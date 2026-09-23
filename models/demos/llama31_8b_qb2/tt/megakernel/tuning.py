@@ -33,6 +33,7 @@ class ProjectionTuning:
     attention_workers: int = 32
     attention_chunk: int = 256
     projection_full_dst: str = "off"
+    norm_stats_face: bool = False
     norm_full_dst: bool = False
     norm_tile_height: int = 32
     projection_tile_height: int = 32
@@ -47,6 +48,8 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.norm_stats_face and (self.norm_tile_height != 16 or self.scratch_init_once != "all"):
+            raise ValueError("Short norm statistics require16-row norms and per-invocation scratch initialization")
         if self.cache_layer_table and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
             raise ValueError("Layer-table caching currently excludes helper prefetch")
         if self.custom_gu and (self.projection_tile_height != 16 or self.reader != "pipelined" or not self.wide_subblocks or self.projection_full_dst != "off" or self.compact_activations != "off" or self.share_qkv_workers):

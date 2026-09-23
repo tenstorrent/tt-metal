@@ -9,12 +9,14 @@ from .mlp import _grid
 
 
 class FusedNorm:
-    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None, compact_output=False, tile_height=32, full_dst=False):
+    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None, compact_output=False, tile_height=32, full_dst=False, stats_face=False):
         self.mesh = mesh
         self.compact_output = compact_output
         if tile_height not in (16, 32): raise ValueError("Norm supports16 or32 rows")
         self.tile_height = tile_height
         self.full_dst = full_dst
+        self.stats_face = stats_face
+        if stats_face and tile_height != 16: raise ValueError("Short statistics need16-row geometry")
         if debug and compact_output:
             raise ValueError("Compact norm output is a private projection transport")
         self.epsilon = struct.unpack("I", struct.pack("f", epsilon))[0]
@@ -68,7 +70,7 @@ class FusedNorm:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore)), ("COMPACT_NORM_OUTPUT", str(int(self.compact_output))), ("TINY_NORM_M", str(int(self.tile_height == 16)))]
+                    defines=[(role, "1"), ("NORM_STATS_FACE", str(int(self.stats_face))), ("NORM_READY_SEMAPHORE", str(ready_semaphore)), ("COMPACT_NORM_OUTPUT", str(int(self.compact_output))), ("TINY_NORM_M", str(int(self.tile_height == 16)))]
                     + ([("FUSE_NORM", "1")] if projection_cores else [])
                     + ([("FUSE_GATHER", "1")] if wait_for_gather else []),
                     config=config,

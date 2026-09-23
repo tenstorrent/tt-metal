@@ -173,7 +173,7 @@ class FusedMLP:
         if fuse_norm:
             from .norm import FusedNorm
 
-            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps, compact_output=self.tuning.compact_activations != "off", tile_height=self.tuning.norm_tile_height, full_dst=self.tuning.norm_full_dst)
+            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps, compact_output=self.tuning.compact_activations != "off", tile_height=self.tuning.norm_tile_height, full_dst=self.tuning.norm_full_dst, stats_face=self.tuning.norm_stats_face)
         self.attention_stage = None
         if fuse_attention:
             from .attention import FusedAttention

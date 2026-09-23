@@ -37,6 +37,12 @@ void QB2_ENTRY() {
 #if TINY_NORM_M
         zero_l1<16 * 2048>(get_write_ptr(16));
 #endif
+#if NORM_STATS_FACE
+        // For16-row tiles all row statistics, including padded rows, live in
+        // face0. Other faces remain zero through this invocation.
+        if (rank == 0) { zero_l1<8 * 4096>(get_write_ptr(9)); }
+        zero_l1<4096>(get_write_ptr(10));
+#endif
         for (uint32_t cb : {7u, 8u, 11u}) {
             zero_l1<4096>(get_write_ptr(cb));
         }
@@ -53,7 +59,7 @@ void QB2_ENTRY() {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(8)),8);
         cb_reserve_back(9,8);
         for(uint32_t src=0;src<8;++src) {
-            noc_async_read(norm_address(src,get_read_ptr(7)),get_write_ptr(9)+src*4096,4096);
+            noc_async_read(norm_address(src,get_read_ptr(7)),get_write_ptr(9)+src*4096,NORM_STATS_FACE ? 1024 : 4096);
         }
         noc_async_read_barrier();
         cb_push_back(9,8);
@@ -61,7 +67,7 @@ void QB2_ENTRY() {
         // All receiver CB layouts are identical. Reserve occurs before use;
         // no prior program can reference this program-local storage.
         for(uint32_t dst=0;dst<8;++dst) {
-            noc_async_write(get_read_ptr(11),norm_address(dst,get_write_ptr(10)),4096);
+            noc_async_write(get_read_ptr(11),norm_address(dst,get_write_ptr(10)),NORM_STATS_FACE ? 1024 : 4096);
         }
         noc_async_write_barrier();
         for(uint32_t dst=0;dst<8;++dst) { noc_semaphore_inc(norm_address(dst,get_semaphore(9)),1); }

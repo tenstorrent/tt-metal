@@ -26,7 +26,7 @@ class FusedPreparation:
             layer.eps,
             cores=self.norm_cores,
             output=body.normalizer.output,
-            compact_output=body.tuning.compact_activations != "off", tile_height=body.tuning.norm_tile_height, full_dst=body.tuning.norm_full_dst,
+            compact_output=body.tuning.compact_activations != "off", tile_height=body.tuning.norm_tile_height, full_dst=body.tuning.norm_full_dst, stats_face=body.tuning.norm_stats_face,
         )
         self.packed = ttnn.empty(
             (1, 1, 1, 1536),
