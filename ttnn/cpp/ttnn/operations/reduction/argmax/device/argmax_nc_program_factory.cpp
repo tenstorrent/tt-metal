@@ -10,6 +10,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <utility>
+#include <vector>
+
 namespace ttnn::prim {
 
 using namespace tt;
@@ -44,10 +47,9 @@ std::pair<uint32_t, uint32_t> extract_nc_strides(const ShapeT& padded_shape, int
 
 }  // namespace
 
-ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
+ProgramDescriptor ArgMaxNCDeviceOperation::create_descriptor(
     const ArgMaxNCParams& operation_attributes, const ArgMaxNCInputs& tensor_args, Tensor& tensor_return_value) {
     auto* device = tensor_args.input.device();
-    Program program{};
 
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
@@ -74,6 +76,7 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     // We need 32-bit DST to hold uint32 indices in registers.
     fp32_dest_acc_en = true;
+    (void)packer_l1_acc;
 
     // Split work across cores.
     const auto grid = device->compute_with_storage_grid_size();
@@ -96,15 +99,29 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     constexpr auto src_cb = CBIndex::c_0;
     constexpr auto out_cb = CBIndex::c_16;
 
-    CircularBufferConfig src_cb_config =
-        CircularBufferConfig(input_cb_depth * input_tile_size, {{src_cb, input_data_format}})
-            .set_page_size(src_cb, input_tile_size);
-    CreateCircularBuffer(program, all_cores, src_cb_config);
+    ProgramDescriptor desc;
+    desc.cbs.reserve(2);
+    desc.kernels.reserve(4);
 
-    CircularBufferConfig out_cb_config =
-        CircularBufferConfig(output_cb_depth * output_tile_size, {{out_cb, output_data_format}})
-            .set_page_size(out_cb, output_tile_size);
-    CreateCircularBuffer(program, all_cores, out_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_depth * input_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src_cb),
+            .data_format = input_data_format,
+            .page_size = input_tile_size,
+        }}},
+    });
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_depth * output_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(out_cb),
+            .data_format = output_data_format,
+            .page_size = output_tile_size,
+        }}},
+    });
 
     // Kernels
     const auto* const reader_kernel_file =
@@ -114,20 +131,33 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/argmax_nc_compute.cpp";
 
+    Buffer* input_buffer = input.buffer();
+    Buffer* output_buffer = output.buffer();
+    TT_FATAL(input_buffer != nullptr, "argmax_nc input tensor has no device buffer");
+    TT_FATAL(output_buffer != nullptr, "argmax_nc output tensor has no device buffer");
+
     std::vector<uint32_t> reader_compile_args;
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
     std::vector<uint32_t> writer_compile_args;
-    tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
 
-    const KernelHandle reader_kernel_id =
-        CreateKernel(program, reader_kernel_file, all_cores, ReaderDataMovementConfig(reader_compile_args));
+    KernelDescriptor reader_kernel;
+    reader_kernel.kernel_source = reader_kernel_file;
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = all_cores;
+    reader_kernel.compile_time_args = std::move(reader_compile_args);
+    reader_kernel.config = ReaderConfigDescriptor{};
 
-    const KernelHandle writer_kernel_id =
-        CreateKernel(program, writer_kernel_file, all_cores, WriterDataMovementConfig(writer_compile_args));
+    KernelDescriptor writer_kernel;
+    writer_kernel.kernel_source = writer_kernel_file;
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = all_cores;
+    writer_kernel.compile_time_args = std::move(writer_compile_args);
+    writer_kernel.config = WriterConfigDescriptor{};
 
-    std::map<std::string, std::string> compute_defines;
+    KernelDescriptor::Defines compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
 
     // Route the unpacker directly to DST for the fp32 value CB so 32-bit precision
@@ -137,29 +167,27 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     // don't need the override — bf16 unpack widens into the full 32-bit DST slot
     // on its own.
     // Size must match host JIT expectation (NUM_CIRCULAR_BUFFERS = 64 on Blackhole / host; WH device uses 32).
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (input_data_format == DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(src_cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(src_cb)] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    auto make_compute_config = [&](uint32_t ntiles_per_core) {
-        return ComputeConfig{
+    auto make_compute_kernel = [&](const CoreRangeSet& cores, uint32_t ntiles_per_core) {
+        KernelDescriptor compute_kernel;
+        compute_kernel.kernel_source = compute_kernel_file;
+        compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_kernel.core_ranges = cores;
+        compute_kernel.compile_time_args = {ntiles_per_core, num_reduce_tiles};
+        compute_kernel.defines = compute_defines;
+        compute_kernel.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
-            .compile_args = std::vector<uint32_t>{ntiles_per_core, num_reduce_tiles},
-            .defines = compute_defines,
         };
+        return compute_kernel;
     };
-
-    if (!core_group_1.ranges().empty()) {
-        CreateKernel(program, compute_kernel_file, core_group_1, make_compute_config(num_tiles_per_core_group_1));
-    }
-    if (!core_group_2.ranges().empty()) {
-        CreateKernel(program, compute_kernel_file, core_group_2, make_compute_config(num_tiles_per_core_group_2));
-    }
 
     // Runtime args per core.
     std::vector<CoreCoord> ordered_cores;
@@ -180,6 +208,11 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
 
     const uint32_t dim_is_zero = (normalized_dim == 0) ? 1u : 0u;
 
+    reader_kernel.runtime_args.reserve(num_cores_to_be_used);
+    reader_kernel.buffer_bindings.reserve(num_cores_to_be_used);
+    writer_kernel.runtime_args.reserve(num_cores_to_be_used);
+    writer_kernel.buffer_bindings.reserve(num_cores_to_be_used);
+
     uint32_t tile_offset = 0;
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         const CoreCoord& core = ordered_cores[i];
@@ -192,11 +225,9 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
             TT_THROW("argmax_nc: core not in any core group");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+        reader_kernel.emplace_runtime_args(
             core,
-            {input.buffer()->address(),
+            {input_buffer,
              num_tiles_this_core,
              tile_offset,
              num_reduce_tiles,
@@ -204,36 +235,21 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
              inner_tile_size,
              dim_is_zero});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_this_core, tile_offset});
+        writer_kernel.emplace_runtime_args(core, {output_buffer, num_tiles_this_core, tile_offset});
 
         tile_offset += num_tiles_this_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_x, std::move(ordered_cores)},
-    };
-}
-
-void ArgMaxNCProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ArgMaxNCParams&,
-    const ArgMaxNCInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
-
-    auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& ordered_cores = cached_program.shared_variables.ordered_cores;
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-    for (const auto& core : ordered_cores) {
-        reader_args_by_core[core.x][core.y][0] = input_buffer->address();
-        writer_args_by_core[core.x][core.y][0] = output_buffer->address();
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    if (!core_group_1.ranges().empty()) {
+        desc.kernels.push_back(make_compute_kernel(core_group_1, num_tiles_per_core_group_1));
     }
+    if (!core_group_2.ranges().empty()) {
+        desc.kernels.push_back(make_compute_kernel(core_group_2, num_tiles_per_core_group_2));
+    }
+
+    return desc;
 }
 
 }  // namespace ttnn::prim
