@@ -27,8 +27,8 @@
 #include "tt_metal/distributed/host_h2d_leg.hpp"
 #include "tt_metal/distributed/host_l1_map.hpp"
 #include "tt_metal/distributed/host_region.hpp"
-#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
-#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
+#include "tt_metal/distributed/host_uva_frame.hpp"
+#include "tt_metal/distributed/host_uva_layout.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
