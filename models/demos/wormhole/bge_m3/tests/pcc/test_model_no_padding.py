@@ -53,7 +53,7 @@ def _run(model, device, input_ids, **kwargs):
     return host
 
 
-@pytest.mark.parametrize("batch_size", [8, 16], ids=["batch8", "batch16"])
+@pytest.mark.parametrize("batch_size", [8, 16, 32], ids=["batch8", "batch16", "batch32"])
 def test_no_padding_contract(device, model_path, batch_size, reset_seeds):
     require_single_device(device)
     model_args, model, _ = create_tt_model(

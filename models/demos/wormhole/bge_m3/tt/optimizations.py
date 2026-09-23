@@ -420,16 +420,11 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     # calls it the Blackhole default. It drops the row buffers and overlaps the
     # FPU with the SFPU, so it removes the pack and unpack passes over the score
     # tiles. Its smaller circular buffers also let the masked B32 path fit L1.
-    # B8 and B16 run the streaming kernel at LoFi. B8 13.766 ms to 13.646 ms, PCC
-    # 0.93923 to 0.93962; B16 26.100 ms to 25.817 ms, PCC 0.93791 to 0.94151.
-    if max_seq_len == 512 and max_batch in (8, 16) and dtype == ttnn.bfloat8_b:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
+    # B8, B16 and B32 run the streaming kernel at LoFi. B8 13.766 ms to 13.646 ms,
+    # PCC 0.93923 to 0.93962; B16 26.100 ms to 25.817 ms, PCC 0.93791 to 0.94151;
+    # B32 sustained 61.378 ms to 60.445 ms, PCC 0.94410 to 0.93803.
     if max_seq_len == 512 and max_batch in (8, 16, 32) and dtype == ttnn.bfloat8_b:
-        return _make_compute_kernel(
-            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
-        )
-    # NOTE: B16 SDPA LoFi gives no speedup (bandwidth-bound, not compute-bound)
-    # and drops PCC to 0.9357 (< 0.94 gate). Kept HiFi2.
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     if max_seq_len == 512 and max_batch in (8, 16, 32):
         # HiFi2 (vs HiFi4) speeds up SDPA without dropping PCC below 0.94.
         fid = ttnn.MathFidelity.HiFi2 if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
