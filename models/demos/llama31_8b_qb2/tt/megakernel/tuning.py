@@ -31,6 +31,7 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     compact_activations: str = "off"
+    attention_placement: str = "row"
     attention_workers: int = 32
     attention_chunk: int = 256
     projection_full_dst: str = "off"
@@ -51,6 +52,10 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.attention_placement not in ("row", "head_priority"):
+            raise ValueError("Attention placement must be row or head_priority")
+        if self.attention_placement == "head_priority" and (self.attention_workers != 32 or self.head_placement != "select" or self.share_qkv_workers):
+            raise ValueError("Head-priority placement requires 32 attention workers, selected head and separate QKV")
         if self.single_layer_barrier and (not self.bounded_barrier or self.inline_cb_reset or self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
             raise ValueError("Single layer boundary requires bounded barriers, ordinary CB reset and no helper prefetch")
         if self.custom_down and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):

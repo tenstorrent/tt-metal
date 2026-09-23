@@ -96,6 +96,7 @@ def parse_args():
     parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
     parser.add_argument("--head-early-blocks", type=int, choices=(0, 2, 3), default=0)
     parser.add_argument("--head-placement", choices=("row", "order", "select", "select32"), default="row")
+    parser.add_argument("--attention-placement", choices=("row", "head_priority"), default="row")
     parser.add_argument("--attention-workers", type=int, choices=(8, 16, 32), default=32)
     parser.add_argument("--attention-chunk", type=int, choices=(64, 128, 256, 512, 1024), default=256)
     parser.add_argument("--projection-full-dst", choices=("off", "mlp", "head", "all"), default="off")
@@ -155,7 +156,7 @@ def run(args):
         compact_activations=args.compact_activations,
         head_placement=args.head_placement, head_early_blocks=args.head_early_blocks,
         custom_o=args.custom_o, custom_down=args.custom_down, custom_gu=args.custom_gu, qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
-        attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
+        attention_placement=args.attention_placement, attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         single_layer_barrier=args.single_layer_barrier, bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, cache_layer_table=args.cache_layer_table, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,

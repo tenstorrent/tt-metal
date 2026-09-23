@@ -19,18 +19,9 @@ class FusedAttention:
         self.mesh = layer.mesh_device
         if self.mesh.compute_with_storage_grid_size().y < 10:
             raise ValueError("Attention composition requires ten worker rows")
-        self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)]
-        if len(self.cores) not in (8, 16, 32) or self.cores != sorted(self.cores, key=lambda c: (c.y, c.x)):
-            raise ValueError("Attention requires8/16/32 workers in row-major native grouping order")
-        self.grid = _grid(self.cores)
         self.compute = layer.decode_sdpa_compute
-        self.config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=[8, len(self.cores) // 8],
-            sub_core_grids=self.grid,
-            q_chunk_size=32,
-            k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,
-        )
+        self.k_chunk_size = k_chunk_size
+        self.configure_cores(cores if cores is not None else [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)])
         self.heads = ttnn.empty(
             (1, 1, 8, 128),
             dtype=ttnn.bfloat16,
@@ -54,6 +45,19 @@ class FusedAttention:
                 device=self.mesh,
                 memory_config=layer.decode_inputs["o"],
             )
+        )
+
+    def configure_cores(self, cores):
+        self.cores = list(cores)
+        if len(self.cores) not in (8, 16, 32) or self.cores != sorted(self.cores, key=lambda c: (c.y, c.x)):
+            raise ValueError("Attention requires 8/16/32 workers in row-major native grouping order")
+        self.grid = _grid(self.cores)
+        self.config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=[8, len(self.cores) // 8],
+            sub_core_grids=self.grid,
+            q_chunk_size=32,
+            k_chunk_size=self.k_chunk_size,
+            exp_approx_mode=False,
         )
 
     def append(self, program, inputs, projection_cores, *, wait_for_kv=False):
