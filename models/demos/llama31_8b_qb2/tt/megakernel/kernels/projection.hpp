@@ -6,7 +6,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 using namespace ckernel;
-#if CUSTOM_GU
+#if CUSTOM_GU || CUSTOM_O
 #include "custom_gu.hpp"
 #endif
 
@@ -14,7 +14,13 @@ template <uint32_t A, uint32_t B, uint32_t Out, uint32_t Partial, uint32_t KBloc
 void projection() {
 #if CUSTOM_GU
     if constexpr (A == 0 && B == 1 && KBlock == 8 && (N == 28 || N == 14) && K == 128 && Subblock == 7) {
-        custom_gu_projection<N>();
+        custom_projection<A, B, Out, Partial, KBlock, N, K, Subblock>();
+        return;
+    }
+#endif
+#if CUSTOM_O
+    if constexpr (A == 6 && B == 7 && KBlock == 4 && N == 16 && K == 32 && Subblock == 8) {
+        custom_projection<A, B, Out, Partial, KBlock, N, K, Subblock>();
         return;
     }
 #endif

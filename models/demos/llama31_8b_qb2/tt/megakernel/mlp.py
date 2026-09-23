@@ -398,7 +398,7 @@ class FusedMLP:
                     formats = list(item.format_descriptors)
                     for fmt in formats:
                         if fmt.buffer_index in (0, 4, 6, 16, 17, 24, 25):
-                            fmt.tile = ttnn.TileDescriptor(8 if self.tuning.custom_gu and fmt.buffer_index == 0 else 16, 32)
+                            fmt.tile = ttnn.TileDescriptor(8 if (self.tuning.custom_gu and fmt.buffer_index == 0) or (self.tuning.custom_o and fmt.buffer_index == 6) else 16, 32)
                     item.format_descriptors = formats
         semaphores = [
             ttnn.SemaphoreDescriptor(

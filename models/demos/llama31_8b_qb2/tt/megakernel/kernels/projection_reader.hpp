@@ -6,7 +6,7 @@
 #include "compact_rows.hpp"
 #endif
 
-#if QKV_CUSTOM_MM || CUSTOM_GU
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
 // Custom unpack walks K faces contiguously, independent of CB page stride.
 // Compact each unpublished block to512-byte8-row tiles; ring blocks retain
 // original2048-byte page spacing. All non-row-zero lanes were zero upstream.
@@ -147,8 +147,8 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                     a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
-#if QKV_CUSTOM_MM || CUSTOM_GU
-            if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
+            if constexpr ((CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
                 compact_custom_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
@@ -174,8 +174,8 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                 a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
-#if QKV_CUSTOM_MM || CUSTOM_GU
-        if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
+        if constexpr ((CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
             compact_custom_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
