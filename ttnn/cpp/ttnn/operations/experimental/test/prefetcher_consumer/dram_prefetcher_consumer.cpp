@@ -73,6 +73,7 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
         ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
         attrs.num_iters,
         attrs.page_size_bytes,
+        attrs.hold_cycles,
         attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
         attrs.prefetcher_pipes);
 }
@@ -108,7 +109,8 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
             .source = std::filesystem::path{
                 "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_bench_discard_receiver.cpp"}};
         receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
-        receiver.compile_time_args = {{"num_iters", operation_attributes.num_iters}};
+        receiver.compile_time_args = {
+            {"num_iters", operation_attributes.num_iters}, {"hold_cycles", operation_attributes.hold_cycles}};
         receiver.hw_config =
             metal_exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
         metal_exp::ProgramSpec spec{
@@ -175,13 +177,15 @@ void test_tensor_prefetcher_pipe_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    uint32_t hold_cycles) {
     using OperationType = DramPrefetcherConsumerDeviceOperation;
     OperationType::operation_attributes_t attrs{
         .num_iters = num_iters,
         .page_size_bytes = page_size_bytes,
         .prefetcher_pipes = prefetcher_pipes,
         .mesh_device = mesh_device,
+        .hold_cycles = hold_cycles,
     };
     OperationType::tensor_args_t tensor_args{};
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);

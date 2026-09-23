@@ -14,6 +14,7 @@ See tt_metal/impl/buffers/prefetcher_matmul_design.md for the contract being val
 """
 
 import gc
+import time
 
 import pytest
 import torch
@@ -687,6 +688,63 @@ def test_pipe_consumer_trace_replay(device):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, trace_id)
+
+
+def test_stop_drains_every_target_not_just_the_last(device):
+    """Stop waits for the receivers of every target a sender has loaded, not only the last one.
+
+    One prefetcher serves a PrefetcherPipe set and then a GlobalCircularBuffer on the same DRAM
+    senders, with disjoint receivers. The GCB's receivers are drained to completion, so its acks are
+    all in, while the pipe's receivers hold every pop back for a fixed wall-clock delay. The pipe's
+    ring holds the whole tensor, so the sender finishes both requests without waiting for either.
+    Stop must then wait out the delay for the pipe's acks: if it returned before them, those acks
+    would land in DRISC L1 the next program is free to reuse.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    pipe_recv_per_bank = 2
+    K = 448
+    N = num_dram_banks * pipe_recv_per_bank * 2 * ttnn.TILE_SIZE
+    pipe_ring_blocks = num_dram_banks * pipe_recv_per_bank
+    tt_weight_pipe, pipes, _bank_to_receivers, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, ttnn.bfloat8_b, pipe_recv_per_bank, num_entries=pipe_ring_blocks
+    )
+    tt_weight_gcb, _addrs, gcb, _, _, gcb_ring_size = _setup_weight_and_gcb_dram_sender(
+        device,
+        K,
+        num_dram_banks * 2 * ttnn.TILE_SIZE,
+        ttnn.bfloat16,
+        recv_per_bank=1,
+        num_layers=1,
+        row_offset=_receiver_rows(num_dram_banks, pipe_recv_per_bank),
+    )
+    # About 0.75 s at Blackhole's 1.35 GHz AICLK, and longer at any lower clock. Stop without the
+    # pipe's acks returns in milliseconds, so half a second separates the two outcomes.
+    hold_cycles = 1_000_000_000
+    min_stop_wait_s = 0.5
+
+    ttnn.experimental.start_tensor_prefetcher(device)
+    held_from = None
+    try:
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_pipe, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_gcb, gcb_ring_size)], global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_gcb, num_layers=1, print_stride=gcb_ring_size, global_cb=gcb
+        )
+        ttnn.synchronize_device(device)
+
+        held_from = time.monotonic()
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes, hold_cycles=hold_cycles
+        )
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(device)
+        stop_returned = time.monotonic()
+        ttnn.synchronize_device(device)
+    stop_waited_s = stop_returned - held_from
+    assert stop_waited_s >= min_stop_wait_s, (
+        f"stop_tensor_prefetcher returned {stop_waited_s:.3f} s after the pipe consumer started holding its acks, "
+        f"before the {min_stop_wait_s} s hold could have ended: it did not wait for the pipe's receivers"
+    )
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
