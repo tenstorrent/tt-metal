@@ -86,6 +86,20 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # Same ring, 2 of the 4 links: for the fused MM/RS, where each link-direction costs the matmul
+    # a (workers + 1)-core slot of the reduce-scatter zone, so two links leave an 8x8 matmul grid
+    # with one RS row.
+    "wh_4x8_ring_2links": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
@@ -214,16 +228,23 @@ SHAPES = [
     # (M_per_core goes 19 -> 36 -> 54 across these three).
     (9184, 3584, 5376, 8, 9, False, "ff2"),
     (13664, 3584, 5376, 8, 9, False, "ff2"),
-    # ff2 fused MM+RS on WH, worth re-testing now the silent fallback is gone. The matmul grid must
-    # leave the reduce-scatter enough rows: at num_links=4 the runner's own `rs_zone_capacity //
-    # (2 * num_links) - 1` gives 1 worker/link at 8x7, 2 at 8x6 and 3 at 8x5. Measured: 3134.7 us at
-    # 8x7, 3610.2 at 8x6, 3996.7 at 8x5 -- monotonically worse as the RS zone grows, since every core
-    # handed to the reduce-scatter costs the matmul more than it returns. All are far off the 2373.0 us
-    # unfused matmul, so keeping Wormhole off the fused path is right. (Not a like-for-like total: the
-    # unfused figure excludes the separate reduce-scatter and addcmul, leaving them a 762 us budget.)
+    # ff2 fused MM+RS on WH. The matmul grid must leave the reduce-scatter enough rows: at
+    # num_links=4 the runner's own `rs_zone_capacity // (2 * num_links) - 1` gives 1 worker per
+    # link-direction at 8x7, 2 at 8x6 and 3 at 8x5. Measured at M=4736 (5 s), with a bias the model
+    # does not have and candidate lists built for the transposed grid (so N_block 7 was never tried):
+    # 3134.7 us at 8x7, 3610.2 at 8x6, 3996.7 at 8x5 -- every core handed to the reduce-scatter costs
+    # the matmul more than it returns. Those are fused totals (matmul + reduce-scatter + addcmul); the
+    # unfused matmul alone was 2373.0 us and its reduce-scatter and addcmul were not measured at this
+    # M, so this sweep never settled fused vs unfused. At M=13664 the like-for-like comparison is the
+    # mesh bench (transformer_op_mesh_bench.py --op ff2 --fused / --with-rs --with-addcmul).
     (4736, 3584, 5376, 8, 7, False, "mmrs"),
     (4736, 3584, 5376, 8, 6, False, "mmrs"),
     (4736, 3584, 5376, 8, 5, False, "mmrs"),
+    # ff2 fused MM+RS at the 15 s shape, bias-free like the model, non-transposed candidate lists.
+    # 8x7 leaves 16 cores = 4 links x 2 directions x (1 worker + 1 mux); the 8x8 row runs on
+    # wh_4x8_ring_2links (2 links x 2 x 2 = 8 cores, one row).
+    (13664, 3584, 5376, 8, 7, False, "mmrs_nobias"),
+    (13664, 3584, 5376, 8, 8, False, "mmrs_nobias"),
     # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
     # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
     # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;
@@ -549,6 +570,15 @@ USE_CASE_CONFIGS = {
     "mmrs": {
         "is_mmrs": True,
         "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
+        "bias": True,
+    },
+    # Same op without the matmul bias: MiniMax-H3 ff2 is RowParallelLinear(14336, 5376, bias=False),
+    # and the bias costs a CB and an epilogue pass the model never runs.
+    # No use_addcmul either: the fused op runs the addcmul on the reduce-scatter cores, so the
+    # matmul cores carry no ternary CBs and the L1 estimate must not charge them.
+    "mmrs_nobias": {
+        "is_mmrs": True,
+        "bias": False,
     },
     # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
     # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
@@ -595,6 +625,12 @@ K_BLOCK_MIN = 2
 # optimum (10, 7, 10) at an estimated 1380 KB, and qkv's shipped (8, 7, 12) at 1352 KB, so the sweep
 # could not even measure the baseline it was supposed to beat.
 L1_BUDGET_KB = 1400
+# The fused MM/RS window shard is an allocator buffer placed at the top of L1, below whatever persistent
+# buffers a model already keeps there (CCLManager's counter arrays and semaphores, a few KB). The sweep
+# runs with an otherwise empty L1, so a windowed combo that fits here by less than this margin can still
+# clash with the circular buffers in the model: MiniMax-H3 ff2 (6, 8, 8), 1336 KB by the estimate, ran
+# 2000 calls on the bench and failed by 10 KB in the transformer block.
+MMRS_WINDOW_L1_MARGIN_KB = 64
 
 # Fabric-bound strided AGMM ("sagmm") fabric parameters. Held fixed across the block
 # sweep so the measured differences are attributable to blocking alone; these match the
@@ -679,6 +715,14 @@ def get_per_core_dims(shape, cluster_size):
         # K_block must divide the pre-gather shard: the ring delivers K_per_device tiles
         # per device in K_block-sized chunks, same rule as the agmm path.
         return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
+
+    if USE_CASE_CONFIGS.get(use_case, {}).get("is_mmrs", False):
+        # The fused MM/RS disables the matmul's grid transpose (the strided reduce-scatter walks the
+        # output as M over grid rows, N over grid columns), so a core holds ceil(Mt / cgy) x
+        # ceil(Nt / cgx) tiles -- the opposite of the "mm" rows. Getting this wrong only skews the
+        # candidate lists (the op itself is unaffected), but it did: an 8x7 grid at N = 5376 has 21
+        # N tiles per core, not 24, so N_block 7 was never generated.
+        return -(-M_tiles // cgy), K_tiles, -(-N_tiles // cgx)
 
     M_per_core = -(-M_tiles // cgx)  # ceiling
     N_per_core = -(-N_tiles // cgy)
@@ -1037,9 +1081,22 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         l1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+        nt_per_core = -(-(N // 32) // core_grid.x)
+        use_case_name = next(name for name, c in USE_CASE_CONFIGS.items() if c is uc_cfg)
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
             blocks_per_core = -(-mt_per_core // m_blk)
-            window = 2 if blocks_per_core >= 2 else None
+            # The resident window shard (2 x M_block x Nt_per_core bf16 tiles per core) shares L1
+            # with the matmul CBs; when the two do not fit together the combo takes the DRAM
+            # handoff rather than failing allocation, which is also the choice the model makes
+            # (FusedMMRSConfig with mm_window_blocks=None). At M=13664 on an 8x7 grid that is
+            # every M_block >= 6 combo, including the sweep winners.
+            window_kb = 2 * m_blk * nt_per_core * 2
+            fits = (
+                estimate_l1_kb(m_blk, k_blk, n_blk, use_case_name, op_kind) + window_kb
+                <= L1_BUDGET_KB - MMRS_WINDOW_L1_MARGIN_KB
+            )
+            window = 2 if blocks_per_core >= 2 and fits else None
             ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor=tt_input,
                 weight_tensor=tt_weight,
@@ -1051,7 +1108,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 num_buffers_per_channel=None,
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=num_workers_per_link,
-                bias=tt_bias,
+                bias=tt_bias if uc_cfg.get("bias", True) else None,
                 memory_config_mm=l1_mem if window is not None else dram_mem,
                 rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                 topology=cfg["topology"],

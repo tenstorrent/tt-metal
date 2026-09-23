@@ -10,13 +10,25 @@ sweep harness: the minimal reproducer for kernel changes. Not a test; pytest lea
     python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op ff1
     python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op to_qkv [--no-fusion]
     python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op to_out [--gate-broadcast]
-    python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op ff2 [--with-rs]
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op ff2 [--with-rs [--with-addcmul]]
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op ff2 --fused --mm-grid 8x7 --blocks 8,7,7,2,2
     ... [--fp32-dest 0] [--blocks 8,7,16,2,4] [--fidelity LoFi] [--iters 10]
 
     to_qkv  AGMM, chunks=3 (the writer splits the output into q|k|v; compute epilogue is a plain copy)
     to_out  AGMM, fused addcmul epilogue  out = a + scalar * (x @ w) * b  (a, b [M, N]; --gate-broadcast: b [1, N])
     ff1     AGMM, fused SwiGLU on the tile-pair-interleaved gate|up weight
-    ff2     minimal_matmul on the full 8x9 grid (per device), --with-rs adds the ring reduce-scatter the model runs next
+    ff2     minimal_matmul on the full 8x9 grid (per device); --with-rs adds the ring reduce-scatter the model runs next
+            (model form: persistent ping-pong buffers, no barrier); --with-addcmul adds the gated residual after it, so
+            MM + RS + addcmul is the whole ff2 tail the block runs. --rs-workers/--rs-chunks/--rs-buffers override the
+            reduce-scatter hyperparameters (CCLManager.get_rs_hyperparams: 2 / 2 / 2).
+            --fused runs the ONE-op form instead, minimal_matmul_strided_reduce_scatter_async exactly as
+            RowParallelLinear.forward_fused_addcmul calls it: the matmul on --mm-grid (never transposed: M over its rows,
+            N over its 8 columns = 21 tiles/core, so pick an N_block that divides 21), the reduce-scatter workers on the
+            rows above it (2 directions x (workers + 1 mux) x links cores; --rs-workers is PER DIRECTION, default from
+            the FusedMMRSConfig zone formula), the addcmul folded into the RS final write. --window 2 hands the matmul
+            output to the RS through a rolling 2-block L1 window (needs the window shard 2 x M_block x 21 tiles to fit
+            beside the matmul CBs: M_block <= 4 at K_block 7); --window 0 is the DRAM handoff. --num-links 2 leaves
+            more rows to the matmul (8x8 + one RS row) at half the fabric bandwidth.
     --no-fusion runs the same shape as a plain matmul (what the sweep harness's "plain" use case measures).
 
 Bar (ff1 numerics acceptance): pcc > 0.9995, rel-RMSE < 0.02. The golden is computed on the first
@@ -73,6 +85,23 @@ def main() -> None:
     )
     p.add_argument("--with-rs", action="store_true", help="ff2: include the ring reduce-scatter in every timed call")
     p.add_argument(
+        "--with-addcmul",
+        action="store_true",
+        help="ff2 --with-rs: add the gated residual addcmul the block runs after the RS",
+    )
+    p.add_argument("--rs-workers", type=int, default=None, help="ff2: reduce-scatter workers per link-direction")
+    p.add_argument("--rs-chunks", type=int, default=2, help="ff2 unfused: reduce-scatter chunks_per_sync")
+    p.add_argument("--rs-buffers", type=int, default=None, help="ff2: reduce-scatter num_buffers_per_channel")
+    p.add_argument("--num-links", type=int, default=None, help="ff2: ring links for the reduce-scatter (default 4)")
+    p.add_argument(
+        "--fused", action="store_true", help="ff2: one minimal_matmul_strided_reduce_scatter_async (+addcmul) per call"
+    )
+    p.add_argument("--mm-grid", default="8x7", help="ff2 --fused: matmul grid WxH; the RS takes the rows above it")
+    p.add_argument("--window", type=int, default=0, help="ff2 --fused: mm_window_blocks (0 = DRAM handoff)")
+    p.add_argument(
+        "--chunk-width", type=int, default=1, help="ff2 --fused: chunk_width_in_mm_blocks (0 = one chunk per M block)"
+    )
+    p.add_argument(
         "--no-pingpong",
         action="store_true",
         help="reuse ONE semaphore set and ONE persistent buffer for every call (the sweep harness's way; races and hangs "
@@ -86,8 +115,10 @@ def main() -> None:
 
     spec = OPS_BY_NAME[args.op]
     fused = spec.has_fusion and not args.no_fusion
-    if args.with_rs and spec.family != "mm+rs":
-        p.error("--with-rs applies to ff2 only")
+    if (args.with_rs or args.fused or args.with_addcmul) and spec.family != "mm+rs":
+        p.error("--with-rs / --with-addcmul / --fused apply to ff2 only")
+    if args.with_addcmul and not (args.with_rs or args.fused):
+        p.error("--with-addcmul needs --with-rs (or --fused, which always fuses the addcmul)")
     if args.gate_broadcast and spec.addcmul_scalar is None:
         p.error("--gate-broadcast applies to to_out only")
     M = args.M or spec.M
@@ -120,15 +151,22 @@ def main() -> None:
         fp32_dest_acc_en=bool(args.fp32_dest),
         packer_l1_acc=True,
     )
+    mm_grid = tuple(int(v) for v in args.mm_grid.split("x")) if args.fused else spec.grid
     mmcfg = ttnn.MinimalMatmulConfig(
         M_block_size=mb,
         K_block_size=kb,
         N_block_size=nb,
         subblock_h=sh,
         subblock_w=sw,
-        compute_with_storage_grid_size=ttnn.CoreCoord(*spec.grid),
+        compute_with_storage_grid_size=ttnn.CoreCoord(*mm_grid),
     )
     grid = mesh.compute_with_storage_grid_size()
+
+    def die(msg: str) -> None:
+        log(msg)
+        close_mesh(parent)
+        sys.exit(2)
+
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     n_sets = 1 if args.no_pingpong else 2
     call_idx = [0]
@@ -182,41 +220,147 @@ def main() -> None:
 
         kind = "AGMM"
     else:
-        # ff2: RowParallelLinear -- every device multiplies its own K shard on the full grid, then the ring
-        # reduce-scatters the [M, N] partials to N/TP per device. Inputs are replicated here (same partial on
-        # every device), so the reduce-scatter's result is TP x one slice of x @ w.
+        # ff2: RowParallelLinear -- every device multiplies its own K shard, then the ring reduce-scatters the [M, N]
+        # partials to N/TP per device, then the block adds the gated residual. Inputs are replicated here (same
+        # partial on every device), so the reduce-scatter's result is TP x one slice of x @ w.
         x = (torch.randn(1, 1, M, K) * 0.5).to(torch.bfloat16)
         tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=mesh, layout=ttnn.TILE_LAYOUT)
-        if args.with_rs:
-            # CCLManager.reduce_scatter without a persistent buffer: barrier semaphore + 3 semaphores per set,
-            # hyperparameters from CCLManager.get_rs_hyperparams; two sets alternated like the AGMM's.
+        links = args.num_links or cfg["num_links"]
+        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        n_out = N // tp
+        use_addcmul = args.fused or args.with_addcmul
+        if use_addcmul:
+            # The block's residual and per-token gate, already at the post-scatter width.
+            extras = {
+                "a": (torch.randn(M, n_out) * 0.5).to(torch.bfloat16),
+                "b": torch.randn(M, n_out).to(torch.bfloat16),
+            }
+            t_extras = {
+                k: ttnn.from_torch(v.reshape(1, 1, M, n_out), dtype=ttnn.bfloat16, device=mesh, layout=ttnn.TILE_LAYOUT)
+                for k, v in extras.items()
+            }
+        if args.with_rs or args.fused:
+            # CCLManager.get_rs_ping_pong_semaphore: 3 semaphores per set, two sets alternated like the AGMM's.
             rs_sems = [[ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(3)] for _ in range(n_sets)]
-            barriers = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(n_sets)]
 
-        def run():
-            i = call_idx[0] % n_sets
-            call_idx[0] += 1
-            out = ttnn.experimental.minimal_matmul(tx, tw, compute_kernel_config=compute, config=mmcfg)
-            if not args.with_rs:
-                return out
-            rs = ttnn.experimental.reduce_scatter_minimal_async(
-                out,
-                persistent_output_buffers=None,
-                dim=3,
-                multi_device_global_semaphore=rs_sems[i],
-                barrier_semaphore=barriers[i],
-                num_links=cfg["num_links"],
-                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-                topology=cfg["topology"],
-                cluster_axis=cfg["cluster_axis"],
-                chunks_per_sync=2,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+        def _dram_buf(shape):
+            return ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, dram)
+
+        if args.fused:
+            # Mirrors RowParallelLinear.forward_fused_addcmul + FusedMMRSConfig.get_params. The RS zone is the rows
+            # the matmul leaves free; each link needs 2 directions x (workers + 1 mux) cores of it.
+            mm_gx, mm_gy = mm_grid
+            rs_zone = (grid.y - mm_gy) * grid.x
+            workers = args.rs_workers or rs_zone // (2 * links) - 1
+            if workers < 1 or rs_zone < 2 * links * (workers + 1):
+                die(
+                    f"matmul grid {mm_gx}x{mm_gy} leaves {rs_zone} cores for the reduce-scatter; {links} links x 2 "
+                    f"directions x ({workers} workers + 1 mux) need {2 * links * (workers + 1)}"
+                )
+            window = args.window or None
+            mt_per_core = -(-(-(-M // 32)) // mm_gy)  # ceil(ceil(M / 32) / rows)
+            if window is not None and -(-mt_per_core // mb) < 2:
+                die(f"M_block {mb} leaves one block per core ({mt_per_core} tiles): the window cannot rotate")
+            rs_out_bufs = [_dram_buf([1, 1, M, n_out]) for _ in range(n_sets)]
+            # Caller-owned counter arrays as CCLManager.get_mm_{progress,credit}_counters_buffer: uint32, L1
+            # HEIGHT_SHARDED over the full grid, a [cores, cores] square covers both the per-MM-core progress rows
+            # and the per-RS-reader credit rows.
+            slots = grid.x * grid.y
+
+            def _counter_array():
+                return ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([slots, slots]),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    mesh,
+                    ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                    ),
+                )
+
+            progress = _counter_array()
+            credits = _counter_array() if window is not None else None
+            log(
+                f"fused MM/RS: matmul {mm_gx}x{mm_gy} ({mm_gx * mm_gy} cores), RS {links} links x 2 dirs x "
+                f"({workers} workers + 1 mux) = {2 * links * (workers + 1)} of {rs_zone} spare cores, "
+                f"window {window}, chunk_width {args.chunk_width or None}, buffers/channel {args.rs_buffers}"
             )
-            ttnn.deallocate(out)
-            return rs
 
-        kind = "MM+RS" if args.with_rs else "MM"
+            def run():
+                i = call_idx[0] % n_sets
+                call_idx[0] += 1
+                mm_out, rs = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                    tx,
+                    tw,
+                    3,
+                    rs_sems[i],
+                    ttnn.CoreCoord(0, mm_gy),
+                    compute_kernel_config=compute,
+                    num_links=links,
+                    memory_config_mm=l1 if window is not None else dram,
+                    rs_output_mem_config=dram,
+                    rs_intermediate_mem_config=dram,
+                    topology=cfg["topology"],
+                    cluster_axis=cfg["cluster_axis"],
+                    config=mmcfg,
+                    barrier_semaphore=None,
+                    using_persistent_buffers=True,
+                    num_workers_per_link=workers,
+                    num_buffers_per_channel=args.rs_buffers,
+                    chunk_width_in_mm_blocks=args.chunk_width or None,
+                    optional_rs_output_tensor=rs_out_bufs[i],
+                    fused_ternary_scalar=1.0,
+                    addcmul_input_tensor1=t_extras["a"],
+                    addcmul_input_tensor2=t_extras["b"],
+                    mm_progress_counters=progress,
+                    mm_window_blocks=window,
+                    mm_credit_counters=credits,
+                )
+                # The matmul output is scratch (an L1 window shard when windowed); holding it would pin L1 across calls.
+                ttnn.deallocate(mm_out)
+                return rs
+
+            kind = f"MMRS fused {mm_gx}x{mm_gy} L{links} w{workers} win{window or 0}"
+        else:
+            if args.with_rs:
+                # CCLManager.reduce_scatter(use_persistent_buffer=True), what RowParallelLinear.forward runs: two
+                # [intermediate, output] pairs alternated, no barrier semaphore.
+                rs_bufs = [[_dram_buf([1, 1, M, N]), _dram_buf([1, 1, M, n_out])] for _ in range(n_sets)]
+                rs_workers = args.rs_workers or 2
+                log(
+                    f"unfused RS: {links} links, {rs_workers} workers/dir, chunks_per_sync {args.rs_chunks}, "
+                    f"buffers/channel {args.rs_buffers or 2}"
+                )
+
+            def run():
+                i = call_idx[0] % n_sets
+                call_idx[0] += 1
+                out = ttnn.experimental.minimal_matmul(tx, tw, compute_kernel_config=compute, config=mmcfg)
+                if not args.with_rs:
+                    return out
+                rs = ttnn.experimental.reduce_scatter_minimal_async(
+                    out,
+                    persistent_output_buffers=rs_bufs[i],
+                    dim=3,
+                    multi_device_global_semaphore=rs_sems[i],
+                    barrier_semaphore=None,
+                    num_links=links,
+                    memory_config=dram,
+                    topology=cfg["topology"],
+                    cluster_axis=cfg["cluster_axis"],
+                    chunks_per_sync=args.rs_chunks,
+                    num_workers_per_link=rs_workers,
+                    num_buffers_per_channel=args.rs_buffers or 2,
+                )
+                ttnn.deallocate(out)
+                if not use_addcmul:
+                    return rs
+                return ttnn.addcmul(t_extras["a"], rs, t_extras["b"])
+
+            kind = "MM+RS+addcmul" if use_addcmul else ("MM+RS" if args.with_rs else "MM")
     log("tensors on device")
 
     out = run()
@@ -248,8 +392,10 @@ def main() -> None:
         for d in range(len(per_part[0])):
             o = torch.cat([ttnn.to_torch(pp[d]).float().reshape(-1, pp[d].shape[-1])[:r] for pp in per_part], dim=-1)
             g = gold
-            if args.with_rs:  # replicated partials: device d holds TP x slice d of the product
+            if args.with_rs or args.fused:  # replicated partials: device d holds TP x slice d of the product
                 g = tp * gold[:, d * spec.N_out : (d + 1) * spec.N_out]
+                if use_addcmul:
+                    g = er["a"].float() + g * er["b"].float()
             pcc = torch.corrcoef(torch.stack([o.flatten(), g.flatten()]))[0, 1].item()
             rr = ((o - g).pow(2).mean().sqrt() / g.pow(2).mean().sqrt()).item()
             worst_pcc, worst_rr = min(worst_pcc, pcc), max(worst_rr, rr)
