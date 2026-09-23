@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -44,6 +45,9 @@ using tt::tt_metal::experimental::Group;
 using tt::tt_metal::experimental::KernelRunArgs;
 using tt::tt_metal::experimental::KernelSpec;
 using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::PrefetcherPipeArgument;
+using tt::tt_metal::experimental::PrefetcherPipeParameter;
+using tt::tt_metal::experimental::PrefetcherPipeParamName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
 using tt::tt_metal::experimental::SemaphoreBinding;
@@ -3201,7 +3205,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes = {}) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -3209,6 +3214,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     bool fuse_op = fused_op_signaler.has_value();
+
+    // PrefetcherPipe delivery: the Tensor prefetcher writes each worker's in1 K-blocks straight into a
+    // PrefetcherPipe ring on that worker, and cb_in1 is a relay laid over the rings, so in1 is neither
+    // read from DRAM nor multicast here.
+    const bool use_prefetcher_pipes = !prefetcher_pipes.empty();
+    if (use_prefetcher_pipes) {
+        // The weight is DRAM-sharded for the prefetcher, but this program never reads it: in1 comes
+        // from the pipes, so none of the sharded-in1 handling below applies.
+        in1_is_sharded = false;
+        TT_FATAL(
+            !transpose_b,
+            "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
+            "K-blocks in its DRAM layout");
+    }
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -3492,8 +3511,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // Defines
     // ------------------------------------------------------------------
     std::map<std::string, std::string> mm_kernel_defines;
+    if (use_prefetcher_pipes) {
+        mm_kernel_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+    }
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    if (use_prefetcher_pipes) {
+        mm_kernel_in1_sender_writer_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+    }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -3657,15 +3682,56 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         dataflow_buffers.size(),
         dataflow_buffers.front().unique_id.get());
 
-    // in1
-    dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IN1_DFB,
-        .entry_size = in1_aligned_tile_size,
-        .num_entries = in1_dfb_size / in1_aligned_tile_size,
-        .data_format_metadata = in1_data_format,
-        .tile_format_metadata = in1_tile,
-        .borrowed_from = in1_is_sharded ? std::optional<TensorParamName>(IN1) : std::nullopt,
-    });
+    // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings. The pipes carry one
+    // K-block per entry, which is what the prefetcher writes; the relay pages each entry as its
+    // tiles, so compute consumes in1 exactly as it does from DRAM. The ring is a whole number of
+    // K-blocks, so a block's tiles never wrap. Every pipe is declared as a parameter and bound by the
+    // in1 reader under one accessor; each worker holds exactly one pipe's receiver.
+    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+    Group<PrefetcherPipeParamName> prefetcher_pipe_names;
+    const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
+    if (use_prefetcher_pipes) {
+        const CoreRangeSet pipe_receivers =
+            tt::tt_metal::experimental::prefetcher_pipe_receiver_cores(prefetcher_pipes);
+        TT_FATAL(
+            pipe_receivers.num_cores() == all_cores_with_work.num_cores() &&
+                pipe_receivers.intersection(all_cores_with_work).num_cores() == all_cores_with_work.num_cores(),
+            "matmul mcast_in0 over prefetcher_pipes needs the pipes' receivers to be exactly the {} workers that "
+            "compute an output block ({}), but they are {}. Receiver i in row-major order computes output columns "
+            "[i * per_core_N, (i + 1) * per_core_N).",
+            all_cores_with_work.num_cores(),
+            all_cores_with_work.str(),
+            pipe_receivers.str());
+        // Validation has checked the ring is a whole number of these K-blocks, and at least two.
+        const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
+        for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+            const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
+            prefetcher_pipe_names.push_back(name);
+            prefetcher_pipe_parameters.push_back(PrefetcherPipeParameter{
+                .unique_id = name,
+                .receivers = prefetcher_pipes[p]->receiver_cores(),
+                .ring_size = ring_size,
+                .entry_size = in1_pipe_entry_size,
+            });
+        }
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN1_DFB,
+            .entry_size = in1_single_tile_size,
+            .num_entries = ring_size / in1_single_tile_size,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = in1_tile,
+            .advanced_options = {.prefetcher_pipe_relays = prefetcher_pipe_names},
+        });
+    } else {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN1_DFB,
+            .entry_size = in1_aligned_tile_size,
+            .num_entries = in1_dfb_size / in1_aligned_tile_size,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = in1_tile,
+            .borrowed_from = in1_is_sharded ? std::optional<TensorParamName>(IN1) : std::nullopt,
+        });
+    }
 
     // in0 sharded: the resident in0 shard the block-sharded sender multicasts out of.
     if (in0_is_sharded) {
@@ -4063,6 +4129,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             in1_sender.compile_time_args.insert({"in3_tensor_stride_w", 1u});
             in1_sender_rta_names.push_back("in3_tensor_start_tile_id");
         }
+        if (use_prefetcher_pipes) {
+            // The pipes' receiver kernel: one accessor over every pipe, one of which is present on each
+            // worker. It publishes each delivered entry to cb_in1 and acks it once compute is done.
+            in1_sender.advanced_options.prefetcher_pipe_bindings = {
+                {.pipe_parameter_names = prefetcher_pipe_names, .accessor_name = "in1"}};
+        }
         if (!output_is_sharded) {
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
         }
@@ -4418,6 +4490,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(BIAS, *bias_tensor);
     }
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            prefetcher_pipe_names[p], PrefetcherPipeArgument{*prefetcher_pipes[p]});
+    }
 
     ProgramSpec spec{
         .name = "matmul_multi_core_reuse_mcast_1d_in0",
@@ -4426,6 +4502,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(prefetcher_pipe_parameters)},
     };
 
     return ttnn::device_operation::ProgramArtifacts{
@@ -6041,8 +6118,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             untilize_out,
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            sub_device_start_core,
+            operation_attributes.prefetcher_pipes);
     }
+    TT_FATAL(
+        operation_attributes.prefetcher_pipes.empty(),
+        "matmul over prefetcher_pipes is supported only for mcast_in0=true, not the mcast_in1 variant");
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_artifacts(
         a,
         device,

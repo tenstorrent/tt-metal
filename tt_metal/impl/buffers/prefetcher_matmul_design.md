@@ -416,6 +416,27 @@ the one exception — a per-receiver rotation is receiver-contiguous only — so
 consumer is always batched, whereas K-row-major mcast is not (its natural FIFO order needs no
 rotation).
 
+#### Mcast-in0 over PrefetcherPipes
+
+Mcast-in0 can also drain the DRAM-sender PrefetcherPipes from `CreatePrefetcherPipesForTensorPrefetcher`
+(`ttnn.linear(..., prefetcher_pipes=pipes)`), through the Metal 2.0 factory
+(`create_program_mcast_in0_artifacts`):
+
+- Every pipe is a `PrefetcherPipeParameter` of the ProgramSpec, and the in1 reader binds them all
+  under one accessor (`pipe::in1`); exactly one is present on each worker. The pipe objects arrive in
+  the run args, so a cached program keeps the pipes it was built against (their identity is in the
+  cache key).
+- The pipes carry one K-block (`in0_block_w * per_core_N` tiles) per entry, which is what the
+  prefetcher writes. The in1 buffer is a relay DFB over the pipes' rings paged by tile, so nothing is
+  copied and compute consumes in1 exactly as it does from DRAM (`wait_front` / `matmul_block` /
+  `pop_front` of a block's tiles). A relay may page each pipe entry as a whole number of its own
+  entries (`DFBAdvancedOptions::prefetcher_pipe_relays`; not on Quasar). The ring must be a whole
+  number of K-blocks, so a block's tiles never wrap, and hold at least two: the reader publishes a
+  block while the previous one drains.
+- Receiver-contiguous weights only, `transpose_b=false`, and the pipes' receivers must be exactly the
+  workers that compute an output block, with the receiver at ring position `i` on the `i`-th worker in
+  row-major order.
+
 #### Fit ladder (receiver-contiguous)
 
 The receiver-contiguous path rotates through three stage slots
@@ -511,6 +532,10 @@ Whoever changes prefetcher or receiver code must preserve these:
   `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp`
 - Receiver matmul compute:
   `ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp`
+- Mcast-in0 over PrefetcherPipes: `create_program_mcast_in0_artifacts` in
+  `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp`,
+  with the `_metal2` in1 reader under `ENABLE_PREFETCHER_PIPE`; the relay's pages-per-entry
+  alignment is in `tt_metal/hw/inc/internal/prefetcher_pipe_init.h`.
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.

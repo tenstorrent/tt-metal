@@ -4,6 +4,8 @@
 
 #include "ttnn/global_circular_buffer.hpp"
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+
 #include <memory>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -428,6 +430,21 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(program_config, weight, receiver_count);
     validate_krow_major_gcb_topology(program_config, gcb);
     return block_count;
+}
+
+uint32_t tensor_prefetcher_block_count_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const ttnn::Tensor& weight,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
+    const uint32_t receiver_count =
+        tt::tt_metal::experimental::prefetcher_pipe_receiver_cores(prefetcher_pipes).num_cores();
+    TT_FATAL(receiver_count > 0, "prefetcher_pipes has no receivers");
+    TT_FATAL(
+        is_receiver_contiguous_weight(weight),
+        "PrefetcherPipe delivery is receiver-contiguous only: allocate the weight with an NdShardSpec giving each "
+        "receiver its own (full K, N/receiver_count) DRAM shard. The legacy K-row-major WIDTH_SHARDED layout needs a "
+        "sender that slices one bank's shard across its receivers, which this transport does not do.");
+    return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the

@@ -241,7 +241,10 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_dfb_id = dfb::in0;
 
     DataflowBuffer in0_dfb(in0_dfb_id);
-    DataflowBuffer in1_dfb(in1_dfb_id);
+    // From the binding token, not the bare id: under PrefetcherPipe delivery the host makes in1 a
+    // relay, and only the token constructor re-aligns it to the pipe's durable read cursor (firmware
+    // resets the buffer's pointers at every launch). Identical to the id form on every other path.
+    DataflowBuffer in1_dfb(dfb::in1);
     DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
     DataflowBuffer untilize_mode_out_dfb(untilize_mode_out_dfb_id);
 
