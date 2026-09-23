@@ -245,6 +245,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_
     assert_equal(torch_result, ttnn_result)
 
 
+@pytest.mark.merge_gate
 def test_argmax_nc_ties_first_index_wins(device):
     """Constant tensor: argmax tie-break must match PyTorch (smallest index wins)."""
     t = torch.full([4, 3, 64, 64], 1.0, dtype=torch.bfloat16)
@@ -256,6 +257,7 @@ def test_argmax_nc_ties_first_index_wins(device):
         assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
 
 
+@pytest.mark.merge_gate
 def test_argmax_nc_preallocated_output(device):
     torch.manual_seed(0)
     t = torch.randn(2, 3, 64, 64, dtype=torch.float32)

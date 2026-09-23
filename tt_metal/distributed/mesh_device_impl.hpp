@@ -41,6 +41,8 @@ namespace tt::tt_metal {
 class Allocator;
 class HWCommandQueue;
 class MetalEnv;
+class MetalEnvImpl;
+class MetalContext;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -135,6 +137,10 @@ private:
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
     ContextId context_id_ = DEFAULT_CONTEXT_ID;
+    // Handles to the runtime this MeshDevice belongs to, resolved once at construction.
+    // context_id_ is retained while thread pools, DriscL1Arena, and context teardown still take an id.
+    MetalContext* metal_context_ = nullptr;
+    MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
     // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
@@ -225,7 +231,7 @@ public:
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh,
-        ContextId context_id);
+        MetalContext& metal_context);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -235,6 +241,8 @@ public:
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     ContextId get_context_id() const { return context_id_; }
+    MetalContext& metal_context() const;
+    MetalEnvImpl& metal_env() const;
     // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.
     // This was added to cleanup the MetalContext after MeshDevice closes.
     // It needs to be removed to enable https://github.com/tenstorrent/tt-metal/issues/21500.
@@ -281,6 +289,7 @@ public:
         NOC noc, const MeshCoordinate& coord);
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;

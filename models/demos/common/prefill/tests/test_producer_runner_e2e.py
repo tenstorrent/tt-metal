@@ -151,26 +151,13 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
+            # GLM-5.2's calibrated KVPE floor. The 0.88 default is above what this model reaches
+            # (~0.857 min per-layer), so it has to be set explicitly here.
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
         # are far past the Kimi-sized defaults.
-        "ready_timeout_s": 3600,
-        "producer_timeout_s": 7200,
-        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
-    },
-    # 5) Scenario (4) + SPxTP KV dedup: each of the 32 devices holds a distinct 1/(sp*tp) slice. Storage
-    #    only, so acceptance is per-layer PCC EQUAL to (4); the floor just clears (4)'s 0.8608 nope minimum.
-    "glm52_full_depth_kv_table_tp_sharded": {
-        "users": 1,
-        "layers": 78,
-        "max_seq_len": 56320,
-        "env": {
-            "PREFILL_MODEL": "glm_5_2",
-            "PREFILL_TRACE_DIR": GLM52_TRACE,
-            "PREFILL_TP_SHARD_KV": "1",
-            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
-        },
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},

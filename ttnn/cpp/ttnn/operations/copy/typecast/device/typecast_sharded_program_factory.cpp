@@ -39,8 +39,8 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat act_df = cb_dataformat_for(input.dtype());
+    tt::DataFormat out_df = cb_dataformat_for(output.dtype());
 
     uint32_t input_tile_size = tt::tile_size(act_df);
     uint32_t output_tile_size = tt::tile_size(out_df);
@@ -187,7 +187,11 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"per_core_block_cnt", 1u}, {"per_core_block_dim", num_tile_per_core}},
+        .compile_time_args =
+            {{"per_core_block_cnt", 1u},
+             {"per_core_block_dim", num_tile_per_core},
+             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
         .hw_config = ComputeHardwareConfig{ComputeGen1Config{
             .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false

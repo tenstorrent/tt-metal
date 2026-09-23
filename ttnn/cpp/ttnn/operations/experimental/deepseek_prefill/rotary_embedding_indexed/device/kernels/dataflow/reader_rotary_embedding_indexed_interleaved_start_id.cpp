@@ -37,9 +37,13 @@ void kernel_main() {
     auto seq_t_start = get_arg(args::seq_t_start);
     auto seq_t_end = get_arg(args::seq_t_end);
 
+    const auto head_start = get_arg(args::head_start);
+    const auto head_end = get_arg(args::head_end);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto input_Wt = get_arg(args::input_Wt);
+    constexpr auto rotary_offset_t = get_arg(args::rotary_offset_t);
     constexpr bool freq_per_head = get_arg(args::freq_per_head) == 1;
     constexpr auto cos_Ht = get_arg(args::cos_Ht);
     constexpr auto sin_Ht = get_arg(args::sin_Ht);
@@ -136,7 +140,7 @@ void kernel_main() {
         uint32_t sin_cos_row_cnt = 0;
         bool done_sin_cos = false;
 
-        for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
+        for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
                 dfb_sin.reserve_back(Wt);
@@ -147,7 +151,8 @@ void kernel_main() {
 
                 dfb_input.reserve_back(Wt);
                 uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
-                uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
+                uint32_t input_curr_idx =
+                    ((batch_id * n_heads + head_num) * Ht + seq_tile) * input_Wt + rotary_offset_t;
                 // Offset the cos/sin source index by update_idxt: the input local tile `seq_tile`
                 // is rotated by the value at shard row (update_idxt + seq_tile).
                 const uint32_t rope_seq_tile = update_idxt + seq_tile;

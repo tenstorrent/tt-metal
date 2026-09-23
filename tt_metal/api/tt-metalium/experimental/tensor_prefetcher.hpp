@@ -82,7 +82,7 @@ struct TensorPrefetcherInput {
     // ring matmul, rotation[r] = r reproduces the natural topology order. The matmul must be
     // built to consume in the matching order, else it deadlocks. The host is responsible for
     // supplying a rotation consistent with the consumer's ring topology.
-    std::vector<uint32_t> rotation = {};
+    std::vector<uint32_t> rotation;
 };
 
 // Build per-device Programs (two DRISC kernels per DRAM bank), allocate

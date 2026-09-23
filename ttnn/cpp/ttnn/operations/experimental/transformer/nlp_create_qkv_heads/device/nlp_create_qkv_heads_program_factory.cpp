@@ -48,6 +48,7 @@ struct InterleavedWorkSplit {
     // Kernel push order in create_descriptor(): [compute core_group_1, [compute core_group_2,]]
     // reader, writer.  The compute kernels exist only when transpose_k_heads, and the second one only
     // when core_group_2 is non-empty.
+    bool head_parallel = false;
     uint32_t reader_kernel_idx = 0;
     uint32_t writer_kernel_idx = 1;
 };
@@ -57,12 +58,16 @@ InterleavedWorkSplit build_interleaved_work_split(
     const auto& input_shape = input_tensor.padded_shape();
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
-    // Block is a unit of work; ie. num of in0_w_tiles per core
-    const uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+    const uint32_t sequence_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+    // Split heads only when the Q-only sequence split would leave cores idle.
+    const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
+                               !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
+    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
     InterleavedWorkSplit split;
+    split.head_parallel = head_parallel;
     split.all_cores = std::move(all_cores);
     split.core_group_1 = std::move(core_group_1);
     split.core_group_2 = std::move(core_group_2);
@@ -160,6 +165,9 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
+        static_cast<uint32_t>(split.head_parallel),
+        q_out_w_tiles,
+        q_out_h_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     // Always append placeholder/accessor for in1 to keep offsets stable
@@ -173,6 +181,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         (std::uint32_t)q_out_HtWt,
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
+        static_cast<uint32_t>(split.head_parallel),
+        operation_attributes.q_head_split.value_or(0) / TILE_WIDTH,
     };
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
@@ -237,8 +247,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // Create circular buffers
-    uint32_t micro_block_size = 1;                 // Num tiles to read/wait for in reader and writer
-    uint32_t cb_num_tiles = micro_block_size * 4;  // Quadruple buffer everything
+    // Retain the original four-tile capacity, including batched head transfers.
+    uint32_t cb_num_tiles = 4;
 
     // TODO: Investigate perf allocating full in0_w_tiles with double buffer
     // uint32_t cb1_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
@@ -313,19 +323,19 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
             reader_rt.push_back(uint32_t{0});
         }
         reader_rt.push_back(num_blocks_per_core);
-        reader_rt.push_back(num_blocks_written * in0_w_tiles);
+        reader_rt.push_back(split.head_parallel ? num_blocks_written : num_blocks_written * in0_w_tiles);
         reader_rt.push_back(num_blocks_written * in1_w_tiles);
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         writer_desc.emplace_runtime_args(
             core,
             {
-                q_buffer,              // q_tensor_addr
-                k_buffer,              // k_tensor_addr
-                v_buffer,              // v_tensor_addr
-                num_blocks_per_core,   // num_blocks
-                q_out_h_dim,           // q_out_h_dim
-                q_out_tensor_tile_id,  // q_out_tensor_tile_id
+                q_buffer,             // q_tensor_addr
+                k_buffer,             // k_tensor_addr
+                v_buffer,             // v_tensor_addr
+                num_blocks_per_core,  // num_blocks
+                q_out_h_dim,          // q_out_h_dim
+                split.head_parallel ? num_blocks_written * q_out_w_tiles : q_out_tensor_tile_id,
                 k_out_tensor_tile_id,  // k_out_tensor_tile_id
                 v_out_tensor_tile_id,  // v_out_tensor_tile_id
             });

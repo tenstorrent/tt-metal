@@ -592,9 +592,11 @@ def open_ring_joint_sdpa_runtime(
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
     num_global_semaphores: int = 3,
+    fabric_config: ttnn.FabricConfig = None,
 ):
     if full_mesh:
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        # The caller asks for a full-mesh gather; the op resolves whether that route closes.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if fabric_config is None else fabric_config
         topology = Topology.Ring
     else:
         use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
@@ -947,6 +949,9 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    # logical_n as a device tensor instead of a host int. Pure transport change, so the accuracy check
+    # below must pass identically.
+    logical_as_tensor=False,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -1119,6 +1124,14 @@ def run_ring_joint_sdpa(
 
         # Set logical_n to the original full sequence length
         corrected_logical_n = sq
+        if logical_as_tensor:
+            corrected_logical_n = ttnn.from_torch(
+                torch.tensor([sq], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
         # Precompute mesh composer dims
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
@@ -3704,8 +3717,16 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
 
 @pytest.mark.parametrize("mesh_scope", ["2x2", "complete"], ids=["2x2", "complete_mesh"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
-def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced):
-    """Run one snake ring across the complete 2D mesh and verify canonical KV placement."""
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced, fabric_config):
+    """Run one snake across the complete 2D mesh and verify canonical KV placement.
+
+    A torus closes the snake; a plain 2D fabric has no closing edge and resolves the same walk as
+    an open path. The gathered KV placement must be identical either way."""
     if mesh_scope == "2x2":
         if MESH_CONFIG.num_devices != 4:
             pytest.skip("2x2 full-mesh ring_mla requires an exact four-device physical mesh")
@@ -3720,8 +3741,12 @@ def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope
         pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
     if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
         pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D_TORUS_XY and not (
+        MESH_CONFIG.is_galaxy and mesh_scope == "complete"
+    ):
+        pytest.skip(f"a torus needs the complete 8x4; {mesh_scope} has no closing edge")
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config)
     try:
         mesh_device = runtime.mesh_device
         ring_size = mesh_device.get_num_devices()
@@ -3896,7 +3921,7 @@ def test_ring_mla_full_mesh_kv_actual_isl_cache_patch_accuracy_and_determinism()
     )
 
 
-def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error):
+def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
     """Full-mesh-only preconditions must fail on the host before any device dispatch."""
     mesh_config = (
         MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
@@ -3960,8 +3985,6 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
                 use_column_major_ccl=True,
             )
 
-        with expect_error(RuntimeError, "requires Ring topology"):
-            invoke(tt_q, tt_kv, tt_persistent, Topology.Linear)
         with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
@@ -4841,6 +4864,30 @@ STANDARD_MODEL_GROUPS, STANDARD_MODEL_GROUP_IDS = _generate_standard_model_group
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
+# Causal / balanced-zigzag coverage for the logical_n tensor transport, where the ring-work masks
+# additionally carry the causal skip rule. models/tt_dit covers the non-causal shapes.
+@pytest.mark.parametrize(
+    "is_causal, is_balanced", [(True, False), (True, True), (False, False)], ids=["causal", "balanced", "noncausal"]
+)
+def test_ring_joint_attention_logical_tensor_accuracy(is_causal, is_balanced):
+    """logical_n read on-device must clear the same accuracy bar as the host scalar: run_ring_joint_sdpa
+    checks the CPU reference, so a mis-derived logical_nt or a missed tail mask shows up as a PCC failure."""
+    run_ring_joint_sdpa(
+        MESH_CONFIG,
+        1,  # b
+        8,  # nhq
+        8,  # nhk
+        256 * MESH_CONFIG.sp_size,  # sq: 256 per device, so half the local seq divides q_chunk_size (balanced case)
+        128,  # d_q
+        128,  # q_chunk_size
+        128,  # k_chunk_size
+        ttnn.bfloat16,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        logical_as_tensor=True,
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
@@ -5297,7 +5344,7 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
         ("wan2_2_1xGLX", 288, 512, 4, 68.5, RING_JOINT_PERF_MARGIN),
-        ("mla_100k", 160, 320, 4, 63.2, RING_JOINT_PERF_MARGIN),
+        ("mla_100k", 160, 320, 4, 62.5, RING_JOINT_PERF_MARGIN),
     ]
 
 

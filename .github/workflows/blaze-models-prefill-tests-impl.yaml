@@ -342,7 +342,7 @@ jobs:
             echo "::notice title=tt-triage::Hang triaged on $(ls "$TRIAGE_OUTPUT_DIR" | tr '\n' ' ')— see artifact \"triage_output_$TEST_NAME (attempt ${{ github.run_attempt }})\""
           fi
           if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
-          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; fi
+          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; rmdir --ignore-fail-on-non-empty "$(dirname "$TRIAGE_OUTPUT_DIR")" 2>/dev/null || true; fi
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()
