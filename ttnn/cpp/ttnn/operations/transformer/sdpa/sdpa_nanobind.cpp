@@ -941,7 +941,7 @@ void bind_sdpa(nb::module_& mod) {
             precision (ttnn.SDPAPrecision, optional): Explicit Blackhole D128, noncausal Q128-Q320/K512
                 numerical recipe (see docs/sdpa_precision.md). One recurrent state per Q chunk is kept in L1
                 across all active ring steps and normalized once on the last one. Currently requires a
-                single head-segment per core row (one pass), a scalar logical_n and the default scale.
+                scalar logical_n and the default scale; up to three head-segments per core row run pass-outer.
                 Omit to retain the legacy behavior. Cannot be combined with compute_kernel_config or
                 exp_approx_mode=False.
             inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint

@@ -226,9 +226,20 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
+#ifdef SDPA_RECIPE_EXP_RING
+    // Named recipes run pass-outer, ring-inner: each pass (head-segment) keeps one resident Q chunk and
+    // one recurrent state across the whole ring, so every pass replays the full ring sequence. All
+    // devices, rows and the MUX writers use the same order, so the cumulative per-link forwarding
+    // counts, mcast credits, dedup relays and phase-alignment pairs stay matched.
+    for (uint32_t pass = 0; pass < q_count; ++pass) {
+    RingIdSequencer pass_seq = fused_op_indexer.seq;
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        uint32_t ring_id = pass_seq.get_next_ring_id([](uint32_t, uint32_t) {});
+#else
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+#endif
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -259,7 +270,9 @@ void kernel_main() {
         // Passes are serial within a ring iteration: pass p attends head (p * rows + my_row) against
         // this iteration's K/V shard. Every core of a row runs the same number of passes in the same
         // order, which is what keeps the row's K/V CB pointers in lockstep for the mcast.
+#ifndef SDPA_RECIPE_EXP_RING
         for (uint32_t pass = 0; pass < q_count; ++pass) {
+#endif
             const uint32_t global_q_chunk = q_base + pass * q_stride;
             // Counted per pass: compute drains its phase-alignment padding per pass too.
             uint32_t KV_chunks_processed_in_iter = 0;
@@ -655,8 +668,13 @@ void kernel_main() {
                     cb_v_writer.push_back(v_chunk_tiles);
                 }
             }
+#ifndef SDPA_RECIPE_EXP_RING
         }
+#endif
     }
+#ifdef SDPA_RECIPE_EXP_RING
+    }
+#endif
 
     // Reset all per-link out-ready semaphores so they are clean for the next invocation
     if (is_injector) {

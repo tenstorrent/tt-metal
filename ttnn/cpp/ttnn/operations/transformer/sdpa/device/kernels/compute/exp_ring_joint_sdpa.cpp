@@ -180,16 +180,18 @@ void kernel_main() {
         CircularBuffer(recipe_cb_identity_scale).wait_front(1);
         CircularBuffer(recipe_cb_col_identity).wait_front(1);
 
-        // One pass per core row (host-validated): a single Q chunk whose recurrent state stays resident
-        // in L1 across every active ring iteration. Q is released and the state normalized only on the
-        // last KV chunk of the last active iteration.
-        ASSERT(q_count == 1);
-        RecipeAccumulatorState resident = {{12, 10, 8}, {13, 11, 9}};
+        // Pass-outer, ring-inner (matching the reader and writer): each pass owns one Q chunk whose
+        // recurrent state stays resident in L1 across every active ring iteration. Q is released and the
+        // state normalized only on the last KV chunk of the pass's last active ring iteration, so the
+        // next pass starts from fresh state and the single-slot Q CB.
         const uint32_t last_active_ring_iter =
             find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
+        for (uint32_t pass = 0; pass < q_count; ++pass) {
+        RecipeAccumulatorState resident = {{12, 10, 8}, {13, 11, 9}};
+        RingIdSequencer pass_seq = fused_op_indexer.seq;
         bool seen_active_iter = false;
         for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            const uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            const uint32_t ring_id = pass_seq.get_next_ring_id([](uint32_t, uint32_t) {});
             const bool do_joint_kv = ring_id == ring_size - 1;
             const uint32_t num_kv_chunks =
                 do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -219,6 +221,7 @@ void kernel_main() {
                 !seen_active_iter,
                 ring_iter == last_active_ring_iter);
             seen_active_iter = true;
+        }
         }
     }
 #else

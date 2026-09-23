@@ -1110,9 +1110,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // Adopt the recipe CB layout (fixed indices 0-16) in place of the exp-ring CBs built above;
         // this discards them unchanged, so the legacy layout stays byte-identical when precision is unset.
         // Only K/V gain second handles for the MUX writer (the recipe's c_14 is exp_max_diff, so the exp
-        // aliases move to exp_ring::kRecipe{K,V}WriterAliasCb). Q is single-slot: with one pass every Q
-        // chunk is read once and stays resident across all ring iterations, so the recipe's second Q
-        // slot would be dead L1.
+        // aliases move to exp_ring::kRecipe{K,V}WriterAliasCb). Q is single-slot: recipes run pass-outer,
+        // so each pass's Q chunk is read once, stays resident across its ring iterations and is popped
+        // before the next pass reads its own; the recipe's second Q slot would be dead L1.
         namespace recipes = ttnn::operations::transformer::sdpa::detail;
         namespace exp_ring_cbs = ttnn::operations::transformer::sdpa::exp_ring;
         auto recipe_program = recipes::recipe_compute_program(*recipe_policy, sdpa_grid_set, 1, Sq_chunk_t);
@@ -1153,7 +1153,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         total_cb_bytes,
         q_chunk_size,
         usable_l1);
-    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
+    // Recipes run pass-outer with a single-slot Q per pass (read once, popped at the pass's end), which
+    // already is the streamed layout; the legacy re-read-every-iteration stream_q protocol never applies.
+    const bool stream_q = !named_compute && (num_passes > 1) && (total_cb_bytes > usable_l1);
     if (stream_q) {
         total_cb_bytes -= desc.cbs[0].total_size;
         desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
