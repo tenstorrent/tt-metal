@@ -104,12 +104,14 @@ void wait_for_tracy_connection() {
 // Cold cache profiling.
 std::shared_ptr<MeshDevice> open_cold() {
     TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::cold");
+    // null MeshDeviceConfig creates a mesh device with the shape of the connected system mesh
     return MeshDevice::create(MeshDeviceConfig(std::nullopt));
 }
 
 // Hot cache profiling.
 std::shared_ptr<MeshDevice> open_hot() {
     TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::hot");
+    // null MeshDeviceConfig creates a mesh device with the shape of the connected system mesh
     return MeshDevice::create(MeshDeviceConfig(std::nullopt));
 }
 
