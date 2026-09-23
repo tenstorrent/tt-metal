@@ -7,8 +7,8 @@
 **This file needs the CustomVoice checkpoint**, which the rest of the suite does not. The
 two releases are complementary: Base carries `speaker_encoder` but leaves `spk_id` empty,
 CustomVoice carries the nine speakers but no speaker encoder. So the speaker-encoder tests
-want Base and these want CustomVoice, and the checkpoint is resolved here by repo id rather
-than from the ambient `$QWEN3_TTS_CKPT`.
+want Base and these want CustomVoice, the one at the ambient checkpoint's size, rather than
+the ambient `$QWEN3_TTS_CKPT` itself.
 
 What is checked, and what cannot be:
 
@@ -28,13 +28,12 @@ What is checked, and what cannot be:
     the checkpoint's own settings, and `sampling` records what greedy does instead.
 """
 
-import os
-
 import pytest
 import torch
 
 from models.demos.audio.qwen3_tts import frontend, weights
 from models.demos.audio.qwen3_tts.reference.qwen3_talker_ref import TalkerReference, default_position_ids
+from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width, use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
     TtCodePredictor,
     preprocess_code_predictor_parameters,
@@ -50,7 +49,6 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
 )
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import TtTalker, preprocess_talker_parameters
 
-CUSTOM_VOICE_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 TEXT = "Hello there."
 LONGER_TEXT = "The kettle is on, and the rain has not let up."
 INSTRUCTION = "Say it in a very angry tone."
@@ -66,40 +64,16 @@ STEPS = 4
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 
-def _clear_caches():
-    """Drop every cached view of the checkpoint, so switching does not leak across tests.
-
-    `frontend` caches too, and forgetting it let this module's checkpoint switch change what
-    a later tokenizer test saw: CustomVoice's `codec_language_id` carries 12 entries, the ten
-    languages plus `beijing_dialect` and `sichuan_dialect` for its dialect speakers.
-    """
-    for cached in (
-        weights.checkpoint_dir,
-        weights._model_config_json,
-        weights.codec_dir,
-        weights._codec_config_json,
-        frontend.tokenizer,
-        frontend.special_tokens,
-        frontend.language_ids,
-    ):
-        cached.cache_clear()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def custom_voice_checkpoint():
-    """Point the whole module at CustomVoice, whatever the ambient setting is."""
-    from huggingface_hub import snapshot_download
+    """Point the whole module at CustomVoice, at the ambient checkpoint's size."""
+    yield from use_release("custom_voice")
 
-    path = snapshot_download(CUSTOM_VOICE_REPO)
-    previous = os.environ.get("QWEN3_TTS_CKPT")
-    os.environ["QWEN3_TTS_CKPT"] = path
-    _clear_caches()
-    yield path
-    if previous is None:
-        os.environ.pop("QWEN3_TTS_CKPT", None)
-    else:
-        os.environ["QWEN3_TTS_CKPT"] = previous
-    _clear_caches()
+
+# Upstream drops an instruction at 0.6B and the pipeline refuses one there instead.
+needs_instructions = pytest.mark.skipif(
+    "weights.model_size() == '0b6'", reason="the 0.6B checkpoints take no instruction"
+)
 
 
 @pytest.fixture(scope="module")
@@ -121,7 +95,7 @@ def test_prefill_length_is_text_plus_eleven(tables):
     embeddings, prompt_ids = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     n_text = len(prompt_ids) - ROLE_IDS - TAIL_IDS
 
-    assert embeddings.shape == (1, n_text + 11, 2048)
+    assert embeddings.shape == (1, n_text + 11, hidden_width())
 
 
 def test_prefill_composition_position_by_position(tables):
@@ -130,7 +104,7 @@ def test_prefill_composition_position_by_position(tables):
     embeddings, prompt_ids = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
 
-    codec = lambda ids: tables.codec(ids).reshape(-1, 2048)
+    codec = lambda ids: tables.codec(ids).reshape(-1, hidden_width())
     think = codec(
         [
             config["codec_think_id"],
@@ -142,7 +116,7 @@ def test_prefill_composition_position_by_position(tables):
     pad = tables.tts_pad.reshape(-1)
 
     # 0-2: role tokens, text track only.
-    assert torch.allclose(embeddings[0, :ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, 2048))
+    assert torch.allclose(embeddings[0, :ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, hidden_width()))
     # 3-6: the think block against tts_pad.
     assert torch.allclose(embeddings[0, 3:7], think + pad)
     # 7: the speaker id against tts_pad.
@@ -150,7 +124,7 @@ def test_prefill_composition_position_by_position(tables):
     # 8: codec_pad against tts_bos.
     assert torch.allclose(embeddings[0, 8], codec([config["codec_pad_id"]])[0] + tables.tts_bos.reshape(-1))
     # 9 onward: the text then tts_eos, each against codec_pad.
-    body = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1).reshape(-1, 2048)
+    body = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1).reshape(-1, hidden_width())
     assert torch.allclose(embeddings[0, 9 : 9 + len(text_ids) + 1], body + codec([config["codec_pad_id"]])[0])
     # last: codec_bos against tts_pad.
     assert torch.allclose(embeddings[0, -1], codec([config["codec_bos_id"]])[0] + pad)
@@ -272,6 +246,7 @@ def test_generate_produces_audio_of_the_right_length(device):
     print(f"generated {codes.shape[0]} frames -> {waveform.shape[1] / 24000:.2f} s")
 
 
+@needs_instructions
 def test_an_instruction_joins_a_named_speaker(tables):
     """Upstream's `generate_custom_voice(..., instruct=...)`: a speaker and a delivery.
 
@@ -296,6 +271,16 @@ def test_an_empty_instruction_is_no_instruction(tables):
         assert torch.equal(got, plain), f"{empty!r} changed the prompt"
 
 
+@pytest.mark.skipif("weights.model_size() != '0b6'", reason="only the 0.6B checkpoints refuse an instruction")
+def test_the_small_checkpoints_refuse_an_instruction(tables, expect_error):
+    """Upstream silently drops `instruct` at 0.6B; speaking without it would ignore the caller."""
+    with expect_error(ValueError, "do not take an instruction"):
+        build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables, INSTRUCTION)
+    plain, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables, "  ")
+    assert plain.shape[1] > 0, "an empty instruction is still no instruction, and allowed"
+
+
+@needs_instructions
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_an_instruction_changes_what_a_named_speaker_does(device):
     """The instruction must reach the speech, not just the prompt."""

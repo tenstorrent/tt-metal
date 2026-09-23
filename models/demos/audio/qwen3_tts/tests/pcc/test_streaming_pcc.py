@@ -14,12 +14,11 @@ a second `tts_eos` after the prompt had closed the text track, and a projection 
 worth 7.5e-08; both are pinned below.
 """
 
-import os
-
 import pytest
 import torch
 
 from models.demos.audio.qwen3_tts import frontend, weights
+from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width, use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     ROLE_IDS,
     TAIL_IDS,
@@ -32,7 +31,6 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     build_streaming_prefill,
 )
 
-CUSTOM_VOICE_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 SPEAKER = "ryan"
@@ -45,33 +43,9 @@ STREAMING_PROMPT = 10
 STREAMING_PROMPT_AUTO = 9
 
 
-def _clear_caches():
-    for cached in (
-        weights.checkpoint_dir,
-        weights._model_config_json,
-        weights.codec_dir,
-        weights._codec_config_json,
-        frontend.tokenizer,
-        frontend.special_tokens,
-        frontend.language_ids,
-    ):
-        cached.cache_clear()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def custom_voice_checkpoint():
-    from huggingface_hub import snapshot_download
-
-    path = snapshot_download(CUSTOM_VOICE_REPO)
-    previous = os.environ.get("QWEN3_TTS_CKPT")
-    os.environ["QWEN3_TTS_CKPT"] = path
-    _clear_caches()
-    yield path
-    if previous is None:
-        os.environ.pop("QWEN3_TTS_CKPT", None)
-    else:
-        os.environ["QWEN3_TTS_CKPT"] = previous
-    _clear_caches()
+    yield from use_release("custom_voice")
 
 
 @pytest.fixture(scope="module")
@@ -86,8 +60,8 @@ def test_the_prompt_length_does_not_depend_on_the_text(tables):
     """The point of the regime: a sentence and a paragraph prefill the same ten positions."""
     short, _ = build_streaming_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     long, _ = build_streaming_prefill(LONGER * 4, SPEAKER, LANGUAGE, tables)
-    assert short.shape == (1, STREAMING_PROMPT, 2048)
-    assert long.shape == (1, STREAMING_PROMPT, 2048)
+    assert short.shape == (1, STREAMING_PROMPT, hidden_width())
+    assert long.shape == (1, STREAMING_PROMPT, hidden_width())
 
     plain_short, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     plain_long, _ = build_custom_voice_prefill(LONGER * 4, SPEAKER, LANGUAGE, tables)
@@ -186,7 +160,7 @@ def _reference(tables, frames=24, words=6):
     codes = torch.randint(0, codebook, (16, frames), generator=generator)
     return CloneReference(
         codes=codes,
-        speaker_embedding=torch.zeros(1, 2048),
+        speaker_embedding=torch.zeros(1, hidden_width()),
         text=" ".join(["word"] * words),
     )
 

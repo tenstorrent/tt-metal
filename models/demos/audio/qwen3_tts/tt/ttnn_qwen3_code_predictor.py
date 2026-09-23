@@ -8,9 +8,9 @@ Reference: models/demos/audio/qwen3_tts/reference/qwen3_code_predictor_ref.py
 
 The talker predicts codebook 0 of each frame; this produces the other 15. Five layers,
 hidden 1024, attention in a 2048-wide head space (16 query heads over 8 key/value heads at
-head_dim 128), intermediate 3072, vocabulary 2048.
+head_dim 128), intermediate 3072, vocabulary 2048. Identical at both model sizes.
 
-Block boundary: embeddings [1, 16, 2048] in, logits [1, 15, 2048] out. Position i is read
+Block boundary: embeddings [1, 16, talker hidden] in, logits [1, 15, 2048] out. Position i is read
 by `lm_head[i-1]` to give codebook i, so the same weights serve a 2-position prefill
 followed by 14 single-position steps, or one teacher-forced pass over all 16. This module
 implements the teacher-forced pass and a greedy loop built on it.
@@ -53,6 +53,36 @@ def plain_rotary_tables(config, length):
     frequencies = (inverse_frequencies.reshape(1, -1, 1) @ positions).transpose(1, 2)
     embedded = torch.cat((frequencies, frequencies), dim=-1)
     return embedded.cos().unsqueeze(1), embedded.sin().unsqueeze(1)
+
+
+def preprocess_projection(state, device, dtype):
+    """`small_to_mtp_projection` as (weight, bias), or (None, None) where it is an identity.
+
+    The 1.7B talker is 2048 wide against the predictor's 1024 and ships the projection, the
+    one layer here with a bias. At 0.6B both are 1024 and upstream builds `nn.Identity`.
+    """
+    if "small_to_mtp_projection.weight" not in state:
+        return None, None
+    weight = ttnn.from_torch(
+        state["small_to_mtp_projection.weight"].t().contiguous(),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    bias = ttnn.from_torch(
+        state["small_to_mtp_projection.bias"].reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    return weight, bias
+
+
+def project(x, parameters, compute_config):
+    """The predictor's input projection, which is nothing at all when the widths match."""
+    if parameters["projection"] is None:
+        return x
+    return ttnn.linear(
+        x, parameters["projection"], bias=parameters["projection_bias"], compute_kernel_config=compute_config
+    )
 
 
 def preprocess_code_predictor_parameters(device, config=None, dtype=ttnn.bfloat16):
@@ -99,19 +129,14 @@ def preprocess_code_predictor_parameters(device, config=None, dtype=ttnn.bfloat1
         )
 
     heads = cfg["num_code_groups"] - 1
+    projection, projection_bias = preprocess_projection(state, device, dtype)
     return {
         "config": cfg,
         "talker_config": talker_cfg,
         "layers": layers,
         "norm": norm("model.norm"),
-        # small_to_mtp_projection is the one layer here that carries a bias.
-        "projection": linear("small_to_mtp_projection"),
-        "projection_bias": ttnn.from_torch(
-            state["small_to_mtp_projection.bias"].reshape(1, 1, -1),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        ),
+        "projection": projection,
+        "projection_bias": projection_bias,
         "lm_head": [linear(f"lm_head.{index}") for index in range(heads)],
         # Host-side tables: position 1 reads the talker's codec embedding, positions 2
         # onward the predictor's own, indexed per step. Kept on host because a greedy loop
@@ -143,16 +168,14 @@ class TtCodePredictor:
         return cos, sin, causal_mask(length)
 
     def __call__(self, embeddings, cos, sin, mask, return_intermediates=False):
-        """embeddings [1, T, 2048] -> hidden states [1, T, 1024], plus logits when T is full.
+        """embeddings [1, T, talker hidden] -> hidden states [1, T, 1024], plus logits when T is full.
 
         Returns hidden states; `logits` turns them into per-codebook predictions.
         """
         length = embeddings.shape[1]
         intermediates = {}
 
-        x = ttnn.linear(
-            embeddings, self.p["projection"], bias=self.p["projection_bias"], compute_kernel_config=self.compute_config
-        )
+        x = project(embeddings, self.p, self.compute_config)
         if return_intermediates:
             intermediates["projection"] = x
 

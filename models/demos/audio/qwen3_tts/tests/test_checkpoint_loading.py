@@ -9,8 +9,9 @@ checkpoint moves: the speaker encoder's tensor names and shapes are derived from
 config.json alone, so a weights bump that stops matching its own config fails here rather
 than surfacing as a PCC miss later.
 
-The checkpoint (3.6 GB) is fetched once and cached by huggingface_hub. Nothing is skipped
-when it is absent: a skip would turn an unreachable checkpoint into a green run.
+The checkpoint (3.6 GB at 1.7B, 1.8 GB at 0.6B) is fetched once and cached by
+huggingface_hub. Nothing is skipped when it is absent: a skip would turn an unreachable
+checkpoint into a green run.
 
 Run:
     pytest -svv models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
@@ -35,6 +36,12 @@ EXPECTED_CONFIG = {
     "sample_rate": 24000,
 }
 
+# The one field the two sizes disagree on: the embedding is as wide as the talker.
+EXPECTED_ENC_DIM = {"1b7": 2048, "0b6": 1024}
+
+# Which moves only the output projection, `fc`: 3072 x enc_dim weights plus enc_dim biases.
+EXPECTED_SPEAKER_PARAMETERS = {"1b7": 12_001_088, "0b6": 8_854_336}
+
 
 @pytest.fixture(scope="module")
 def speaker_config():
@@ -42,7 +49,7 @@ def speaker_config():
 
 
 def test_speaker_config_matches_the_pinned_revision(speaker_config):
-    assert speaker_config == EXPECTED_CONFIG
+    assert speaker_config == dict(EXPECTED_CONFIG, enc_dim=EXPECTED_ENC_DIM[weights.model_size()])
 
 
 def test_speaker_embedding_width_matches_the_talker(speaker_config):
@@ -91,11 +98,11 @@ def test_loaded_weights_are_finite_fp32(speaker_config):
     assert all(torch.isfinite(t).all() for t in state.values())
 
     params = sum(t.numel() for t in state.values())
-    assert 11_000_000 < params < 13_000_000, f"speaker encoder has {params} parameters"
+    assert params == EXPECTED_SPEAKER_PARAMETERS[weights.model_size()], f"speaker encoder has {params} parameters"
 
 
 def test_loading_the_speaker_leaves_the_talker_alone():
-    """The reader names its keys; it must not drag in the 1.7B decoder."""
+    """The reader names its keys; it must not drag in the talker."""
     state = weights.load_speaker_state()
     assert not any(name.startswith(weights.TALKER_PREFIX) for name in state)
     assert weights.TALKER_PREFIX.rstrip(".") in weights.prefixes_in_file()

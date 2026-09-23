@@ -6,8 +6,9 @@
 
 **This file needs the VoiceDesign checkpoint**, the third release. All three carry the same
 architecture and differ in `tts_model_type` and their weights, so every ported block runs on
-it unchanged; what differs is the prompt. The checkpoint is resolved here by repo id rather
-than from the ambient `$QWEN3_TTS_CKPT`, the way `test_pipeline.py` resolves CustomVoice.
+it unchanged; what differs is the prompt. The checkpoint is resolved here at the ambient
+size, the way `test_pipeline.py` resolves CustomVoice. There is no 0.6B VoiceDesign, so at
+0.6B the whole module skips.
 
 The prompt, which is upstream's `generate` with `instruct_ids` set and
 `non_streaming_mode=True`:
@@ -35,12 +36,11 @@ slowly" and "a bright young woman, cheerful and quick". One speaker measures abo
 an unrelated pair about 0.82, so the instruction moves the voice most of the way.
 """
 
-import os
-
 import pytest
 import torch
 
 from models.demos.audio.qwen3_tts import frontend, weights
+from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width, use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     ROLE_IDS,
     TAIL_IDS,
@@ -50,7 +50,6 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     is_voice_design_checkpoint,
 )
 
-VOICE_DESIGN_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
 TEXT = "This voice was designed from a sentence of English."
 INSTRUCTION = "A calm older man speaking slowly, with a slight rasp."
 OTHER_INSTRUCTION = "A bright young woman, cheerful and quick, with a high clear voice."
@@ -63,40 +62,10 @@ HEAD = 8
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 
-def _clear_caches():
-    """Drop every cached view of the checkpoint, so switching does not leak across tests.
-
-    The same list `test_pipeline.py` clears, and for the same reason: `frontend` caches the
-    tokenizer and the id tables too, and a checkpoint switch that left them behind would
-    change what a later test in the session saw.
-    """
-    for cached in (
-        weights.checkpoint_dir,
-        weights._model_config_json,
-        weights.codec_dir,
-        weights._codec_config_json,
-        frontend.tokenizer,
-        frontend.special_tokens,
-        frontend.language_ids,
-    ):
-        cached.cache_clear()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def voice_design_checkpoint():
-    """Point the whole module at VoiceDesign, whatever the ambient setting is."""
-    from huggingface_hub import snapshot_download
-
-    path = snapshot_download(VOICE_DESIGN_REPO, allow_patterns=weights.HUB_PATTERNS)
-    previous = os.environ.get("QWEN3_TTS_CKPT")
-    os.environ["QWEN3_TTS_CKPT"] = path
-    _clear_caches()
-    yield path
-    if previous is None:
-        os.environ.pop("QWEN3_TTS_CKPT", None)
-    else:
-        os.environ["QWEN3_TTS_CKPT"] = previous
-    _clear_caches()
+    """Point the whole module at VoiceDesign at the ambient size, or skip where none exists."""
+    yield from use_release("voice_design")
 
 
 @pytest.fixture(scope="module")
@@ -125,7 +94,8 @@ def test_the_architecture_is_the_base_checkpoint_s():
 
     from huggingface_hub import hf_hub_download
 
-    base = json.load(open(hf_hub_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "config.json")))
+    repo, revision = weights.sibling_repo("base")
+    base = json.load(open(hf_hub_download(repo, "config.json", revision=revision)))
     assert weights.talker_config() == base["talker_config"]
 
 
@@ -135,7 +105,7 @@ def test_the_prompt_length_is_the_instruction_plus_the_text_plus_ten(tables):
     n_text = len(prompt_ids) - ROLE_IDS - TAIL_IDS
     n_instruction = len(frontend.instruction_ids(INSTRUCTION))
 
-    assert embeddings.shape == (1, n_instruction + HEAD + n_text + 2, 2048)
+    assert embeddings.shape == (1, n_instruction + HEAD + n_text + 2, hidden_width())
 
 
 def test_the_prompt_position_by_position(tables):
@@ -146,7 +116,7 @@ def test_the_prompt_position_by_position(tables):
     instruction_ids = frontend.instruction_ids(INSTRUCTION)
     start = len(instruction_ids)
 
-    codec = lambda ids: tables.codec(ids).reshape(-1, 2048)
+    codec = lambda ids: tables.codec(ids).reshape(-1, hidden_width())
     pad = tables.tts_pad.reshape(-1)
     think = codec(
         [
@@ -158,14 +128,16 @@ def test_the_prompt_position_by_position(tables):
     )
 
     # The instruction, text track only, with nothing from the codec track added.
-    assert torch.allclose(embeddings[0, :start], tables.text(instruction_ids).reshape(-1, 2048))
+    assert torch.allclose(embeddings[0, :start], tables.text(instruction_ids).reshape(-1, hidden_width()))
     # Then the role tokens, also text only.
-    assert torch.allclose(embeddings[0, start : start + ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, 2048))
+    assert torch.allclose(
+        embeddings[0, start : start + ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, hidden_width())
+    )
     # The think block against tts_pad, and no speaker position after it.
     assert torch.allclose(embeddings[0, start + 3 : start + 7], think + pad)
     assert torch.allclose(embeddings[0, start + 7], codec([config["codec_pad_id"]])[0] + tables.tts_bos.reshape(-1))
     # The text, then tts_eos, each against codec_pad; then codec_bos against tts_pad.
-    body = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1).reshape(-1, 2048)
+    body = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1).reshape(-1, hidden_width())
     assert torch.allclose(embeddings[0, start + HEAD : -1], body + codec([config["codec_pad_id"]])[0])
     assert torch.allclose(embeddings[0, -1], codec([config["codec_bos_id"]])[0] + pad)
 

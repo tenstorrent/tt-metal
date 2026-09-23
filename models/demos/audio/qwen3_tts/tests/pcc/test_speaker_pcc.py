@@ -4,7 +4,8 @@
 
 """PCC test for the TTNN Qwen3-TTS speaker encoder against the CPU reference.
 
-Block boundary: log-mel [1, T, 128] (mel front-end on host) -> embedding [1, 2048].
+Block boundary: log-mel [1, T, 128] (mel front-end on host) -> embedding [1, enc_dim], as
+wide as the talker.
 
 Input is a deterministic synthetic voiced clip pushed through the reference mel front-end.
 The reference is the vendored upstream encoder loaded from the same checkpoint, so no

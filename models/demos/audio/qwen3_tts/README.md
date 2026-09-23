@@ -7,6 +7,11 @@ Text-to-speech with voice cloning ([Qwen/Qwen3-TTS-12Hz-1.7B-Base](https://huggi
 on Tenstorrent hardware. The model generates discrete audio tokens with a 1.7B decoder at a
 12.5 Hz frame rate, then decodes them to a 24 kHz waveform with a 0.2B neural codec. Apache 2.0.
 
+Both sizes run on the same code: the 0.6B releases
+([Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base),
+[CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)) are the 1.7B
+architecture at half the talker's width. See [Two sizes](#two-sizes).
+
 ## Status
 
 Bring-up in progress. This directory holds what is finished, and nothing that is not.
@@ -15,9 +20,9 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 |---|---|---|---|
 | 0 | Checkpoint access (`weights.py`) | host | **done** |
 | 1 | Mel front-end, 128 bins at 24 kHz (`audio.py`) | host | **done**, matches upstream exactly |
-| 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
+| 2 | Speaker encoder (ECAPA-TDNN) → `[1, hidden]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
-| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **done**, PCC 0.995, KV cache + trace |
+| 4 | Talker (28 layers, hidden 2048 or 1024, MRoPE) | device | **done**, PCC 0.995, KV cache + trace |
 | 5 | Code Predictor (5 layers, 15 steps per frame) | device | **done**, logits PCC 0.995, KV cache + trace |
 | 6 | Codec decoder → waveform (1920x) | device | **done**, waveform PCC 0.995 |
 | 7 | Dual-track prompt + decode loop | host + device | **done**, end to end |
@@ -28,10 +33,11 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 12 | Streaming text input, all voice modes | host + device | **done**, prompt bit-exact |
 | 13 | Instruction with a named speaker | host + device | **done**, prompt bit-exact |
 | 14 | Cloning from the voice alone (`x_vector_only`) | host + device | **done**, prompt bit-exact |
+| 15 | The 0.6B releases, on the same code | host + device | **done**, same suite |
 
-The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
-single position of the talker's prompt. Its width matches the talker's hidden size, so
-nothing projects between them.
+The speaker encoder reads a reference clip and emits one vector as wide as the talker (2048
+at 1.7B, 1024 at 0.6B), which occupies a single position of the talker's prompt. Its width
+matches the talker's hidden size, so nothing projects between them.
 
 ## Demo
 
@@ -287,6 +293,29 @@ leg: each stops on its own, every code lands inside the codebook, and the length
 rather than a spent budget. The transcription is a measurement, not a gate, because putting
 Whisper in CI would cost a 970 MB download and add its own failure modes.
 
+## Two sizes
+
+Five releases exist: 1.7B Base, CustomVoice and VoiceDesign, and 0.6B Base and CustomVoice.
+**There is no 0.6B VoiceDesign.** Both sizes share the tokenizer, the codec (the identical
+`speech_tokenizer/` weights) and `generation_config.json`, and their configs differ in four
+fields:
+
+| field | 1.7B | 0.6B |
+|---|---|---|
+| `talker_config.hidden_size` | 2048 | 1024 |
+| `talker_config.intermediate_size` | 6144 | 3072 |
+| `speaker_encoder_config.enc_dim` | 2048 | 1024 |
+| `tts_model_size` | `1b7` | `0b6` |
+
+Layers (28), heads (16 query over 8 key/value), `head_dim` (128) and the whole code predictor
+are the same. So at 0.6B the attention's head space is **2048 wide against a hidden size of
+1024**. `head_dim` is a config field and never `hidden // heads`, and the head-merge reshapes
+use `heads * head_dim`. The one missing tensor is `talker.code_predictor.small_to_mtp_projection`,
+which exists at 1.7B to take the talker's 2048 down to the predictor's 1024; at 0.6B the
+widths already match and upstream builds an identity, as the device predictors do.
+
+The pipeline refuses an instruction on a 0.6B checkpoint, where upstream silently drops it.
+
 ## Speed
 
 **2.35x faster than real time, warm, on one P300 chip**, against 1.19x when this directory
@@ -312,6 +341,23 @@ the same thing said the other way round and easy to mistake for a speedup.
 A one-second utterance comes out at 1.7x rather than 2.35x. The prefill, the two captures
 and the codec are per utterance rather than per frame, and on 13 frames they are a third of
 the wall clock.
+
+### On Wormhole N150, and at 0.6B
+
+`tests/perf/test_perf.py` on one N150, warm, CustomVoice, `ryan`. The block columns come from
+the profiled run, whose device syncs cost a few percent:
+
+| | talker step | predictor, 15 steps | per frame | long utterance | faster than real time |
+|---|---|---|---|---|---|
+| 1.7B | 15.6 ms | 31.2 ms | 49.3 ms | 13.3 s of audio in 8.8 s | **1.51x** |
+| 0.6B | 9.7 ms | 31.6 ms | 43.8 ms | 12.6 s of audio in 7.4 s | **1.70x** |
+
+Against Blackhole's 31.9 ms frame, Wormhole spends 1.6x on both decoders, and the predictor
+is an even larger share of the frame: 63% at 1.7B, 72% at 0.6B. **0.6B is not twice as fast.**
+Only the talker's projections and MLP halve. The predictor is the same model at both sizes,
+and so is the talker's attention (head_dim 128 over the same KV cache). The decode matmul
+configs were swept at 1.7B shapes on Blackhole; they are valid at 0.6B and on Wormhole but
+have not been re-swept for either.
 
 `tests/perf/test_perf.py` prints this table and charges the frame loop block by block, so a
 regression says which block. It syncs the device at every split, which costs a few percent
@@ -433,8 +479,8 @@ would put the file under a codeowner for no gain. Add it when a real dependency 
 
 ## Checkpoint
 
-Fetched from the HF hub on first use and cached (3.6 GB), or point `$QWEN3_TTS_CKPT` at a
-local directory holding `config.json` and `model.safetensors`:
+Fetched from the HF hub on first use and cached (3.6 GB at 1.7B, 1.8 GB at 0.6B), or point
+`$QWEN3_TTS_CKPT` at a local directory holding `config.json` and `model.safetensors`:
 
 ```bash
 hf download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir qwen3_tts_ref
@@ -442,23 +488,43 @@ export QWEN3_TTS_CKPT=$(pwd)/qwen3_tts_ref
 ```
 
 `weights.py` resolves `$QWEN3_TTS_CKPT`, then `$HF_MODEL` (a hub id or a path, matching the
-tiered-CI convention), then the default repo at a pinned revision. Override the revision with
-`$QWEN3_TTS_REVISION`.
+tiered-CI convention), then the default repo. Every release in `weights.RELEASES` is pinned
+to a revision; override the ambient one with `$QWEN3_TTS_REVISION`. For 0.6B, set
+`HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base`, or pass `--ckpt` to the demos.
 
-Three releases share one architecture and differ in which voices they answer to, so the
-suite needs all three: **Base** carries `speaker_encoder` and an empty `spk_id` and clones
-from a clip, **CustomVoice** the nine named speakers and no encoder, **VoiceDesign** neither,
-taking a sentence of English instead. `tts_model_type` in `config.json` is how each says
-which it is, and the pipeline reads it before refusing the wrong input.
+Three kinds of release share one architecture and differ in which voices they answer to:
+**Base** carries `speaker_encoder` and an empty `spk_id` and clones from a clip,
+**CustomVoice** the nine named speakers and no encoder, **VoiceDesign** neither, taking a
+sentence of English instead. `tts_model_type` in `config.json` is how each says which it is,
+and the pipeline reads it before refusing the wrong input. The suite runs on a Base
+checkpoint and switches to its CustomVoice and VoiceDesign siblings **at the same size** for
+the files that need them (`tests/checkpoints.py`).
 
 The Base checkpoint holds two top-level prefixes, `speaker_encoder.` (76 tensors, 12.0M
-parameters) and `talker.` (the rest). Readers open the file lazily and name their keys, so speaker-encoder
-work never materialises the talker.
+parameters at 1.7B, 8.9M at 0.6B) and `talker.` (the rest). Readers open the file lazily
+and name their keys, so speaker-encoder work never materialises the talker.
 
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoints and, for the device tests, a card. 118 tests, 200 s warm.
+it needs only the checkpoints and, for the device tests, a card. 148 tests, the same ones at
+either size. On one N150, warm: **1.7B 147 passed and 1 skipped** in 10.6 min, **0.6B 136
+passed and 12 skipped** in 7.0 min. The 1.7B skip is the test that 0.6B refuses an
+instruction; the 0.6B skips are the ten VoiceDesign tests (there is no such release) and the
+two that need an instruction to work.
+
+```bash
+HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base pytest models/demos/audio/qwen3_tts/tests/   # at 0.6B
+```
+
+**The 0.6B code predictor is less exact than 1.7B's, by a measured amount.** Its residual
+stream is not scaled down by a projection and runs near 2665, where bf16 steps by 16. Per-step
+greedy logits reach PCC 0.9755 against 1.7B's 0.9914, and the distance between the device's
+and the reference's sampling distributions reaches 0.184 against 0.085. So
+`test_code_predictor_pcc.py` and `test_decode_pcc.py` carry per-size gates with the
+measurements beside them. fp32 activations cut that distance to 0.118 and were not taken,
+since they cost time in the block that is already 72% of the 0.6B frame; utterances still
+stop over eight seeds at 0.6B.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -650,6 +716,11 @@ identifier drops the frame rate that the HF name carries; `HF_MODEL` keeps the c
 Dispatch a single run from
 [`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
 with tier 3, type unit, and that identifier.
+
+A second leg, `qwen3-tts-0.6b-base`, runs the same files on
+`Qwen/Qwen3-TTS-12Hz-0.6B-Base` on the same two SKUs. Timeouts are from one N150: the 1.7B
+leg took 10.6 min warm and 14.8 with a cold kernel cache (its N150 timeout is 20, where the
+original 10 was sized on Blackhole), the 0.6B leg 7.0 warm and 8 cold (timeout 12).
 
 The end-to-end leg is deliberately absent. It lands with the first change that produces a
 waveform, together with its own `e2e_tier3` budget; registering one before then would either

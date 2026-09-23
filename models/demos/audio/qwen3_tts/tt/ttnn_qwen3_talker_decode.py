@@ -135,7 +135,7 @@ def preprocess_cached_talker_parameters(
         fused = torch.cat(
             [state[f"{prefix}.q_proj.weight"], state[f"{prefix}.k_proj.weight"], state[f"{prefix}.v_proj.weight"]],
             dim=0,
-        )  # [2048 + 1024 + 1024, 2048]
+        )  # [(heads + 2 * kv_heads) * head_dim, hidden]
         layers.append(
             {
                 "input_layernorm": norm(f"layers.{index}.input_layernorm"),
@@ -400,7 +400,7 @@ class TtTalkerCachedDecoder:
             attended = ttnn.matmul(
                 attended, ttnn.repeat_interleave(value, repeats, dim=1), compute_kernel_config=self.compute_config
             )
-            attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.hidden))
+            attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.heads * self.head_dim))
 
             x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
             normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
@@ -463,7 +463,7 @@ class TtTalkerCachedDecoder:
                 compute_kernel_config=self.compute_config,
             )
             # Fused head merge instead of permute + reshape.
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.hidden))
+            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim))
             x = ttnn.add(
                 x,
                 ttnn.linear(
@@ -503,7 +503,7 @@ class TtTalkerCachedDecoder:
             ttnn.copy(self._zero_cache, cache)
 
     def step(self, embedding, position):
-        """One position: embedding [1, 1, 2048] -> hidden state [1, 1, 2048]."""
+        """One position: embedding [1, 1, hidden] -> hidden state [1, 1, hidden]."""
         # A host tensor copied into the stable input, rather than a fresh device buffer.
         if isinstance(embedding, ttnn.Tensor):
             ttnn.copy(embedding, self._in)

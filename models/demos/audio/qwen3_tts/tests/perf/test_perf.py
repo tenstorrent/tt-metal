@@ -17,14 +17,11 @@ Run:
     pytest -svv models/demos/audio/qwen3_tts/tests/perf/test_perf.py
 """
 
-import os
-
 import pytest
 
-from models.demos.audio.qwen3_tts import frontend, weights
+from models.demos.audio.qwen3_tts.tests.checkpoints import use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline
 
-CUSTOM_VOICE_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 SPEAKER = "ryan"
@@ -49,34 +46,10 @@ MAX_PREFILL_S = 4.0
 MAX_CODEC_MS_PER_FRAME = 8.0
 
 
-def _clear_caches():
-    for cached in (
-        weights.checkpoint_dir,
-        weights._model_config_json,
-        weights.codec_dir,
-        weights._codec_config_json,
-        frontend.tokenizer,
-        frontend.special_tokens,
-        frontend.language_ids,
-    ):
-        cached.cache_clear()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def custom_voice_checkpoint():
-    """CustomVoice, so the measurement needs no reference clip to get started."""
-    from huggingface_hub import snapshot_download
-
-    path = snapshot_download(CUSTOM_VOICE_REPO)
-    previous = os.environ.get("QWEN3_TTS_CKPT")
-    os.environ["QWEN3_TTS_CKPT"] = path
-    _clear_caches()
-    yield path
-    if previous is None:
-        os.environ.pop("QWEN3_TTS_CKPT", None)
-    else:
-        os.environ["QWEN3_TTS_CKPT"] = previous
-    _clear_caches()
+    """CustomVoice at the ambient size, so the measurement needs no reference clip."""
+    yield from use_release("custom_voice")
 
 
 def _row(name, timings, seconds):

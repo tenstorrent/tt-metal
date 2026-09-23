@@ -71,7 +71,7 @@ def synthetic_voiced_clip(seconds=CLIP_SECONDS, seed=0, voice="low"):
 def speaker_reference(seconds=CLIP_SECONDS, seed=0):
     """Input mel, reference embedding and per-block intermediates, computed live.
 
-    Returns a dict with `mel` [1, T, 128], `embedding` [1, 2048] and `intermediates`,
+    Returns a dict with `mel` [1, T, 128], `embedding` [1, enc_dim] and `intermediates`,
     the latter keyed by the names in `qwen3_speaker_ref.INTERMEDIATES` and laid out
     channel-first the way the reference works.
     """
@@ -95,7 +95,7 @@ def talker_prompt(text=TALKER_TEXT):
     text_projection, which is `linear_fc2(silu(linear_fc1(x)))`. The codec track is absent,
     so this is the text stream alone rather than a full dual-track prompt.
 
-    Returns (embeddings [1, T, 2048], position_ids [3, 1, T]).
+    Returns (embeddings [1, T, hidden], position_ids [3, 1, T]).
     """
     table = weights.load_prefixed("talker.model.text_embedding.")["weight"]
     projection = weights.load_prefixed("talker.text_projection.")
@@ -126,7 +126,7 @@ def code_predictor_prompt():
     state, read codebook 0 off `codec_head`, then let the reference decode codebooks 1 to
     15 greedily. The result is a self-consistent frame the model would actually produce.
 
-    Returns (talker_hidden [1, 1, 2048], first_code, codes, embeddings [1, 16, 2048]),
+    Returns (talker_hidden [1, 1, hidden], first_code, codes, embeddings [1, 16, hidden]),
     where `codes` is codebooks 1 to 15 and `embeddings` teacher-forces all 16 positions.
     """
     from models.demos.audio.qwen3_tts.reference.qwen3_code_predictor_ref import (

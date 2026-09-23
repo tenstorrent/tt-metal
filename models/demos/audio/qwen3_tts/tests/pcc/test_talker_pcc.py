@@ -4,7 +4,8 @@
 
 """PCC test for the TTNN Qwen3-TTS talker against the CPU reference.
 
-Block boundary: embeddings [1, T, 2048] -> hidden states [1, T, 2048].
+Block boundary: embeddings [1, T, hidden] -> hidden states [1, T, hidden], where hidden is
+2048 at 1.7B and 1024 at 0.6B.
 
 Input is a real prompt, built from real token ids through the model's own embedding and
 projection path. That choice matters more than it looks. Random embeddings land far outside

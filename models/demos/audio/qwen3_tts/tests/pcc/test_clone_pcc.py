@@ -10,8 +10,8 @@ carries the nine speakers and no encoder, so cloning is a Base-only path and the
 speakers are a CustomVoice-only path.
 
 A clone prompt joins four things that are each tested elsewhere: the codec encoder's codes,
-the speaker encoder's 2048-wide vector, the tokenizer's ids for two pieces of text, and the
-talker's own embedding tables. What is new here is the arrangement, which is
+the speaker encoder's vector (as wide as the talker), the tokenizer's ids for two pieces of
+text, and the talker's own embedding tables. What is new here is the arrangement, which is
 `generate_icl_prompt` with `non_streaming_mode=True`:
 
     3           role, text track only
@@ -35,6 +35,7 @@ import pytest
 import torch
 
 from models.demos.audio.qwen3_tts import frontend, weights
+from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width
 from models.demos.audio.qwen3_tts.tests.reference_helpers import codebook_size, synthetic_voiced_clip
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     REFERENCE_TAIL_IDS,
@@ -75,7 +76,7 @@ def reference():
     """
     generator = torch.Generator().manual_seed(0)
     codes = torch.randint(0, codebook_size(), (16, REFERENCE_FRAMES), generator=generator)
-    voice = torch.randn(1, 2048, generator=generator)
+    voice = torch.randn(1, hidden_width(), generator=generator)
     return CloneReference(codes, voice, REFERENCE_TEXT)
 
 
@@ -94,7 +95,7 @@ def test_the_clone_prompt_has_the_length_the_two_tracks_imply(tables, reference)
     n_text = len(prompt_ids) - ROLE_IDS - TAIL_IDS
     n_reference = len(frontend.reference_text_ids(REFERENCE_TEXT)) - ROLE_IDS - REFERENCE_TAIL_IDS
 
-    assert embeddings.shape == (1, 9 + (n_reference + n_text + 1) + (1 + reference.frames), 2048)
+    assert embeddings.shape == (1, 9 + (n_reference + n_text + 1) + (1 + reference.frames), hidden_width())
 
 
 def test_the_clone_prompt_position_by_position(tables, reference):
@@ -104,7 +105,7 @@ def test_the_clone_prompt_position_by_position(tables, reference):
     text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
     reference_ids = frontend.reference_text_ids(REFERENCE_TEXT)[ROLE_IDS:-REFERENCE_TAIL_IDS]
 
-    codec = lambda ids: tables.codec(ids).reshape(-1, 2048)
+    codec = lambda ids: tables.codec(ids).reshape(-1, hidden_width())
     pad = tables.tts_pad.reshape(-1)
     think = codec(
         [
@@ -116,7 +117,7 @@ def test_the_clone_prompt_position_by_position(tables, reference):
     )
 
     # 0-2 role, 3-6 the think block, 7 the voice, 8 codec_pad against tts_bos.
-    assert torch.allclose(embeddings[0, :ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, 2048))
+    assert torch.allclose(embeddings[0, :ROLE_IDS], tables.text(prompt_ids[:ROLE_IDS]).reshape(-1, hidden_width()))
     assert torch.allclose(embeddings[0, 3:7], think + pad)
     assert torch.allclose(embeddings[0, 7], reference.speaker_embedding.reshape(-1) + pad)
     assert torch.allclose(embeddings[0, 8], codec([config["codec_pad_id"]])[0] + tables.tts_bos.reshape(-1))
@@ -124,11 +125,13 @@ def test_the_clone_prompt_position_by_position(tables, reference):
     # The reference transcript comes before the text to speak, which is the whole point of
     # ICL: the model is shown what the clip said as well as how it sounded.
     spoken = torch.cat([tables.text(list(reference_ids) + list(text_ids)), tables.tts_eos], dim=1)
-    spoken = spoken.reshape(-1, 2048) + codec([config["codec_pad_id"]])[0]
+    spoken = spoken.reshape(-1, hidden_width()) + codec([config["codec_pad_id"]])[0]
     assert torch.allclose(embeddings[0, 9 : 9 + spoken.shape[0]], spoken)
 
     # Then codec_bos and the clip itself, one summed frame per position.
-    voice = torch.cat([codec([config["codec_bos_id"]]), tables.frames(reference.codes).reshape(-1, 2048)]) + pad
+    voice = (
+        torch.cat([codec([config["codec_bos_id"]]), tables.frames(reference.codes).reshape(-1, hidden_width())]) + pad
+    )
     assert torch.allclose(embeddings[0, 9 + spoken.shape[0] :], voice)
 
 
@@ -153,18 +156,18 @@ def test_the_language_tag_swaps_the_think_id(tables, reference):
 def test_the_reference_frames_are_the_sum_of_sixteen_codebooks(tables, reference):
     """Codebook 0 reads the talker's table, 1 to 15 the code predictor's own."""
     frames = tables.frames(reference.codes)
-    assert frames.shape == (1, reference.frames, 2048)
+    assert frames.shape == (1, reference.frames, hidden_width())
 
     expected = tables.codec_table[reference.codes[0]]
     for index, table in enumerate(tables.predictor_tables):
         expected = expected + table[reference.codes[index + 1]]
-    assert torch.allclose(frames.reshape(-1, 2048), expected)
+    assert torch.allclose(frames.reshape(-1, hidden_width()), expected)
 
 
 def test_a_reference_without_a_transcript_is_refused(expect_error):
     """ICL conditions on the transcript as well as the codes, so it is not optional."""
     with expect_error(ValueError, "transcript"):
-        CloneReference(torch.zeros(16, 4, dtype=torch.long), torch.zeros(1, 2048), "")
+        CloneReference(torch.zeros(16, 4, dtype=torch.long), torch.zeros(1, hidden_width()), "")
 
 
 # ── cloning from the voice alone: upstream's x_vector_only_mode ─────────────
@@ -192,14 +195,14 @@ def test_the_x_vector_prompt_is_the_custom_voice_prompt_with_a_measured_voice(ta
 
 def test_a_voice_only_reference_needs_no_transcript():
     """The point of the mode: most clips come without one."""
-    voice_only = CloneReference(None, torch.zeros(1, 2048))
+    voice_only = CloneReference(None, torch.zeros(1, hidden_width()))
     assert voice_only.frames == 0
     assert "voice only" in repr(voice_only)
 
 
 def test_an_icl_prompt_refuses_a_voice_only_reference(tables, expect_error):
     """A reference with no codes cannot fill the codec track ICL needs."""
-    voice_only = CloneReference(None, torch.zeros(1, 2048))
+    voice_only = CloneReference(None, torch.zeros(1, hidden_width()))
     with expect_error(ValueError, "only a speaker vector"):
         build_voice_clone_prefill(TEXT, voice_only, "Auto", tables)
 
@@ -212,7 +215,7 @@ def test_a_voice_only_reference_skips_the_codec_encoder(device):
     full = build_clone_reference(device, clip, REFERENCE_TEXT)
 
     assert voice_only.codes is None and voice_only.frames == 0
-    assert voice_only.speaker_embedding.shape == (1, 2048)
+    assert voice_only.speaker_embedding.shape == (1, hidden_width())
     assert torch.allclose(voice_only.speaker_embedding, full.speaker_embedding), "same clip, same voice"
 
 
@@ -238,9 +241,9 @@ def test_codes_in_the_wrong_layout_are_refused(expect_error):
     tested.
     """
     with expect_error(ValueError, "16, frames"):
-        CloneReference(torch.zeros(20, 16, dtype=torch.long), torch.zeros(1, 2048), REFERENCE_TEXT)
+        CloneReference(torch.zeros(20, 16, dtype=torch.long), torch.zeros(1, hidden_width()), REFERENCE_TEXT)
     with expect_error(ValueError, "16, frames"):
-        CloneReference(torch.zeros(16, dtype=torch.long), torch.zeros(1, 2048), REFERENCE_TEXT)
+        CloneReference(torch.zeros(16, dtype=torch.long), torch.zeros(1, hidden_width()), REFERENCE_TEXT)
 
 
 # ── device ──────────────────────────────────────────────────────────────────
@@ -261,7 +264,7 @@ def test_a_reference_clip_becomes_codes_and_a_voice(device):
     assert low.frames == REFERENCE_FRAMES, f"a {CLIP_SECONDS} s clip is {REFERENCE_FRAMES} frames, got {low.frames}"
     assert low.codes.shape == (16, REFERENCE_FRAMES)
     assert int(low.codes.min()) >= 0 and int(low.codes.max()) < codebook_size()
-    assert low.speaker_embedding.shape == (1, 2048)
+    assert low.speaker_embedding.shape == (1, hidden_width())
     assert torch.isfinite(low.speaker_embedding).all()
 
     similarity = torch.nn.functional.cosine_similarity(low.speaker_embedding, high.speaker_embedding).item()

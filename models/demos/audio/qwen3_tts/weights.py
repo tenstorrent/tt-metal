@@ -5,15 +5,17 @@
 """Checkpoint access for Qwen3-TTS.
 
 The Base checkpoint is a single `model.safetensors` holding exactly two top-level
-prefixes: `speaker_encoder.` (76 tensors, 12.0M parameters) and `talker.` (the 1.7B
-decoder). Every reader here opens the file lazily and pulls only the keys it names, so
-speaker-encoder work never materialises the talker.
+prefixes: `speaker_encoder.` (76 tensors; 12.0M parameters at 1.7B, 8.9M at 0.6B) and
+`talker.` (the decoder). Every reader here opens the file lazily and pulls only the keys it
+names, so speaker-encoder work never materialises the talker.
 
 Where the checkpoint comes from, first match wins:
 
     $QWEN3_TTS_CKPT   a local directory holding config.json + model.safetensors
     $HF_MODEL         a hub id, or a local directory (the tiered-CI convention)
     DEFAULT_REPO      Qwen/Qwen3-TTS-12Hz-1.7B-Base at PINNED_REVISION
+
+Any release in RELEASES is pinned to its revision, whichever way it was named.
 
 `expected_speaker_shapes()` derives every speaker-encoder tensor name and shape from the
 config alone, mirroring how `Qwen3TTSSpeakerEncoder.__init__` builds its modules. Nothing
@@ -33,6 +35,16 @@ from safetensors import safe_open
 
 DEFAULT_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 PINNED_REVISION = "fd4b254389122332181a7c3db7f27e918eec64e3"
+
+# Every release, by (`tts_model_size`, `tts_model_type`). There is no 0.6B VoiceDesign.
+RELEASES = {
+    ("1b7", "base"): ("Qwen/Qwen3-TTS-12Hz-1.7B-Base", PINNED_REVISION),
+    ("1b7", "custom_voice"): ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe"),
+    ("1b7", "voice_design"): ("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", "5ecdb67327fd37bb2e042aab12ff7391903235d3"),
+    ("0b6", "base"): ("Qwen/Qwen3-TTS-12Hz-0.6B-Base", "5d83992436eae1d760afd27aff78a71d676296fc"),
+    ("0b6", "custom_voice"): ("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", "85e237c12c027371202489a0ec509ded67b5e4b5"),
+}
+PINNED_REVISIONS = dict(RELEASES.values())
 
 # The codec that turns codes back into a waveform. Model repos bundle it under
 # `speech_tokenizer/`, and it is also published standalone.
@@ -93,11 +105,11 @@ SPEAKER_MEL = {
 
 
 def _hub_revision(repo):
-    """Pin the default repo; leave any other repo on whatever the caller asked for."""
+    """Pin the known releases; leave any other repo on whatever the caller asked for."""
     override = os.environ.get("QWEN3_TTS_REVISION", "").strip()
     if override:
         return override
-    return PINNED_REVISION if repo == DEFAULT_REPO else None
+    return PINNED_REVISIONS.get(repo)
 
 
 @functools.lru_cache(maxsize=None)
@@ -143,6 +155,33 @@ def _model_config_json(allow_download=True):
 def model_config(allow_download=True):
     """The whole config.json, as a fresh dict the caller may mutate."""
     return json.loads(json.dumps(_model_config_json(allow_download)))
+
+
+def model_size(allow_download=True):
+    """`1b7` or `0b6`, as the checkpoint names itself."""
+    return model_config(allow_download)["tts_model_size"]
+
+
+def model_kind(allow_download=True):
+    """`base`, `custom_voice` or `voice_design`."""
+    return model_config(allow_download)["tts_model_type"]
+
+
+def sibling_repo(kind, allow_download=True):
+    """The release of `kind` at this checkpoint's size, as (repo, revision), or None."""
+    return RELEASES.get((model_size(allow_download), kind))
+
+
+def fetch_release(repo, allow_download=True):
+    """A known release's local directory, at its pinned revision.
+
+    `$QWEN3_TTS_REVISION` is not consulted: it moves the ambient checkpoint, not its siblings.
+    """
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(
+        repo, revision=PINNED_REVISIONS[repo], allow_patterns=HUB_PATTERNS, local_files_only=not allow_download
+    )
 
 
 def speaker_encoder_config(allow_download=True):
@@ -370,9 +409,9 @@ def prefixes_in_file(allow_download=True):
 def load_speaker_state(dtype=torch.float32, allow_download=True):
     """The speaker encoder's weights, keyed without the `speaker_encoder.` prefix.
 
-    Reads only the tensors the config asks for, so the talker's 1.7B of weights stay on
-    disk. Defaults to fp32 because the CPU reference runs in fp32; pass `dtype=None` to
-    keep the checkpoint's own bf16.
+    Reads only the tensors the config asks for, so the talker's weights stay on disk.
+    Defaults to fp32 because the CPU reference runs in fp32; pass `dtype=None` to keep
+    the checkpoint's own bf16.
     """
     shapes = expected_speaker_shapes(speaker_encoder_config(allow_download))
     state = {}

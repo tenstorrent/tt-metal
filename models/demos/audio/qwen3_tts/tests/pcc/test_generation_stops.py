@@ -13,17 +13,14 @@ builds of this model: 32.8 38.0 4.0 6.0 4.8 4.8 9.2 3.5 before tuning, 17.0 8.5 
 Most seeds stop promptly and which ones wander moves with the last bits, so this counts
 wandering seeds rather than judging one.
 
-Needs the CustomVoice checkpoint, like `test_pipeline.py`.
+Needs the CustomVoice checkpoint at the ambient size, like `test_pipeline.py`.
 """
-
-import os
 
 import pytest
 
-from models.demos.audio.qwen3_tts import frontend, weights
+from models.demos.audio.qwen3_tts.tests.checkpoints import use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline
 
-CUSTOM_VOICE_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 SPEAKER = "ryan"
@@ -42,33 +39,9 @@ MAX_FRAMES_PER_WORD = 12.0
 MAX_WANDERING_SEEDS = 2
 
 
-def _clear_caches():
-    for cached in (
-        weights.checkpoint_dir,
-        weights._model_config_json,
-        weights.codec_dir,
-        weights._codec_config_json,
-        frontend.tokenizer,
-        frontend.special_tokens,
-        frontend.language_ids,
-    ):
-        cached.cache_clear()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def custom_voice_checkpoint():
-    from huggingface_hub import snapshot_download
-
-    path = snapshot_download(CUSTOM_VOICE_REPO)
-    previous = os.environ.get("QWEN3_TTS_CKPT")
-    os.environ["QWEN3_TTS_CKPT"] = path
-    _clear_caches()
-    yield path
-    if previous is None:
-        os.environ.pop("QWEN3_TTS_CKPT", None)
-    else:
-        os.environ["QWEN3_TTS_CKPT"] = previous
-    _clear_caches()
+    yield from use_release("custom_voice")
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)

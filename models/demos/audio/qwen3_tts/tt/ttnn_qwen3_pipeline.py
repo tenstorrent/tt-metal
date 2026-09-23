@@ -107,6 +107,8 @@ class HostEmbeddings:
         self.fc1 = (talker["text_projection.linear_fc1.weight"], talker["text_projection.linear_fc1.bias"])
         self.fc2 = (talker["text_projection.linear_fc2.weight"], talker["text_projection.linear_fc2.bias"])
         self.codec_head = talker["codec_head.weight"]
+        # 2048 at 1.7B, 1024 at 0.6B; a wrong width folds positions rather than failing.
+        self.width = self.codec_table.shape[1]
 
         predictor = checkpoint.load_prefixed("talker.code_predictor.model.codec_embedding.", dtype=dtype)
         self.predictor_tables = [predictor[f"{index}.weight"] for index in range(len(predictor))]
@@ -121,15 +123,15 @@ class HostEmbeddings:
         return F.linear(F.silu(F.linear(embedded, *self.fc1)), *self.fc2)
 
     def text(self, ids):
-        """Text ids -> projected embeddings [1, n, 2048]."""
-        return self.project(self.text_table[torch.as_tensor(ids, dtype=torch.long)]).reshape(1, -1, 2048)
+        """Text ids -> projected embeddings [1, n, width]."""
+        return self.project(self.text_table[torch.as_tensor(ids, dtype=torch.long)]).reshape(1, -1, self.width)
 
     def codec(self, ids):
-        """Codec ids -> embeddings [1, n, 2048], no projection."""
-        return self.codec_table[torch.as_tensor(ids, dtype=torch.long)].reshape(1, -1, 2048)
+        """Codec ids -> embeddings [1, n, width], no projection."""
+        return self.codec_table[torch.as_tensor(ids, dtype=torch.long)].reshape(1, -1, self.width)
 
     def frames(self, codes):
-        """Codes [16] or [16, T] -> one summed embedding per frame, [1, T, 2048].
+        """Codes [16] or [16, T] -> one summed embedding per frame, [1, T, width].
 
         Codebook 0 reads the talker's table, codebooks 1 to 15 the predictor's own, indexed
         per group. Both the decode loop's next prompt position and a reference clip's codec
@@ -139,13 +141,13 @@ class HostEmbeddings:
         total = self.codec_table[codes[0]]
         for index, table in enumerate(self.predictor_tables):
             total = total + table[codes[index + 1]]
-        return total.reshape(1, -1, 2048)
+        return total.reshape(1, -1, self.width)
 
 
 class CloneReference:
     """What a reference clip contributes to a prompt: its codes, its voice, its transcript.
 
-    `codes` [16, T] from the codec encoder, `speaker_embedding` [1, 2048] from the speaker
+    `codes` [16, T] from the codec encoder, `speaker_embedding` [1, width] from the speaker
     encoder, `text` the transcript. Upstream calls this a `VoiceClonePromptItem` and builds
     it once per clip, separately from generation, because neither encoder is needed again
     once the prompt exists.
@@ -228,13 +230,13 @@ def resolve_language(language, speaker=None):
 def _prompt_head(tables, role_ids, language_id, speaker_embed):
     """The positions every prompt opens with, and the `codec_bos` that follows them.
 
-    Returns (head [1, 9, 2048], codec_bos [1, 1, 2048]) when a language and a speaker are
+    Returns (head [1, 9, width], codec_bos [1, 1, width]) when a language and a speaker are
     both present: three text-only role positions, then the think block, the speaker and
     `codec_pad`, each against a text-track pad or `tts_bos`. Upstream holds `codec_bos`
     back here and re-adds it after the text, so this returns it rather than placing it.
 
     `speaker_embed` is a codec-table row for CustomVoice and the speaker encoder's own
-    2048-wide output for a clone. Both occupy one position and neither is projected.
+    output for a clone, which is the talker's width at either size. Both occupy one position and neither is projected.
     """
     talker_config = checkpoint.talker_config()
 
@@ -262,7 +264,7 @@ def _prompt_body(tables, text_ids, codec_bos):
     """The text to speak, then `tts_eos`, each against `codec_pad`; then `codec_bos`.
 
     The tail of every prompt here, and the last thing the model sees before it starts
-    producing frames. Returns [1, n_text + 2, 2048].
+    producing frames. Returns [1, n_text + 2, width].
     """
     codec_pad = checkpoint.talker_config()["codec_pad_id"]
     spoken = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1)

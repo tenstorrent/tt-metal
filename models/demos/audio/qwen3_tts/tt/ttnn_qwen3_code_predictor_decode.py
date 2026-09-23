@@ -26,7 +26,12 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import weights as checkpoint
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import CODE_PREDICTOR_PREFIX, TALKER_CODEC_EMBEDDING
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
+    CODE_PREDICTOR_PREFIX,
+    TALKER_CODEC_EMBEDDING,
+    preprocess_projection,
+    project,
+)
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, causal_mask
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     CACHE_TILE_MULTIPLE,
@@ -96,14 +101,15 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
         checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX + "model.codec_embedding.")[f"{index}.weight"]
         for index in range(heads)
     ]
+    projection, projection_bias = preprocess_projection(state, device, dtype)
     return {
         "config": cfg,
+        # What each position arrives as: the talker's width, before any projection.
+        "input_width": talker_cfg["hidden_size"],
         "layers": layers,
         "norm": norm("model.norm"),
-        "projection": linear("small_to_mtp_projection"),
-        "projection_bias": ttnn.from_torch(
-            state["small_to_mtp_projection.bias"].reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
-        ),
+        "projection": projection,
+        "projection_bias": projection_bias,
         "lm_head": [linear(f"lm_head.{index}") for index in range(heads)],
         "talker_codec_embedding": talker_table,
         "codec_embedding": predictor_tables,
@@ -143,7 +149,9 @@ class TtCodePredictorCachedDecoder:
         ]
 
         self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
-        self._in = ttnn.from_torch(torch.zeros(1, 1, 2048), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self._in = ttnn.from_torch(
+            torch.zeros(1, 1, parameters["input_width"]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
         self._cos = ttnn.from_torch(
             torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
@@ -274,9 +282,7 @@ class TtCodePredictorCachedDecoder:
         x = to_device(embeddings)
         cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(causal_mask(length))
 
-        x = ttnn.linear(
-            x, self.p["projection"], bias=self.p["projection_bias"], compute_kernel_config=self.compute_config
-        )
+        x = project(x, self.p, self.compute_config)
         for index, layer in enumerate(self.p["layers"]):
             normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
             qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
@@ -318,9 +324,7 @@ class TtCodePredictorCachedDecoder:
 
     def _step_ops(self, x):
         """One position through the five layers. The output head stays outside the trace."""
-        x = ttnn.linear(
-            x, self.p["projection"], bias=self.p["projection_bias"], compute_kernel_config=self.compute_config
-        )
+        x = project(x, self.p, self.compute_config)
         for index, layer in enumerate(self.p["layers"]):
             normed = self._norm(x, layer, "input_layernorm")
             qkv = ttnn.linear(
@@ -435,7 +439,7 @@ class TtCodePredictorCachedDecoder:
             ttnn.from_torch(torch.tensor([[int(code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
         )
         row = ttnn.embedding(self._index, table, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy(ttnn.reshape(row, (1, 1, self.p["projection"].shape[0])), self._in)
+        ttnn.copy(ttnn.reshape(row, (1, 1, self.p["input_width"])), self._in)
         ttnn.deallocate(row)
 
     def generate(self, talker_hidden, first_code, pick=None, watch=None):
