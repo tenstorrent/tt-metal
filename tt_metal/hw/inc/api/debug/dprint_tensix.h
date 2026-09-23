@@ -280,9 +280,10 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
                 "dprint_tensix_dest_reg: unsupported data format {}, expected Float32 or Float16_b\n",
                 (uint32_t)data_format);
         } else {
-            // Program Math's section for MMIO DEST reads; tensix_sync first commits the copied tile.
+            // Program Math's section for MMIO DEST reads. configure_dest_access issues RMWCIB config writes,
+            // so wait for the config unit before the first read.
             ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
-            ckernel::tensix_sync();
+            ckernel::wait_cfg_idle();
 
             DPRINT("Tile ID = {}\n", tile_id);
             uint32_t row = tile_id * NUM_ROWS_PER_TILE;

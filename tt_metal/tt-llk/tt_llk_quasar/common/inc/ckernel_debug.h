@@ -45,16 +45,26 @@ inline void dbg_thread_halt()
 
     if constexpr (thread_id == UnpackThreadId)
     {
-        // Drain, signal idle to math, then block until math releases us in dbg_thread_unhalt.
-        tensix_sync();
+        // Wait for this thread's in-flight unpacks (issued through the MOP/replay) to finish, signal idle
+        // to math, then block until math releases us in dbg_thread_unhalt.
+        bstatus_u busy {};
+        busy.mop    = 1;
+        busy.replay = 1;
+        busy.unpack = 1;
+        wait_bstatus_low(busy.val);
         mailbox_write(MathThreadId, 1);
         volatile std::uint32_t ack = mailbox_read(MathThreadId);
         (void)ack;
     }
     else // MathThreadId
     {
-        // Drain, then wait for unpack to report idle before reading DEST.
-        tensix_sync();
+        // Wait for this thread's FPU/SFPU writes to DEST to finish, then for unpack to report idle.
+        bstatus_u busy {};
+        busy.mop    = 1;
+        busy.replay = 1;
+        busy.fpu    = 1;
+        busy._sfpu  = 1;
+        wait_bstatus_low(busy.val);
         volatile std::uint32_t idle = mailbox_read(UnpackThreadId);
         (void)idle;
     }
@@ -67,8 +77,9 @@ inline void dbg_thread_unhalt()
 
     if constexpr (thread_id == MathThreadId)
     {
-        // Release the unpack thread.
-        tensix_sync();
+        // Release the unpack thread. Math's only Tensix work since dbg_thread_halt, the configure_dest_access
+        // config writes, was waited on before the DEST read, and the read itself is RISC loads through the
+        // MMIO window, so there is nothing left to wait for.
         mailbox_write(UnpackThreadId, 1);
     }
     // UnpackThreadId: nothing to do.
