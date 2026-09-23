@@ -71,7 +71,7 @@ def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layer
     """The `model.language_model.*` sub-tree, layers `[0, num_layers)`, prefix stripped.
 
     Reads only the shards that hold wanted tensors, so the vision tower and `lm_head` are never
-    materialized -- with 50 of 64 layers that is ~50 GB of the checkpoint's 63 GB. `norm.weight`
+    materialized. `norm.weight`
     *is* kept even though the tap bypasses the final norm: the module owns that parameter and the
     load is strict, so dropping it would fail as a missing key rather than save anything
     meaningful (one 5120-element vector).
