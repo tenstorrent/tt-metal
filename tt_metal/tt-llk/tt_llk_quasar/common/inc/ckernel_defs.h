@@ -119,4 +119,22 @@ constexpr static bool IS_MX_FORMAT(std::uint32_t format)
     }
 }
 
+// True for integer data formats, whose packer negative-infinity fill is an all-ones bit pattern.
+constexpr static bool IS_INTEGER_FORMAT(std::uint32_t format)
+{
+    switch (static_cast<DataFormat>(format))
+    {
+        case DataFormat::Int8:
+        case DataFormat::UInt8:
+        case DataFormat::Int16:
+        case DataFormat::UInt16:
+        case DataFormat::Int32:
+        case DataFormat::Int4:
+        case DataFormat::UInt4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace ckernel

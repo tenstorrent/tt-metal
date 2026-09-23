@@ -569,11 +569,7 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     )
     physical_output = ttnn.to_torch(result)
     # Check the packer's fill value outside the reduced row/column/scalar.
-    padding_value = 0
-    if case.pool == "MAX":
-        # Mode 1 emits all-one bits for Int32, read here as two's-complement -1.
-        # This checks the encoding; it is not an integer MAX identity.
-        padding_value = -1 if case.output_dtype == "int32" else float("-inf")
+    padding_value = float("-inf") if case.pool == "MAX" and case.output_dtype != "int32" else 0
     padding = physical_output.clone()
     _meaningful_output(case, padding).fill_(padding_value)
     assert torch.all(padding == padding_value).item(), f"{case.name}: incorrect reduction output padding"

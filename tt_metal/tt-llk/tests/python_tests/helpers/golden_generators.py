@@ -4445,23 +4445,20 @@ class ReduceGolden:
     def padding_value(pool_type, data_format):
         if pool_type != ReducePool.Max:
             return 0
-        if data_format.is_mx_format() or data_format in {
-            DataFormat.Bfp8,
-            DataFormat.Bfp8_b,
-            DataFormat.Bfp4_b,
-            DataFormat.Bfp2_b,
-        }:
-            # Keep zero fill for shared-exponent formats so masked infinities
-            # cannot change the exponent used by the valid reduction result.
+        if (
+            data_format.is_integer()
+            or data_format.is_mx_format()
+            or data_format
+            in {
+                DataFormat.Bfp8,
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp4_b,
+                DataFormat.Bfp2_b,
+            }
+        ):
+            # Shared-exponent formats keep zero fill so masked infinities cannot change the
+            # exponent of the valid result; integers keep it because all ones is not a MAX identity.
             return 0
-        if data_format.is_integer():
-            # The LLK harness decodes signed integer output as sign-magnitude.
-            bits = int(data_format.byte_size * 8)
-            return (
-                (1 << bits) - 1
-                if str(data_format).startswith("U")
-                else -((1 << (bits - 1)) - 1)
-            )
         return float("-inf")
 
     def _make_tile_result(self, data_format, tile_shape, pool_type):

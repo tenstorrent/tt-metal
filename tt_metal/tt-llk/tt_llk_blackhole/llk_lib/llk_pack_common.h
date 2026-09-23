@@ -187,7 +187,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * scalar reduce a single datum. Default tiled packing selects the row mask per face through
  * TILE_FACE_SET_MAPPING_0; Blackhole has one packer, so the packer selectors cannot select faces.
  *
- * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP and integer outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @param pack_dst_format: Packer output (L1) data format, as last programmed by the caller's pack reconfig.
@@ -266,7 +266,8 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
     if constexpr (reduce_type == PoolType::MAX)
     {
         // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
-        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format));
+        // Integer outputs keep zero fill: the all-ones pattern is not a MAX identity for them.
+        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format));
     }
 
     if constexpr (pack_mode == PackMode::Default)

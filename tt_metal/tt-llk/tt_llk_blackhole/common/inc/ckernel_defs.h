@@ -282,6 +282,22 @@ constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
     return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
 }
 
+// True for integer data formats, whose packer negative-infinity fill is an all-ones bit pattern.
+constexpr static bool IS_INTEGER_FORMAT(const std::uint32_t format)
+{
+    switch (format)
+    {
+        case to_underlying(DataFormat::Int8):
+        case to_underlying(DataFormat::UInt8):
+        case to_underlying(DataFormat::UInt16):
+        case to_underlying(DataFormat::Int32):
+        case to_underlying(DataFormat::UInt32):
+            return true;
+        default:
+            return false;
+    }
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
