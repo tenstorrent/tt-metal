@@ -108,7 +108,30 @@ FAST_TILIZE_MAX_BLOCK_WIDTH = 255
 # Transaction-size floor (op_design.md perf lamp "Transaction size vs occupancy"): a column group
 # holds at least MIN_GROUP_COL_TILES tile-columns (rounded up to col_align_tiles), so a stick
 # segment read is at least MIN_GROUP_COL_TILES * 32 * elem_bytes bytes. 1 = maximum participation.
+# Measured on WH B0 (64 Tensix cores), device-kernel ns, floor 1 / 2 / 4 / 8 / 16 tile-columns:
+#   [1,1,32,2048]  3828 (64 cores) / 3969 (32) / 4068 (16) / 4368 (8) / 5395 (4); row split 14273 (1)
+#   [1,1,32,8192]  7227 (64) / 7376 (64) / 7376 (64) / 8134 (32) / 8197 (16);    row split 30847 (1)
+# Maximum participation wins: the floor is parked at 1, a live knob.
 MIN_GROUP_COL_TILES = 1
+# Minimum walk positions per Tensix core (tile-rows x column blocks) before the column axis is cut
+# into extra blocks: with one position the depth-2 CBs have nothing to overlap (read -> tilize ->
+# write run back to back). Only engages while every block keeps stick segments of at least
+# PIPELINE_MIN_SEGMENT_BYTES (narrow segments cost more in transactions than overlap buys).
+# 1 = off. Measured on WH, 64 Tensix cores, device-kernel ns (median of 3 where given):
+#   [1,1,2048,2048] (1 tile-row x 64 tiles per core)  1: 92293   2 (2 x 2 KiB-segment blocks): 87033
+#   [1,1,2048,1024] (1 x 32, 1 KiB segments at 2)     1: 45171   2: 45412 (flat)
+#   ungated, short_wide: [1,1,32,8192] 7505 -> 10006 (2) / 11523 (4); [1,1,64,4096] 8128 -> 9398 / 11946;
+#   [1,1,32,4096] 4985 -> 6763 / 6657 -- hence the segment floor.
+PIPELINE_MIN_POSITIONS = 2
+PIPELINE_MIN_SEGMENT_BYTES = 2048
+# Fixed cost of one tile-row on a Tensix core, in output tiles: the rule's makespan is
+# rows * (cols + ROW_COST_TILES), not rows * cols. A tile-row always costs tile_h stick-segment
+# reads plus a CB handshake whatever its width, so a column split that multiplies a core's
+# tile-rows pays that again for every extra tile-row. 0 = the pinned tile-count rule. Fitted
+# from the row split's per-core timings (t ~ rows * (a + b * cols) + c on WH: a / b ~ 1.5).
+# Measured, WH, device-kernel ns (0 vs 1.5 -> the split the rule picks):
+#   [4,3,256,96] (R 96, C 3): 0 -> 3 column groups, 11183 ns; 1.5 -> row split, 8860 ns
+ROW_COST_TILES = 1.5
 
 # Split-reader knob (op_design.md perf lamp "Reader issue-rate"). When a core's
 # stick-segment reads are small, one RISC-V is issue-bound; BRISC (the writer,
@@ -242,25 +265,34 @@ def _col_align_tiles(input_tensor, in_elem_bytes):
     return max(1, _div_up(align_bytes, TILE_WIDTH * in_elem_bytes))
 
 
-def balanced_width(core_col_tiles_max, *, per_col_tile_bytes, low_l1, col_align_tiles):
-    """op_design.md `balanced_width`: coarsest column block that fits the CB budget, balanced over blocks."""
+def balanced_width(core_col_tiles_max, *, per_col_tile_bytes, low_l1, col_align_tiles, min_col_blocks=1):
+    """op_design.md `balanced_width`: coarsest column block that fits the CB budget, balanced over blocks.
+
+    `min_col_blocks` (> 1 only for PIPELINE_MIN_POSITIONS) cuts the core's columns into at least
+    that many blocks, never below col_align_tiles tile-columns per block.
+    """
     cap = min(FAST_TILIZE_MAX_BLOCK_WIDTH, CB_BUDGET_BYTES[low_l1] // per_col_tile_bytes)
     cap = max(col_align_tiles, (cap // col_align_tiles) * col_align_tiles)
-    num_col_blocks = _div_up(core_col_tiles_max, cap)
+    num_col_blocks = max(
+        _div_up(core_col_tiles_max, cap), min(min_col_blocks, _div_up(core_col_tiles_max, col_align_tiles))
+    )
     width = _round_up(_div_up(core_col_tiles_max, num_col_blocks), col_align_tiles)
     return min(width, cap)
 
 
-def grid_2d_split(R, C, num_cores, *, col_align_tiles, row_align=1, min_group_col_tiles=None):
+def grid_2d_split(R, C, num_cores, *, col_align_tiles, row_align=1, min_group_col_tiles=None, row_cost_tiles=None):
     """op_design.md `grid_2d_split` assignment rule -> (g_r, g_c).
 
     Rows are counted in units of `row_align` tile-rows (retile: an input tile-row never straddles
     two Tensix cores), columns in units of `col_align_tiles` tile-columns (NoC alignment of every
     column start). Minimizes the busiest core's tiles; tie-break 1: wider column groups (larger
-    stick segments); tie-break 2: fewer Tensix cores. g_c == 1 is the row split.
+    stick segments); tie-break 2: fewer Tensix cores. g_c == 1 is the row split. The busiest core's
+    cost counts `row_cost_tiles` (ROW_COST_TILES) extra tiles per tile-row it owns.
     """
     if min_group_col_tiles is None:
         min_group_col_tiles = MIN_GROUP_COL_TILES
+    if row_cost_tiles is None:
+        row_cost_tiles = ROW_COST_TILES
     row_units = R // row_align
     col_units = _div_up(C, col_align_tiles)
     max_g_c = max(1, col_units // _div_up(min_group_col_tiles, col_align_tiles))
@@ -269,7 +301,7 @@ def grid_2d_split(R, C, num_cores, *, col_align_tiles, row_align=1, min_group_co
         rows_busiest = _div_up(row_units, g_r) * row_align
         for g_c in range(1, min(col_units, max_g_c, num_cores // g_r) + 1):
             units_busiest = _div_up(col_units, g_c)
-            key = (rows_busiest * units_busiest * col_align_tiles, -units_busiest, g_r * g_c)
+            key = (rows_busiest * (units_busiest * col_align_tiles + row_cost_tiles), -units_busiest, g_r * g_c)
             if best is None or key < best[0]:
                 best = (key, g_r, g_c)
     return best[1], best[2]
@@ -531,6 +563,18 @@ def create_program_descriptor(
     core_row_tiles_max = max(rows for _, _, rows, _, _ in assignment)
     core_col_tiles_max = max(cols for _, _, _, _, cols in assignment)
 
+    # PIPELINE_MIN_POSITIONS: a core whose walk is shorter than that (short_wide: one tile-row)
+    # cuts its columns into more blocks so read, tilize and write overlap through the CBs.
+    min_col_blocks = 1
+    if PIPELINE_MIN_POSITIONS > 1 and not retile:
+        segment_floor_tiles = _round_up(
+            max(1, _div_up(PIPELINE_MIN_SEGMENT_BYTES, TILE_WIDTH * in_elem_bytes)), col_align_tiles
+        )
+        min_col_blocks = max(
+            1,
+            min(_div_up(PIPELINE_MIN_POSITIONS, core_row_tiles_max), core_col_tiles_max // segment_floor_tiles),
+        )
+
     def _block_width_for(num_input_cbs):
         if any_resident:
             return shard_block_width  # the whole resident shard width is one block
@@ -539,6 +583,7 @@ def create_program_descriptor(
             per_col_tile_bytes=_per_col_tile_bytes(num_input_cbs),
             low_l1=low_l1,
             col_align_tiles=col_align_tiles,
+            min_col_blocks=min_col_blocks,
         )
 
     # The split reader decision needs the segment width, which needs block_width, which

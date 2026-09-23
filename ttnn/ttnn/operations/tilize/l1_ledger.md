@@ -67,6 +67,16 @@ Data movement (retile): input 1 DRAM crossing in whole-tile NoC reads (`R_in * C
 
 Data movement (padded): input 1 DRAM crossing of the input's own bytes (`X` elements: only existing sticks are read, each for its data bytes only); output 1 crossing of the padded grid (`R * C` tile writes over `P`); plus core-local L1 fills of `(prod(P) - prod(X)) * in_elem_bytes` bytes (CPU stores or NoC loopback), no cross-core traffic.
 
+## 2-D split (`grid_2d_split`, Refinement 5) and `low_l1`
+
+No CB is added, removed or resized by the regime itself: each Tensix core runs the `row_split_interleaved` rows above over its own rectangle `[row_start, +core_row_tiles) x [col_start, +core_col_tiles)`. `block_width = balanced_width(core_col_tiles_max, cap)` is now computed from the busiest core's column-group width rather than from `C`, so it can only shrink. `cb_input_sticks` / `cb_output_tiles` rows are unchanged (`Shares with / why not`: as above: the two CBs are live concurrently by construction, since they are the double-buffered pipeline).
+
+- Assignment (`tilize_program_descriptor.grid_2d_split`): `(g_r, g_c)` minimizes `ceil(R_units / g_r) * row_align * (ceil(col_units / g_c) * col_align_tiles + ROW_COST_TILES)` over `g_r * g_c <= N`. Tie-breaks: wider column groups, then fewer Tensix cores. `ROW_COST_TILES = 1.5` charges each tile-row's fixed cost (`tile_h` stick reads + a CB handshake); 0 is the pinned tile-count rule, which measured +22 % on [4,3,256,96] and +97 % on [1,1,2080,2048]. `g_c == 1` keeps the row split (`split_work_to_cores`, byte-identical to before). Core k of the first `g_r * g_c` Tensix cores (row-wise) owns row group `k // g_c` and column group `k % g_c`.
+- `PIPELINE_MIN_POSITIONS = 2` / `PIPELINE_MIN_SEGMENT_BYTES = 2048`: a core with a single walk position cuts its columns into up to 2 blocks, but only while each block keeps at least 2 KiB stick segments. That lets read, tilize and write overlap in the depth-2 CBs. It lowers `block_width` and so the footprint: it never raises it.
+- `low_l1=True` → `CB_BUDGET_BYTES[True]` = 65536 bytes. The footprint formula above holds unchanged (`block_width_cap` = 8 tiles at bf16), and the A/B readback is bit-identical (`test_tilize_grid_2d.py::test_low_l1_ab_bit_identical`, golden low_l1 scenarios).
+
+Data movement (`grid_2d_split`): the same minimum bytes as the row split (input 1 DRAM crossing, output 1 DRAM crossing, 0 cross-core bytes). Transactions: `R * tile_h * g_c` stick-segment reads of `core_col_tiles * 32 * in_elem_bytes` bytes (short_wide_canonical [1,1,32,2048] on 64 Tensix cores: 64-byte segments, 32 per core) + `R * C` tile-page writes.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate / source that establishes it |

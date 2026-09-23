@@ -213,3 +213,40 @@
   - program cache across fill values;
   - the two refusals (inner leading-dim growth, retile × fill) and retile × an auto pad with nothing to fill;
   - perf shapes and A/B tests for `PAD_W_TAIL_PERSIST` and the fill mover.
+
+## Refinement 5 — 2-D grid split (short_wide, square_large) + low_l1
+- Date: 2026-09-23
+- What was done:
+  - **SUPPORTED.** `low_l1` is now `[False, True]`. The `short_wide` / `square_large` row-split EXCLUSIONS (`_row_split_wide_exclusions`) are deleted, so both values run on every placement.
+  - **`grid_2d_split` regime (host only, kernels unchanged).** They already took `(row_start, core_row_tiles, col_start, core_col_tiles)`. `tilize_program_descriptor.grid_2d_split(R, C, N)` transcribes the pinned rule and replaces `NUM_COL_GROUPS`: minimize the busiest core's cost; tie-break 1 wider column groups; tie-break 2 fewer Tensix cores; every column start a multiple of `col_align_tiles`; row groups in units of `row_align` (retile).
+    - One measured amendment: the cost is `rows * (cols + ROW_COST_TILES)` with `ROW_COST_TILES = 1.5` (0 = the pinned tile-count rule, a live knob). Every tile-row costs `tile_h` stick reads whatever its width. The pure tile count put 1-column groups on shapes the row split already filled: [4,3,256,96] 8.9 → 11.0 µs, [1,1,2080,2048] 92 → 181 µs.
+    - `g_c == 1` falls through to the unchanged `split_work_to_cores` row split, so the perf-focus path compiles to the same program.
+    - `g_c > 1` puts row group `k // g_c` × column group `k % g_c` on the first `g_r * g_c` Tensix cores, row-wise.
+  - **Transaction-size lamp** (`MIN_GROUP_COL_TILES`, a column-group floor): measured 1 / 2 / 4 / 8 / 16 tile-columns. Maximum participation wins, so it is parked at 1 (live knob).
+  - **Quantum re-measure.** On short_wide every Tensix core owns one walk position, so `rows_per_quantum` is pinned to 1 and `QUANTUM_MIN_TILES` cannot engage.
+  - **New lever: `PIPELINE_MIN_POSITIONS` (2) + `PIPELINE_MIN_SEGMENT_BYTES` (2048).** It targets the one-position serialization: a core with one walk position cuts its columns into up to 2 blocks, so read / tilize / write overlap in the depth-2 CBs, but only while each block keeps at least 2 KiB stick segments.
+- Accuracy achieved: bit-exact (bf16 → bf16, `torch.equal`; PCC = 1.0, rtol = atol = 0) on [1,1,32,2048], [1,1,64,4096], [1,1,32,8192], [1,1,1,2048] (auto pad), [1,1,32,4090] (auto pad), [1,1,2048,2048], [8,1,249,2048] (auto pad), [2,3,64,1024], [1,1,96,64], [1,1,2048,64], L1-interleaved [1,1,32,2048]. `low_l1=True` vs `False` is bit-identical on [1,1,64,256], [1,1,32,4096], [1,1,32,8192], [1,1,50,50] (padded) and [1,1,4096,1024].
+- Golden test progress:
+  - `test_golden.py`: 74 passed, 0 failed, 0 XPASS, 716 xfailed (all dtype / output_dtype, Refinement 7). Every `work_geometry` and `low_l1` cell passes, including `short_wide_l1_forcing` and `low_l1_forcing_width` at both settings with no OOM, and `PROGRAM_CACHE_CASES` `short_wide_canonical`, `tall_narrow_grid_scale` and `square_large`.
+  - `test_translated.py`: 2 failures, both module-order program-cache hits that pass when run alone:
+    - the known `test_tilize_program_cache_addr_change[sharded_width_l1]` (Refinement 1);
+    - `test_tilize_with_val_padding_block_per_node_cb_size[1.0-input_shape5]`, newly admitted (short_wide). (2,1,60,7328) folds to the same R = 4, C = 229 program as the earlier (1,1,100,7328) case, and its pad map rides on RT args, so its "first" call is a correct cache hit.
+  - `test_regression.py`: the 10 tracked dtype failures, unchanged (Refinement 7).
+- Perf (WH B0, device-kernel ns, Tensix cores in parentheses):
+  - short_wide_canonical [1,1,32,2048]: 14273 (1) → 3640–3828 (64); ref 3486.
+  - [1,1,32,8192]: 30847 (1) → 7105–7505 (64); ref 7142.
+  - [1,1,64,4096]: 20149 (2) → 7292–7342 (64).
+  - square_large [1,1,2048,2048]: row split kept on 64 cores (tie on makespan); the pipeline lever takes it from 92293 to 87033 (−5.7 %, medians of 3).
+  - [1,1,96,64]: 3133 (3) → 2927 (6).
+  - [1,1,128,64]: flat, 3118 (4) → 2894–3141 (8).
+  - Guard set unchanged within noise: narrow DRAM 25191, wide DRAM 43131, L1 interleaved 5683, sharded resident 1921, sharded accessor 17270, tiny tile 16 25103, retile 38324.
+- Issues encountered:
+  - The pinned tile-count rule regressed shapes the row split already filled (see above), fixed by `ROW_COST_TILES`.
+  - An ungated column pipeline lost 30–50 % on short_wide (narrower reads), fixed by the 2 KiB segment floor.
+- Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_grid_2d.py` (32 cases):
+  - the rule, pinned and with row cost, plus row_align;
+  - bit-exact work-geometry shapes, with a Tensix-core-count assertion (≥ 3/4 of the grid on short_wide / square_large / tall_narrow);
+  - padded short_wide / square_large;
+  - an L1-interleaved 2-D split;
+  - the `low_l1` A/B bit-identity and the CB-budget bound;
+  - the 2-D program cache.

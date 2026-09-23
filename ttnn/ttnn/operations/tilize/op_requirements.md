@@ -167,7 +167,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
   - Inner leading-dim growth raises `NotImplementedError`: TTNN's logical view cannot express it.
 - **Perf.** No unpadded path regressed (guard set within noise). On the padded path the remaining cost is the per-stick W-tail band store on narrow tensors: [1,1,16370,50] is 36.6 µs vs 25.3 µs aligned, and 27.6 µs with the band stubbed. It is persisted across CB-ring passes, so tall tensors pay it once per CB row: [1,1,65520,50] is +9 % over aligned.
 
-### [ ] Refinement 5 — 2-D grid split (short_wide, square_large) + low_l1
+### [x] Refinement 5 — 2-D grid split (short_wide, square_large) + low_l1
 
 **Goal**: add `tile_grid` `short_wide`, `square_large` and `low_l1` `True` to SUPPORTED.
 - **2-D split.** Implement the `grid_2d_split` assignment rule pinned in op_design.md → Regimes: choose `(g_r, g_c)` minimizing the busiest core's tiles, with tie-breaks for wider stick segments and then fewer cores. `NUM_COL_GROUPS` is replaced by that rule, and every column start is a multiple of `col_align_tiles`. The kernels already take `(row_start, core_row_tiles, col_start, core_col_tiles)`.
@@ -185,6 +185,12 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Reference timings.** The short_wide LOOSE_CASES are device-ns references: [1,1,32,8192] 7142 ns, [1,1,32,2048] 3486 ns (WH).
 
 **Done when**: the `work_geometry` cells pass, including `short_wide_l1_forcing` and `low_l1_forcing_width` with no OOM at either setting. Every `low_l1` scenario passes the bit-identical A/B. `PROGRAM_CACHE_CASES` `short_wide_canonical`, `tall_narrow_grid_scale` and `square_large` pass. Core counts are reported. Zero loud categories.
+**Outcome**: landed. `tile_grid` `short_wide` / `square_large` run on every placement (the row-split EXCLUSIONS are gone) and `low_l1` is `[False, True]`.
+- **Golden.** `test_golden.py` has 74 pass / 0 fail / 0 XPASS: every `work_geometry` and `low_l1` cell, with no OOM at either setting on `short_wide_l1_forcing` / `low_l1_forcing_width`, the bit-identical `low_l1` A/B, and `PROGRAM_CACHE_CASES` `short_wide_canonical` / `tall_narrow_grid_scale` / `square_large`.
+- **Rule.** `grid_2d_split` is host-only, with `ROW_COST_TILES = 1.5` added to the pinned tile-count cost: the pure count regressed [4,3,256,96] by 22 % and [1,1,2080,2048] by 2×.
+- **Core counts (WH).** short_wide_canonical 64 of 64 Tensix cores (was 1): 14.3 → 3.7 µs (ref 3.49). [1,1,32,8192] 64 cores: 30.8 → 7.2 µs (ref 7.14). square_large 64 of 64 (row split = the 2-D optimum on 64 cores; 64 × 2 on a 130-core grid). tall_narrow_grid_scale 64 of 64.
+- **Lamps.** The column-group floor lamp favors maximum participation, so it is parked at 1. Gated column pipelining (`PIPELINE_MIN_POSITIONS` 2, ≥ 2 KiB segments) takes square_large from 92.3 to 87.0 µs.
+- **What is left.** short_wide is one tile-row per core: 32 reads of 64–256 bytes, then one tilize, then 1–4 writes, fully serialized. Launch and fill latency are most of its ~3.7 µs.
 
 ### [ ] Refinement 6 — Speed up the perf-flagged profile (bank-coalesced stick reads)
 

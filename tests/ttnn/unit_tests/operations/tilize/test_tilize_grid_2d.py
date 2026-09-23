@@ -38,7 +38,25 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     ],
 )
 def test_grid_2d_rule(R, C, N, align, expect):
-    assert grid_2d_split(R, C, N, col_align_tiles=align, min_group_col_tiles=1) == expect
+    """The pinned tile-count rule (row_cost_tiles = 0)."""
+    assert grid_2d_split(R, C, N, col_align_tiles=align, min_group_col_tiles=1, row_cost_tiles=0) == expect
+
+
+@pytest.mark.parametrize(
+    "R, C, N, expect",
+    [
+        (96, 3, 64, (96, 1)),  # the row split already fills the grid: keep full-width segments
+        (1, 64, 64, (1, 64)),  # short_wide still spreads over the grid
+        (64, 64, 130, (64, 2)),  # square_large on a Blackhole-sized grid
+        (64, 2, 130, (64, 2)),  # tall_narrow_grid_scale with R < N
+    ],
+)
+def test_grid_2d_rule_row_cost(R, C, N, expect):
+    g_r, g_c = grid_2d_split(R, C, N, col_align_tiles=1, min_group_col_tiles=1, row_cost_tiles=1.5)
+    if expect[1] == 1:
+        assert g_c == 1
+    else:
+        assert (g_r, g_c) == expect
 
 
 def test_grid_2d_rule_row_align():
