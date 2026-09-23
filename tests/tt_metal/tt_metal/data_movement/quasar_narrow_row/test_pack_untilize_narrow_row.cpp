@@ -336,17 +336,47 @@ void dump_mapping(
         }
     }
 
+    // Duplicates alone do NOT mean the destinations collided -- that was the first reading of
+    // this output and it was wrong. Two entries overwriting one slot must leave some OTHER
+    // slot untouched, so a destination collision requires duplicates AND unwritten > 0. With
+    // every slot written exactly once, a repeated source means the SOURCE index failed to
+    // advance while the destination pointer advanced correctly, which is a different bug in a
+    // different part of the engine.
     const char* conclusion =
-        duplicated > 0     ? "COLLISIONS -- two entries landed on the same destination slot"
+        (duplicated > 0 && unwritten > 0)
+            ? "DESTINATION COLLISIONS -- two entries wrote the same slot, and another was left untouched"
+        : duplicated > 0   ? "SOURCE REUSED -- every destination written exactly once, but the scatter index "
+                             "did not advance: the same list entry was consumed repeatedly"
         : unwritten > 0    ? "GAPS -- some destination rows were never written"
         : fragmented > 0   ? "FRAGMENTED -- a destination row was stitched from more than one source run"
         : identity == rows ? "IDENTITY -- the mapping is exactly right"
                            : "PERMUTATION/OFFSET -- every slot written once, but from the wrong place";
 
+    // The source-index sequence, run-length encoded. This is the most informative line in the
+    // dump: a stuck prefix like "0 x16, 16, 17, ..." says exactly how many entries the engine
+    // consumed before the list caught up, and 16 entries x 8 B = 128 B is a fetch-block-sized
+    // clue that per-row numbers never would have given.
+    std::string sequence;
+    for (std::uint32_t r = 0; r < rows;) {
+        std::uint32_t run = 1;
+        while (r + run < rows && src_row[r + run] == src_row[r]) {
+            run++;
+        }
+        if (!sequence.empty()) {
+            sequence += ", ";
+        }
+        sequence += src_row[r] < 0 ? std::string("?") : std::to_string(src_row[r]);
+        if (run > 1) {
+            sequence += " x" + std::to_string(run);
+        }
+        r += run;
+    }
+
     log_info(
         tt::LogTest,
         "MAPPING {} rows, engine={} ch={} matrix_w={} pad_w={} iters={}\n"
         "  verdict: {}\n"
+        "  source index sequence: {}\n"
         "  identity {}, unwritten {}, unrecognised {}, fragmented {}, "
         "source rows used twice or more: {}{}, source rows never used: {}\n{}",
         rows,
@@ -356,6 +386,7 @@ void dump_mapping(
         pad_w,
         cfg.compact_iterations,
         conclusion,
+        sequence,
         identity,
         unwritten,
         unrecognised,
