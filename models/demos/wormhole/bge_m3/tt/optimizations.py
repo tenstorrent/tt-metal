@@ -260,37 +260,36 @@ def _linear_activation_memory_config(max_seq_len, max_batch_size=None):
     return ttnn.L1_MEMORY_CONFIG
 
 
-# B8 (b*s=4096) DRAM activations. NOTE: tried extending the B32 L1 output
-# overrides to B8 (mlp_wi/wo, attn_output, create_heads) — ALL variants, even
-# create_heads alone, fail with "static CBs clash with L1 buffers" on the 11x10
-# grid: the SDPA/matmul static circular buffers leave no L1 headroom. Dead end
-# unless the SDPA grid is shrunk first to free L1. Kept at default (DRAM).
+# Blackhole B8/B16/B32 at S512 keep the MLP and attention-output activations in
+# L1. At B16 they moved from DRAM to L1 after the streaming SDPA kernel freed L1:
+# wo + attention output took 32.835 ms to 30.647 ms, and wi took it to 28.164 ms
+# once its output block was split (see _b16s512_mlp_wi_program_config).
 def _mlp_wi_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _mlp_wo_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
 
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    # B8: create_heads output to L1 clashes with SDPA static CBs (program 15,
-    # 11x10 grid) - reverted. Stays at default (DRAM) for B8.
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    # B16 and B32 write the Q/K/V heads to L1; at B16 this saves 2.06 ms. B8 clashed
+    # with the legacy SDPA circular buffers and stays in DRAM until it is retested.
+    if max_seq_len == 512 and max_batch in (16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
 
@@ -532,8 +531,11 @@ def _b16s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_siz
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=min(4, hidden_tiles),
-        out_subblock_h=2,
-        out_subblock_w=4,
+        # out_block_h=13 splits the 26-tile M block in two. With the output in
+        # L1, the full block's circular buffers overlapped it by 136 KB.
+        out_subblock_h=1,
+        out_subblock_w=6,
+        out_block_h=13,
         per_core_M=(m_tiles + grid_y - 1) // grid_y,
         per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
         transpose_mcast=False,
