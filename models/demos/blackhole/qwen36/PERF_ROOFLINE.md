@@ -23,6 +23,7 @@ Everything else is one of:
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
 | **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B produced no output, including the baseline control; treat as broken |
+| **implemented, A/B in flight** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | default OFF until verified; see the port section |
 
 **Verified savings so far: zero.** The 8-11 ms plan below is a budget of estimated cuts against
 measured costs; none of the cuts has been demonstrated.
@@ -307,6 +308,96 @@ collectives. The absolute numbers should not be quoted.
 
 The honest use of this analysis is as evidence for attacking collectives **inside** the current
 SP x TP design -- PP's zero-collective property without its pipeline-occupancy tax.
+
+## Aniruddha's measurements (atupe/qwen35-sp-prefill, 4-die QuietBox, TP=1)
+
+Reported 2026-09-23, his config is SP=4 x **TP=1** on 4 dies -- not ours:
+
+| config | GDN layers | FA layers | note |
+|---|---|---|---|
+| SP=4 (TP=1) | **65%** of TTFT | 21% | pipeline fill (GDN state + KV to the last chip, sockets) **~4 ms** |
+| TP=1 | **74%** of TTFT | 18% | |
+
+Two things carry over to our SP=4 x TP=8 numbers. GDN dominating is consistent with our
+profile (GDN scan + prep + its data-movement chain is ~18% of *work* here, but that is after
+collectives take 45%; at TP=1 there are no collectives, so GDN's share rises). And his ~4 ms
+socket fill matches our measured wavefront tail (d3 - d0 = 4.28 ms) almost exactly -- so that
+tail is the state/KV handoff, and it is the same size at TP=1 and TP=8.
+
+## Porting atupe/qwen35-sp-prefill round 4 to SP=4 x TP=8 (2026-09-23)
+
+Branch `atupe/qwen35-sp-prefill` (3 commits, **no common ancestor** with ours -- a squashed
+snapshot of a different base, so nothing cherry-picks; ported at file level). His round-4
+commit `c58a31a46d0` changes four model files:
+
+| change | file | his measurement (T=1024, tp=1) |
+|---|---|---|
+| **KDA fused conv1d+SiLU+QKV-split** replacing concat/conv1d/silu/slice | `gdn/tp.py` | **643 -> 316 us**, PCC 0.99999 |
+| SDPA q_chunk=128 / k_chunk=256 on an 8x8 grid | `attention/tp.py` | **1198 -> 703 us** on the 4096-key die, PCC unchanged |
+| L1-resident SiLU(z), gate multiply, conv row-major intermediates | `gdn/tp.py` | removes ~86 + 36 + 19.5 us of L1->DRAM |
+| L1-resident SiLU(gate)*up | `mlp.py` | removes 106 us L1->DRAM + 94 us DRAM->L1 |
+| on-device argmax + optional async socket FIFO | `sp_prefill.py` | **not ported** (see below) |
+
+### As written, all four perf changes are inert on our config
+
+Every one carries the gate `self.mesh.get_num_devices() == 1`. His branch is the 4-die
+QuietBox at TP=1. On the Galaxy each span's submesh is `create_submeshes(MeshShape(1, tp))`
+(`sp_prefill.py:209`), so at TP=8 `get_num_devices()` is 8 and **every gate is False**. Dropping
+his files onto our branch and re-running would have produced exactly 42.79 ms and told us
+nothing. That is the first finding of this exercise and the reason the port needed edits rather
+than a copy.
+
+Nothing in the optimisations themselves is TP=1-specific: `tw["conv_taps"]` is already
+per-device sharded by `shard_small` (that *is* the per-device depthwise conv the op wants), and
+every L1-resident intermediate is 8x smaller at TP=8 than in his measurements, so L1 is less
+contended, not more.
+
+### What was done
+
+- The four changes were applied with the device-count gate replaced by one predicate,
+  `tp_common.atupe_opts_enabled()` (`QWEN36_ATUPE_OPTS`). **Default off until verified**; the
+  A/B sets `=1`. Unset is byte-identical to before the port. His per-feature opt-outs
+  (`QWEN36_SP_KDA_CONV=0`, `QWEN36_SP_L1_RES=0`, `QWEN36_SP_SDPA_LEGACY=1`) still work under it,
+  so each change can be isolated.
+- **Chunk size had to change.** The KDA op validates `chunk % 32 == 0`, `chunk <= C`, and
+  `C % chunk == 0`. His `channel_chunk_size=512` is at C=6144; our per-device width at TP=8 is
+  **C=768** (2B GDN: 16 k-heads + 16 v-heads x 128 -> 6144 / 8), and 512 does not divide it.
+  `tp_common.kda_channel_chunk(C)` picks the largest tile-aligned divisor <= 512: **384 at
+  C=768**, and reproduces his 512 at C=6144. `QWEN36_SP_KDA_CHUNK` overrides for sweeps,
+  validated against the same rules.
+- The op is **already in our build** (`ttnn.experimental.kda.qkv_causal_conv1d_silu`, from the
+  DeepSeek KDA work upstream), so no C++ port or rebuild. His 215 differing C++ files are
+  base-tree drift and were not touched.
+- `sp_prefill.py` was **skipped**: the on-device argmax moves the *total* TTFT stamp and changes
+  `prefill_traced` / `_tail` return contracts, but does not touch the wavefront time we compare
+  on; the socket-FIFO experiment is opt-in and off. Neither bears on this A/B.
+- Every anchor was asserted to occur exactly once before any write, all four files parse, all
+  six qwen36 modules import cleanly, and the `Nk/Dk/Nv/Dv`, `_L1`, `new_state`, `os` names his
+  code relies on are bound in the enclosing scopes at each insertion point.
+
+### The import test also clears a suspect for the empty replicated-residual A/B
+
+The leading theory for that A/B printing nothing (including its baseline) was a circular import
+from the module-level `tpc` import added to `gdn/tp.py`. All six modules import without error,
+so that is not it. The baseline re-run with full stdout captured (see below) is what will show
+the real cause.
+
+### A/B protocol and results
+
+- **baseline**: `SP_DIES=4 SP_TP=8 QWEN36_NO_AGMM=1`, `QWEN36_ATUPE_OPTS` unset. The process was
+  started **before** the port was written, so it runs the pre-port code (full log:
+  `base_head.log`).
+- **ported**: same env plus `QWEN36_ATUPE_OPTS=1`, launched after the baseline finished
+  (`atupe_head.log`). Guarded: not launched if the baseline exited by timeout/kill (124/143),
+  the pattern that wedges the device.
+
+| run | wavefront | per-die finish | PCC | status |
+|---|---|---|---|---|
+| baseline (pre-port HEAD) | *pending* | | | running |
+| ported, all three on | *pending* | | *pending* | chained behind baseline |
+
+Results to be filled in when the runs land; per-feature isolation runs follow only if the
+combined run moves the number.
 
 ## Path to ~11 ms: measured costs, estimated cuts, zero verified so far
 

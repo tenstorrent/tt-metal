@@ -902,3 +902,44 @@ def residual_all_reduce(x, mesh_device, tt_ccl, cluster_axis, dim, topology, mem
     # its documented "reduce across the line" form.
     flat = 1 in list(mesh_device.shape)
     return ttnn.all_reduce(x, cluster_axis=None if flat else cluster_axis, num_links=num_links, topology=topology)
+
+
+def atupe_opts_enabled():
+    """QWEN36_ATUPE_OPTS=0 turns off every optimisation ported from atupe/qwen35-sp-prefill.
+
+    Aniruddha's round-4 changes (KDA fused conv, SDPA q=128/k=256 on 8x8, L1-resident eltwise
+    intermediates) were all gated on ``self.mesh.get_num_devices() == 1`` -- his branch is the
+    4-die QuietBox config, SP=4 x TP=1. On our SP=4 x TP=8 Galaxy each span's submesh is
+    ``MeshShape(1, 8)``, so as written every one of those gates is False and the code is inert.
+    Nothing in the optimisations themselves is TP=1-specific (the conv taps are already
+    per-device sharded by shard_small, and the intermediates only get SMALLER at TP>1), so this
+    predicate replaces the device-count test. **Default OFF until the SP=4 x TP=8 A/B verifies
+    it** (same discipline as QWEN36_REPL_RESIDUAL); unset is byte-identical to before the port,
+    which is what makes the A/B clean. The A/B run sets ``=1`` explicitly. The per-feature opt-outs he added
+    (QWEN36_SP_KDA_CONV, QWEN36_SP_L1_RES, QWEN36_SP_SDPA_LEGACY) still work underneath it.
+    """
+    return os.environ.get("QWEN36_ATUPE_OPTS", "0") == "1"
+
+
+def kda_channel_chunk(channels):
+    """channel_chunk_size for qkv_causal_conv1d_silu at this device's Q+K+V width.
+
+    The op validates: chunk % 32 == 0, chunk <= channels, and channels % chunk == 0 (it must
+    divide exactly). Aniruddha's probe used 512 at C=6144 (tp=1, 12 chunks). At tp=8 the 2B's
+    per-device width is 768 and 512 does not divide it. Default = the largest tile-aligned
+    divisor <= 512, which gives 384 at C=768 and reproduces his 512 at C=6144.
+    QWEN36_SP_KDA_CHUNK overrides for sweeps; it is validated against the same three rules so a
+    bad value fails here with a readable message rather than as a TT_FATAL inside the op.
+    """
+    ov = os.environ.get("QWEN36_SP_KDA_CHUNK")
+    if ov:
+        c = int(ov)
+        assert (
+            c > 0 and c % 32 == 0 and c <= channels and channels % c == 0
+        ), f"QWEN36_SP_KDA_CHUNK={c} invalid for C={channels}: need %32==0, <=C, and C%chunk==0"
+        return c
+    start = (min(512, channels) // 32) * 32
+    for c in range(start, 31, -32):
+        if channels % c == 0:
+            return c
+    return 32

@@ -168,6 +168,16 @@ class Qwen36MLP:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
         self._sequence_parallel = getattr(args, "sequence_parallel", False)
+        # L1-resident gate*up multiply (SP prefill). Ported from atupe/qwen35-sp-prefill round 4:
+        # his one-die T=1024 profile shows BinaryNg 106us L1->DRAM for the SiLU(gate)*up multiply,
+        # then the down-proj matmul reads it back DRAM->L1 (94us). Keeping the multiply output in
+        # L1 avoids the round trip. At tp=8 `hidden` is 8x narrower than in his measurement.
+        # QWEN36_SP_L1_RES=0 opts out; non-SP behaviour is unchanged.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._sp_l1_res = (
+            self._sequence_parallel and _tpc.atupe_opts_enabled() and os.environ.get("QWEN36_SP_L1_RES", "1") != "0"
+        )
         # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
         self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
@@ -319,7 +329,10 @@ class Qwen36MLP:
         _prefill_tuned = x.shape[-2] > ttnn.TILE_SIZE and _silu_fused
         # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
         if not _fused_gu:
-            mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
+            # SP prefill: keep hidden in L1 instead of DRAM (see self._sp_l1_res in __init__ for
+            # the profile numbers). Default TP path (mc = DRAM) unchanged.
+            _l1_res_prefill = self._sp_l1_res and x.shape[-2] > ttnn.TILE_SIZE
+            mc_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _l1_res_prefill) else mc
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if gate_needs_silu:
                 # SiLU fused into the packer doubles the gate matmul time (179 vs 91 us @1024x2048x6144,
