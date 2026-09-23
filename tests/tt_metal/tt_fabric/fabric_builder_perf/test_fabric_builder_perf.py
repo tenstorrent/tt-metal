@@ -31,6 +31,8 @@ CACHES = ["cold", "hot"]
 PHASE_MARKER = "FabricBuilderBenchmark::{cache}"
 
 DEFAULT_TOLERANCE_PERCENT = 10.0
+# Added to every row's relative tolerance so zones of a few ms don't fail on timer and scheduling jitter.
+ABS_TOLERANCE_MS = 0.5
 BENCHMARK_TIMEOUT_S = 180
 CAPTURE_EXIT_TIMEOUT_S = 60
 TRACY_PORTS = range(8086, 8500)
@@ -43,8 +45,10 @@ SUMMARY_HEADERS = [
     "zone",
     "measured_ms",
     "golden_ms",
+    "delta_ms",
     "delta_percent",
     "tolerance_percent",
+    "allowed_ms",
     "status",
 ]
 
@@ -248,7 +252,8 @@ def write_golden_rows(golden_path: Path, fabric_config: str, durations: dict[tup
         writer.writerows(other_rows + new_rows)
 
 
-# Golden comparison. Tolerance is two-sided, so a large speedup also fails and the golden gets refreshed.
+# Golden comparison. A zone passes when |measured - golden| <= ABS_TOLERANCE_MS + golden * tolerance_percent / 100.
+# Tolerance is two-sided, so a large speedup also fails and the golden gets refreshed.
 def compare_to_golden(
     fabric_config: str, durations: dict[tuple[str, str], float], golden_rows: list[dict]
 ) -> tuple[list[dict], list[str]]:
@@ -265,8 +270,10 @@ def compare_to_golden(
 
         golden_ms = float(golden["golden_ms"])
         tolerance_percent = float(golden["tolerance_percent"])
-        delta_percent = (measured_ms / golden_ms - 1.0) * 100.0
-        status = "pass" if abs(delta_percent) <= tolerance_percent else "fail"
+        delta_ms = measured_ms - golden_ms
+        delta_percent = delta_ms / golden_ms * 100.0
+        allowed_ms = ABS_TOLERANCE_MS + golden_ms * (tolerance_percent / 100.0)
+        status = "pass" if abs(delta_ms) <= allowed_ms else "fail"
         rows.append(
             make_summary_row(
                 fabric_config,
@@ -274,15 +281,18 @@ def compare_to_golden(
                 zone,
                 measured_ms,
                 golden_ms=golden["golden_ms"],
+                delta_ms=f"{delta_ms:+.3f}",
                 delta_percent=f"{delta_percent:+.1f}",
                 tolerance_percent=golden["tolerance_percent"],
+                allowed_ms=f"{allowed_ms:.3f}",
                 status=status,
             )
         )
         if status == "fail":
             errors.append(
                 f"{cache} {zone}: {measured_ms:.3f} ms vs golden {golden_ms:.3f} ms "
-                f"({delta_percent:+.1f}%, tolerance {tolerance_percent}%)"
+                f"({delta_ms:+.3f} ms, {delta_percent:+.1f}%; allowed +/-{allowed_ms:.3f} ms = "
+                f"{ABS_TOLERANCE_MS} ms + {tolerance_percent}%)"
             )
 
     # Whatever is left in the golden was not measured.
