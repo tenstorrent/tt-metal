@@ -202,6 +202,37 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
 
 
 @pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        ([1, 1, 32, 32], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 32, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+        ([1, 1, 32, 64], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 64, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+    ],
+)
+def test_softmin_large_last_tile_subtracts_max(shape, dim, strategy, device):
+    # Force LARGE_*; these shapes would otherwise pick SMALL_*. Last tile must use (x - max).
+    torch_input = torch.empty(shape, dtype=torch.bfloat16)
+    if shape[dim] == 32:
+        torch_input.fill_(100)
+    elif dim == 3:
+        torch_input[..., :32] = 103
+        torch_input[..., 32:] = 100
+    else:
+        torch_input[..., :32, :] = 103
+        torch_input[..., 32:, :] = 100
+
+    torch_output = F.softmin(torch_input, dim)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.to_torch(ttnn.operations.moreh.softmin(ttnn_input, dim, strategy=strategy)).to(torch.bfloat16)
+
+    rtol = atol = 0.05
+    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=rtol, atol=atol)
+    logger.debug(out)
+    assert passing, out
+
+
+@pytest.mark.parametrize(
     "shape_dim",
     [
         [[1, 1, 10, 15], 3],  # single tile

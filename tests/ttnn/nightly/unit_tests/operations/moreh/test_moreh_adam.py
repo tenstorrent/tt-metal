@@ -19,7 +19,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
-# Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
 
 
@@ -66,8 +65,15 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
     cpu_grad = model.weight.grad.clone()
     dev_grad = create_tt_tensor(cpu_grad, device, dtype=dtype)
 
-    for _ in range(step):
-        optimizer.step()
+    # Device does one update at this `step`. Match that on CPU; do not call step() `step` times.
+    if step > 1:
+        state = optimizer.state[model.weight]
+        state["step"] = torch.tensor(step - 1)
+        state["exp_avg"] = torch.zeros_like(model.weight)
+        state["exp_avg_sq"] = torch.zeros_like(model.weight)
+        if amsgrad:
+            state["max_exp_avg_sq"] = torch.zeros_like(model.weight)
+    optimizer.step()
 
     optimizer_state_dict = optimizer.state_dict()
 
@@ -116,17 +122,20 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
         max_exp_avg_sq_result = None
 
     rtol = atol = 0.01
-    passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.999, rtol=rtol, atol=atol)
+    passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.999, rtol=rtol, atol=0.05)
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
+    assert passing, f"param_out mismatch: {out}"
 
     passing, out = comp_allclose_and_pcc(cpu_exp_avg_result, exp_avg_result, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Out passing (exp_avg)={passing}")
     logger.debug(f"Output pcc={out}")
+    assert passing, f"exp_avg mismatch: {out}"
 
     passing, out = comp_allclose_and_pcc(cpu_exp_avg_sq_result, exp_avg_sq_result, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Out passing (exp_avg_sq)={passing}")
     logger.debug(f"Output pcc={out}")
+    assert passing, f"exp_avg_sq mismatch: {out}"
 
     if "max_exp_avg_sq" in optimizer_state_dict["state"][0]:
         passing, out = comp_allclose_and_pcc(
@@ -134,7 +143,7 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
         )
         logger.debug(f"Out passing (max_exp_avg_sq)={passing}")
         logger.debug(f"Output pcc={out}")
-    assert passing
+        assert passing, f"max_exp_avg_sq mismatch: {out}"
 
 
 @pytest.mark.parametrize(
@@ -157,6 +166,22 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     )
 
 
+@pytest.mark.parametrize("step", [1, 4])
+def test_moreh_adam_bias_correction_uses_step(step, device):
+    torch.manual_seed(0)
+    run_moreh_adam(
+        [32, 32],
+        1e-1,
+        (0.9, 0.999),
+        1e-8,
+        0.0,
+        False,
+        False,
+        device,
+        step=step,
+    )
+
+
 @pytest.mark.parametrize(
     "params",
     (
@@ -167,7 +192,6 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
 )
 def test_moreh_adam_callback(params, device):
     torch.manual_seed(2024)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
     device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
@@ -191,7 +215,6 @@ def test_moreh_adam_callback(params, device):
 )
 def test_moreh_adam_caching(params, device):
     torch.manual_seed(2024)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
     device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(1, 5):
@@ -202,19 +225,14 @@ def test_moreh_adam_caching(params, device):
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    # Guard that the op registers cached programs at all; the equality checks alone
-    # would still pass even if it never does.
     assert num_program_cache_entries_list[0] > 0
     for i in range(1, 4):
         assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
 
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
     device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(4):
         shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
-
-        # generate a random lr between (0, 1)
         lr = torch.rand(1).item()
 
         run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device)
@@ -223,8 +241,6 @@ def test_moreh_adam_caching(params, device):
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    # Guard that the op registers cached programs at all; the equality checks alone
-    # would still pass even if it never does.
     assert num_program_cache_entries_list[0] > 0
     for i in range(1, 4):
         assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]

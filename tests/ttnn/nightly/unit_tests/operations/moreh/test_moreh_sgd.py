@@ -212,6 +212,42 @@ def test_moreh_sgd(
 
 @pytest.mark.parametrize(
     "shape",
+    [
+        [1, 1, 30, 32],  # H — non-multiple of 32
+        [1, 1, 32, 40],  # W — non-multiple of 32
+    ],
+)
+def test_moreh_sgd_partial_tile(shape, device):
+    # ones - lr*ones with lr=1 → 0 on written tiles; a skipped tile stays 1.
+    cpu_param = torch.ones(shape, dtype=torch.bfloat16)
+    cpu_grad = torch.ones(shape, dtype=torch.bfloat16)
+    dev_param = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_grad = ttnn.from_torch(cpu_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_param_out = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    dev_param_out, _ = ttnn.operations.moreh.sgd(
+        dev_param,
+        dev_grad,
+        None,
+        dev_param_out,
+        None,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        momentum_initialized=False,
+        compute_kernel_config=get_compute_kernel_options(False),
+    )
+
+    result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
+    expected = torch.zeros(shape, dtype=torch.bfloat16)
+    passing, out = comp_allclose_and_pcc(expected, result, pcc=0.99, rtol=0.05, atol=0.05)
+    assert passing, out
+
+
+@pytest.mark.parametrize(
+    "shape",
     [[32, 32]],  # single
 )
 @pytest.mark.parametrize("lr", [3.0])
