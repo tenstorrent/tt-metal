@@ -289,3 +289,53 @@ def test_missing_llk_tree_is_rejected(tmp_path):
     (tmp_path / "unrelated").mkdir()
     with pytest.raises(ValueError, match="tt_metal/tt-llk"):
         repo_map.build_map(tmp_path)
+
+
+def test_dict_unpacked_sweep_recovers_axes_from_the_signature(tmp_path):
+    """The form the big matrices use, and the one decorator parsing misses.
+
+    test_eltwise_unary_datacopy is parametrized as @parametrize(**DATACOPY_SWEEP),
+    so there are no keyword names to read. Its axes are its parameters, and
+    dest_acc/formats are exactly the axes behind trial04's 13 base-unsupported
+    skips. The sweep constant is named so the matrix itself can be found.
+    """
+    wt = _tree(
+        tmp_path,
+        {
+            "test_sweep.py": (
+                "from helpers.param_config import parametrize\n"
+                "DATACOPY_SWEEP = {}\n"
+                "@parametrize(**DATACOPY_SWEEP)\n"
+                "def test_datacopy(formats, dest_acc, num_faces, request): pass\n"
+            )
+        },
+    )
+    test = repo_map.build_map(wt)["test_modules"][0]["tests"][0]
+    assert test["param_axes"] == ["dest_acc", "formats", "num_faces"]
+    assert test["param_sweeps"] == ["DATACOPY_SWEEP"]
+
+
+def test_unparametrized_test_gets_no_axes_from_its_signature(tmp_path):
+    """Only a parametrized test's parameters are axes; a plain one takes fixtures."""
+    wt = _tree(
+        tmp_path,
+        {"test_plain.py": "def test_plain(request, tmp_path): pass\n"},
+    )
+    test = repo_map.build_map(wt)["test_modules"][0]["tests"][0]
+    assert test["param_axes"] == []
+    assert "param_sweeps" not in test
+
+
+def test_explicit_axes_win_over_the_signature_fallback(tmp_path):
+    wt = _tree(
+        tmp_path,
+        {
+            "test_explicit.py": (
+                "import pytest\n"
+                "@pytest.mark.parametrize('fmt', [1])\n"
+                "def test_x(fmt, unrelated_fixture): pass\n"
+            )
+        },
+    )
+    test = repo_map.build_map(wt)["test_modules"][0]["tests"][0]
+    assert test["param_axes"] == ["fmt"]

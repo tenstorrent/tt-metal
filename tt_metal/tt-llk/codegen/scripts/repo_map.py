@@ -81,22 +81,45 @@ def _marker_names(decorator: ast.expr) -> list[str]:
     return ["parametrize"] if parts and parts[-1] == "parametrize" else []
 
 
-def _param_axes(decorator: ast.expr) -> list[str]:
-    """Axis names from pytest.mark.parametrize or the helpers.param_config one."""
+def _parametrize_info(decorator: ast.expr) -> tuple[bool, list[str], list[str]]:
+    """(is_parametrize, axis names it states, sweep constants it unpacks).
+
+    Three forms appear in this tree and only two of them name their axes:
+    ``parametrize("a,b", [...])``, ``parametrize(axis=values)``, and
+    ``parametrize(**DATACOPY_SWEEP)``. The third form carries the big matrices,
+    so reading decorators alone reports the most heavily parametrized tests in
+    the suite as having no axes at all. The caller recovers those from the
+    function signature; the unpacked constant is reported so a reader can jump
+    straight to the sweep definition instead of searching for it.
+    """
     if not isinstance(decorator, ast.Call):
-        return []
+        return False, [], []
     names = _marker_names(decorator)
     if not names or names[-1] != "parametrize":
-        return []
+        return False, [], []
     axes: list[str] = []
-    # pytest form: parametrize("a,b", [...])
+    sweeps: list[str] = []
     if decorator.args and isinstance(decorator.args[0], ast.Constant):
         raw = decorator.args[0].value
         if isinstance(raw, str):
             axes.extend(a.strip() for a in raw.split(",") if a.strip())
-    # repository form: parametrize(axis=values, ...)
-    axes.extend(kw.arg for kw in decorator.keywords if kw.arg)
-    return axes
+    for kw in decorator.keywords:
+        if kw.arg:
+            axes.append(kw.arg)
+        elif isinstance(kw.value, ast.Name):  # **SWEEP_CONSTANT
+            sweeps.append(kw.value.id)
+        elif isinstance(kw.value, ast.Attribute):  # **module.SWEEP
+            sweeps.append(kw.value.attr)
+    return True, axes, sweeps
+
+
+def _signature_axes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """A parametrized test's axes are its parameters, minus pytest's own fixtures."""
+    fixtures = {"request", "tmp_path", "capsys", "monkeypatch", "caplog"}
+    args = [
+        a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+    ]
+    return [a for a in args if a not in fixtures]
 
 
 def _module_level_marks(tree: ast.Module) -> tuple[set[str], list[str]]:
@@ -150,20 +173,28 @@ def _scan_test_module(path: Path, root: Path) -> dict[str, Any] | None:
             continue
         markers: set[str] = set(inherited)
         axes: list[str] = []
+        sweeps: list[str] = []
+        parametrized = False
         for dec in node.decorator_list:
             for name in _marker_names(dec):
                 if name != "parametrize":
                     markers.add(name)
-            axes.extend(_param_axes(dec))
+            is_param, dec_axes, dec_sweeps = _parametrize_info(dec)
+            parametrized = parametrized or is_param
+            axes.extend(dec_axes)
+            sweeps.extend(dec_sweeps)
+        if parametrized and not axes:
+            axes = _signature_axes(node)
         module_markers |= markers
-        tests.append(
-            {
-                "name": node.name,
-                "line": node.lineno,
-                "markers": sorted(markers),
-                "param_axes": sorted(set(axes)),
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": node.name,
+            "line": node.lineno,
+            "markers": sorted(markers),
+            "param_axes": sorted(set(axes)),
+        }
+        if sweeps:
+            entry["param_sweeps"] = sorted(set(sweeps))
+        tests.append(entry)
     if not tests:
         return None
     result = {
