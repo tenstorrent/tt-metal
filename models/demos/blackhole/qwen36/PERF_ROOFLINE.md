@@ -576,18 +576,44 @@ TPOT 6.99 ms/token is **device time only** at TP=8 (see the per-layer section). 
 sampling and any host interaction per step. Median per-layer gives 6.99; total device work in
 the window / steps gives **7.69 ms**, so quote 6.99 as median with 7.69 as the worst case.
 
-### Honest e2e for the OSL=8 target
+### MEASURED e2e: prefill + handoff + 8 decode (2026-09-23)
 
-| | ms |
-|---|---|
-| prefill TTFT (device + token readback) | 38.3 |
-| prefill -> decode handoff | **~35, estimated, unmeasured** |
-| 8 decode tokens @ 6.99 (median) | 55.9 |
-| 8 decode tokens @ 7.69 (worst) | 61.5 |
-| **e2e, median decode** | **~130** |
+Run `tests/perf/perf_e2e_prefill_decode.py`: one device session, all three phases on one clock.
 
-Decode, not prefill, dominates the OSL=8 target, and the unmeasured handoff is comparable to
-the whole prefill. Both were invisible while only the wavefront was quoted.
+| phase | ms | share |
+|---|---|---|
+| prefill, true TTFT | **38.00** | 3% |
+| handoff: export device->host | 193.02 | |
+| handoff: inject host->device | 192.41 | |
+| **handoff total** | **385.43** | **28%** |
+| **8 decode tokens** (116.79 ms/token) | **934.35** | **69%** |
+| **E2E TOTAL** | **1357.78 ms** | |
+
+(A further 53.12 ms of full-logits readback happens inside `prefill_traced` for PCC/debug and
+is excluded -- production reads only the on-device-argmax token.)
+
+**The earlier ~130 ms estimate in this document was wrong by 10x.** Both estimated terms were
+far too optimistic, and for reasons that a bytes calculation could not see:
+
+| | estimated | measured | why |
+|---|---|---|---|
+| handoff | ~35 ms | **385 ms** | not bandwidth-bound. It is a per-layer Python loop of `ttnn.to_torch`, host reshard, `ttnn.from_torch` -- 24 layers x several tensors, each a separate round-trip. |
+| 8 decode tokens | ~56 ms | **934 ms** | `decode_tp` is **eager/untraced**: 116.79 ms/token wall vs **6.99 ms/token of device time**. ~17x is host dispatch of ~24 layers of ops per step. |
+
+So the two dominant costs, 97% of e2e, are **implementation gaps, not hardware limits**:
+
+1. **Trace the decode loop.** Prefill is traced and lands within 2% of its device time; decode
+   is not traced at all. At device time, 8 tokens would be ~56-62 ms rather than 934 ms.
+2. **Move the handoff on-device.** `sp_handoff.py` v1 goes through host torch tensors by
+   design. The last SP die already holds the full 4096-token KV and the GDN state -- the data
+   does not need to leave the mesh, only to be resharded.
+
+With both fixed, e2e is ~38 + small + ~60 = **~105 ms**, against **1358 ms today**.
+
+A third, smaller gap: the decode model must be built separately because the SP models are
+`sequence_parallel=True` and, under the replicated residual, hold full-width norm gamma while
+`decode_tp` feeds hidden-fractured activations (`Gamma's last padded dim needs to equal tile
+width`). That is why the handoff targets a distinct TP model at all.
 
 ## Per-layer cost, prefill and decode (measured 2026-09-23)
 
