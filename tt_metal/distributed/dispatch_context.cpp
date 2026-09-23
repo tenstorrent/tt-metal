@@ -27,13 +27,10 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/allocator/allocator.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "impl/device/device_manager.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
-#include "impl/dispatch/dispatch_mem_map.hpp"
-#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -47,26 +44,16 @@ struct DispatchContext::StashedQueues {
 
 namespace {
 
-// One resident L1 allocation whose data sits on a dispatch core inside the fast-dispatch firmware footprint.
+// One resident L1 allocation whose data sits on a core that fast dispatch is about to claim.
 struct FdL1Conflict {
     ChipId chip;
     CoreCoord core;
-    const char* role;    // "prefetch" / "dispatch": which firmware role runs on this core
     const char* ledger;  // "chip" / "mesh" / "chip arena" / "mesh arena": which bookkeeping recorded it
     const char* kind;    // "per-core" / "lockstep-sharded" / "lockstep-nd-sharded" / "interleaved" / "arena"
-    DeviceAddr lowest;   // the allocation's address on this core
-    DeviceAddr window_end;
+    DeviceAddr address;  // the allocation's address on this core; reported, never used to decide
     DeviceAddr bytes_per_core;
-    uint32_t num_cores;  // how many cores the allocation spans (0 when unknown)
+    uint32_t num_cores;  // how many cores the allocation spans (0 = every L1 bank, i.e. interleaved)
 };
-
-std::optional<DeviceAddr> lowest_arena_address(const AllocatorImpl& allocator, const CoreCoord& core) {
-    std::optional<DeviceAddr> lowest;
-    for (const auto& range : allocator.persistent_l1().occupied_ranges(core)) {
-        lowest = lowest.has_value() ? std::min(*lowest, range.first) : std::make_optional(range.first);
-    }
-    return lowest;
-}
 
 // Does this buffer hold data in L1 on `core`? Addresses are irrelevant here. A lockstep buffer
 // reserves its address range on every bank, but its bytes live only on its shard grid, so the
@@ -83,7 +70,9 @@ bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
         const auto& cores = distribution->cores_with_data();
         return std::find(cores.begin(), cores.end(), core) != cores.end();
     }
-    return true;  // Interleaved: one page on every bank, including this core.
+    // Interleaved: pages are spread round-robin over every L1 bank, so the buffer is attributed to every
+    // core. Conservative for a buffer with fewer pages than banks.
+    return true;
 }
 
 const char* l1_buffer_kind(const Buffer& buffer) {
@@ -100,8 +89,8 @@ const char* l1_buffer_kind(const Buffer& buffer) {
 }
 
 // Append one conflict per L1 buffer, and per persistent-arena region, that `allocator` has placed on
-// `core` below `window_end`. Buffers are attributed to cores by their shard grid, not by the free list,
-// so a lockstep tensor sharded elsewhere does not count even though it reserves the same address on
+// `core`, at any address. Buffers are attributed to cores by their shard grid, not by the free list, so
+// a lockstep tensor sharded elsewhere does not count even though it reserves the same address range on
 // this bank (the "lockstep false positive").
 void collect_conflicts(
     const AllocatorImpl& allocator,
@@ -109,26 +98,16 @@ void collect_conflicts(
     const char* arena_ledger,
     ChipId chip,
     const CoreCoord& core,
-    const char* role,
-    DeviceAddr window_end,
     std::vector<FdL1Conflict>& conflicts) {
     if (!allocator.has_bank(BufferType::L1, core)) {
         return;
     }
 
     // Fast path. Every allocated buffer's address is recorded in a free list (lockstep, or this bank's
-    // per-core list under HYBRID), and every arena region in the arena. If neither reaches below
-    // window_end, no buffer can, and the walk below is skipped. This is the common case.
+    // per-core list under HYBRID). An empty free list for this bank means no buffer can be on this core,
+    // and the walk below is skipped.
     const uint32_t bank = allocator.get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
-    const auto free_list_lowest = allocator.get_lowest_occupied_l1_address(bank);
-    const auto arena_lowest = lowest_arena_address(allocator, core);
-    const bool free_list_low = free_list_lowest.has_value() && *free_list_lowest < window_end;
-    const bool arena_low = arena_lowest.has_value() && *arena_lowest < window_end;
-    if (!free_list_low && !arena_low) {
-        return;
-    }
-
-    if (free_list_low) {
+    if (allocator.get_lowest_occupied_l1_address(bank).has_value()) {
         // get_allocated_buffers() copies the set under the allocator mutex; the Buffer pointers are
         // dereferenced without it. A manual fast-dispatch session is entered from one host thread with
         // no concurrent allocation, which is the contract this preflight relies on.
@@ -141,28 +120,20 @@ void collect_conflicts(
             const DeviceAddr address = per_core_allocation::is_per_core_allocation(*buffer)
                                            ? per_core_allocation::get_per_core_address(*buffer, core)
                                            : static_cast<DeviceAddr>(buffer->address());
-            if (address < window_end) {
-                conflicts.push_back(
-                    {chip,
-                     core,
-                     role,
-                     ledger,
-                     l1_buffer_kind(*buffer),
-                     address,
-                     window_end,
-                     buffer->aligned_size_per_bank(),
-                     buffer->num_cores().value_or(0)});
-            }
+            conflicts.push_back(
+                {chip,
+                 core,
+                 ledger,
+                 l1_buffer_kind(*buffer),
+                 address,
+                 buffer->aligned_size_per_bank(),
+                 buffer->num_cores().value_or(0)});
         }
     }
 
-    if (arena_low) {
-        for (const auto& range : allocator.persistent_l1().occupied_ranges(core)) {
-            if (range.first < window_end) {
-                conflicts.push_back(
-                    {chip, core, role, arena_ledger, "arena", range.first, window_end, range.second - range.first, 1});
-            }
-        }
+    // Arena regions are not Buffer objects and are tracked per core, so they are read directly.
+    for (const auto& range : allocator.persistent_l1().occupied_ranges(core)) {
+        conflicts.push_back({chip, core, arena_ledger, "arena", range.first, range.second - range.first, 1});
     }
 }
 
@@ -200,11 +171,8 @@ namespace {
 // keeping them file-local keeps FdL1Conflict out of the public header.
 std::vector<FdL1Conflict> find_fd_l1_conflicts(
     MetalContext& metal_context,
-    const Cluster& cluster,
     distributed::MeshDevice* mesh_device,
-    const std::vector<::tt::tt_metal::Device*>& devices,
-    bool write_only) {
-    const DispatchMemMap& mem_map = metal_context.dispatch_mem_map();
+    const std::vector<::tt::tt_metal::Device*>& devices) {
     auto& dispatch_core_manager = metal_context.get_dispatch_core_manager();
 
     // Lockstep allocations live in the allocator of the MeshDevice view that
@@ -228,11 +196,9 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     collect_views(root);
 
     std::vector<FdL1Conflict> conflicts;
-    // Walk through the IDevice interface: everything this preflight needs (id, num_hw_cqs,
-    // allocator_impl) is public there, while Device keeps allocator_impl private.
+    // Walk through the IDevice interface: everything this preflight needs (id, allocator_impl) is
+    // public there, while Device keeps allocator_impl private.
     for (IDevice* device : devices) {
-        const uint16_t channel = cluster.get_assigned_channel_for_device(device->id());
-
         std::vector<distributed::MeshDevice*> views_over_device;
         for (distributed::MeshDevice* view : mesh_views) {
             for (IDevice* view_device : view->get_view().get_devices()) {
@@ -251,52 +217,18 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
             }
         }
 
-        auto check_core = [&](const tt_cxy_pair& core_with_chip, const char* role, DeviceAddr window_end) {
-            if (core_with_chip.chip != device->id()) {
-                // Split dispatch: a chip without its own host link is served from its MMIO neighbour, so
-                // its firmware is spread over two chips (prefetch_h/dispatch_h there, prefetch_d/dispatch_d/
-                // dispatch_s here) with L1 layouts this preflight does not model. Skipping the check for
-                // this chip leaves such clusters exactly as they were before the guard existed, rather
-                // than refusing every session on them.
-                log_warning(
-                    tt::LogAlways,
-                    "Fast-dispatch L1 preflight skipped for chip {}: its {} interface core is on chip {} (split "
-                    "dispatch topology is not checked; resident L1 on this chip's dispatch cores is not verified).",
-                    device->id(),
-                    role,
-                    core_with_chip.chip);
-                return;
-            }
-
-            const CoreCoord core(core_with_chip.x, core_with_chip.y);
+        // The cores fast dispatch has claimed on this chip. They were assigned during
+        // init_command_queue_host(), before any firmware is written, and the dispatch core manager is
+        // asked for the whole set rather than for named roles, so every role, queue and split-dispatch
+        // placement the configuration uses is covered.
+        for (const CoreCoord& core : dispatch_core_manager.get_assigned_dispatch_cores(device->id())) {
             // Per-core buffers are recorded in the chip's allocator; lockstep buffers in the allocator
             // of the mesh view that created them (the HYBRID mirror marks ranges but registers no
             // Buffer). Each ledger is walked for buffers whose data is on this core.
-            collect_conflicts(
-                *device->allocator_impl(), "chip", "chip arena", device->id(), core, role, window_end, conflicts);
+            collect_conflicts(*device->allocator_impl(), "chip", "chip arena", device->id(), core, conflicts);
             for (distributed::MeshDevice* view : views_over_device) {
-                collect_conflicts(
-                    *view->allocator_impl(), "mesh", "mesh arena", device->id(), core, role, window_end, conflicts);
+                collect_conflicts(*view->allocator_impl(), "mesh", "mesh arena", device->id(), core, conflicts);
             }
-        };
-
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
-            const DeviceAddr cmddat_end = mem_map.cmddat_q_base(cq_id) + mem_map.cmddat_q_size();
-            const DeviceAddr scratch_end = mem_map.scratch_db_base(cq_id) + mem_map.scratch_db_size();
-            const DeviceAddr ringbuffer_end = mem_map.scratch_db_base(cq_id) + mem_map.ringbuffer_size();
-            const DeviceAddr prefetch_end =
-                write_only ? std::max(cmddat_end, scratch_end) : std::max(scratch_end, ringbuffer_end);
-
-            // dispatch_s performs DEVICE_PRINT aggregation only on CQ0 and only
-            // when this device has at least one configured print core.
-            const auto& dprint_server = metal_context.dprint_server();
-            const bool dprint_on = cq_id == 0 && metal_context.get_dispatch_query_manager().dispatch_s_enabled() &&
-                                   dprint_server && !dprint_server->get_print_cores(device->id()).empty();
-            const DeviceAddr dispatch_end = mem_map.dispatch_s_buffer_end(cq_id) +
-                                            (dprint_on ? mem_map.dispatch_s_device_print_l1_cache_size() : 0);
-
-            check_core(dispatch_core_manager.prefetcher_core(device->id(), channel, cq_id), "prefetch", prefetch_end);
-            check_core(dispatch_core_manager.dispatcher_core(device->id(), channel, cq_id), "dispatch", dispatch_end);
         }
     }
     return conflicts;
@@ -305,19 +237,18 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
 std::string format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) {
     std::string report;
     for (const auto& conflict : conflicts) {
+        const std::string span =
+            conflict.num_cores == 0 ? std::string("every L1 bank") : fmt::format("{} core(s)", conflict.num_cores);
         report += fmt::format(
-            "  chip {} core ({},{}) [{}]: {} ledger: {} allocation at 0x{:X}, {} B/core, spans {} core(s); "
-            "fast-dispatch firmware writes up to 0x{:X}\n",
+            "  chip {} dispatch core ({},{}): {} ledger: {} allocation at 0x{:X}, {} B/core, spans {}\n",
             conflict.chip,
             conflict.core.x,
             conflict.core.y,
-            conflict.role,
             conflict.ledger,
             conflict.kind,
-            conflict.lowest,
+            conflict.address,
             conflict.bytes_per_core,
-            conflict.num_cores,
-            conflict.window_end);
+            span);
     }
     return report;
 }
@@ -380,22 +311,23 @@ void DispatchContext::initialize_fast_dispatch(
             dev->init_command_queue_host();
         }
 
-        // Dispatch cores are assigned, but no fast-dispatch firmware has been
-        // written yet. Refuse before bring-up can overwrite resident L1.
-        const auto conflicts =
-            find_fd_l1_conflicts(metal_context, cluster, mesh_device, active_devices, options.write_only);
+        // Dispatch cores are assigned, but no fast-dispatch firmware has been written yet. Dispatch
+        // cores may not hold L1 allocations while fast dispatch is active, at any address, so refuse
+        // now if any do.
+        const auto conflicts = find_fd_l1_conflicts(metal_context, mesh_device, active_devices);
         if (!conflicts.empty()) {
             const std::string report = format_fd_l1_conflicts(conflicts);
             if (!options.allow_destructive) {
                 TT_THROW(
-                    "Fast-dispatch bring-up would overwrite resident L1 on dispatch cores (tt-blaze #2019):\n{}"
-                    "Free or relocate those allocations before entering fast dispatch, or pass "
-                    "allow_destructive=true to proceed and accept that the listed L1 will be corrupted.",
+                    "Fast dispatch would claim dispatch cores that hold resident L1 (tt-blaze #2019):\n{}"
+                    "L1 allocations may not live on a dispatch core while a fast-dispatch session is active. "
+                    "Free or relocate them before entering fast dispatch, or pass allow_destructive=true to "
+                    "proceed and accept that the listed L1 may be corrupted.",
                     report);
             }
             log_warning(
                 tt::LogAlways,
-                "allow_destructive=true: fast-dispatch bring-up will overwrite resident L1 on dispatch cores:\n{}",
+                "allow_destructive=true: fast-dispatch bring-up may overwrite resident L1 on dispatch cores:\n{}",
                 report);
         }
     } catch (...) {

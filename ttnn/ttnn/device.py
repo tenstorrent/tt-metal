@@ -180,20 +180,20 @@ terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
 
 
 @contextlib.contextmanager
-def setup_fast_dispatch(device, *, allow_destructive=False, write_only=False):
+def setup_fast_dispatch(device, *, allow_destructive=False):
     """
     Context manager that enables Fast Dispatch for the duration of the block.
     The device must have been opened in Slow Dispatch mode (e.g. TT_METAL_SLOW_DISPATCH_MODE=1).
     On exit, Fast Dispatch is terminated and the device returns to Slow Dispatch.
 
+    Entering refuses, before any firmware is written, if an L1 allocation is
+    resident on a core that Fast Dispatch will claim: dispatch cores may not
+    hold L1 allocations while Fast Dispatch is active.
+
     Args:
         device: The device to enable Fast Dispatch on.
-        allow_destructive: If True, proceed with a warning when resident L1 on
-            a dispatch core will be overwritten. The default refuses before
-            fast-dispatch firmware is written.
-        write_only: The block will issue only host-to-device writes. This
-            narrows the prefetcher check while retaining the scratch staging
-            region used by pinned writes.
+        allow_destructive: If True, proceed with a warning instead of refusing.
+            The resident L1 may be corrupted.
 
     Yields:
         None: Use the device inside the block; it is in Fast Dispatch mode.
@@ -205,7 +205,7 @@ def setup_fast_dispatch(device, *, allow_destructive=False, write_only=False):
         ...     pass
         >>> # FD terminated; device is back in Slow Dispatch
     """
-    initialize_fast_dispatch(device, allow_destructive=allow_destructive, write_only=write_only)
+    initialize_fast_dispatch(device, allow_destructive=allow_destructive)
     try:
         yield
     finally:

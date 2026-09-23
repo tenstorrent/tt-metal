@@ -468,23 +468,22 @@ void device_module(nb::module_& m_device) {
         "Return the row/column axis used by the device's live dispatch-core configuration.");
     m_device.def(
         "initialize_fast_dispatch",
-        [](MeshDevice* device, bool allow_destructive, bool write_only) {
+        [](MeshDevice* device, bool allow_destructive) {
             tt::tt_metal::experimental::FastDispatchSetupOptions options;
             options.allow_destructive = allow_destructive;
-            options.write_only = write_only;
             tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
         },
         nb::arg("device").noconvert(),
         nb::arg("allow_destructive") = false,
-        nb::arg("write_only") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
+        Refuses, before any firmware is written, if an L1 allocation is resident on a core that Fast
+        Dispatch will claim; dispatch cores may not hold L1 allocations while Fast Dispatch is active.
+
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
-            allow_destructive (bool): Warn and proceed if resident L1 on a dispatch core will be overwritten.
-            write_only (bool): The session will issue only host-to-device writes, narrowing the prefetcher check
-                to the command-data and scratch-staging buffers.
+            allow_destructive (bool): Warn and proceed instead of refusing. The resident L1 may be corrupted.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",

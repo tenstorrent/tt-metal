@@ -26,14 +26,10 @@ namespace experimental {
 
 // Options for a manual fast-dispatch session.
 struct FastDispatchSetupOptions {
-    // Warn and proceed when fast-dispatch firmware will overwrite an existing
-    // L1 allocation. The conflicting allocation may be corrupted.
+    // Warn and proceed when an L1 allocation is resident on a core that fast
+    // dispatch will claim. The default refuses before any firmware is written.
+    // The conflicting allocation may be corrupted.
     bool allow_destructive = false;
-
-    // The session will issue only host-to-device writes. This excludes the
-    // prefetch ringbuffer from the checked footprint, but still includes the
-    // command-data queue and scratch staging used by pinned writes.
-    bool write_only = false;
 };
 
 // This class provides APIs to dynamically enable and teardown Fast Dispatch during runtime.
