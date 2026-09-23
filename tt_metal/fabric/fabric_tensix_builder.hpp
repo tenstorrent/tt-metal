@@ -41,9 +41,21 @@ struct hash<tt::tt_fabric::FabricTensixCoreType> {
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
+// Runtime-session state that FabricTensixDatamoverConfig needs, gathered by the MetalContext that opens the
+// devices. Read only during construction; the config must not keep references to it.
+struct FabricTensixSessionInputs {
+    std::vector<tt::tt_metal::IDevice*> active_devices;
+    // Logical tensix cores reserved for fabric mux and for dispatch mux; identical on every device.
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores;
+};
+
 class FabricTensixDatamoverConfig {
 public:
-    FabricTensixDatamoverConfig();
+    // fabric_context owns this config (through its FabricBuilderContext) and outlives it.
+    FabricTensixDatamoverConfig(const FabricContext& fabric_context, const FabricTensixSessionInputs& inputs);
 
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
@@ -141,6 +153,8 @@ public:
     WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const tt::tt_metal::CoreCoord& worker_coord) const;
 
 private:
+    const FabricContext& fabric_context_;
+
     std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores_;
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores_;
     std::unordered_set<tt::tt_metal::CoreCoord> translated_fabric_mux_cores_;
@@ -252,8 +266,8 @@ private:
      */
     void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
 
-    bool initialize_channel_mappings();
-    void calculate_buffer_allocations();
+    bool initialize_channel_mappings(const FabricTensixSessionInputs& inputs);
+    void calculate_buffer_allocations(const std::vector<tt_metal::IDevice*>& all_active_devices);
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
 
     // Helper to track missing directions for UDM mode

@@ -24,6 +24,7 @@
 
 namespace tt::tt_fabric {
 class ControlPlane;
+struct FabricTensixSessionInputs;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal::distributed {
@@ -72,7 +73,7 @@ public:
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
     void initialize_fabric_config();
-    void initialize_fabric_tensix_datamover_config();
+    void initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs);
     void teardown_fabric_config();
 
     // --- Control plane ---
