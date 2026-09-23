@@ -14,7 +14,8 @@ measurements, and they were not always kept apart. This section is the line betw
 
 **Exactly one performance number in this document is a result:**
 
-> **42.79 ms** prefill wavefront, SP=4 x TP=8, all 32 chips, PCC 0.9991, commit `b9356ef71e3`.
+> **42.79 ms** prefill wavefront, SP=4 x TP=8, all 32 chips, PCC 0.9991, commit `b9356ef71e3`
+> (reproduced 2026-09-23 on the reset device: **42.78 ms**, min 42.74, in 34 s -- HEAD default path intact).
 
 Everything else is one of:
 
@@ -23,7 +24,7 @@ Everything else is one of:
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
 | **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B runs all timed out -- now attributed to a **device wedge**, not the code (see *Hang diagnosis*); re-verification pending |
-| **implemented, A/B in flight** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | default OFF until verified; see the port section |
+| **implemented, failing** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | baseline verified 42.78 ms; ported run fails with a nanobind TypeError on the KDA op call (binding differs from his tree) -- being fixed |
 
 **Verified savings so far: zero.** The 8-11 ms plan below is a budget of estimated cuts against
 measured costs; none of the cuts has been demonstrated.
@@ -393,8 +394,8 @@ the real cause.
 
 | run | wavefront | per-die finish | PCC | status |
 |---|---|---|---|---|
-| baseline (pre-port HEAD) | *pending* | | | running |
-| ported, all three on | *pending* | | *pending* | chained behind baseline |
+| baseline (HEAD, opts unset) | **42.78 ms** (min 42.74) | | | **PASS** in 34 s -- reproduces 42.79; wedge diagnosis confirmed, refactor cleared |
+| ported, all three on | -- | | -- | **FAILED** in 12 s: `TypeError: qkv_causal_conv1d_silu(): incompatible function arguments` -- our nanobind signature differs from his tree; no hang, no device issue |
 
 Results to be filled in when the runs land; per-feature isolation runs follow only if the
 combined run moves the number.
@@ -435,6 +436,10 @@ The A/B was then restarted on the verified device as one sequential script
 and on the device being free. **If the baseline hangs again on a clean device, the HEAD default
 path is the culprit and the next step is to bisect against `b9356ef71e3`.** If it passes, the
 wedge diagnosis is confirmed.
+
+**Confirmed 2026-09-23 15:47:** on the reset, probe-verified device the same baseline completed in
+**34 seconds** at 42.78 ms. The earlier "20-minute" runs were never slow -- they were hung from
+the start.
 
 A second, self-inflicted bug found on the way: the original chain waited on
 `ps | grep '[p]ytest'` returning 0 as its "device free" check. That pattern matches any bash
