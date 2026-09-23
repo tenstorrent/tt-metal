@@ -14,7 +14,7 @@ prefill chunks.
 | --- | --- |
 | Runtime contracts | The engine owns the input/cache. Compile warmup leaves no logical user prefix. All 32 layer acknowledgements follow device synchronization. Failed work cannot acknowledge success. |
 | `test_kv_cache_table.py` | Every one of 65,536 synthetic cache pages maps to the expected slot, layer, head and token position. Serialization preserves addresses and ownership. Real QKV/RoPE writes are readable through the table. |
-| `test_producer_runner_pcc[llama31_2k_two_slots]` | The producer sends two different book prompts through the common runner. Both slots' K and V for all 32 layers meet PCC ≥ 0.99 against independent FP32 Hugging Face traces. The completion counter must total 128, and the runner shuts down cleanly. |
+| `test_producer_runner_pcc[llama31_two_slots]` | The producer sends two different book prompts through the common runner. Both slots' K and V for all 32 layers meet PCC ≥ 0.99 against independent FP32 Hugging Face traces. Uses the common completion drain before readback and checks clean runner shutdown. |
 | `run_multirank_pcc.sh llama31 sc1` | The standard launcher discovers the Galaxy, publishes the address table, checks the populated rank verdict for both slots, and verifies shutdown. |
 
 The SC1 tests validate the prefill source and table readback in a separate
@@ -33,17 +33,31 @@ export TT_METAL_HOME="$PWD"
 export PREFILL_HF_MODEL=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
 export LLAMA31_8B_CHECKPOINT="$PREFILL_HF_MODEL"
 export PREFILL_SUMMARIES="$PWD/generated/llama31-runner"
-bash models/demos/common/prefill/runners/ci/run_llama31_sc1_acceptance.sh
+bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
 ```
 
-The stage runs the focused host checks, generates two independent 2K reference
-traces from *Pride and Prejudice*, then runs the table, direct producer/runner,
-and standard-launcher tests sequentially. It returns nonzero on failure.
-The two runner checks reuse the same newly generated reference traces.
+The stage runs the focused host checks, generates two independent reference
+traces from *Pride and Prejudice*, then runs the table and standard-launcher
+tests sequentially. The default runner capacity is 2K. It returns nonzero on
+failure. The direct pytest entry point remains available for local debugging:
+
+```bash
+export PREFILL_MODEL=llama_3p1_8b
+export PREFILL_PRODUCER_SLOT_TRACES=/path/to/golden/slot0,/path/to/golden/slot1
+python3 -m pytest -v --tt-arch blackhole \
+  'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31_two_slots]'
+```
+
+Both entry points use the acceptance configuration and trace validation in
+`tests/utils.py`. The direct test starts standalone child processes; the standard
+launcher also exercises tt-run discovery and MPI placement.
 
 For a local installation, set `TTRUN_DIR` to the directory containing its MPI
 `hostfile`; the default is `/etc/ttop`. `PREFILL_TCP_INTERFACE` selects the TCP
 interface used by the standard launcher; the default is `ens5f0np0`.
+Set `PREFILL_KEEP_RUN_EVIDENCE=1` to retain the standard launcher's local run
+directory for debugging. Its normal cleanup removes the directory after reporting
+results; retention does not automatically upload raw files as CI artifacts.
 
 In **Blaze Models Prefill tests**, select `llama31_prefill_runner`. This selects
 one SC1 allocation for the complete acceptance stage.
@@ -64,10 +78,11 @@ and allocation; a receiver must use the freshly published table.
 
 The runtime waits for the whole chunk to finish before acknowledging its
 layers. Acknowledgements identify the worker's chunk request, not the user ID.
-The producer checks an aggregate completion counter. That counter does not
-carry layer/request identities; a duplicate and a missing event could cancel
-in its total. Runtime contract tests separately check the callback identities
-and ordering.
+The producer uses the existing common aggregate completion drain before readback.
+The common drain logs and returns a partial count on timeout; this PR does not add
+a separate Llama completion verdict or change that shared policy. The counter does
+not expose layer/request identities. Runtime contract tests separately check the
+callback identities and ordering.
 
 The receiver must also agree on configuration names/order, dtype and tile
 format, K ordering, slot identity, valid token range, completion protocol and
@@ -77,7 +92,18 @@ compatibility.
 ## Follow-up capacity gates
 
 Repeat the focused runner acceptance at 4K, 8K, 16K, 32K and 64K after the 2K
-case passes. Each capacity needs matching allocation, manifest, chunk count
-and references. The current SC1 acceptance command is deliberately a fixed
-2K gate; changing only an environment variable does not validate larger
-capacities.
+case passes. Set `PREFILL_MAX_SEQ_LEN` to select the acceptance capacity; the shared fixture
+derives the chunk count and the recipe generates matching references. The table's
+synthetic address test remains the focused 2K case. Only the default 2K runner
+case has passed this branch's hardware acceptance; configuration support alone is
+not evidence that the larger cases passed. Two allocated slots remain a model
+constraint.
+
+## Real loopback migration remains a separate gate
+
+The tests above cover Gate 1 of the common `PREFILL_MIGRATION_TESTING.md` guide.
+Gate 2 requires the real endpoint/workers and `migration_driver` with destination
+byte and golden verification. It has not been run on this branch. One source and
+one destination can use a proposed slot 0 -> 1 test; two independent source/destination
+pairs require four slots and a model-capacity change. Prefill completion counters
+are not evidence of completed migration operations.

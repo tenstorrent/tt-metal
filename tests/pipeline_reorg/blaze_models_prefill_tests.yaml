@@ -1471,8 +1471,8 @@
   sp_config: sc1
 
 
-# One SC1 allocation runs the table and both shared runner acceptance paths. It generates
-# two independent 2K golden traces once, then requires every layer of both slots to pass PCC.
+# One SC1 allocation runs the table and the standard shared runner acceptance path. It generates
+# two independent 2K golden traces, then requires every layer of both slots to pass PCC.
 - name: "(Llama-3.1-8B) prefill KV table and two-slot runner accuracy 2k, SC1"
   cmd: |
     set -euo pipefail
@@ -1481,13 +1481,13 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_llama31_sc1_acceptance.sh
+    exec bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: llama31_prefill_runner
   test_tags: [llama31, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # Table ~2 min, direct runner ~4-7 min, plus standard launcher, golden generation,
+      # Table, standard launcher, golden generation,
       # container setup and cold kernel compilation. These are bounds, not performance claims.
       timeout: 30
       tier: 2

@@ -15,21 +15,6 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
-from models.demos.llama_3p1_8b_d_p.tests.kv_table_test_utils import (
-    GLOBAL_CHUNK,
-    HEAD_DIM,
-    MAX_SEQ_LEN,
-    NUM_KV_HEADS,
-    NUM_LAYERS,
-    NUM_SLOTS,
-    PAGE_TOKENS,
-    assert_page_equal,
-    device_major_positions,
-    independent_tensor_location,
-    logical_tag,
-    tagged_page,
-    tagged_values,
-)
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache, write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.model_config import resolve_weights_path
@@ -39,6 +24,91 @@ from models.demos.llama_3p1_8b_d_p.tt.runners.kv_chunk_table import (
     build_and_serialize_kv_chunk_table,
     build_kv_chunk_address_table,
 )
+
+NUM_SLOTS = 2
+NUM_LAYERS = 32
+NUM_KV_HEADS = 8
+MAX_SEQ_LEN = 2048
+GLOBAL_CHUNK = 1024
+LOCAL_CHUNK = 256
+PAGE_TOKENS = 32
+HEAD_DIM = 128
+
+
+def _check_index(name: str, value: int, upper: int) -> None:
+    if type(value) is not int or not 0 <= value < upper:
+        raise ValueError(f"{name} must be an int in [0, {upper}), got {value!r}")
+
+
+def _logical_tag(slot: int, layer: int, head: int, position: int) -> int:
+    """Pack all non-K/V coordinates into one collision-free integer."""
+    _check_index("slot", slot, NUM_SLOTS)
+    _check_index("layer", layer, NUM_LAYERS)
+    _check_index("head", head, NUM_KV_HEADS)
+    _check_index("position", position, MAX_SEQ_LEN)
+    return (((slot * NUM_LAYERS + layer) * NUM_KV_HEADS + head) * MAX_SEQ_LEN) + position
+
+
+def _device_major_positions(start: int) -> list[int]:
+    """Order one logical 1K chunk as four contiguous 256-token SP shards."""
+    if type(start) is not int or start not in range(0, MAX_SEQ_LEN, GLOBAL_CHUNK):
+        raise ValueError(f"start must be a 1K boundary below {MAX_SEQ_LEN}, got {start!r}")
+    positions = range(start, start + GLOBAL_CHUNK)
+    return [
+        position for owner in range(4) for position in positions if (position % GLOBAL_CHUNK) // LOCAL_CHUNK == owner
+    ]
+
+
+def _tagged_values(kind: str, slot: int, layer: int, positions) -> torch.Tensor:
+    """Encode every logical coordinate in values preserved exactly by BF16 and BFP8."""
+    if kind not in ("k", "v"):
+        raise ValueError(f"kind must be 'k' or 'v', got {kind!r}")
+    _check_index("slot", slot, NUM_SLOTS)
+    _check_index("layer", layer, NUM_LAYERS)
+    positions = list(positions)
+    if not positions:
+        raise ValueError("positions cannot be empty")
+    for position in positions:
+        _check_index("position", position, MAX_SEQ_LEN)
+
+    position_tensor = torch.tensor(positions, dtype=torch.int64)
+    heads = torch.arange(NUM_KV_HEADS, dtype=torch.int64)
+    dimensions = torch.arange(HEAD_DIM, dtype=torch.int64)
+    tags = (((slot * NUM_LAYERS + layer) * NUM_KV_HEADS + heads[:, None]) * MAX_SEQ_LEN) + position_tensor[None, :]
+    bits = (tags[:, :, None] >> (dimensions[None, None, :] % 20)) & 1
+    values = (32 + bits * 32).float()
+    return values if kind == "k" else -values
+
+
+def _tagged_page(kind: str, slot: int, layer: int, head: int, position: int) -> torch.Tensor:
+    """Build one logical 32-token page without consulting the production table."""
+    _check_index("head", head, NUM_KV_HEADS)
+    if type(position) is not int or position % PAGE_TOKENS or not 0 <= position <= MAX_SEQ_LEN - PAGE_TOKENS:
+        raise ValueError(f"position must be a 32-token page start below {MAX_SEQ_LEN}, got {position!r}")
+    return _tagged_values(kind, slot, layer, range(position, position + PAGE_TOKENS))[head : head + 1].unsqueeze(0)
+
+
+def _independent_tensor_location(position: int) -> tuple[int, int]:
+    """Map a logical page to its live cache shard without using table arithmetic."""
+    if type(position) is not int or position % PAGE_TOKENS or not 0 <= position < MAX_SEQ_LEN:
+        raise ValueError(f"position must be a 32-token page start below {MAX_SEQ_LEN}, got {position!r}")
+    offset = position % GLOBAL_CHUNK
+    sp_row = offset // LOCAL_CHUNK
+    local_position = (position // GLOBAL_CHUNK) * LOCAL_CHUNK + (offset % LOCAL_CHUNK)
+    return sp_row, local_position
+
+
+def _assert_page_equal(actual: torch.Tensor, expected: torch.Tensor, description: str) -> None:
+    """Require exact values and the physical page shape used by the address table."""
+    page_shape = (1, 1, PAGE_TOKENS, HEAD_DIM)
+    if tuple(actual.shape) != page_shape or tuple(expected.shape) != page_shape:
+        raise AssertionError(
+            f"KV page mismatch for {description}: actual={tuple(actual.shape)}, expected={tuple(expected.shape)}"
+        )
+    if not torch.equal(actual.float(), expected.float()):
+        mismatches = torch.count_nonzero(actual.float() != expected.float()).item()
+        raise AssertionError(f"KV page mismatch for {description}: {mismatches} values differ")
+
 
 MESH_SHAPE = (4, 8)
 TP = MESH_SHAPE[1]
@@ -78,7 +148,7 @@ def _snapshot_shards(cache_tensor):
 
 
 def _snapshot_page(shards, *, head, slot, layer, position):
-    sp_row, local_position = independent_tensor_location(position)
+    sp_row, local_position = _independent_tensor_location(position)
     live = shards[sp_row * TP + head]
     batch = slot * NUM_LAYERS + layer
     return live[batch : batch + 1, :1, local_position : local_position + PAGE_TOKENS, :HEAD_DIM]
@@ -88,9 +158,9 @@ def _write_synthetic_cache(mesh_device, cache):
     for slot in range(NUM_SLOTS):
         for layer in range(NUM_LAYERS):
             for start in range(0, MAX_SEQ_LEN, GLOBAL_CHUNK):
-                positions = device_major_positions(start)
-                tt_k = _to_chunk(mesh_device, tagged_values("k", slot, layer, positions))
-                tt_v = _to_chunk(mesh_device, tagged_values("v", slot, layer, positions))
+                positions = _device_major_positions(start)
+                tt_k = _to_chunk(mesh_device, _tagged_values("k", slot, layer, positions))
+                tt_v = _to_chunk(mesh_device, _tagged_values("v", slot, layer, positions))
                 try:
                     write_kv_chunk(
                         cache,
@@ -159,7 +229,7 @@ def _load_layer_zero_qkv_weights():
 
 
 def _producer_input():
-    positions = torch.tensor(device_major_positions(0), dtype=torch.float32)
+    positions = torch.tensor(_device_major_positions(0), dtype=torch.float32)
     columns = torch.arange(Llama31_8BConfig.EMB_SIZE, dtype=torch.float32)
     return (torch.sin(positions[:, None] / 23 + columns[None, :] / 127) * 0.125).reshape(
         1, 1, GLOBAL_CHUNK, Llama31_8BConfig.EMB_SIZE
@@ -176,14 +246,14 @@ def test_kv_table_oracle_coordinates_are_unique_and_exact():
         for head in range(NUM_KV_HEADS)
         for position in BOUNDARY_POSITIONS
     ]
-    assert len({logical_tag(*key) for key in keys}) == len(keys)
+    assert len({_logical_tag(*key) for key in keys}) == len(keys)
     for kind in ("k", "v"):
         for key in keys:
-            page = tagged_page(kind, *key)
+            page = _tagged_page(kind, *key)
             allowed = {32.0, 64.0} if kind == "k" else {-64.0, -32.0}
             assert set(torch.unique(page).tolist()) <= allowed
             assert torch.equal(page, page.to(torch.bfloat16).float())
-    assert [independent_tensor_location(position) for position in BOUNDARY_POSITIONS] == [
+    assert [_independent_tensor_location(position) for position in BOUNDARY_POSITIONS] == [
         (0, 0),
         (0, 224),
         (1, 0),
@@ -222,10 +292,10 @@ def test_llama_kv_table_reads_all_synthetic_cache_pages(mesh_device, device_para
                 for layer in range(NUM_LAYERS):
                     for position in range(0, MAX_SEQ_LEN, PAGE_TOKENS):
                         live = _snapshot_page(snapshots[kind], head=head, slot=slot, layer=layer, position=position)
-                        expected = tagged_page(kind, slot, layer, head, position).to(torch.bfloat16)
-                        assert_page_equal(live, expected, f"live {config_name}/{slot}/{layer}/{position}")
+                        expected = _tagged_page(kind, slot, layer, head, position).to(torch.bfloat16)
+                        _assert_page_equal(live, expected, f"live {config_name}/{slot}/{layer}/{position}")
                         table_page = _decode_page(table.read_device_chunk(layer, position, slot, config_id=config_id))
-                        assert_page_equal(table_page, live, f"table {config_name}/{slot}/{layer}/{position}")
+                        _assert_page_equal(table_page, live, f"table {config_name}/{slot}/{layer}/{position}")
                         comparisons += 1
         assert comparisons == EXPECTED_PAGES
         table_path = tmp_path / "llama-kv-table.pb"
@@ -289,7 +359,7 @@ def test_llama_gqa_producer_pages_match_kv_table(mesh_device, device_params):
                 live = _snapshot_page(snapshots[kind], head=head, slot=0, layer=0, position=position)
                 nonzero_values += torch.count_nonzero(live).item()
                 table_page = _decode_page(table.read_device_chunk(0, position, 0, config_id=config_id))
-                assert_page_equal(table_page, live, f"producer {config_name}/0/0/{position}")
+                _assert_page_equal(table_page, live, f"producer {config_name}/0/0/{position}")
                 comparisons += 1
         assert comparisons == len(CONFIG_NAMES) * (GLOBAL_CHUNK // PAGE_TOKENS)
         assert nonzero_values > 0

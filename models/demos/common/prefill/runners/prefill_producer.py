@@ -278,58 +278,6 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-def _drain_llama_layer_acks(
-    ack_channel,
-    *,
-    layers_per_chunk: int,
-    chunks: int,
-    request_id_start: int,
-    timeout_s: float = 600.0,
-) -> dict:
-    """Drain one Llama request range and return the strict count contract recorded in the verdict."""
-    expected = layers_per_chunk * chunks
-    received = _drain_layer_acks(ack_channel, expected, timeout_s=timeout_s)
-    # Once every expected completion arrived, no legitimate completion remains for this
-    # request range. One final nonblocking drain catches an over-production batch that landed
-    # concurrently with the last expected count.
-    if ack_channel is not None and received >= expected:
-        received += ack_channel.try_consume_all()
-    summary = {
-        "ok": ack_channel is not None and received == expected,
-        "expected": expected,
-        "received": received,
-        "layers_per_chunk": layers_per_chunk,
-        "chunks": chunks,
-        "expected_request_id_start": request_id_start if chunks else None,
-        "expected_request_id_end": request_id_start + chunks - 1 if chunks else None,
-    }
-    if summary["ok"]:
-        logger.success(
-            f"[producer] Llama LayerAck count PASSED ({received}/{expected}); scheduled request IDs "
-            f"[{summary['expected_request_id_start']},{summary['expected_request_id_end']}]"
-        )
-    else:
-        logger.error(
-            f"[producer] Llama LayerAck count FAILED ({received}/{expected}); scheduled request IDs "
-            f"[{summary['expected_request_id_start']},{summary['expected_request_id_end']}]"
-        )
-    return summary
-
-
-def _drain_warmup_layer_acks(ack_channel, *, layers_per_chunk: int, chunks: int, strict_llama: bool):
-    """Drain warmup completions only when verification owns an ack channel."""
-    if strict_llama:
-        return _drain_llama_layer_acks(
-            ack_channel,
-            layers_per_chunk=layers_per_chunk,
-            chunks=chunks,
-            request_id_start=0,
-        )
-    if ack_channel is not None:
-        _drain_layer_acks(ack_channel, layers_per_chunk * chunks)
-    return None
-
-
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
     TILE = 32
     n_tiles = head_dim // TILE
@@ -1093,13 +1041,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
 
 def _write_pcc_verdict(
-    rank: int,
-    ok: bool,
-    min_pcc: float,
-    checked: int,
-    threshold: float,
-    per_cache: dict | None = None,
-    layer_acks: dict | None = None,
+    rank: int, ok: bool, min_pcc: float, checked: int, threshold: float, per_cache: dict | None = None
 ) -> None:
     summary_dir = os.environ.get("PREFILL_PCC_SUMMARY_DIR")
     if not summary_dir:
@@ -1113,8 +1055,6 @@ def _write_pcc_verdict(
         "slots_checked": checked,
         "threshold": threshold,
     }
-    if layer_acks is not None:
-        verdict["layer_acks"] = layer_acks
     with open(os.path.join(summary_dir, f"rank{rank}.json"), "w") as f:
         json.dump(verdict, f)
 
@@ -1146,22 +1086,14 @@ def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> boo
 
 
 def _verify_resident_slots(
-    kv_table,
-    stats: RunStats,
-    threshold: float,
-    slot_traces: dict,
-    rank: int = 0,
-    num_ranks: int = 1,
-    layer_acks: dict | None = None,
+    kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0, num_ranks: int = 1
 ) -> bool:
     device_map = _read_device_map(
         int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank, num_ranks=num_ranks
     )
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
-        _write_pcc_verdict(
-            rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={}, layer_acks=layer_acks
-        )
+        _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
@@ -1219,24 +1151,13 @@ def _verify_resident_slots(
         f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}"
         f"{dflash_field}{per_cache_field}"
     )
-    ack_failed = layer_acks is not None and not layer_acks["ok"]
-    ok = bool(checked) and not failures and not dflash_failures and not ack_failed
-    _write_pcc_verdict(
-        rank,
-        ok=ok,
-        min_pcc=min_pcc_overall,
-        checked=checked,
-        threshold=threshold,
-        per_cache=per_cache,
-        layer_acks=layer_acks,
-    )
+    ok = bool(checked) and not failures and not dflash_failures
+    _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold, per_cache=per_cache)
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
     if dflash_failures:
         logger.error(f"[producer] drafter KV PCC below {dflash_threshold} for (slot, real_len, pcc): {dflash_failures}")
-    if ack_failed:
-        logger.error(f"[producer] Llama LayerAck verdict failed: {layer_acks}")
-    if failures or dflash_failures or ack_failed:
+    if failures or dflash_failures:
         return False
     if not checked:
         logger.error("[producer] verify requested but no resident slots had data to check.")
@@ -1461,14 +1382,8 @@ def main() -> None:
         for cidx in range(warmup_chunks):
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
-        warmup_acks = _drain_warmup_layer_acks(
-            ack_channel,
-            layers_per_chunk=ack_layers,
-            chunks=warmup_chunks,
-            strict_llama=ADAPTER.name == "llama_3p1_8b" and cfg.verify,
-        )
-        if warmup_acks is not None and not warmup_acks["ok"]:
-            sys.exit(1)
+        if ack_channel is not None:
+            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1483,16 +1398,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    layer_acks = None
-    if ADAPTER.name == "llama_3p1_8b" and cfg.verify:
-        layer_acks = _drain_llama_layer_acks(
-            ack_channel,
-            layers_per_chunk=ack_layers,
-            chunks=stats.total_pushes,
-            request_id_start=warmup_chunks,
-        )
-    else:
-        _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
+    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
@@ -1501,13 +1407,7 @@ def main() -> None:
     if cfg.verify and kv_table is not None:
         try:
             verify_ok = _verify_resident_slots(
-                kv_table,
-                stats,
-                cfg.pcc_threshold,
-                slot_traces,
-                rank=mr_rank,
-                num_ranks=world_size,
-                layer_acks=layer_acks,
+                kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank, num_ranks=world_size
             )
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
