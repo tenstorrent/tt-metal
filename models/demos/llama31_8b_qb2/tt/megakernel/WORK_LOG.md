@@ -290,3 +290,8 @@ Measuredsource e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad. All40 processes passed 
 See experiment2-benchmark-summary.json for all trials, paired process deltas, command/source/result hashes, startup costs and denominator checks. Generalcandidate beatsnative in every paired block. Final code/report checkpoint and durablecopy verification follow; no further optimization jobs.
 
 After final measurement freeze: added a host-side rejection of single_layer_barrier=True, before mesh creation. The C++ experiment remains in source for investigation, but the known semaphore-address mismatch can no longer be selected through ordinary tuning. Default and selected configurations remain unchanged. Verified default/selected construction and rejection of both plain/bounded single-barrier requests without hardware.
+
+
+## Final preservation verified
+
+2026-09-23T16:55:46.690533+00:00: final-preserve.sh completed with exit0. All40 paired command/log/allocation/result JSON files SHA256-match durable copies; all tensor evidence files have matching nonzero sizes after rsync transfer verification. Six final profile archives separately SHA256-verified on durable storage. Source/report/safety-guard checkpoint07b300e2 bundle verified. All hardware tests ended16:50:05UTC; preservation began before16:52:44 and completed before17:02:44. Final documentation checkpoint follows, then only read-only ownership/process checks; no further tests or builds.
