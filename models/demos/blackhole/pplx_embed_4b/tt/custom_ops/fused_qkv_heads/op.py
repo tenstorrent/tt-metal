@@ -22,6 +22,7 @@ rebases. Mirrors ``models/demos/wormhole/bge_m3/tt/custom_ops``.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -158,7 +159,8 @@ def nlp_create_qkv_heads_headsplit(
     device = qkv_fused.device()
     plan = _Plan.from_input(qkv_fused, num_heads, num_kv_heads)
     if head_groups is None:
-        head_groups = plan.num_kv_heads
+        _env = os.getenv("QWEN_HEADSPLIT_GROUPS_QKV")
+        head_groups = int(_env) if _env else plan.num_kv_heads
     if plan.num_kv_heads % head_groups != 0:
         raise ValueError(f"num_kv_heads ({plan.num_kv_heads}) must be divisible by head_groups ({head_groups})")
     heads_per_group = plan.num_kv_heads // head_groups
