@@ -1,0 +1,405 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Whether a change to the SFPU accuracy table loosens a gate, and whether the
+hardware still fits the gates it declares.
+
+Two questions, one vocabulary, because both are about the same rows:
+
+* **a diff of the table** -- what a pull request is doing to the budgets. A budget
+  that goes up, or a row that stops being gated at all, is a *regression* whatever
+  the reason, and the table's own rule is that it may only happen alongside a fresh
+  measurement. Needs no hardware, so it runs on every PR that touches the file.
+* **a run of the sweep against the table** -- what the hardware actually measures,
+  read from the ``--ulp-measure`` rows. The sweep already fails a cell it cannot
+  meet; this turns the rest of the run into a headroom report, which is what says a
+  budget is about to become a regression before it does.
+
+Deliberately standalone: ``yaml`` and the standard library, no torch, no
+``helpers.ulp``. The PR check runs on a slim runner with no LLK environment, and it
+has to be able to parse a *base* revision of the table as well as the head one.
+``test_ulp_budget_diff.py`` ties this parse back to the real loader so the two
+cannot drift.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+import yaml
+
+#: The key dimensions of a row, in the order a cell is named in a report.
+KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
+
+#: What a row can say about the gate itself.
+_METRIC = "metric"
+_MAX_ULP = "max_ulp"
+
+#: A cell identity: the op plus whichever key dimensions the row pins.
+Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
+
+
+@dataclass(frozen=True)
+class Row:
+    """One table row, reduced to what a regression is defined over."""
+
+    op: str
+    key: Tuple[Tuple[str, str], ...]
+    max_ulp: Optional[int]
+    provenance: str
+
+    @property
+    def gated(self) -> bool:
+        """Whether this row enforces a step budget at all."""
+        return self.max_ulp is not None
+
+    def describe(self) -> str:
+        if not self.key:
+            return f"{self.op} (default)"
+        return f"{self.op} {{" + ", ".join(f"{k}: {v}" for k, v in self.key) + "}"
+
+
+@dataclass(frozen=True)
+class Change:
+    """One cell that differs between two revisions of the table."""
+
+    cell: Cell
+    kind: str  # raised | ungated | removed | tightened | gated | added | provenance
+    before: Optional[Row]
+    after: Optional[Row]
+
+    #: The kinds that weaken a gate. Everything else is neutral or an improvement.
+    REGRESSIONS = frozenset({"raised", "ungated", "removed"})
+
+    @property
+    def is_regression(self) -> bool:
+        return self.kind in self.REGRESSIONS
+
+    @property
+    def remeasured(self) -> bool:
+        """Whether the row's provenance comment changed in the same diff.
+
+        The table's rule, verbatim: "A budget may only be *raised* by re-measuring and
+        updating that comment in the same change." A raise whose comment is untouched
+        is a number edited to make a failure go away.
+        """
+        if self.before is None or self.after is None:
+            return False
+        return self.before.provenance != self.after.provenance
+
+
+def _strip_comment(line: str) -> Tuple[str, str]:
+    """A row line split into its YAML body and its provenance comment."""
+    body, sep, comment = line.partition("#")
+    return body, comment.strip() if sep else ""
+
+
+def _provenance_by_op(text: str) -> Dict[str, List[str]]:
+    """Each op's row comments, in file order.
+
+    The comments are the half PyYAML throws away, and they are what says whether a
+    raised budget was re-measured. Scanned positionally and zipped with the loaded
+    rows below, which is sound only while every row is a single inline mapping --
+    checked, not assumed.
+    """
+    by_op: Dict[str, List[str]] = {}
+    op: Optional[str] = None
+    for line in text.splitlines():
+        head = re.match(r"^([A-Za-z_]\w*):", line)
+        if head:
+            op = head.group(1)
+            by_op.setdefault(op, [])
+            continue
+        if op is not None and line.strip().startswith("- "):
+            by_op[op].append(_strip_comment(line)[1])
+    return by_op
+
+
+def parse_table(text: str) -> Dict[Cell, Row]:
+    """Every row of the table, keyed by the cell it governs.
+
+    Values through PyYAML, so anchors, aliases and ``<<`` merge keys mean what they
+    mean -- the coarse-LUT tolerance pair is written as an anchor and an alias, and a
+    line-oriented reader skipped both. Comments through a positional scan, because
+    PyYAML discards them and the provenance is half of what this compares.
+    """
+    loaded = yaml.safe_load(text) or {}
+    comments = _provenance_by_op(text)
+    rows: Dict[Cell, Row] = {}
+    for op, entries in loaded.items():
+        if not isinstance(entries, list):
+            continue
+        found = comments.get(op, [])
+        # A row split over several lines would slide every comment after it by one.
+        # Rather than mislabel provenance, drop it for that op and keep the budgets.
+        aligned = found if len(found) == len(entries) else [""] * len(entries)
+        for fields, provenance in zip(entries, aligned):
+            if not isinstance(fields, dict):
+                continue
+            key = tuple(
+                (k, str(fields[k]))
+                for k in KEY_FIELDS
+                if k in fields and fields[k] is not None
+            )
+            max_ulp = fields.get(_MAX_ULP)
+            if fields.get(_METRIC) == "tolerance":
+                max_ulp = None
+            # A repeated cell is the loader's error to raise, not this tool's; keep
+            # the last so a report is still produced rather than crashing the check.
+            rows[(op, key)] = Row(
+                op=op,
+                key=key,
+                max_ulp=max_ulp if isinstance(max_ulp, int) else None,
+                provenance=provenance,
+            )
+    return rows
+
+
+def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
+    """Every cell whose gate differs, strongest change first."""
+    changes: List[Change] = []
+    for cell in sorted(set(base) | set(head), key=lambda c: (c[0], c[1])):
+        was, now = base.get(cell), head.get(cell)
+        if was is None:
+            changes.append(Change(cell, "added", None, now))
+        elif now is None:
+            # Only a loss if it was gating; dropping a tolerance row gates nothing.
+            changes.append(Change(cell, "removed" if was.gated else "added", was, None))
+        elif was.gated and not now.gated:
+            changes.append(Change(cell, "ungated", was, now))
+        elif not was.gated and now.gated:
+            changes.append(Change(cell, "gated", was, now))
+        elif was.gated and now.gated and now.max_ulp > was.max_ulp:
+            changes.append(Change(cell, "raised", was, now))
+        elif was.gated and now.gated and now.max_ulp < was.max_ulp:
+            changes.append(Change(cell, "tightened", was, now))
+    order = {
+        "raised": 0,
+        "ungated": 1,
+        "removed": 2,
+        "tightened": 3,
+        "gated": 4,
+        "added": 5,
+    }
+    changes.sort(key=lambda c: (order[c.kind], c.cell))
+    return changes
+
+
+def _budget(row: Optional[Row]) -> str:
+    if row is None:
+        return "—"
+    return str(row.max_ulp) if row.gated else "tolerance"
+
+
+_KIND_TEXT = {
+    "raised": "budget raised",
+    "ungated": "gating lost (now tolerance)",
+    "removed": "row removed",
+    "tightened": "budget tightened",
+    "gated": "newly gated",
+    "added": "new row",
+}
+
+
+def render_budget_diff(changes: List[Change], label_hint: str) -> str:
+    """The PR comment. Regressions first, and what to do about them."""
+    regressions = [c for c in changes if c.is_regression]
+    if not changes:
+        return "### SFPU ULP budgets\n\nNo budget changed.\n"
+
+    out = ["### SFPU ULP budgets", ""]
+    if regressions:
+        out += [
+            f"**{len(regressions)} cell(s) loosen a gate.** A budget may only be raised "
+            "by re-measuring and updating that row's provenance comment in the same "
+            "change — that is the table's own rule, and it is what makes every number "
+            "in it traceable.",
+            "",
+            "| cell | change | before | after | re-measured |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for c in regressions:
+            row = c.after or c.before
+            mark = "yes" if c.remeasured else "**no**"
+            out.append(
+                f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
+                f"{_budget(c.after)} | {mark} |"
+            )
+        out += [
+            "",
+            "If these are genuine re-measurements, say so in the PR body and add the "
+            f"`{label_hint}` label. If they are not, the budget is being fitted to a "
+            "failure and the kernel or the golden is what moved.",
+            "",
+        ]
+
+    improvements = [c for c in changes if not c.is_regression]
+    if improvements:
+        out += [
+            f"<details><summary>{len(improvements)} other budget change(s)</summary>",
+            "",
+            "| cell | change | before | after |",
+            "| --- | --- | --- | --- |",
+        ]
+        for c in improvements:
+            row = c.after or c.before
+            out.append(
+                f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
+                f"{_budget(c.after)} |"
+            )
+        out += ["", "</details>", ""]
+    return "\n".join(out) + "\n"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The other question: what the hardware measured against what the table declares
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Below this fraction of its budget a cell is carrying slack the sweep cannot
+#: justify. Not a failure -- tightening is a deliberate change with its own
+#: measurement -- but it is the list someone should work through.
+_SLACK_FRACTION = 0.5
+
+
+def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
+    """The worst lane each variant reached, from ``--ulp-measure`` rows.
+
+    Several rows land on one cell -- a driver enumerates axes the budget key does
+    not -- so the worst of them wins, the same rule ``ulp_sweep.record`` applies.
+    """
+    worst: Dict[Cell, int] = {}
+    for row in rows:
+        key = tuple((k, str(row[k])) for k in KEY_FIELDS if row.get(k) is not None)
+        cell: Cell = (row["op"], key)
+        worst[cell] = max(worst.get(cell, 0), int(row["max"]))
+    return worst
+
+
+def _resolve(
+    table: Dict[Cell, Row], op: str, key: Tuple[Tuple[str, str], ...]
+) -> Optional[Row]:
+    """The most specific row of *op* covering *key*, by the registry's own rule."""
+    asked = dict(key)
+    best: Optional[Row] = None
+    for (row_op, row_key), row in table.items():
+        if row_op != op:
+            continue
+        if any(asked.get(k) != v for k, v in row_key):
+            continue
+        if best is None or len(row_key) > len(best.key):
+            best = row
+    return best
+
+
+def render_headroom(
+    table: Dict[Cell, Row], measured: Dict[Cell, int]
+) -> Tuple[str, int]:
+    """What the run says about the gates. Returns the report and the over-budget count.
+
+    The sweep already fails a cell it cannot meet, so an over-budget line here is a
+    second voice on a test that is already red. The value is the rest: which cells
+    have no headroom left, and which are carrying slack.
+    """
+    over: List[str] = []
+    tight: List[str] = []
+    slack: List[str] = []
+    for cell, worst in sorted(measured.items()):
+        row = _resolve(table, cell[0], cell[1])
+        if row is None or not row.gated:
+            continue
+        named = f"{cell[0]} {{" + ", ".join(f"{k}: {v}" for k, v in cell[1]) + "}"
+        if worst > row.max_ulp:
+            over.append(f"| `{named}` | {worst} | {row.max_ulp} | over budget |")
+        elif worst == row.max_ulp:
+            tight.append(f"| `{named}` | {worst} | {row.max_ulp} | no headroom |")
+        elif row.max_ulp > 1 and worst < _SLACK_FRACTION * row.max_ulp:
+            slack.append(f"| `{named}` | {worst} | {row.max_ulp} | could tighten |")
+
+    out = ["### SFPU ULP sweep vs the declared budgets", ""]
+    if not measured:
+        return "\n".join(out + ["No measurements recorded.", ""]), 0
+    out.append(f"{len(measured)} cell(s) measured.")
+    out.append("")
+    for title, lines in (
+        ("Over budget", over),
+        ("No headroom left", tight),
+        (f"Carrying slack (measured under {_SLACK_FRACTION:.0%} of budget)", slack),
+    ):
+        if not lines:
+            continue
+        collapse = title.startswith("Carrying")
+        if collapse:
+            out.append(f"<details><summary>{title} — {len(lines)}</summary>")
+            out.append("")
+        else:
+            out.append(f"**{title} — {len(lines)}**")
+            out.append("")
+        out += ["| cell | measured | budget | |", "| --- | --- | --- | --- |"] + lines
+        out.append("")
+        if collapse:
+            out += ["</details>", ""]
+    if not (over or tight or slack):
+        out.append("Every gated cell is inside its budget with headroom to spare.")
+        out.append("")
+    return "\n".join(out), len(over)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    d = sub.add_parser("diff", help="compare two revisions of the budget table")
+    d.add_argument("--base", type=Path, required=True)
+    d.add_argument("--head", type=Path, required=True)
+    d.add_argument(
+        "--allow-raises",
+        action="store_true",
+        help="report loosened gates but exit 0 (the override label is set)",
+    )
+    d.add_argument("--label-hint", default="ulp-budget-raise-approved")
+    d.add_argument("--out", type=Path, help="write the report here as well as stdout")
+
+    h = sub.add_parser("headroom", help="compare a --ulp-measure run against the table")
+    h.add_argument("--table", type=Path, required=True)
+    h.add_argument("--measured", type=Path, required=True)
+    h.add_argument("--out", type=Path)
+
+    args = parser.parse_args(argv)
+
+    if args.mode == "diff":
+        changes = compare(
+            parse_table(args.base.read_text(encoding="utf-8")),
+            parse_table(args.head.read_text(encoding="utf-8")),
+        )
+        report = render_budget_diff(changes, args.label_hint)
+        regressions = [c for c in changes if c.is_regression]
+        status = 0 if (not regressions or args.allow_raises) else 1
+        if regressions and args.allow_raises:
+            report += (
+                f"\n_Allowed: the `{args.label_hint}` label is set on this pull "
+                "request._\n"
+            )
+    else:
+        table = parse_table(args.table.read_text(encoding="utf-8"))
+        rows = [
+            json.loads(line)
+            for line in args.measured.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        report, over = render_headroom(table, _measured_cells(rows))
+        status = 1 if over else 0
+
+    sys.stdout.write(report)
+    if args.out:
+        args.out.write_text(report, encoding="utf-8")
+    return status
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
