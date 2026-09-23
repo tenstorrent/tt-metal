@@ -242,31 +242,63 @@ class TtHiFTGenerator:
         self.stft = TtStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
         self.istft = TtIStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
 
-    def _verify_weight_preparation(self) -> int:
-        """Turn on the prepared-weight check for every `TtConv1d` this generator owns.
+    def _convs(self) -> list:
+        """Every `TtConv1d` this generator owns.
 
-        A walk rather than a constructor argument: the convolutions are two and three
-        levels down (ResBlocks hold six each, the f0 predictor holds four) and threading a
-        flag through `build_conv1d`, `build_resblock`, `build_conv_transpose1d` and
-        `build_f0_predictor` would put the same decision in four places. Walking the object
-        graph once, here, keeps it in one.
+        A walk rather than a list kept at construction: the convolutions are two and three
+        levels down (ResBlocks hold six each, the f0 predictor holds four) and threading
+        them out through `build_conv1d`, `build_resblock`, `build_conv_transpose1d` and
+        `build_f0_predictor` would put the same bookkeeping in four places.
         """
         from .conv import TtConv1d
 
-        seen, count, stack = set(), 0, [self]
+        seen, out, stack = set(), [], [self]
         while stack:
             obj = stack.pop()
             if id(obj) in seen:
                 continue
             seen.add(id(obj))
             if isinstance(obj, TtConv1d):
-                obj._verify = True
-                count += 1
+                out.append(obj)
             elif isinstance(obj, (list, tuple)):
                 stack.extend(obj)
             elif hasattr(obj, "__dict__"):
                 stack.extend(obj.__dict__.values())
-        return count
+        return out
+
+    def _verify_weight_preparation(self) -> int:
+        """Turn on the prepared-weight check for every `TtConv1d` this generator owns."""
+        convs = self._convs()
+        for c in convs:
+            c._verify = True
+        return len(convs)
+
+    def pause_weight_verification(self):
+        """Stop checking prepared conv weights until the returned callable is called.
+
+        For the length of a stream. An interleaved stream runs the vocoder between replays
+        of the LLM's decode trace, and a geometry that fails the check switches to the op's
+        own weight preparation, which allocates on every call. Allocations made while a
+        trace is live are the hazard `TtStreamingSynthesizer._carry_store` describes, and a
+        stream checked this way comes out corrupted (a peak of 72.5 in
+        `test_device_streaming_generates_the_same_tokens_as_batch`). Paused, every geometry
+        runs its prepared weights.
+
+        Returns `resume`, which restores the flags as they were and does nothing when
+        called again. Geometries already switched to the op's preparation stay switched.
+        """
+        saved = [(c, c._verify) for c in self._convs()]
+        for c, _ in saved:
+            c._verify = False
+        done = []
+
+        def resume():
+            if not done:
+                done.append(True)
+                for c, flag in saved:
+                    c._verify = flag
+
+        return resume
 
     @classmethod
     def from_export(cls, device, path: str | None = None, **kw):

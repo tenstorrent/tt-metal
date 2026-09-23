@@ -90,7 +90,6 @@ def test_device_conv_stack_matches_torch(device, t):
     speech its words. The stack takes the op's own weight preparation now.
     """
     import ttnn
-
     from models.demos.cosyvoice.tt.weights import WeightBag
 
     bag = WeightBag.load(FLOW_WEIGHTS).sub("length_regulator")

@@ -340,6 +340,11 @@ class StreamSession:
         self.hop = synth.cfg.token_hop_len
         self.n_chunks = 0
         self._done = False
+        # The vocoder's prepared-weight check stays off until `close`: a geometry that
+        # fails it would allocate on every call, with the decode trace live
+        # (`TtHiFTGenerator.pause_weight_verification`).
+        pause = getattr(getattr(synth, "hift", None), "pause_weight_verification", None)
+        self._resume_verification = pause() if pause else None
 
     # ------------------------------------------------------------------
     def push(self, token: int):
@@ -387,8 +392,11 @@ class StreamSession:
         return wav, n
 
     def close(self):
-        """Free whatever the carried caches still hold. Idempotent."""
+        """Free whatever the carried caches still hold, and restore the vocoder's
+        prepared-weight check. Idempotent."""
         self.state.free()
+        if self._resume_verification is not None:
+            self._resume_verification()
 
     def __enter__(self):
         return self
