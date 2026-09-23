@@ -213,3 +213,161 @@
   owner_id: U0896VBAKFC
   team: models
   budget_type: sweep
+
+# Request behavior tests: real models, device sampling, no serving framework.
+
+- name: Llama 3.3-70B request behavior (Galaxy)
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=galaxy-llama70b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml
+  model: llama3.3-70b-galaxy
+  model_family: Llama
+  skus:
+    wh_galaxy_perf:
+      timeout: 60
+      tier: 1
+      release_ready: false
+  owner_id: U053W15B6JF
+  team: models
+  budget_type: sweep
+
+- name: Llama 3.1-8B request behavior
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=llama3.1-8b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml
+  model: llama3.1-8b
+  model_family: Llama
+  skus:
+    wh_n150:
+      timeout: 45
+      tier: 1
+      release_ready: false
+    bh_p150:
+      timeout: 45
+      tier: 1
+      release_ready: false
+    wh_llmbox_perf:
+      timeout: 45
+      tier: 2
+      release_ready: false
+    bh_quietbox_2:
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U03PUAKE719
+  team: models
+  budget_type: sweep
+
+- name: Gemma-4-26B-A4B request behavior
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=google/gemma-4-26B-A4B-it
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=gemma-4-26b-a4b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml
+  model: gemma-4-26b-a4b
+  model_family: Gemma
+  skus:
+    wh_llmbox_perf:
+      timeout: 120
+      tier: 2
+      release_ready: false
+    bh_quietbox_2:
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U088413NP0Q
+  team: models
+  budget_type: sweep
+
+- name: Qwen3.6-27B request behavior
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=Qwen/Qwen3.6-27B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    export MESH_DEVICE=P150x4
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=qwen3.6-27b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U08HL8X1ECD
+  team: models
+  budget_type: sweep
+
+- name: Qwen3.6-35B-A3B request behavior
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=Qwen/Qwen3.6-35B-A3B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B
+    export MESH_DEVICE=P150x4
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=qwen3.6-35b-a3b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U08FBKRKTB8
+  team: models
+  budget_type: sweep
+
+- name: GPT-OSS 120B request behavior
+  cmd: |
+    mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+    export TT_MM_THROTTLE_PERF=2
+    SKIP_MODEL_LOAD="--model-behavior-skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest --confcutdir=tests/model_behavior tests/model_behavior \
+      --model-behavior-backend=gpt-oss-120b --model-behavior-execution=both \
+      --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
+      --junitxml=generated/test_reports/model_behavior/results.xml $SKIP_MODEL_LOAD
+  model: gpt-oss-120b
+  model_family: GPT-OSS
+  skus:
+    wh_galaxy_perf:
+      timeout: 90
+      tier: 1
+      release_ready: false
+    bh_quietbox_2:
+      timeout: 90
+      tier: 1
+      release_ready: false
+    bh_galaxy:
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U08TJ70UFRT
+  team: models
+  budget_type: sweep

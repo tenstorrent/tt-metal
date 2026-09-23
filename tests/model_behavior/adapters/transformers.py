@@ -180,7 +180,7 @@ class TransformersAdapter(PagedAdapter):
             can_sample_on_device=True,
         )
         if self.enable_trace:
-            if self.profile.family == "gemma" and self.sku == "wh_llmbox_perf":
+            if self.profile.family == "gemma":
                 # Keep the two smallest distinct padded prefill buckets. Keep the
                 # full eager compile pass above before any trace is resident;
                 # longer requests still exercise prefill, but execute eagerly.
@@ -447,8 +447,8 @@ def open_adapter(execution_mode, *, backend, sku=None, skip_model_load=False):
     with patch.dict(os.environ, env):
         if hardware.shape == (1, 1):
             fabric = ttnn.FabricConfig.DISABLED
-        elif profile.family == "gemma":
-            # Match Gemma's production test factory and linear CCL topology.
+        elif profile.family in ("gemma", "qwen"):
+            # Match the production Gemma/Qwen factories' linear CCL topology.
             fabric = ttnn.FabricConfig.FABRIC_1D
         else:
             fabric = ttnn.FabricConfig.FABRIC_1D_RING
@@ -460,6 +460,9 @@ def open_adapter(execution_mode, *, backend, sku=None, skip_model_load=False):
             parent_mesh = ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(4, 8) if galaxy_submesh else ttnn.MeshShape(*hardware.shape),
                 trace_region_size=resolve_trace_region_size(backend, sku),
+                # Qwen's GDN conv1d needs the same 24 KiB L1_SMALL reservation
+                # as models/demos/blackhole/qwen36/tests/test_factory.py.
+                l1_small_size=24_576 if profile.family == "qwen" else 0,
             )
             mesh = parent_mesh.create_submesh(ttnn.MeshShape(*hardware.shape)) if galaxy_submesh else parent_mesh
             mesh.enable_program_cache()

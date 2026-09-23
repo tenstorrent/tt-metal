@@ -9,8 +9,6 @@ import pytest
 
 from tests.model_behavior.driver import Request, Sampling, assert_same_tokens, assert_varied_tokens, run_batch
 
-pytestmark = pytest.mark.timeout(1800)
-
 DIVERSITY_PROMPT = "Pick one random lowercase letter from a to z. Reply with that letter only."
 PENALTY_PROMPTS = (
     "She opened the door and",

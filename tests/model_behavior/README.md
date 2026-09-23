@@ -8,11 +8,12 @@ stands in for a model run.
 
 ## Models and CI hardware
 
-The new jobs use the same enabled SKUs and per-SKU tiers as each model's existing
-e2e entry in `tests/pipeline_reorg/models_e2e_tests.yaml`. A CPU regression checks
-that mapping and the matching workflow selectors. Request behavior runs in the
-existing tier 1 or tier 2 workflows, with its own allowance in each tier's time
-budget. The new jobs remain `release_ready: false`.
+The jobs live in `tests/pipeline_reorg/models_sweep_tests.yaml`. They use the same
+enabled SKUs and per-SKU tiers as each model's existing e2e entry. A CPU regression
+checks that mapping and the matching sweep workflow selectors. Tier 1 sweeps run
+on Wednesdays and Saturdays; tier 2 sweeps run on Saturdays. Both also support
+manual runs. The jobs remain `release_ready: false`.
+Changes to these entries still run through the PR's `Verify changed tests` gate.
 The 45/60/90-minute job limits are provisioning estimates; Gemma 26B on Wormhole
 uses a conservative 120 minutes based on local eager/traced runtime. These are
 provisional until representative runs on each physical CI SKU establish the
@@ -43,13 +44,13 @@ measured accelerator usage; tier 3 receives no additional jobs or budget.
 
 | Models budget bucket | SKU | Prior minutes | New job contributions (minutes) | Total minutes |
 | --- | --- | ---: | --- | ---: |
-| `e2e_tier1` | `wh_n150` | 28 | Llama 8B: 45 | 73 |
-| `e2e_tier1` | `bh_p150` | 27 | Llama 8B: 45 | 72 |
-| `e2e_tier1` | `wh_galaxy_perf` | 215 | Llama 70B: 60; GPT-OSS: 90 | 365 |
-| `e2e_tier1` | `bh_quietbox_2` | 434 | Gemma 26B: 90; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 794 |
-| `e2e_tier1` | `bh_galaxy` | 78 | GPT-OSS: 90 | 168 |
-| `e2e_tier2` | `wh_llmbox_perf` | 270 | Llama 8B: 45; Gemma 26B: 120 | 435 |
-| `e2e_tier2` | `bh_quietbox_2` | 186 | Llama 8B: 45 | 231 |
+| `sweep_tier1` | `wh_n150` | 30 | Llama 8B: 45 | 75 |
+| `sweep_tier1` | `bh_p150` | 30 | Llama 8B: 45 | 75 |
+| `sweep_tier1` | `wh_galaxy_perf` | 55 | Llama 70B: 60; GPT-OSS: 90 | 205 |
+| `sweep_tier1` | `bh_quietbox_2` | 0 | Gemma 26B: 90; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 360 |
+| `sweep_tier1` | `bh_galaxy` | 0 | GPT-OSS: 90 | 90 |
+| `sweep_tier2` | `wh_llmbox_perf` | 60 | Llama 8B: 45; Gemma 26B: 120 | 225 |
+| `sweep_tier2` | `bh_quietbox_2` | 30 | Llama 8B: 45 | 75 |
 
 Available local measurements (2026-09-22) are 283.5 seconds for Llama 8B's
 full eager/traced sweep on a one-chip Wormhole Galaxy submesh, and approximately
@@ -80,6 +81,7 @@ mkdir -p generated/test_reports/model_behavior
 python -m pytest --confcutdir=tests/model_behavior tests/model_behavior \
   --model-behavior-backend=llama3.1-8b \
   --model-behavior-execution=both \
+  --timeout=3600 \
   --basetemp=generated/test_reports/model_behavior/requests \
   --junitxml=generated/test_reports/model_behavior/results.xml
 ```
@@ -91,7 +93,8 @@ on a Wormhole Galaxy for local testing. This does not add a Galaxy CI leg for
 that model, and a submesh run does not certify a different physical machine.
 Wrong architectures and unsupported model/SKU combinations fail setup.
 
-Gemma uses the production factory's linear `FABRIC_1D` configuration. For a
+Gemma and Qwen use their production factories' linear `FABRIC_1D` configuration.
+Qwen reserves 24 KiB of `L1_SMALL` for GDN prefill convolution. For a
 local eight-chip Gemma run on Wormhole Galaxy, the adapter opens the 32-chip
 parent mesh so fabric neighbors are initialized, then gives the model a `1x8`
 submesh. Reserve the whole Galaxy for that run; model weights and requests still
@@ -102,6 +105,16 @@ For Gemma, install `models/demos/gemma4/requirements.txt` first. For GPT-OSS,
 weight-cache path, matching CI's read-only NAS setup. Use it only with a complete
 cache. Trace reservations come from `models/model_trace_region_sizes.yaml`.
 `TT_METAL_CACHE` controls the separate writable kernel cache.
+
+Gemma retains prefill traces for 128 and 1024 tokens on both supported SKUs.
+Longer prefills execute eagerly; decode uses traces. Wormhole reserves 160 MiB
+(140.16 MiB measured). Blackhole uses the demo's 256 MB reservation, pending a
+complete CI run. Its previous 70 MB limit failed with 164,265,984 bytes already
+needed during prefill trace capture.
+
+The command's `--timeout` includes model loading and warmup for the first test
+in each mode. There is no shorter module timeout overriding it. CI sets one hour;
+the outer job limit still bounds the full sweep.
 
 Use `eager` or `traced` to run one mode. The model and mesh are recreated between
 modes. Without an explicit backend, hardware scenarios skip. CPU checks need
@@ -156,13 +169,12 @@ prefill. Decode uses the full configured slot layout. Qwen uses the production
 model-owned traced prefill chunks in both execution modes; `eager`/`traced`
 selects its decode mode. Models may also select eager prefill for lengths their
 normal trace policy does not support.
-On Wormhole T3K, Gemma 26B traces the 128- and 1024-token prefill buckets. This
+On both supported SKUs, Gemma 26B traces the 128- and 1024-token prefill buckets. This
 retains more coverage than the existing short-prompt serving CI's 128-token
 policy. Longer prefills and cached-prefix continuations run eagerly; decode
 remains traced. The full eager prefill/decode warmup runs before
 restricting trace capture, preserving compilation coverage for longer inputs.
-Other Gemma SKUs retain the model's normal trace policy (eager continuations and
-input lengths above 4096). Reports include the eligible prefill lengths,
+Reports include the eligible prefill lengths,
 captured trace keys and allocated trace-region bytes per device, so a traced
 decode run does not imply every prefill was traced. The allocation metric counts
 the fixed trace region; dynamic traces allocated from ordinary DRAM are not

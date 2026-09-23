@@ -396,7 +396,9 @@ sizes:
       bh_p150:
         trace_region_size: 70000000
       p300x2:
-        trace_region_size: 70000000
+        # Match Gemma's BH demo reservation. The behavior sweep retains only
+        # 128/1024 prefill traces; CI observed 164,265,984 bytes before decode.
+        trace_region_size: 256000000
 
   gemma-4-31b:
     aliases:

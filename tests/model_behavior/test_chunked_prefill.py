@@ -9,8 +9,6 @@ import pytest
 
 from tests.model_behavior.driver import Request, run_batch
 
-pytestmark = pytest.mark.timeout(1800)
-
 FILLER = "The archive contains ordinary notes about weather, gardens, rivers, and roads. "
 NEEDLES = ("violet compass 7319", "copper lantern 4826", "silver meadow 9053", "amber pebble 1648")
 

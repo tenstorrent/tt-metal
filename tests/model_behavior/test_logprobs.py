@@ -10,8 +10,6 @@ import pytest
 from tests.model_behavior.driver import Request, Sampling, assert_same_tokens, run_batch
 from tests.model_behavior.test_sampling_behavior import PENALTY_PROMPTS, spaced_slots
 
-pytestmark = pytest.mark.timeout(1800)
-
 
 @pytest.fixture(autouse=True)
 def require_device_logprobs(request_driver):

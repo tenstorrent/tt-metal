@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import torch
 import yaml
 
 from tests.model_behavior.adapters import ADAPTERS
+from tests.model_behavior.adapters import transformers as adapters
 from tests.model_behavior.adapters.profiles import PROFILES, select_sku
 from tests.model_behavior.adapters.transformers import TransformersAdapter, sampled_logprob, vocabulary_groups
 from tests.model_behavior.driver import Request, RequestDriver, RequestState, Sample, Sampling
@@ -23,7 +25,12 @@ def test_behavior_jobs_keep_existing_ci_skus_tiers_and_workflow_selectors(backen
     entries = yaml.safe_load((root / "tests/pipeline_reorg/models_e2e_tests.yaml").read_text())
     entries = [entry for entry in entries if entry["model"] == model]
     original = next(entry for entry in entries if " e2e tests" in entry["name"])
-    behavior = next(entry for entry in entries if "request behavior" in entry["name"])
+    assert not any("request behavior" in entry["name"] for entry in entries)
+    sweeps = yaml.safe_load((root / "tests/pipeline_reorg/models_sweep_tests.yaml").read_text())
+    behavior_entries = [entry for entry in sweeps if entry["model"] == model and "request behavior" in entry["name"]]
+    assert len(behavior_entries) == 1
+    behavior = behavior_entries[0]
+    assert behavior["budget_type"] == "sweep"
     if backend == "galaxy-llama70b":
         skus, hf_model = ("wh_galaxy_perf",), "meta-llama/Llama-3.3-70B-Instruct"
     else:
@@ -33,9 +40,10 @@ def test_behavior_jobs_keep_existing_ci_skus_tiers_and_workflow_selectors(backen
     assert f"--model-behavior-backend={backend}" in behavior["cmd"]
     expected_tiers = {sku: config["tier"] for sku, config in original["skus"].items()}
     assert {sku: config["tier"] for sku, config in behavior["skus"].items()} == expected_tiers
-    for tier in (1, 2, 3):
+    assert set(expected_tiers.values()) <= {1, 2}
+    for tier in (1, 2):
         workflow = yaml.load(
-            (root / f".github/workflows/models-t{tier}-e2e-tests.yaml").read_text(), Loader=yaml.BaseLoader
+            (root / f".github/workflows/models-t{tier}-sweep-tests.yaml").read_text(), Loader=yaml.BaseLoader
         )
         choices = workflow["on"]["workflow_dispatch"]["inputs"]["model"]["options"]
         assert (model in choices) == (tier in expected_tiers.values())
@@ -59,7 +67,8 @@ def test_architecture_and_sku_mismatches_fail_before_model_creation():
     [
         ("gemma-4-26b-a4b", "wh_llmbox_perf", True, True),
         ("gemma-4-26b-a4b", "wh_llmbox_perf", False, False),
-        ("gemma-4-26b-a4b", "bh_quietbox_2", True, False),
+        ("gemma-4-26b-a4b", "bh_quietbox_2", True, True),
+        ("gemma-4-26b-a4b", "bh_quietbox_2", False, False),
         ("llama3.1-8b", "wh_llmbox_perf", True, False),
     ],
 )
@@ -100,6 +109,36 @@ def test_gemma_short_trace_policy_preserves_full_eager_warmup(backend, sku, trac
     assert args.can_enable_trace(2048) is not restricted
     assert not args.can_enable_trace(128, num_cached_tokens=64)
     assert not args.can_enable_trace(128, batch_size=64)
+
+
+@pytest.mark.parametrize("backend", ["qwen3.6-27b", "qwen3.6-35b-a3b"])
+def test_qwen_opens_mesh_with_gdn_scratch_and_linear_fabric(monkeypatch, backend):
+    opened, fabrics, closed = [], [], []
+    mesh = SimpleNamespace(enable_program_cache=lambda: None)
+    adapter = SimpleNamespace(warmup=lambda: None, close=lambda: closed.append("adapter"))
+    runtime = SimpleNamespace(
+        get_arch_name=lambda: "blackhole",
+        get_num_devices=lambda: 4,
+        FabricConfig=SimpleNamespace(DISABLED="disabled", FABRIC_1D="linear", FABRIC_1D_RING="ring"),
+        set_fabric_config=fabrics.append,
+        MeshShape=lambda *shape: shape,
+        open_mesh_device=lambda **kwargs: opened.append(kwargs) or mesh,
+        close_mesh_device=lambda device: closed.append(device),
+    )
+    monkeypatch.setitem(sys.modules, "ttnn", runtime)
+    monkeypatch.setitem(
+        sys.modules,
+        "models.demos.utils.trace_region_sizes",
+        SimpleNamespace(resolve_trace_region_size=lambda model, sku: 123456),
+    )
+    monkeypatch.setattr(adapters, "QwenAdapter", lambda *args, **kwargs: adapter)
+
+    with adapters.open_adapter("eager", backend=backend, sku="bh_quietbox_2") as result:
+        assert result is adapter
+        assert opened == [dict(mesh_shape=(1, 4), trace_region_size=123456, l1_small_size=24576)]
+        assert fabrics == ["linear"]
+    assert fabrics == ["linear", "disabled"]
+    assert closed == ["adapter", mesh]
 
 
 def test_vocab_oracle_preserves_tp_and_dp_domains():

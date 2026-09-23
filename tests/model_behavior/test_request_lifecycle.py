@@ -7,8 +7,6 @@ import pytest
 
 from tests.model_behavior.driver import Request, Sampling, assert_same_tokens
 
-pytestmark = pytest.mark.timeout(1800)
-
 
 @pytest.mark.parametrize("batch_layout", ["sparse", "full"])
 def test_mixed_request_replay(request_driver, batch_layout):
