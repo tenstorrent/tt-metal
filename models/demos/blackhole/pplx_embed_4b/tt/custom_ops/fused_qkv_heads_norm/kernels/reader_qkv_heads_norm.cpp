@@ -17,8 +17,11 @@ void kernel_main() {
     const uint32_t gk_addr = get_arg_val<uint32_t>(2);
     const uint32_t scaler_addr = get_arg_val<uint32_t>(3);
     const uint32_t eps_addr = get_arg_val<uint32_t>(4);
-    const uint32_t num_work_units = get_arg_val<uint32_t>(5);
-    const uint32_t work_unit_start = get_arg_val<uint32_t>(6);
+    const uint32_t cos_addr = get_arg_val<uint32_t>(5);
+    const uint32_t sin_addr = get_arg_val<uint32_t>(6);
+    const uint32_t trans_addr = get_arg_val<uint32_t>(7);
+    const uint32_t num_work_units = get_arg_val<uint32_t>(8);
+    const uint32_t work_unit_start = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t q_heads_per_kv = get_compile_time_arg_val(0);
     constexpr uint32_t num_kv_heads = get_compile_time_arg_val(1);
@@ -27,20 +30,28 @@ void kernel_main() {
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t head_groups = get_compile_time_arg_val(5);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
-    constexpr auto in0_args = TensorAccessorArgs<7>();
+    constexpr auto in0_args = TensorAccessorArgs<8>();
     constexpr auto gq_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto gk_args = TensorAccessorArgs<gq_args.next_compile_time_args_offset()>();
     constexpr auto sc_args = TensorAccessorArgs<gk_args.next_compile_time_args_offset()>();
     constexpr auto eps_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
+    constexpr auto cos_args = TensorAccessorArgs<eps_args.next_compile_time_args_offset()>();
+    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto trans_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    constexpr uint32_t fuse_rotary = get_compile_time_arg_val(7);  // 0/1; placeholders bound when 0
 
     constexpr uint32_t cb_id = 0;  // fused QKV tiles for compute
     constexpr uint32_t cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
+    constexpr uint32_t cb_cos = 9, cb_sin = 10, cb_trans = 11;
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const auto sgq = TensorAccessor(gq_args, gq_addr);
     const auto sgk = TensorAccessor(gk_args, gk_addr);
     const auto ssc = TensorAccessor(sc_args, scaler_addr);
     const auto seps = TensorAccessor(eps_args, eps_addr);
+    const auto scos = TensorAccessor(cos_args, cos_addr);
+    const auto ssin = TensorAccessor(sin_args, sin_addr);
+    const auto strans = TensorAccessor(trans_args, trans_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
     const uint32_t const_tile_bytes = get_tile_size(cb_gq);
 
@@ -68,6 +79,13 @@ void kernel_main() {
         noc.async_read(ssc, csc, const_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
         ceps.reserve_back(1);
         noc.async_read(seps, ceps, const_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        if constexpr (fuse_rotary) {
+            CircularBuffer ct(cb_trans);
+            ct.reserve_back(1);
+            noc.async_read(strans, ct, const_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            ct.push_back(1);
+        }
         noc.async_read_barrier();
         cgq.push_back(head_dim_tiles);
         cgk.push_back(head_dim_tiles);
@@ -100,7 +118,31 @@ void kernel_main() {
             noc.async_read(s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
             l1_write_offset += tile_size_bytes;
         }
-        noc.async_read_barrier();
+        if constexpr (fuse_rotary) {
+            // cos/sin tiles for this seq tile (shared by every head in the unit)
+            CircularBuffer ccos(cb_cos), csin(cb_sin);
+            ccos.reserve_back(head_dim_tiles);
+            csin.reserve_back(head_dim_tiles);
+            for (uint32_t j = 0; j < head_dim_tiles; ++j) {
+                noc.async_read(
+                    scos,
+                    ccos,
+                    const_tile_bytes,
+                    {.page_id = s_tile * head_dim_tiles + j},
+                    {.offset_bytes = j * const_tile_bytes});
+                noc.async_read(
+                    ssin,
+                    csin,
+                    const_tile_bytes,
+                    {.page_id = s_tile * head_dim_tiles + j},
+                    {.offset_bytes = j * const_tile_bytes});
+            }
+            noc.async_read_barrier();
+            ccos.push_back(head_dim_tiles);
+            csin.push_back(head_dim_tiles);
+        } else {
+            noc.async_read_barrier();
+        }
         cb.push_back(unit_tiles);
     }
 }

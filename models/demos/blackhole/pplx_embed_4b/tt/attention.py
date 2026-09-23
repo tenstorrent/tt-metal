@@ -94,7 +94,7 @@ def _wrap_create_qkv_heads_headsplit(original_fn):
     return wrapper
 
 
-def _wrap_create_qkv_heads_norm(original_fn, consts):
+def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None):
     """Route ``nlp_create_qkv_heads`` to the head-split + Q/K RMSNorm fused op.
 
     ``consts`` = (gamma_q_tiles, gamma_k_tiles, scaler, eps) built once per layer. The
@@ -103,6 +103,7 @@ def _wrap_create_qkv_heads_norm(original_fn, consts):
     the call (sharded input, transposed K heads, indivisible head counts).
     """
     gq, gk, sc, ep = consts
+    rot_kwargs = {} if rot is None else {"rot_cos": rot[0], "rot_sin": rot[1], "trans_mat": rot[2]}
 
     @functools.wraps(original_fn)
     def wrapper(qkv_fused, *args, **kwargs):
@@ -124,6 +125,7 @@ def _wrap_create_qkv_heads_norm(original_fn, consts):
                 num_heads=num_heads,
                 num_kv_heads=num_kv_heads,
                 memory_config=kwargs.get("memory_config"),
+                **rot_kwargs,
             )
         return original_fn(qkv_fused, *args, **kwargs)
 
@@ -250,13 +252,43 @@ class PplxBidirectionalAttention(Attention):
         original_create_heads = ttnn.experimental.nlp_create_qkv_heads
         original_concat_heads = ttnn.experimental.nlp_concat_heads
         _saved_norms = None
+        _saved_rope = None
+        _saved_dealloc = None
         if self._fused_norm_consts is not None:
+            # QWEN_FUSED_ROTARY=1 also folds RoPE into the same pass (rot_mats = [cos, sin] for
+            # this chunk; the single 32x32 tile-local rotation is transformation_mats["prefill"]).
+            rot = None
+            if os.getenv("QWEN_FUSED_ROTARY", "0") == "1" and rot_mats is not None and self.transformation_mats:
+                rot = (rot_mats[0], rot_mats[1], self.transformation_mats["prefill"])
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_norm(
-                original_create_heads, self._fused_norm_consts
+                original_create_heads, self._fused_norm_consts, rot
             )
             _saved_norms = (self.q_norm, self.k_norm)
             self.q_norm = lambda x, mode, norm_config: x
             self.k_norm = lambda x, mode, norm_config: x
+            if rot is not None:
+                # RoPE already applied inside the fused op: hand Q/K straight through. The
+                # upstream forward then deallocates the "pre-rotary" tensors, which are now
+                # the tensors SDPA reads, so skip exactly one deallocation of each (later
+                # frees still happen, nothing leaks).
+                _saved_rope = self.rotary_embedding_prefill
+                _skip_once = {}
+
+                def _identity_rope(q, k, rm):
+                    _skip_once[id(q)] = 1
+                    _skip_once[id(k)] = 1
+                    return q, k
+
+                self.rotary_embedding_prefill = _identity_rope
+                _saved_dealloc = ttnn.deallocate
+
+                def _guarded_dealloc(t, *a, **kw):
+                    if _skip_once.get(id(t), 0) > 0:
+                        _skip_once[id(t)] -= 1
+                        return None
+                    return _saved_dealloc(t, *a, **kw)
+
+                ttnn.deallocate = _guarded_dealloc
         elif os.getenv("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "0") == "1":
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_headsplit(original_create_heads)
         if os.getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "0") == "1":
@@ -277,6 +309,10 @@ class PplxBidirectionalAttention(Attention):
             ttnn.experimental.nlp_concat_heads = original_concat_heads
             if _saved_norms is not None:
                 self.q_norm, self.k_norm = _saved_norms
+            if _saved_rope is not None:
+                self.rotary_embedding_prefill = _saved_rope
+            if _saved_dealloc is not None:
+                ttnn.deallocate = _saved_dealloc
 
 
 PplxBidirectionalAttention.__name__ = "Attention"

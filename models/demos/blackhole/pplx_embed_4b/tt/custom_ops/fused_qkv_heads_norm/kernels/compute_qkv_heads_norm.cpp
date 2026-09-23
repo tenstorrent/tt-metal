@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/reduce.h"
+#include "api/compute/matmul.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
@@ -24,8 +25,9 @@
 namespace {
 constexpr uint32_t cb_in = 0, cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
 constexpr uint32_t cb_x2 = 5, cb_red = 6, cb_inv = 7, cb_tmp = 8, cb_out = 16;
+constexpr uint32_t cb_cos = 9, cb_sin = 10, cb_trans = 11, cb_rot = 12, cb_si = 13, cb_ci = 14, cb_norm = 15;
 
-template <uint32_t Wt>
+template <uint32_t Wt, uint32_t cb_dst>
 inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
     CircularBuffer x2(cb_x2), red(cb_red), inv(cb_inv), tmp(cb_tmp);
     // x^2
@@ -95,11 +97,15 @@ inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
     tile_regs_release();
     tmp.push_back(Wt);
     inv.pop_front(1);
-    // out = y * gamma
+    // out = y * gamma  (to cb_out at out_off, or to cb_norm at 0 when rotary follows)
     reconfig_data_format(cb_tmp, cb_gamma);
-    pack_reconfig_data_format(cb_out);
+    pack_reconfig_data_format(cb_dst);
     mul_init(cb_tmp, cb_gamma);
     tmp.wait_front(Wt);
+    CircularBuffer nrm(cb_norm);
+    if constexpr (cb_dst == cb_norm) {
+        nrm.reserve_back(Wt);
+    }
     tile_regs_acquire();
     for (uint32_t j = 0; j < Wt; ++j) {
         mul_tiles(cb_tmp, cb_gamma, j, j, j);
@@ -107,10 +113,86 @@ inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
     tile_regs_commit();
     tile_regs_wait();
     for (uint32_t j = 0; j < Wt; ++j) {
-        pack_tile(j, cb_out, out_off + j);
+        pack_tile(j, cb_dst, (cb_dst == cb_norm ? 0 : out_off) + j);
     }
     tile_regs_release();
     tmp.pop_front(Wt);
+    if constexpr (cb_dst == cb_norm) {
+        nrm.push_back(Wt);
+    }
+}
+
+// RoPE on one normalised head sitting in cb_norm: out = x*cos + (x @ T)*sin, where T is the
+// single 32x32 tile-local rotation the model's rotary_embedding_llama applies to every tile.
+template <uint32_t Wt>
+inline void rotary_head(uint32_t out_off) {
+    CircularBuffer nrm(cb_norm), rot(cb_rot), si(cb_si), ci(cb_ci);
+    nrm.wait_front(Wt);
+    reconfig_data_format(cb_norm, cb_trans);
+    pack_reconfig_data_format(cb_rot);
+    matmul_init(cb_norm, cb_trans);
+    rot.reserve_back(Wt);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        matmul_tiles(cb_norm, cb_trans, j, 0, j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        pack_tile(j, cb_rot, j);
+    }
+    tile_regs_release();
+    rot.push_back(Wt);
+    reconfig_data_format(cb_rot, cb_sin);
+    pack_reconfig_data_format(cb_si);
+    mul_init(cb_rot, cb_sin);
+    rot.wait_front(Wt);
+    si.reserve_back(Wt);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        mul_tiles(cb_rot, cb_sin, j, j, j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        pack_tile(j, cb_si, j);
+    }
+    tile_regs_release();
+    si.push_back(Wt);
+    rot.pop_front(Wt);
+    reconfig_data_format(cb_norm, cb_cos);
+    pack_reconfig_data_format(cb_ci);
+    mul_init(cb_norm, cb_cos);
+    ci.reserve_back(Wt);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        mul_tiles(cb_norm, cb_cos, j, j, j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        pack_tile(j, cb_ci, j);
+    }
+    tile_regs_release();
+    ci.push_back(Wt);
+    nrm.pop_front(Wt);
+    reconfig_data_format(cb_ci, cb_si);
+    pack_reconfig_data_format(cb_out);
+    add_init(cb_ci, cb_si);
+    ci.wait_front(Wt);
+    si.wait_front(Wt);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        add_tiles(cb_ci, cb_si, j, j, j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < Wt; ++j) {
+        pack_tile(j, cb_out, out_off + j);
+    }
+    tile_regs_release();
+    ci.pop_front(Wt);
+    si.pop_front(Wt);
 }
 }  // namespace
 
@@ -118,6 +200,7 @@ void kernel_main() {
     constexpr uint32_t q_heads_per_kv = get_compile_time_arg_val(0);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);  // head_dim_tiles
+    constexpr uint32_t fuse_rotary = get_compile_time_arg_val(3);
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
@@ -131,15 +214,35 @@ void kernel_main() {
     gk.wait_front(Wt);
     sc.wait_front(1);
     ep.wait_front(1);
+    if constexpr (fuse_rotary) {
+        CircularBuffer ct(cb_trans);
+        ct.wait_front(1);
+    }
 
     for (uint32_t w = 0; w < num_work_units; ++w) {
         in.wait_front(unit_tiles);
         out.reserve_back(unit_tiles);
-        for (uint32_t h = 0; h < q_heads_per_group; ++h) {
-            norm_head<Wt>(h * Wt, h * Wt, cb_gq);
-        }
-        for (uint32_t h = 0; h < heads_per_group; ++h) {
-            norm_head<Wt>(group_q_tiles + h * Wt, group_q_tiles + h * Wt, cb_gk);
+        if constexpr (fuse_rotary) {
+            CircularBuffer ccos(cb_cos), csin(cb_sin);
+            ccos.wait_front(Wt);
+            csin.wait_front(Wt);
+            for (uint32_t h = 0; h < q_heads_per_group; ++h) {
+                norm_head<Wt, cb_norm>(h * Wt, h * Wt, cb_gq);
+                rotary_head<Wt>(h * Wt);
+            }
+            for (uint32_t h = 0; h < heads_per_group; ++h) {
+                norm_head<Wt, cb_norm>(group_q_tiles + h * Wt, group_q_tiles + h * Wt, cb_gk);
+                rotary_head<Wt>(group_q_tiles + h * Wt);
+            }
+            ccos.pop_front(Wt);
+            csin.pop_front(Wt);
+        } else {
+            for (uint32_t h = 0; h < q_heads_per_group; ++h) {
+                norm_head<Wt, cb_out>(h * Wt, h * Wt, cb_gq);
+            }
+            for (uint32_t h = 0; h < heads_per_group; ++h) {
+                norm_head<Wt, cb_out>(group_q_tiles + h * Wt, group_q_tiles + h * Wt, cb_gk);
+            }
         }
         // V passes through
         reconfig_data_format(cb_in, cb_in);

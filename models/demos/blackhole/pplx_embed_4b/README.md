@@ -546,6 +546,31 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Fused head-split + Q/K RMSNorm + RoPE — landed (2026-09-23)
+
+The same `fused_qkv_heads_norm` op now also applies RoPE to Q and K
+(`QWEN_FUSED_ROTARY=1`, default on). The model's prefill rotary is a single
+32×32 tile-local rotation `T` applied to every tile, so per head the kernel
+does `rot = x @ T`, `out = x·cos + rot·sin` right after the gamma phase, with
+the unit's cos/sin tiles read once per seq-tile and `T` resident. Five ops per
+layer (heads, q_norm, k_norm, rotary×2) are now one. Standalone vs the device
+`rotary_embedding_llama` reference: PCC q 0.99997 / k 1.00000; B=8 traced
+670.1 → 334.5 µs (−50.1%). Upstream `forward_prefill` deallocates the
+"pre-rotary" tensors after rotary; with RoPE fused those are the tensors SDPA
+reads, so the wrapper skips exactly one deallocation of each (later frees still
+happen).
+
+| batch | H200 | before | **after** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 25.0  | **23.9**  | **−4.4%** | 4.40× |
+| bs8  | 33.081  | 144.7 | **143.4** | −0.9% | 4.33× |
+| bs16 | 67.225  | 276.8 | **263.5** | **−4.8%** | 3.92× |
+| bs32 | 139.150 | 519.2 | **495.0** | **−4.7%** | 3.56× |
+
+STS-B Spearman **0.8134** (0.8135 before). Next in the same op: emit Q in bfp8
+(SDPA validates operand dtypes independently, so Q bfp8 with K/V bf16 is what
+runs today after a separate cast) to remove the per-layer Typecast.
+
 ### Fused head-split + Q/K RMSNorm — landed (2026-09-23)
 
 `tt/custom_ops/fused_qkv_heads_norm/`: a model-local `ttnn.generic_op` with a
