@@ -556,7 +556,9 @@ default 8,8,8 / 1×8 (−6.0%). Same-chip A/B (chip 8): bs16 **237.0 → 231.8 m
 bs16/ISL512 only: at bs8 the default is already the best of the sweep, and bs32 runs the
 unfused path, where the defaults win for every projection. The same sweep says the plain
 bs8 matmuls want other blocks (FF2 16,8,8 −16%, QKV 8,4,8 −15%, WO 16,8,8 −12%
-standalone) — e2e A/B in progress. Full table: `perf_csv/NEGATIVE_RESULTS.md` §29.
+standalone) — same-chip A/B (chip 7): bs8 **126.4 → 123.4 ms (−2.4%)**, now the bs8
+default (`QWEN_MM_BLOCK_FF2=16,8,8`, `QWEN_MM_BLOCK_QKV=8,4,8`, `QWEN_MM_BLOCK_WO=16,8,8`).
+Full table: `perf_csv/NEGATIVE_RESULTS.md` §29.
 
 ### Fused residual add + RMSNorm (bs16+) — landed (2026-09-23)
 

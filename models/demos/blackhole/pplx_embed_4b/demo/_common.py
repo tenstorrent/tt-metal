@@ -424,6 +424,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size == 16 and seq_len == 512:
         os.environ.setdefault("QWEN_MM_BLOCK_FF13", "4,8,8")
         os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,4")
+    # Plain minimal_matmul blocks at bs8 (M=4096), same sweep: FF2 16,8,8 (-16% standalone),
+    # QKV 8,4,8 (-15%), WO 16,8,8 (-12%); e2e 126.4 -> 123.4 ms (-2.4%, chip 7). At bs16/bs32
+    # the 8,8,8 defaults are the best of the sweep for these projections.
+    if batch_size == 8 and seq_len == 512:
+        os.environ.setdefault("QWEN_MM_BLOCK_FF2", "16,8,8")
+        os.environ.setdefault("QWEN_MM_BLOCK_QKV", "8,4,8")
+        os.environ.setdefault("QWEN_MM_BLOCK_WO", "16,8,8")
     apply_recommended_env(batched_l1=cfg["batched_l1"])
     # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul
     # BinaryNg into one minimal_matmul(fuse_swiglu=True). It is a win at moderate
