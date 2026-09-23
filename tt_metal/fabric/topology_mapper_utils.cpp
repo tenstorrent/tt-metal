@@ -1615,11 +1615,14 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}};
     std::optional<PinningsByMesh> session_pinnings;
     MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
-    const ValidGroupingsMap groupings = PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, session_pinnings);
     placement_stats_ = std::make_unique<PlacementSolveStats>();
     placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
-        groupings, merged, physical_system_descriptor, placement_stats_.get(), asic_id_to_mesh_rank_, unique_shapes);
+        merged,
+        physical_system_descriptor,
+        placement_stats_.get(),
+        session_pinnings,
+        asic_id_to_mesh_rank_,
+        unique_shapes);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1631,11 +1634,14 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     using namespace ::tt::tt_fabric;
     std::optional<PinningsByMesh> session_pinnings;
     MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
-    const ValidGroupingsMap groupings = PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
-        merged, physical_system_descriptor, session_pinnings);
     placement_stats_ = std::make_unique<PlacementSolveStats>();
     placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
-        groupings, merged, physical_system_descriptor, placement_stats_.get(), asic_id_to_mesh_rank_, unique_shapes);
+        merged,
+        physical_system_descriptor,
+        placement_stats_.get(),
+        session_pinnings,
+        asic_id_to_mesh_rank_,
+        unique_shapes);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;

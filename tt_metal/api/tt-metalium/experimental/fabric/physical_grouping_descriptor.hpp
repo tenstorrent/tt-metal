@@ -432,12 +432,12 @@ public:
         bool unique_shapes = false,
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
-    // No PGD: seat from an already-resolved groupings map (e.g. MGD fallbacks).
+    // No PGD: seat from MGD placement fallbacks.
     SatPlacementEnumerationSession(
-        const ValidGroupingsMap& valid_groupings,
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         PlacementSolveStats* stats,
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
         bool unique_shapes = false);
 

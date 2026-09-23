@@ -2739,10 +2739,10 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
 }
 
 SatPlacementEnumerationSession::SatPlacementEnumerationSession(
-    const ValidGroupingsMap& valid_groupings,
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     PlacementSolveStats* stats,
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     bool unique_shapes) :
     physical_system_descriptor_(&physical_system_descriptor), stats_(stats), unique_shapes_(unique_shapes) {
@@ -2764,7 +2764,12 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
             mesh_graph_descriptor.is_intra_mesh_policy_relaxed(mesh_id) ? ConnectionValidationMode::RELAXED
                                                                         : ConnectionValidationMode::STRICT);
     }
-    apply_valid_groupings_map(valid_groupings, mesh_graph_descriptor, mesh_ids, global_mesh_groupings_);
+    apply_valid_groupings_map(
+        PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
+            mesh_graph_descriptor, physical_system_descriptor, pinnings),
+        mesh_graph_descriptor,
+        mesh_ids,
+        global_mesh_groupings_);
     fallbacks_in_ = true;
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
     finish_init(asic_id_to_mesh_rank);
