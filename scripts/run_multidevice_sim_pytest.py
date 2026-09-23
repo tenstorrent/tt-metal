@@ -22,8 +22,14 @@ Usage
 
 Everything after `--` is forwarded verbatim to `pytest` (target, --splits/--group,
 --junitxml=..., -q/-v). Each selected topology prints one line:
-  MULTIDEV_SIM_RESULT[<topology>]: PASS|FAIL|HANG|ERROR
+  MULTIDEV_SIM_RESULT[<topology>]: PASS|FAIL|HANG|ERROR|SKIP
 Aggregate exit code: 0 all-PASS / 1 any FAIL / 2 any HANG / 3 config error.
+
+Topology coverage follows the reviewer model "test every topology; skip on hardware
+what the box can't do; on sim do everything": list one matrix entry per topology, and
+a `runtime: hardware` entry whose mesh needs more chips than the box has is auto-SKIPPED
+(vs. the "system_mesh.cpp: requested_size <= system_size" fatal) so a partial box still
+grades what it can. Sim entries never auto-skip — the mock cluster always has the mesh.
 """
 import argparse
 import os
@@ -35,7 +41,30 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX = REPO / "scripts" / "multidevice_sim_topologies.yaml"
 ARCH_SUFFIX = {"wormhole": "wh", "blackhole": "bh"}
 
-PASS, FAIL, HANG, ERROR = "PASS", "FAIL", "HANG", "ERROR"
+PASS, FAIL, HANG, ERROR, SKIP = "PASS", "FAIL", "HANG", "ERROR", "SKIP"
+
+
+def _hw_available_devices():
+    """Chips this box exposes, or None when it can't be determined cheaply.
+
+    Queried in a throwaway subprocess (no device is opened) so the runner parent
+    holds no ttnn/device state. None -> undeterminable (e.g. stale _ttnn.so): we do
+    NOT skip, so the run fails loudly rather than silently degrading coverage.
+    """
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", "import ttnn; print(ttnn.GetNumAvailableDevices())"],
+            cwd=REPO, capture_output=True, text=True, timeout=120).stdout.strip().splitlines()
+        return int(out[-1]) if out else None
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
+
+
+def _mesh_size(t):
+    n = 1
+    for d in (t.get("mesh_shape") or []):
+        n *= int(d)
+    return n
 
 
 def load_topologies(matrix):
@@ -117,6 +146,14 @@ def run_one(t, pytest_args, timeout):
     name = t.get("name", "?")
     is_hw = t.get("runtime", "sim") == "hardware"
     if is_hw:
+        need, have = _mesh_size(t), _hw_available_devices()
+        if have is not None and need > have:
+            print(f"MULTIDEV_SIM_RESULT[{name}]: {SKIP}", flush=True)
+            sys.stderr.write(
+                f"[{name}] SKIP — needs {need} chips, box has {have} "
+                f"(mesh_shape={tuple(t.get('mesh_shape') or ())}); run this topology on sim "
+                "or a larger box.\n")
+            return SKIP
         env, missing = hw_env(t), []
     else:
         env, missing = sim_env(t)
