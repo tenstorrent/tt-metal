@@ -33,6 +33,8 @@ WORKAROUND_MIN_DECODE_CHUNK_SIZE = 64
 # (-inf), which the SFPU does not evaluate to 0, and the output becomes all zeros. A finite value
 # avoids that.
 MASK_VALUE = -(2.0**127)
+# Largest top-k the decode step selects on the device, the multi-core limit of `ttnn.topk`.
+MAX_DEVICE_TOP_K = 64
 
 LINEAR_DTYPE = ttnn.bfloat8_b
 WEIGHT_CACHE_DTYPE = "bf8"
@@ -176,10 +178,13 @@ class TransformerEncoder(Module):
 
         self.config = config
 
+        tp_factor = device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
+
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
         self._sp_axis = ctx.sp_axis
         self._sp_factor = device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
+        self._local_vocab_size = config.vocab_size // tp_factor
         self._ccl_manager = ctx.ccl_manager
         self._cached_position_embeddings = {}
         self._decode_trace: _DecodeTrace | None = None
@@ -352,7 +357,9 @@ class TransformerEncoder(Module):
         cache: Cache,
         rope_offset: ttnn.Tensor | None = None,
         attn_bias: ttnn.Tensor | None = None,
+        device_top_k: _DeviceTopK | None = None,
     ) -> ttnn.Tensor:
+        """Runs one decode step and returns the logits, or with `device_top_k`, its output."""
         rope_index = cache.position if rope_offset is None else cache.position + rope_offset
         rope_index = ttnn.reshape(ttnn.typecast(rope_index, ttnn.uint32), [-1, 1])
         cos, sin = pos_embeds
@@ -385,9 +392,11 @@ class TransformerEncoder(Module):
 
         x = self.final_linear.forward(x)
 
-        # Reading the logits shards one by one costs the host more than a decode step, and a
-        # tile-layout read transfers the padding to 32 rows, so they are gathered and untilized
-        # here.
+        if device_top_k is not None:
+            x = device_top_k.forward(x)
+
+        # Reading the shards one by one costs the host more than a decode step, and a tile-layout
+        # read transfers the padding to 32 rows, so they are gathered and untilized here.
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
@@ -412,10 +421,23 @@ class TransformerEncoder(Module):
 
         return x[:, index - block]
 
-    def _get_decode_trace(self, *, batch_size: int, size: int, masked: bool) -> _DecodeTrace:
+    def _make_device_top_k(self, top_k: int | None) -> _DeviceTopK | None:
+        return (
+            _DeviceTopK(
+                top_k,
+                local_vocab_size=self._local_vocab_size,
+                device=self._device,
+                tp_axis=self._tp_axis,
+            )
+            if top_k is not None
+            else None
+        )
+
+    def _get_decode_trace(self, *, batch_size: int, size: int, masked: bool, top_k: int | None) -> _DecodeTrace:
         """Returns the decode trace for these shapes, building it when the kept one differs."""
-        # A trace fixes whether the step takes an attention bias, so `masked` is part of the key.
-        key = (batch_size, size, masked)
+        # A trace fixes whether the step takes an attention bias and what it returns, so `masked`
+        # and `top_k` are part of the key.
+        key = (batch_size, size, masked, top_k)
         if self._decode_trace is not None and self._decode_trace.key == key:
             return self._decode_trace
 
@@ -424,15 +446,17 @@ class TransformerEncoder(Module):
         cache = Cache(device=self._device, size=size, batch_size=batch_size)
         # `ttnn.embedding` converts a tile-layout table on every call, so the step takes row-major ones.
         pos_embeds = self._get_pos_embeds(start=0, sequence_length=size, layout=ttnn.ROW_MAJOR_LAYOUT)
+        device_top_k = self._make_device_top_k(top_k)
 
         self._decode_trace = _DecodeTrace(
             key=key,
             tracer=Tracer(
-                functools.partial(self._decode_step, pos_embeds=pos_embeds, cache=cache),
+                functools.partial(self._decode_step, pos_embeds=pos_embeds, cache=cache, device_top_k=device_top_k),
                 device=self._device,
                 clone_prep_inputs=False,
             ),
             cache=cache,
+            device_top_k=device_top_k,
         )
 
         return self._decode_trace
@@ -681,11 +705,20 @@ class TransformerEncoder(Module):
 
         logits = [] if return_logits else None
 
+        top_k_on_device = top_k is not None and top_k <= MAX_DEVICE_TOP_K and not return_logits
+
         if traced:
-            trace = self._get_decode_trace(batch_size=batch_size, size=padded_seq_len, masked=mask is not None)
+            trace = self._get_decode_trace(
+                batch_size=batch_size,
+                size=padded_seq_len,
+                masked=mask is not None,
+                top_k=top_k if top_k_on_device else None,
+            )
             cache = trace.cache
             decode_step = trace.tracer
+            device_top_k = trace.device_top_k
         else:
+            device_top_k = self._make_device_top_k(top_k if top_k_on_device else None)
             cache = Cache(device=device, size=padded_seq_len, batch_size=batch_size)
             decode_step = functools.partial(
                 self._decode_step,
@@ -695,6 +728,7 @@ class TransformerEncoder(Module):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
                 cache=cache,
+                device_top_k=device_top_k,
             )
 
         tt_input_tokens = tensor.from_torch(prefill_tokens, dtype=ttnn.uint32, device=device)
@@ -751,9 +785,9 @@ class TransformerEncoder(Module):
                 )
                 # The prefill advanced the cache past its padding
                 cache.advance(pos - prefill_length)
-                step_output = self._last_token_logits(x, index=pos - 1)
+                output = self._last_token_logits(x, index=pos - 1)
             else:
-                step_output = decode_step(
+                output = decode_step(
                     tt_input_tokens,
                     rope_offset=tt_rope_offset,
                     attn_bias=decode_attn_bias[:, :, prev_pos : prev_pos + 1, :]
@@ -763,15 +797,19 @@ class TransformerEncoder(Module):
                 # Outside the step so it's not executed twice due to the tracer's preparation run.
                 cache.advance(1)
 
-            torch_logits = tensor.to_torch(step_output).float()
+            torch_output = tensor.to_torch(output).float()
 
             if logits is not None:
-                logits.append(torch_logits)
+                logits.append(torch_output)
 
             if guide is not None:
                 torch_new_tokens = guide[:, pos : pos + 1].float()
+            elif device_top_k is not None and prev_pos != 0:
+                values, indices = device_top_k.split(torch_output)
+                picked = _sample(torch.softmax(values / temperature, 1), top_k=device_top_k.top_k, top_p=top_p)
+                torch_new_tokens = torch.gather(indices, 1, picked.long()).to(torch.uint32)
             else:
-                torch_prob = torch.softmax(torch_logits / temperature, 1)
+                torch_prob = torch.softmax(torch_output / temperature, 1)
                 torch_new_tokens = _sample(torch_prob, top_k=top_k, top_p=top_p)
 
             tokens = torch.cat([tokens, torch_new_tokens.to(tokens.dtype)], dim=1)
@@ -1384,9 +1422,10 @@ class Cache:
 
 @dataclass
 class _DecodeTrace:
-    key: tuple[int, int, bool]  # [batch size, cache size, masked]
+    key: tuple[int, int, bool, int | None]  # [batch size, cache size, masked, device top-k]
     tracer: Tracer
     cache: Cache
+    device_top_k: _DeviceTopK | None
 
     def release(self) -> None:
         self.tracer.release_trace()
@@ -1450,6 +1489,65 @@ def _make_positions(
         pos = ttnn.mesh_partition(pos, dim=1, cluster_axis=sp_axis)
 
     return pos
+
+
+class _DeviceTopK:
+    """Selects the top-k logits of a decode step on the device, so that only those are read back.
+
+    `ttnn.topk` is fast only on a power-of-two width with 16-bit indices, so each device's local
+    vocabulary is split into chunks of at most `2**15` columns, each padded up to a power of two.
+    """
+
+    def __init__(self, top_k: int, *, local_vocab_size: int, device: ttnn.MeshDevice, tp_axis: int | None) -> None:
+        if not 0 < top_k <= MAX_DEVICE_TOP_K:
+            msg = f"top_k must be in [1, {MAX_DEVICE_TOP_K}], got {top_k}"
+            raise ValueError(msg)
+
+        chunk_size = 2**15
+        tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
+
+        self.top_k = top_k
+        self._local_vocab_size = local_vocab_size
+        self._chunks = [
+            (start, min(chunk_size, 1 << (min(chunk_size, local_vocab_size - start) - 1).bit_length()))
+            for start in range(0, local_vocab_size, chunk_size)
+        ]
+
+        # Added to the output of `forward`, it turns each index within a chunk into a vocabulary
+        # index: zero at the logits, and where the chunk starts in the vocabulary at the indices.
+        starts = torch.tensor([start for start, _ in self._chunks])
+        offsets = torch.zeros([tp_factor, len(starts), 2, top_k])
+        offsets[:, :, 1] = (torch.arange(tp_factor).reshape(-1, 1) * local_vocab_size + starts).unsqueeze(-1)
+        self._index_offsets = tensor.from_torch(
+            offsets.reshape(1, -1), device=device, dtype=ttnn.float32, mesh_axes=[None, tp_axis]
+        )
+
+    def forward(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Takes a device's local logits `[batch, local vocab]` and returns its candidates.
+
+        The result is a float32 tensor `[batch, chunks * 2 * top_k]`. For every chunk, it holds the
+        `top_k` largest logits, followed by their vocabulary indices. The indices are float32 so
+        that one gather across the devices carries both.
+        """
+        results = []
+
+        for start, width in self._chunks:
+            chunk = logits[:, start : min(start + width, self._local_vocab_size)]
+            if chunk.shape[-1] != width:
+                # `ttnn.topk` is several times faster on a power-of-two width.
+                chunk = ttnn.pad(chunk, [(0, 0), (0, width - chunk.shape[-1])], value=MASK_VALUE)
+            values, indices = ttnn.topk(chunk, k=self.top_k, dim=-1)
+            results += [ttnn.typecast(values, ttnn.float32), ttnn.typecast(indices, ttnn.float32)]
+
+        return ttnn.concat(results, dim=-1) + self._index_offsets
+
+    def split(self, output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Splits the candidates of all devices into logits and vocabulary indices, `[batch, n]` each."""
+        batch_size = output.shape[0]
+        output = output.reshape(batch_size, -1, 2, self.top_k)
+        values = output[:, :, 0].reshape(batch_size, -1)
+        indices = output[:, :, 1].long().reshape(batch_size, -1)
+        return values, indices
 
 
 def _sample(prob: torch.Tensor, *, top_k: int | None = None, top_p: float = 1, num_samples: int = 1) -> torch.Tensor:
