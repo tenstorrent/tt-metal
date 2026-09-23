@@ -55,6 +55,7 @@ _GBENCH_BENCH_ARGS = {
     "BM_D2HLegBandwidth": ["page_size", "cores", "ring_pages", "iters", "warmup_pct", "verify"],
     "BM_H2DLegBandwidth": ["page_size", "cores", "ring_pages", "iters", "warmup_pct", "verify"],
     "BM_H2HLegBandwidth": ["page_size", "window", "iters", "warmup_pct", "pp_iters", "verify"],
+    "BM_D2H2H2DVolume": ["page_size", "cores", "volume_mib", "pct_steady", "verify", "timing"],
     "BM_H2DSocketMultiChipThroughput": ["chip_index", "fifo_size", "page_size", "total_data"],
 }
 
