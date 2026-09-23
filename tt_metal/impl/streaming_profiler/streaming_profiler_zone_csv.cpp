@@ -77,6 +77,35 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
     if (freq_mhz_ == 0.0 && !batch.zones().empty()) {
         freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;
     }
+    if (temp_global_ == nullptr) {  // TEMP: every record on the host timeline, tenths of a ns
+        temp_global_ = std::fopen((path_ + ".global.csv").c_str(), "w");
+        std::fprintf(temp_global_, "kind,name,chip,px,py,lx,ly,risc,prog,t0,t1,payload,tick0,tick1\n");
+    }
+    for (const api::Zone& z : batch.zones()) {
+        const api::Core c = z.core();
+        std::fprintf(
+            temp_global_, "Z,%.*s,%u,%u,%u,%u,%u,%u,%u,%lld,%lld,,%llu,%llu\n", static_cast<int>(z.site().name.size()),
+            z.site().name.data(), static_cast<unsigned>(c.chip_id), static_cast<unsigned>(c.physical.x),
+            static_cast<unsigned>(c.physical.y), static_cast<unsigned>(c.logical.x), static_cast<unsigned>(c.logical.y),
+            static_cast<unsigned>(c.risc), static_cast<unsigned>(z.runtime_id()),
+            static_cast<long long>(z.start_time().time_since_epoch().count()),
+            static_cast<long long>(z.end_time().time_since_epoch().count()),
+            static_cast<unsigned long long>(z.start_timestamp()), static_cast<unsigned long long>(z.end_timestamp()));
+    }
+    for (const api::TimestampedData& d : batch.timestamped_data()) {
+        const api::Core c = d.core();
+        const std::span<const uint64_t> p = d.payload();
+        std::fprintf(
+            temp_global_, "D,%.*s,%u,%u,%u,%u,%u,%u,%u,%lld,,", static_cast<int>(d.site().name.size()),
+            d.site().name.data(), static_cast<unsigned>(c.chip_id), static_cast<unsigned>(c.physical.x),
+            static_cast<unsigned>(c.physical.y), static_cast<unsigned>(c.logical.x), static_cast<unsigned>(c.logical.y),
+            static_cast<unsigned>(c.risc), static_cast<unsigned>(d.runtime_id()),
+            static_cast<long long>(d.time().time_since_epoch().count()));
+        for (size_t i = 0; i < p.size(); i++) {
+            std::fprintf(temp_global_, i == 0 ? "%llu" : ";%llu", static_cast<unsigned long long>(p[i]));
+        }
+        std::fprintf(temp_global_, ",%llu,\n", static_cast<unsigned long long>(d.timestamp()));
+    }
     for (const api::Zone& z : batch.zones()) {
         // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
         const uint32_t id = name_hash(z.site().name);
@@ -144,6 +173,9 @@ void ZoneCsvConsumer::write_csv() {
             r.logical_y);
     }
     std::fflush(f);
+    if (temp_global_ != nullptr) {  // TEMP
+        std::fflush(temp_global_);
+    }
     std::fprintf(
         stderr,
         "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped records: %llu, events with no payload: %llu)\n",

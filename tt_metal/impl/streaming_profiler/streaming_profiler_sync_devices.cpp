@@ -569,6 +569,21 @@ void SyncDevices::measure_tiles(uint32_t di, CaptureContext::Device& cap) {
 void SyncDevices::plan_links() {
     auto& mc = MetalContext::instance(context_id_);
     fabric_link_sync_ = mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
+    if (fabric_link_sync_) {  // TEMP: the chip -> fabric node map for the global-timeline CCL check
+        const auto& cp = mc.get_control_plane();
+        for (const DeviceState& ds : devices_) {
+            const auto fn = cp.get_fabric_node_id_from_physical_chip_id(ds.d.chip_id);
+            const auto shape = cp.get_physical_mesh_shape(fn.mesh_id);
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] TEMP FABRICMAP chip {} mesh {} fabric_chip {} shape {}x{}",
+                ds.d.chip_id,
+                *fn.mesh_id,
+                fn.chip_id,
+                shape[0],
+                shape.dims() > 1 ? shape[1] : 1);
+        }
+    }
     if (!link_sync::enabled()) {
         log_info(tt::LogMetal, "[streaming profiler] link sync left out (TT_METAL_STREAMING_PROFILER_LINK_SYNC=0)");
         return;

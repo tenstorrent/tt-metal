@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "unicast_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"  // TEMP
 
 using address_t = uint32_t;
 
@@ -147,11 +148,23 @@ void kernel_main() {
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
         fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
+        DeviceTimestampedData(
+            "AG-BAR",
+            (static_cast<uint64_t>(neighbor_chip_id) << 48) | (static_cast<uint64_t>(barrier_sem_noc_x) << 40) |
+                (static_cast<uint64_t>(barrier_sem_noc_y) << 32));  // TEMP
     }
 
     const uint64_t downstream_data_valid_addr =
         safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
-    auto signal = [&](uint32_t chunks) { fabric.atomic_inc(downstream_data_valid_addr, chunks); };
+    uint32_t temp_cum = 0;  // TEMP: chunks signalled so far
+    auto signal = [&](uint32_t chunks) {
+        fabric.atomic_inc(downstream_data_valid_addr, chunks);
+        temp_cum += chunks;
+        DeviceTimestampedData(
+            "AG-SIG",
+            (static_cast<uint64_t>(neighbor_chip_id) << 48) | (static_cast<uint64_t>(data_valid_sem_noc_x) << 40) |
+                (static_cast<uint64_t>(data_valid_sem_noc_y) << 32) | temp_cum);
+    };
 
     ///////////////////////////////////////////////////
     // MAIN

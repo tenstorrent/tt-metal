@@ -57,6 +57,7 @@ private:
     static uint32_t name_hash(std::string_view name);
 
     std::string path_;
+    std::FILE* temp_global_ = nullptr;  // TEMP
     FILE* f_ = nullptr;
     bool header_written_ = false;
     std::vector<Row> rows_;
