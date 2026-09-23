@@ -46,6 +46,7 @@
 #include <type_traits>
 #include <utility>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion,bugprone-undefined-memory-manipulation)
 namespace ttsl::detail::llvm {
 
 template <typename T>
@@ -167,9 +168,7 @@ protected:
     }
 
     /// Return true if V is an internal reference to this vector.
-    bool isReferenceToStorage(const void* V) const {
-        return isReferenceToRange(V, static_cast<const void*>(this->begin()), static_cast<const void*>(this->end()));
-    }
+    bool isReferenceToStorage(const void* V) const { return isReferenceToRange(V, this->begin(), this->end()); }
 
     /// Return true if First and Last form a valid (possibly empty) range in this
     /// vector's storage.
@@ -244,7 +243,7 @@ protected:
         bool ReferencesStorage = false;
         int64_t Index = -1;
         if (!U::TakesParamByValue) {
-            if (This->isReferenceToStorage(static_cast<const void*>(&Elt))) [[unlikely]] {
+            if (This->isReferenceToStorage(&Elt)) [[unlikely]] {
                 ReferencesStorage = true;
                 Index = &Elt - This->begin();
             }
@@ -473,7 +472,7 @@ void SmallVectorTemplateBase<T, TriviallyCopyable>::takeAllocationForGrow(T* New
     // If this wasn't grown from the inline copy, deallocate the old space.
     if (!this->isSmall()) {
         // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-        free(static_cast<void*>(this->begin()));
+        free(this->begin());
     }
 
     this->set_allocation_range(NewElts, NewCapacity);
@@ -525,10 +524,9 @@ protected:
         // Use memcpy for PODs iterated by pointers (which includes SmallVector
         // iterators): std::uninitialized_copy optimizes to memmove, but we can
         // use memcpy here. Note that I and E are iterators and thus might be
-        // invalid for memcpy if they are equal. The specialization uses LLVM's
-        // trivial-construction/destruction trait, including std::pair<POD, POD>.
+        // invalid for memcpy if they are equal.
         if (I != E) {
-            memcpy(static_cast<void*>(Dest), static_cast<const void*>(I), (E - I) * sizeof(T));
+            memcpy(reinterpret_cast<void*>(Dest), I, (E - I) * sizeof(T));
         }
     }
 
@@ -572,7 +570,7 @@ protected:
 public:
     void push_back(ValueParamT Elt) {
         const T* EltPtr = reserveForParamAndGetAddress(Elt);
-        memcpy(static_cast<void*>(this->end()), static_cast<const void*>(EltPtr), sizeof(T));
+        memcpy(reinterpret_cast<void*>(this->end()), EltPtr, sizeof(T));
         this->set_size(this->size() + 1);
     }
 
@@ -602,7 +600,7 @@ protected:
         this->destroy_range(this->begin(), this->end());
         if (!this->isSmall()) {
             // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-            free(static_cast<void*>(this->begin()));
+            free(this->begin());
         }
         this->BeginX = RHS.BeginX;
         this->Size = RHS.Size;
@@ -615,7 +613,7 @@ protected:
         // If this wasn't grown from the inline copy, deallocate the old space.
         if (!this->isSmall()) {
             // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-            free(static_cast<void*>(this->begin()));
+            free(this->begin());
         }
     }
 
@@ -1338,6 +1336,7 @@ extern template class llvm::SmallVectorBase<uint64_t>;
 #endif
 
 }  // namespace ttsl::detail::llvm
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion,bugprone-undefined-memory-manipulation)
 
 namespace std {
 
