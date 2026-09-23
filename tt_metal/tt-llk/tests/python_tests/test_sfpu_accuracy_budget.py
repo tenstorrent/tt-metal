@@ -45,7 +45,12 @@ from helpers.sfpu_accuracy_budget import (
     usable_budget_ceiling,
     validate_registry,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
+from helpers.sfpu_domains import (
+    _UNARY_OPS_NOT_SWEPT,
+    exclude_undefined,
+    for_op_pipeline,
+    sfpu_unary_ops,
+)
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
     _ULP_PROXY_DTYPES,
@@ -547,12 +552,24 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        # Exact except on -0.0, where WH's bit-pattern compare diverges by design. A
-        # 0-ULP budget would fail a kernel that is behaving as specified.
-        MathOperation.Sign,
-        MathOperation.Heaviside,
+        # The transcendentals the exhaustive sweep cannot gate anywhere. Their *least*
+        # inaccurate cell is already past that output's usable ceiling, so there is no
+        # variant a step budget would tighten: Erfc 376, Xielu 512, Polygamma 614,
+        # Softplus 6,416, Lgamma 32,295 and Digamma 33,840 steps at best, against
+        # ceilings of 6.4 (bf16), 51.2 (fp16) and 25.6 (Bfp8_b). Lgamma's worst is
+        # 2.3e9, which is issue #55356 rather than a budgeting question.
+        MathOperation.Erfc,
+        MathOperation.Xielu,
+        MathOperation.Polygamma,
+        MathOperation.Softplus,
+        MathOperation.Lgamma,
+        MathOperation.Digamma,
     }
 )
+# Sign and Heaviside used to sit here, on the -0.0 divergence: WH's bit-pattern compare
+# reads -0.0 as negative, so a 0-ULP budget would have failed a kernel behaving as
+# specified. Sweeping every input format reaches cells where that lane is not in play,
+# and both now carry a budget there.
 # GeluTanh, Tanhshrink and SfpuElwmul used to sit here, on a per-op-per-format maximum
 # that was past the ceiling everywhere. The full sweep measures each variant separately,
 # and some of their cells are well inside it -- GeluTanh's Float32 worst lane is 8.7e8
@@ -568,7 +585,7 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
-    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 125, sorted(
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 132, sorted(
         op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     )
     saw_ulp = set()
@@ -588,7 +605,9 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     )
     # And specifically the input-keyed ones: the loop that left `input_format` unset
     # sent exactly these to TOLERANCE_CONTRACT, so they are the regression's witnesses.
-    assert _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT <= saw_ulp
+    # Less the documented tolerance-only ops, which are input-keyed as well now that
+    # every input format is swept -- they are excused above, by name and with numbers.
+    assert _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT - ONLY_EVER_TOLERANCE <= saw_ulp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -893,9 +912,13 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         MathOperation.Floor,
         MathOperation.Ceil,
         MathOperation.Trunc,
-        # Fill is block-friendly by a different mechanism from the three above, and a
-        # stronger one: its output is a single constant, so every block is uniform
-        # whatever the input held and the shared exponent is exact by construction.
+        # Fill was here on the "exact by construction" argument -- a single constant
+        # output makes every block uniform whatever the input held. True of the op, but
+        # the enrolment did not rest on it: the only ULP rows it had on a Bfp8_b output
+        # were sampled `{in: Bfp4_b, out: Bfp8_b}` and `{in: Float32, out: Bfp8_b}`
+        # ones, the very class the next paragraph excludes. Once those inputs were swept
+        # exhaustively the rule below demoted them like any other block float, and
+        # nothing was left carrying the claim.
         #
         # Threshold is deliberately absent, and so is every op enrolled only through a
         # sampled `{in: Bfp4_b, out: Bfp8_b}` or `{in: Float32, out: Bfp8_b}` row. Those
@@ -904,7 +927,6 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         # THRESHOLD_T=5.0, where the pass-through branch never fires, while the
         # exhaustive sweep reads 16545. They are recorded as tolerance with their
         # measurements.
-        MathOperation.Fill,
     }, sorted(op.name for op in enrolled_on_bfp8)
 
 
@@ -1365,3 +1387,27 @@ def test_no_step_budget_exceeds_the_measurement_it_records():
                 f"{where}: budget {budget} is more than "
                 f"{MEASUREMENT_HEADROOM}x the measurement"
             )
+
+
+def test_every_unary_op_is_enrolled_or_excused():
+    """No unary SFPU op may end up with no accuracy contract by nobody noticing.
+
+    Enrolment is incremental, but "never measured" and "measured and deliberately left
+    on tolerance" read identically in the table: absent. This asserts the difference is
+    written down -- either the op has a block, or ``_UNARY_OPS_NOT_SWEPT`` says why it
+    has none.
+
+    Absence was not a recoverable state on its own: ``write_table`` passes an op's key
+    line through verbatim and cannot generate one, so an op with no block was one the
+    measurement pass could not enrol either. Erfc, Lgamma and Xielu sat there.
+    """
+    unaccounted = sorted(
+        set(sfpu_unary_ops()) - set(enrolled_ops()) - set(_UNARY_OPS_NOT_SWEPT),
+        key=lambda op: op.name,
+    )
+    assert not unaccounted, (
+        "no accuracy contract, and no reason given, for: "
+        + ", ".join(op.name for op in unaccounted)
+        + ". Measure it with --ulp-emit (add the op's key line to the table first), or "
+        "add it to _UNARY_OPS_NOT_SWEPT with why it cannot be swept."
+    )

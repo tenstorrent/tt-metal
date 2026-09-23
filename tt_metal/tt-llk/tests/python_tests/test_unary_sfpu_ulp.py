@@ -61,6 +61,8 @@ from helpers.test_variant_parameters import (
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
     SWEEP_FORMATS,
+    SWEEP_INPUT_FORMATS,
+    is_exhaustive,
     measurable_mask,
     nonfinite_failures,
     stimuli_format_for,
@@ -96,7 +98,7 @@ def run_sweep(
         input_dimensions_A=SWEEP_DIMENSIONS,
         stimuli_format_B=stimuli_format_for(formats.input_format),
         input_dimensions_B=SWEEP_DIMENSIONS,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -215,13 +217,19 @@ def _measurable_unary_ops():
     )
 
 
-#: Resolved at collection, so it has to read `EMIT` from the command line rather than
-#: from `ulp_sweep`, which `pytest_configure` sets at the same point.
-SWEEP_OPS = (
-    _measurable_unary_ops()
-    if any(arg == "--ulp-emit" for arg in sys.argv)
-    else _ulp_gateable_unary_ops()
-)
+def _emitting():
+    """Whether this session measures rather than gates.
+
+    Both sources are needed. `ulp_sweep.EMIT` is authoritative but `pytest_configure`
+    sets it at the same point this module is imported, and an xdist worker's argv does
+    not carry the flag at all -- reading argv alone collects the narrow gating set in
+    the workers, so `--compile-producer -n N` builds none of the wider set's ELFs.
+    """
+    return ulp_sweep.EMIT or any(arg == "--ulp-emit" for arg in sys.argv)
+
+
+#: Resolved at collection, so `_emitting()` has to hold for both.
+SWEEP_OPS = _measurable_unary_ops() if _emitting() else _ulp_gateable_unary_ops()
 
 
 @pytest.mark.parametrize(
@@ -231,7 +239,7 @@ SWEEP_OPS = (
     "approx_mode", list(ApproximationMode), ids=lambda a: f"approx:{a.name}"
 )
 @pytest.mark.parametrize("out_fmt", SWEEP_FORMATS, ids=lambda f: f"out:{f.name}")
-@pytest.mark.parametrize("in_fmt", SWEEP_FORMATS, ids=lambda f: f"in:{f.name}")
+@pytest.mark.parametrize("in_fmt", SWEEP_INPUT_FORMATS, ids=lambda f: f"in:{f.name}")
 @pytest.mark.parametrize("mathop", SWEEP_OPS, ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     """Every non-special value of the input format, against the op's declared budget.
@@ -272,19 +280,31 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         pytest.skip(f"golden cannot be computed over the full range: {exc}")
 
     lanes = int(mask.sum())
-    # Before the emit return, not after: an empty mask makes `ulp_stats` report `max: 0`,
-    # so a variant that compared nothing would pass the gate and record a bit-exact
-    # `max_ulp: 0`.
-    assert lanes > 0, (
+    cell = (
         f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
-        f"dest_acc={dest_acc.name}: no lane a step count can describe"
+        f"dest_acc={dest_acc.name}"
     )
-    assert not bool(overflowed.any()), (
-        f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
-        f"dest_acc={dest_acc.name}: {int(overflowed.sum())} lane(s) disagree about "
-        "being non-finite. No budget buys an overflow, and a step count cannot "
-        "describe one -- so it is neither gated nor measured below."
-    )
+    # Checked before the emit return, not after: an empty mask makes `ulp_stats` report
+    # `max: 0`, so a variant that compared nothing would pass the gate and be recorded
+    # as bit-exact.
+    #
+    # A gating run *fails* on either, because a declared budget that cannot be measured
+    # is a gate that is not running. A measurement pass *skips*: it is deciding what is
+    # enrollable, and "this cell cannot be measured" is one of the answers. Failing
+    # instead would also stop the emitter writing anything at all, since it refuses to
+    # write from a session that had failures.
+    unmeasurable = None
+    if lanes == 0:
+        unmeasurable = "no lane a step count can describe"
+    elif bool(overflowed.any()):
+        unmeasurable = (
+            f"{int(overflowed.sum())} lane(s) disagree about being non-finite. No "
+            "budget buys an overflow, and a step count cannot describe one."
+        )
+    if unmeasurable:
+        if ulp_sweep.EMIT:
+            pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
+        raise AssertionError(f"{cell}: {unmeasurable}")
 
     if ulp_sweep.EMIT:
         # --ulp-emit: this run *is* the measurement, so there is nothing to gate against.
@@ -306,10 +326,8 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         mask=mask,
         **contract.passed_test_kwargs(),
     ), (
-        f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
-        f"dest_acc={dest_acc.name}: {stats['max']} ULP over {lanes} swept lanes, "
-        f"budget {contract.max_ulp}. Worst lane at flat index {stats['worst_index']}. "
-        "The budget was measured on a sample; this sweep leaves nothing out."
+        f"{cell}: {stats['max']} ULP over {lanes} swept lanes, budget "
+        f"{contract.max_ulp}. Worst lane at flat index {stats['worst_index']}."
     )
 
 
@@ -354,9 +372,15 @@ def _emit_measured_table(request):
             "measured a subset. Nothing written -- emit from a clean run."
         )
 
+    # Names the input axis, split by how it was walked: Float32 has 2^32 values and one
+    # run holds 2^16, so calling the whole thing exhaustive would overstate every row
+    # keyed on a Float32 input.
+    walked = "/".join(f.name for f in SWEEP_INPUT_FORMATS if is_exhaustive(f))
+    strided = "/".join(f.name for f in SWEEP_INPUT_FORMATS if not is_exhaustive(f))
     suffix = (
-        f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
-        f"{arch.value}, {date.today().isoformat()}"
+        f"exhaustive {walked}"
+        + (f" + strided {strided}" if strided else "")
+        + f" sweep, {arch.value}, {date.today().isoformat()}"
     )
     n = ulp_sweep.write_table(_TABLE_PATH, suffix)
     print(f"\n--ulp-emit: rewrote {n} op block(s) in {_TABLE_PATH.name}")
