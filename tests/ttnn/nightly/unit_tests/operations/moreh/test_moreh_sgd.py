@@ -242,8 +242,7 @@ def test_moreh_sgd_partial_tile(shape, device):
 
     result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
     expected = torch.zeros(shape, dtype=torch.bfloat16)
-    passing, out = comp_allclose_and_pcc(expected, result, pcc=0.99, rtol=0.05, atol=0.05)
-    assert passing, out
+    assert torch.equal(result, expected), result
 
 
 @pytest.mark.parametrize(

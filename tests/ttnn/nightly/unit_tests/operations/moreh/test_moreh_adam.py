@@ -27,7 +27,9 @@ def create_tt_tensor(tensor: torch.Tensor, device, dtype=ttnn.bfloat16, layout=t
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
-def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=ttnn.bfloat16, step=1):
+def run_moreh_adam(
+    shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=ttnn.bfloat16, step=1, param_atol=0.01
+):
     x_data = torch.rand(shape).to(torch.bfloat16)
     y_data = torch.rand(shape).to(torch.bfloat16)
 
@@ -69,7 +71,7 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
     # Device does one update at this `step`. Match that on CPU; do not call step() `step` times.
     if step > 1:
         state = optimizer.state[model.weight]
-        state["step"] = torch.tensor(step - 1)
+        state["step"] = torch.tensor(float(step - 1))
         state["exp_avg"] = torch.zeros_like(model.weight)
         state["exp_avg_sq"] = torch.zeros_like(model.weight)
         if amsgrad:
@@ -123,7 +125,7 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
         max_exp_avg_sq_result = None
 
     rtol = atol = 0.01
-    passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.999, rtol=rtol, atol=0.05)
+    passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.999, rtol=rtol, atol=param_atol)
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
     assert passing, f"param_out mismatch: {out}"
@@ -167,12 +169,16 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     )
 
 
-@pytest.mark.parametrize("step", [1, 4])
+@pytest.mark.parametrize("step", [2, 10])
 def test_moreh_adam_bias_correction_uses_step(step, device):
     torch.manual_seed(0)
+    # lr=1 so a kernel that ignores step (and computes step 1) misses by ~0.26 at step 2
+    # and ~0.52 at step 10. step 1 is already covered by test_moreh_adam.
+    # step 100 is not here: with fp32 dest acc off, beta2=0.999 is stored as bf16 0.99609375,
+    # and the update scale drifts by ~0.05.
     run_moreh_adam(
         [32, 32],
-        1e-1,
+        1.0,
         (0.9, 0.999),
         1e-8,
         0.0,
@@ -180,6 +186,9 @@ def test_moreh_adam_bias_correction_uses_step(step, device):
         False,
         device,
         step=step,
+        # lr=1 amplifies bf16 rounding. Measured param delta is 0.018 at step 2.
+        # A stuck step-1 kernel still misses by ~0.26.
+        param_atol=0.05,
     )
 
 
@@ -243,7 +252,8 @@ def test_moreh_adam_caching(params, device):
         # generate a random lr between (0, 1)
         lr = torch.rand(1).item()
 
-        run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device)
+        # Large shape, random lr: one bf16 ulp at |w|~4 is 0.03125, past the default 0.01.
+        run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, param_atol=0.05)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())

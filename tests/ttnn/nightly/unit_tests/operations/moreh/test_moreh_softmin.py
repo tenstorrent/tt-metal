@@ -226,8 +226,8 @@ def test_softmin_large_last_tile_subtracts_max(shape, dim, strategy, device):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_output = ttnn.to_torch(ttnn.operations.moreh.softmin(ttnn_input, dim, strategy=strategy)).to(torch.bfloat16)
 
-    rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=rtol, atol=atol)
+    # 1/32 is exact in bf16. atol=0.05 would accept an all-zero output on the constant case.
+    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0.02, atol=1e-3)
     logger.debug(out)
     assert passing, out
 

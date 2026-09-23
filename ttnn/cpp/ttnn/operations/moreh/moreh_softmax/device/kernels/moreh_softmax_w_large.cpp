@@ -64,7 +64,7 @@ void kernel_main() {
 
         // step 1
         for (std::uint32_t w = 0; w < Wt; ++w) {
-            // compute exp(x)
+            // compute exp(x - max(x))
             sub_tiles_bcast_cols_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
             if (w == Wt - 1) {
 #ifdef SOFTMAX
