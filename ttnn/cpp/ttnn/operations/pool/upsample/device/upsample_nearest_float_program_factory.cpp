@@ -4,6 +4,7 @@
 
 #include "upsample_device_operation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -86,7 +87,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
 
     // Calculate stick sizes (aligned based on buffer type for efficient reads)
     const std::uint32_t num_cb_pages = BUFFERING_FACTOR;
-    const std::uint32_t output_cb_page_size = aligned_output_page_size;
+    const std::uint32_t output_cb_page_size = std::max(aligned_input_page_size, aligned_output_page_size);
 
     metal2::DataflowBufferSpec out_dfb{
         .unique_id = OUT,
