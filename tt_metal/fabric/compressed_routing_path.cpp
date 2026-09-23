@@ -5,15 +5,19 @@
 #include <cstring>
 #include "compressed_routing_path.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 
 // 1D uncompressed routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t num_chips, uint32_t extension_words) {
+    const ControlPlane& control_plane, const FabricNodeId& /*src_fabric_node_id*/, uint16_t num_chips) {
     // Zero-initialize entire 256-byte buffer
     std::memset(&paths, 0, sizeof(paths));
+
+    // Query FabricContext to determine routing mode (16-hop vs 32-hop)
+    uint32_t extension_words = control_plane.get_fabric_context().get_1d_pkt_hdr_extension_words();
 
     // Calculate words per entry and populate table
     // 16-hop mode: 1 word (4 bytes), 32-hop mode: 2 words (8 bytes)
@@ -34,7 +38,7 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    uint16_t /*num_chips*/, uint32_t /*extension_words*/) {
+    const ControlPlane& /*control_plane*/, const FabricNodeId& /*src_fabric_node_id*/, uint16_t /*num_chips*/) {
     // No-op
 }
 

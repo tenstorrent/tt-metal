@@ -515,10 +515,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
         paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    // Routing calculation methods. Each specialization defines only the overload for its dim.
-    // 1D: extension_words is the packet header's 1D extension word count (see FabricContext).
-    void calculate_chip_to_all_routing_fields(uint16_t num_chips, uint32_t extension_words);
-    // 2D
+    // Routing calculation methods
     void calculate_chip_to_all_routing_fields(
         const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #else

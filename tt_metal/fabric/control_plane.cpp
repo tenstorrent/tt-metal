@@ -1924,8 +1924,7 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routi
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
     intra_mesh_routing_path_t<1, false> routing_path_1d;
-    routing_path_1d.calculate_chip_to_all_routing_fields(
-        num_chips, this->get_fabric_context().get_1d_pkt_hdr_extension_words());
+    routing_path_1d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, 0), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
