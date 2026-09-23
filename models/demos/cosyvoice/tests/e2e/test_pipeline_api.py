@@ -194,12 +194,9 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch)
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
 
-    # `synthesize_batch` needs the CFM estimator's trace cache off for the whole process:
-    # with it on, the estimator trace cached by an earlier utterance is live when
-    # `generate_batch` captures its decode trace, and the device hangs. Releasing the
-    # cached trace, or disabling the cache only around the call, hangs the same way.
-    # `TtConditionalCFM` reads the variable once, in its constructor, so it is set
-    # before `_model` builds the pipeline.
+    # Why this is set: `docs/VALIDATION.md`, *Buffers allocated while a trace is live*.
+    # `TtConditionalCFM` reads it once, in its constructor, so it is set before `_model`
+    # builds the pipeline.
     monkeypatch.setenv("COSYVOICE_CFM_TRACE_CACHE", "0")
 
     paths = _cases(2)
@@ -241,13 +238,12 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch)
 def test_device_consecutive_utterances_with_one_flow_length(device):
     """A second utterance with the same flow length as the one before it completes.
 
-    The CFM solver keeps its trace across calls, and replays it when the next call has
-    the same mel length. Between two utterances the vocoder creates per-length state
-    and the LLM captures a trace of its own, both after the flow's capture, so a replay
-    by the second utterance can overwrite what the vocoder then reads. In a five-language
-    sweep that is Korean after Cantonese -- both 328 tokens -- and the device stalled at
-    the first read of Korean's waveform in every run. The pipeline now releases the
-    flow's trace once each utterance's mel is out (`TtMaskedDiffWithXvec.release_trace`).
+    The CFM solver keeps its trace across calls and replays it when the next call has
+    the same mel length. Between two utterances the vocoder and the LLM allocate device
+    buffers while that trace is live, and a replay by the second utterance stalls the
+    device at the first read of its waveform. The pipeline releases the flow's trace once
+    each utterance's mel is out (`TtMaskedDiffWithXvec.release_trace`,
+    `docs/VALIDATION.md`).
 
     This drives that sequence through the public stages: one utterance end to end, then
     a second prompt's tokens cut to the first's count so the flow length repeats, with
@@ -302,10 +298,10 @@ def test_device_stream_leaves_no_flow_trace(device):
     """A stream releases the flow's trace when it ends, and a batch call after it completes.
 
     `synthesize_streaming` runs the flow once per chunk through its own path, not
-    `tokens_to_mel`, so the last chunk's trace used to outlive the stream. A later call
-    whose flow length matched that chunk's would have replayed it after the stream's
-    vocoder and the next LLM capture had allocated beside it -- the shape of the Korean
-    stall (`test_device_consecutive_utterances_with_one_flow_length`).
+    `tokens_to_mel`, so it releases the last chunk's trace itself. Kept, that trace would
+    be replayed by a later call of the same flow length after the stream's vocoder and the
+    next LLM capture had allocated beside it, as in
+    `test_device_consecutive_utterances_with_one_flow_length`.
     """
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext

@@ -85,9 +85,9 @@ def test_device_conv_stack_matches_torch(device, t):
 
     The flow length includes the prompt, and cross-lingual's prompt is 1289 frames, so its
     utterances run this stack at 1700-2300 frames; zero-shot's run near 900 and the golden
-    at 282. With prepared conv weights the stack was at PCC 0.02 against torch at 1717 and
-    1895 on Blackhole, and exact at 891: the mel condition lost its content and the
-    speech its words. The stack takes the op's own weight preparation now.
+    at 282. Prepared conv weights make the stack wrong on Blackhole at 1717 and 1895 and
+    leave it exact at 891 (`docs/VALIDATION.md`), so it takes the op's own weight
+    preparation.
     """
     import ttnn
     from models.demos.cosyvoice.tt.weights import WeightBag

@@ -300,9 +300,9 @@ class CosyVoiceTTNN:
         utterance, and batching them would pad every utterance to the longest mel, a
         cost the flow decoder pays in full because it is linear in mel length.
 
-        Set `COSYVOICE_CFM_TRACE_CACHE=0` before building the pipeline: with the cache
-        on, this hangs the device once an earlier utterance has captured the flow
-        decoder's estimator trace (`docs/VALIDATION.md`).
+        `test_device_batched_synthesis_agrees_with_one_at_a_time` runs it with
+        `COSYVOICE_CFM_TRACE_CACHE=0`, for the reason in `docs/VALIDATION.md`; whether
+        the variable is still needed is untested.
         """
         rngs = rngs or [RandomSources() for _ in ctxs]
         token_lists = self.text_to_tokens_batch(ctxs, **kw)
