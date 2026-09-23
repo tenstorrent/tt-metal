@@ -24,7 +24,7 @@ TEST(MoEComputeHostHelpers, FusedSourceBufferLayoutMatchesPhysicalShard) {
     constexpr uint32_t source_shard_height = 64;
     constexpr uint32_t source_shard_width = token_segment_width;
     constexpr uint32_t num_buffers = 2;
-    constexpr uint32_t token_segment_size_bytes = token_segment_width * kBf16Bytes;  // 1280
+    constexpr uint32_t token_segment_size_bytes = token_segment_width * kBf16Bytes;                       // 1280
     constexpr uint32_t source_buffer_size_bytes = source_shard_height * source_shard_width * kBf16Bytes;  // 81920
 
     const auto layout = compute_fused_source_buffer_layout(
@@ -60,7 +60,7 @@ TEST(MoEComputeHostHelpers, FusedSourceBufferLayoutFullWidthShardCountsSegmentRo
     constexpr uint32_t source_shard_height = 64;
     constexpr uint32_t source_shard_width = hidden_size;
     constexpr uint32_t num_buffers = 2;
-    constexpr uint32_t token_segment_size_bytes = token_segment_width * kBf16Bytes;  // 3584
+    constexpr uint32_t token_segment_size_bytes = token_segment_width * kBf16Bytes;                       // 3584
     constexpr uint32_t source_buffer_size_bytes = source_shard_height * source_shard_width * kBf16Bytes;  // 917504
 
     const auto layout = compute_fused_source_buffer_layout(

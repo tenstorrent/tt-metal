@@ -20,12 +20,21 @@ namespace ttnn::experimental::prim {
 
 // Mode selector for the moe_compute op.
 // - `FullCcl` runs the production multi-device pipeline (matmul + fused
-//   selective_reduce_combine over fabric). Requires cluster_axis and CCL options.
+//   selective_reduce_combine over fabric). Requires a cluster_axis of extent > 1; CCL options apply.
 // - `FullLocal` runs a single-device fused pipeline (matmul + local combine) with no
 //   CCL/fabric. Used on a 1x1 mesh with cluster_axis=None. Returns 6 tensors like FullCcl.
+// - `LocalOutput` runs on a cluster_axis of extent 1 (a 1x1 mesh with an explicit axis, or axis
+//   0 of a 1xN expert-parallel mesh): there is nothing to combine, so no combine kernels are
+//   built and moe_compute's own writer (dm1) writes each expert's token rows straight into the
+//   final [k, T, H] row-major output (one token row per page: INTERLEAVED or HEIGHT_SHARDED,
+//   DRAM or L1). No fabric; the CCL options are accepted and unused. On a
+//   multi-device mesh the token set must be replicated and every coordinate returns the partial
+//   of its own experts, which the caller reduces across the other axis. Returns 6 tensors like
+//   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged.
+//   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
-enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1 };
+enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1, LocalOutput = 3 };
 
 struct MoEComputeParams {
     // MoE compute attributes
