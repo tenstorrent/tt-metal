@@ -292,3 +292,36 @@ def test_device_consecutive_utterances_with_one_flow_length(device):
     for name, w in (("first", wav_a), ("second", wav_b)):
         assert w.numel() > 0 and bool(torch.isfinite(w).all()), f"{name} utterance produced empty or non-finite audio"
     assert p >= 0.9999, p
+
+
+@pytest.mark.timeout(1800)
+@needs_weights
+@needs_inputs
+@needs_device
+def test_device_stream_leaves_no_flow_trace(device):
+    """A stream releases the flow's trace when it ends, and a batch call after it completes.
+
+    `synthesize_streaming` runs the flow once per chunk through its own path, not
+    `tokens_to_mel`, so the last chunk's trace used to outlive the stream. A later call
+    whose flow length matched that chunk's would have replayed it after the stream's
+    vocoder and the next LLM capture had allocated beside it -- the shape of the Korean
+    stall (`test_device_consecutive_utterances_with_one_flow_length`).
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.pipeline import PromptContext
+
+    (ctx_a, _), (ctx_b, _) = (PromptContext.from_npz(p) for p in _cases(2))
+    model = _model(device)
+
+    res = model.synthesize_streaming(ctx_a, sampler="greedy", max_tokens=MAX_TOKENS, seed=1986)
+    n_chunks = res.n_chunks
+    res.free()
+    assert model.flow.decoder._trace_id is None, "the last chunk's flow trace outlived the stream"
+
+    wav, tokens = model.synthesize(ctx_b, sampler="greedy", max_tokens=MAX_TOKENS)
+    w = ttnn.to_torch(wav).float().reshape(-1)
+    ttnn.deallocate(wav)
+    print(f"\n  stream of {n_chunks} chunks, then a batch call: {len(tokens)} tokens, {w.numel()} samples")
+    assert w.numel() > 0 and bool(
+        torch.isfinite(w).all()
+    ), "the batch call after a stream produced empty or non-finite audio"

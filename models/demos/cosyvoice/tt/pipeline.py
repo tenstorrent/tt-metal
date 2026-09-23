@@ -326,6 +326,12 @@ class CosyVoiceTTNN:
         mel_len2 = TtMaskedDiffWithXvec.mel_len_for(len(tokens), self.input_frame_rate, self.sample_rate)
         prompt_feat = ctx.prompt_feat if ctx.prompt_feat is not None else torch.zeros(1, 0, self.flow.output_size)
         z = rng.z_for(mel_len1 + mel_len2, self.flow.output_size)
+        # One flow call per utterance, so a trace kept from an earlier call -- this
+        # method's or a stream's -- would be replayed here after the vocoder and the LLM
+        # have allocated beside it, and this call's own trace would be replayed by the
+        # next utterance the same way. Release on both sides of the solve; see
+        # `TtMaskedDiffWithXvec.release_trace`.
+        self.flow.release_trace()
         mel = self.flow.inference(
             self._ids(all_tokens),
             ctx.n_prompt_tokens,
@@ -335,10 +341,6 @@ class CosyVoiceTTNN:
             self._dev(ctx.flow_embedding),
             self._dev(z),
         )
-        # One flow call per utterance, so a kept trace would next be replayed by a
-        # different utterance -- after the vocoder and the LLM have allocated beside it.
-        # See `TtMaskedDiffWithXvec.release_trace`. Streaming keeps its trace within one
-        # stream and does not come through here.
         self.flow.release_trace()
         return mel, mel_len2
 
@@ -501,30 +503,38 @@ class CosyVoiceTTNN:
         first_audio_s: float | None = None
         t0 = time.perf_counter()
 
-        with synth.session(stream_ctx, rng_for_chunk) as session:
+        try:
+            with synth.session(stream_ctx, rng_for_chunk) as session:
 
-            def emit(wav, n):
-                nonlocal first_audio_s
-                if first_audio_s is None:
-                    first_audio_s = time.perf_counter() - t0
-                chunks.append(wav)
-                if on_chunk:
-                    on_chunk(wav, n)
+                def emit(wav, n):
+                    nonlocal first_audio_s
+                    if first_audio_s is None:
+                        first_audio_s = time.perf_counter() - t0
+                    chunks.append(wav)
+                    if on_chunk:
+                        on_chunk(wav, n)
 
-            def on_token(token, index):
-                for wav, n in session.push(token):
-                    emit(wav, n)
+                def on_token(token, index):
+                    for wav, n in session.push(token):
+                        emit(wav, n)
 
-            tokens = self.text_to_tokens(ctx, on_token=on_token, **kw)
-            emit(*session.finish())
+                tokens = self.text_to_tokens(ctx, on_token=on_token, **kw)
+                emit(*session.finish())
 
-        return StreamResult(
-            chunks=chunks,
-            tokens=tokens,
-            first_audio_s=first_audio_s,
-            total_s=time.perf_counter() - t0,
-            n_chunks=len(chunks),
-        )
+            return StreamResult(
+                chunks=chunks,
+                tokens=tokens,
+                first_audio_s=first_audio_s,
+                total_s=time.perf_counter() - t0,
+                n_chunks=len(chunks),
+            )
+        finally:
+            # The last chunk's trace would otherwise outlive the stream, and the next call
+            # with the same flow length would replay it after this stream's vocoder and
+            # the next LLM capture have allocated beside it. Replays within the stream
+            # are covered by the warm-up chunk above. See
+            # `TtMaskedDiffWithXvec.release_trace`.
+            self.flow.release_trace()
 
     # ----------------------------------------------------------------------
     @staticmethod
