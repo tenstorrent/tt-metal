@@ -56,8 +56,15 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         tensor.layout());
 
     // Row-major operands are processed by element (see the factory), so neither the tile shape
-    // nor the shard shape constrains them.
+    // nor the shard shape constrains them. Block-float formats have no row-major element size:
+    // their exponents are shared per tile face.
     if (tensor.layout() != Layout::TILE) {
+        TT_FATAL(
+            tensor.dtype() != DataType::BFLOAT8_B && tensor.dtype() != DataType::BFLOAT4_B,
+            "{} operation does not support {} in ROW_MAJOR layout with block-float dtype {}.",
+            op_name,
+            name,
+            tensor.dtype());
         return;
     }
 
@@ -243,11 +250,11 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
         input.memory_config(),
         grad_output.dtype(),
         grad_output.memory_config(),
-        input.padded_shape().volume(),
-        // Selects tile or row-major kernels; for row-major the factory also bakes the row width
-        // and every tensor's page size into its runtime args and CB-aliasing decision.
-        input.layout(),
-        input.padded_shape()[-1]);
+        // The full shape, not just its volume: a sharded buffer's TensorAccessorArgs bake its shape
+        // in pages into compile-time args, and the row-major path bakes in the row width.
+        input.padded_shape(),
+        // Selects tile or row-major kernels.
+        input.layout());
 
     // args only carries the requested output_dtype/output_memory_config; when the caller
     // supplies its own output tensor that is what the factory actually binds, sizing the

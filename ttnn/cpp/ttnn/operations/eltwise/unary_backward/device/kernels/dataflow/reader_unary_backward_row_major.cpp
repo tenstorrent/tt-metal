@@ -56,7 +56,9 @@ void kernel_main() {
 
     DataflowBuffer dfb_grad(cb_id_grad);
     DataflowBuffer dfb_input(cb_id_input);
-    const uint32_t scratch = aligned_scratch(cb_id_scratch);
+    const uint32_t scratch = aligned_scratch(
+        cb_id_scratch,
+        (grad_paging.alignment > input_paging.alignment) ? grad_paging.alignment : input_paging.alignment);
 
     const uint32_t end_block = start_block + num_blocks;
     for (uint32_t block = start_block; block < end_block; ++block) {

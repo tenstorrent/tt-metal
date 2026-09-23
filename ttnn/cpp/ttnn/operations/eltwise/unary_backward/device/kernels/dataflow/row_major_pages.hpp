@@ -126,5 +126,8 @@ inline void write_piece(
     noc_async_write_barrier();
 }
 
-// The scratch CB is sized with slack so its start can be rounded up to the widest alignment.
-inline uint32_t aligned_scratch(uint32_t cb_id) { return round_up_to(get_write_ptr(cb_id), 64); }
+// The scratch CB is sized with slack (by the host, from the buffers' alignments) so its start can
+// be rounded up to the widest alignment any of its transfers use.
+inline uint32_t aligned_scratch(uint32_t cb_id, uint32_t alignment) {
+    return round_up_to(get_write_ptr(cb_id), alignment);
+}

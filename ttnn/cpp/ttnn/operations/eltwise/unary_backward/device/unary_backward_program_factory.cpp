@@ -99,6 +99,19 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         if (!(a == b && b == c)) {
             return false;
         }
+        // ShardSpec equality leaves out the memory layout, which picks the distribution (2D grid
+        // for block, round-robin otherwise), so equal specs could still place shards differently.
+        const auto layout = grad_output.memory_config().memory_layout();
+        if (input.memory_config().memory_layout() != layout || output.memory_config().memory_layout() != layout) {
+            return false;
+        }
+        // Each core gets exactly one shard's work below, so the grid must hold exactly one shard per
+        // core. A grid larger than the tensor needs would hand the spare cores work on an L1 region
+        // that holds no data.
+        const uint64_t shard_elements = static_cast<uint64_t>(a.shape[0]) * a.shape[1];
+        if (shard_elements * a.grid.num_cores() != input.physical_volume()) {
+            return false;
+        }
         // A row-major shard is consumed as tile-sized CB pages, so it has to be a whole number of
         // them, and dense: a row padded out to the buffer alignment leaves gaps in the shard, and
         // those gaps sit at different element positions for operands of different dtypes.
@@ -115,10 +128,6 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         return true;
     }();
 
-    // Aliasing is all-or-nothing across the three tensors -- see the rule above -- so a single
-    // flag describes every operand; there is no per-operand sharded state.
-    const bool alias = can_alias_shards;
-
     // ROW_MAJOR, following eltwise unary's RM_INTERLEAVED path. When the shards cannot be aliased
     // a row-major tensor is read and written in BLOCKS rather than tiles: rows_per_tile narrow rows
     // packed into one tile-sized CB page, or a row wider than a tile split into chunks_per_row
@@ -126,7 +135,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // the same face layout on unpack and pack, so the compute kernel needs no change. An aliased
     // row-major shard needs none of this: its pages are consumed in place like a tiled shard's.
     const bool row_major = input.layout() == Layout::ROW_MAJOR;
-    const bool rm_blocked = row_major && !alias;
+    const bool rm_blocked = row_major && !can_alias_shards;
 
     // Row geometry. The element geometry is shared by all three tensors because validation pins
     // their shapes equal; the paging is per tensor, since a width- or block-sharded row-major buffer
@@ -183,7 +192,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // Pages in one shard. Counted by elements rather than by tile rows and columns so that it holds
     // for a row-major shard too, whose shape need not be a multiple of the tile in either dimension
     // -- only its element count must be (enforced by can_alias_shards).
-    const uint32_t shard_tiles = alias ? static_cast<uint32_t>(shard_of(grad_output)->numel() / TILE_HW) : 0;
+    const uint32_t shard_tiles = can_alias_shards ? static_cast<uint32_t>(shard_of(grad_output)->numel() / TILE_HW) : 0;
 
     IDevice* device = input.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -195,7 +204,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1, core_group_2;
     uint32_t num_cores = 0, num_units_per_core_group_1 = 0, num_units_per_core_group_2 = 0;
-    if (alias) {
+    if (can_alias_shards) {
         const auto shard_grid = shard_of(grad_output)->grid;
         all_cores = shard_grid;
         core_group_1 = shard_grid;
@@ -218,7 +227,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // An addressed CB is a staging area: two pages, so the reader can fill one while compute
     // drains the other. An aliased CB is the whole shard in place.
     constexpr uint32_t kDoubleBufferPages = 2;
-    const uint32_t cb_pages = alias ? shard_tiles : kDoubleBufferPages;
+    const uint32_t cb_pages = can_alias_shards ? shard_tiles : kDoubleBufferPages;
 
     ProgramDescriptor desc;
 
@@ -248,19 +257,24 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         grad_output_cb_index,
         grad_output_cb_data_format,
         grad_output_single_tile_size,
-        alias ? grad_output_buffer : nullptr);
-    push_cb(input_cb_index, input_cb_data_format, input_single_tile_size, alias ? input_buffer : nullptr);
-    push_cb(grad_input_cb_index, output_cb_data_format, output_single_tile_size, alias ? grad_input_buffer : nullptr);
+        can_alias_shards ? grad_output_buffer : nullptr);
+    push_cb(input_cb_index, input_cb_data_format, input_single_tile_size, can_alias_shards ? input_buffer : nullptr);
+    push_cb(
+        grad_input_cb_index,
+        output_cb_data_format,
+        output_single_tile_size,
+        can_alias_shards ? grad_input_buffer : nullptr);
 
     // Scratch for the row-major kernels' unaligned pieces (see kernels/dataflow/row_major_pages.hpp):
     // one staging window of at most a chunk plus two alignment units, plus slack for rounding the
-    // window's start up to the widest alignment. One each, since the reader and writer run
+    // scratch start up to the widest buffer alignment. One each, since the reader and writer run
     // concurrently.
     if (rm_blocked) {
-        constexpr uint32_t kMaxAlignment = 64;
+        const uint32_t max_alignment =
+            std::max({grad_paging.alignment, input_paging.alignment, output_paging.alignment});
         const uint32_t scratch_bytes =
             std::max({grad_output_single_tile_size, input_single_tile_size, output_single_tile_size}) +
-            (3 * kMaxAlignment);
+            (3 * max_alignment);
         for (uint32_t index : {static_cast<uint32_t>(CBIndex::c_3), static_cast<uint32_t>(CBIndex::c_4)}) {
             desc.cbs.push_back(CBDescriptor{
                 .total_size = scratch_bytes,
@@ -309,7 +323,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // appending one for an aliased operand would shift the other's offset.
         std::vector<uint32_t> reader_compile_time_args = {0};
         std::map<std::string, std::string> reader_defines;
-        if (alias) {
+        if (can_alias_shards) {
             reader_defines["IN0_SHARDED"] = "1";
             reader_defines["IN1_SHARDED"] = "1";
         } else {
@@ -328,7 +342,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;
-        if (alias) {
+        if (can_alias_shards) {
             writer_desc.defines = {{"OUT_SHARDED", "1"}};
         }
     }
@@ -389,7 +403,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // each core another core's tile range. That produced correct results only where the shard
     // grid happened to be one compute-grid column; a full 8x8 grid came out at PCC 0.13.
     std::vector<CoreCoord> cores;
-    if (alias) {
+    if (can_alias_shards) {
         cores =
             corerange_to_cores(all_cores, num_cores, shard_of(grad_output)->orientation == ShardOrientation::ROW_MAJOR);
     } else {

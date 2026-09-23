@@ -232,11 +232,11 @@ def test_sigmoid_bw_program_cache_distinguishes_dtypes(device):
 
 
 @pytest.mark.parametrize("shard_inputs", [True, False], ids=["sharded_inputs", "sharded_output_request"])
-def test_sigmoid_bw_sharded_keeps_working(shard_inputs, device):
-    """Sharded calls must keep working. The fused device operation is interleaved-only, so the
-    composite layer routes sharded operands -- or a request for a sharded output -- to the op
-    composition that supports them. Without that fallback, a previously valid sharded call
-    raises, since the shared validation rejects sharded tensors."""
+def test_sigmoid_bw_sharded(shard_inputs, device):
+    """Sharded calls run on the fused device operation. Operands all L1-sharded on the same
+    grid, shard shape and orientation alias their circular buffers to the tensor's own shard;
+    anything else (DRAM-sharded, mixed sharded/interleaved) is addressed by logical page through
+    TensorAccessor. Both must return the requested layout."""
     torch.manual_seed(0)
     shape = (1, 1, 256, 32)
     torch_input = torch.randn(shape, dtype=torch.float32)

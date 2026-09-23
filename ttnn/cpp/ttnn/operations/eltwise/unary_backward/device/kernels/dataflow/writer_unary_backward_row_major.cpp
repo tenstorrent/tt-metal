@@ -37,7 +37,7 @@ void kernel_main() {
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
     DataflowBuffer dfb_dst(cb_id_dst);
-    const uint32_t scratch = aligned_scratch(cb_id_scratch);
+    const uint32_t scratch = aligned_scratch(cb_id_scratch, dst_paging.alignment);
 
     const uint32_t end_block = start_block + num_blocks;
     for (uint32_t block = start_block; block < end_block; ++block) {
