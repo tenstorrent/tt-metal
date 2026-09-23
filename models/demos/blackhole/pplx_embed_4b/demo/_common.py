@@ -285,6 +285,10 @@ def apply_recommended_env(batched_l1: bool) -> None:
     # bs32 495.0->474.3 (-4.2%); STS-B 0.8134->0.8190 (Q-only 0.8164).
     os.environ.setdefault("QWEN_FUSED_Q_BFP8", "force")
     os.environ.setdefault("QWEN_FUSED_KV_BFP8", "1")
+    # ...and let the QKV projection itself write bfp8 (the fused op is its only reader;
+    # upstream pinned bf16 only for the stock rotary). E2E: bs8 135.3->127.5 (-5.8%),
+    # bs16 250.4->240.9 (-3.8%), bs32 474.3->456.7 (-3.7%), bs1 23.7 unchanged; STS-B 0.8161.
+    os.environ.setdefault("QWEN_QKV_OUT_BFP8", "1")
     # The block-sharded LN path aims for an 8x8 grid, which is inherited from
     # BGE-M3 / 0.6B. On 4B that silently disables it: k_tiles = dim/32 = 80, so
     # gx=8 gives block_w=10 and block_h*block_w = 20, over the 16-tile per-core
