@@ -75,6 +75,11 @@ cleanup() {
     kill "${RUNNER_PID}" 2>/dev/null || true
     wait "${RUNNER_PID}" 2>/dev/null || true
   fi
+  if pgrep -f "prterun.*${MR_DIR}" >/dev/null 2>&1; then
+    pkill -TERM -f "prterun.*${MR_DIR}" 2>/dev/null || true
+    for _ in $(seq 1 30); do pgrep -f "prterun.*${MR_DIR}" >/dev/null 2>&1 || break; sleep 1; done
+    pkill -KILL -f "prterun.*${MR_DIR}" 2>/dev/null || true
+  fi
   echo "==================== per-cache PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
   for f in "${PCC_DIR}"/rank*.json; do
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
@@ -106,7 +111,7 @@ cleanup() {
     rm -rf "${MR_DIR}"
   fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${NUM_USERS} chunks=${REAL_CHUNKS}"
 
