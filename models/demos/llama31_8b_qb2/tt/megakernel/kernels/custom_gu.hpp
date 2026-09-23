@@ -41,6 +41,8 @@ void custom_gu_projection() {
                 reconfig_data_format_srca(24, 1);
                 custom_mm_block_init_short<false, false, false>(0, 1, 24, 7);
             }
+            UNPACK((tensix_sync()));
+            MATH((tensix_sync()));
             UNPACK((custom_gu_unpack(column)));
             MATH((llk_math_custom_mm<false>(0, 1, 0, 8, 7)));
             tile_regs_commit();
