@@ -393,6 +393,78 @@ def test_prefill_admission_into_same_slot_fully_resets_seed_state():
     assert seed_manager.seed_counters[1] == 0
 
 
+def test_finished_requests_release_seeds_before_permuted_prefill():
+    """A unique seed must replay from prefill, before decode can reconcile slots."""
+    manager = _make_host_only_seed_manager(max_batch_size=32)
+    slots = [0, 10, 20, 31]
+    seeds = [100, 101, 102, 103]
+    first = {}
+    for slot, seed in zip(slots, seeds):
+        manager.reset_seed([seed], [slot])
+        first[seed] = [manager._next_device_seed_for_slot(slot) for _ in range(4)]
+    for slot in slots:
+        manager.release_slot(slot)
+    for slot, seed in zip(reversed(slots), seeds):
+        manager.reset_seed([seed], [slot])
+        assert manager.seed_salts[slot] == 0
+        assert [manager._next_device_seed_for_slot(slot) for _ in range(4)] == first[seed]
+
+
+def test_release_keeps_surviving_duplicate_stream_and_frees_only_finished_salt():
+    manager = _make_host_only_seed_manager()
+    manager.reset_seed([55, 55], [0, 1])
+    manager._next_device_seed_for_slot(1)
+    survivor_rng = manager.rngs[1].getstate()
+    manager.release_slot(0)
+    manager.release_slot(0)  # Idempotent; a live sibling still owns salt 1.
+    assert manager.seed_salts[1] == 1
+    assert manager.seed_counters[1] == 1
+    assert manager.rngs[1].getstate() == survivor_rng
+    assert manager._next_device_seed_for_slot(1) == _hash_request_seed_to_device_seed(55, 1, 1)
+    manager.reset_seed([55], [3])
+    assert manager.seed_salts[3] == 0
+    assert manager.seed_salts[1] == 1
+
+
+def test_releasing_last_seeded_request_rearms_unseeded_sampling():
+    manager = _RecordingSeedManager(4)
+    manager.reset_seed([42], [3])
+    manager.get_new_values([3])
+    manager.release_slot(3)
+    assert not manager._seed_active
+    assert manager._reseted
+    first = manager.get_new_values([0])
+    assert all(0 < seed < MAX_UINT32 for seed in first)
+    assert manager.get_new_values([0]) == (MAX_UINT32,) * 4
+    assert manager.get_new_values([0]) is None
+
+
+@pytest.mark.parametrize("capacity,replicas,slot", [(32, 1, 31), (32, 2, 63), (128, 1, 127)])
+def test_generator_release_request_routes_global_state_slot(capacity, replicas, slot):
+    from models.tt_transformers.tt.generator import Generator
+
+    managers = [_make_host_only_seed_manager(capacity) for _ in range(replicas)]
+    for manager in managers:
+        manager.reset_seed([17, 17], [0, capacity - 1])
+    generator = SimpleNamespace(
+        model_args=[SimpleNamespace(max_batch_size=capacity)],
+        data_parallel=replicas,
+        model=[SimpleNamespace(sampling=SimpleNamespace(seed_manager=m)) for m in managers],
+        _slots_prefilled_since_decode={0, slot},
+    )
+    Generator.release_request(generator, slot)
+    rank, local_slot = divmod(slot, capacity)
+    assert managers[rank].seeds[local_slot] is None
+    assert managers[rank].seeds[0] == 17
+    assert generator._slots_prefilled_since_decode == {0}
+    for other_rank, manager in enumerate(managers):
+        if other_rank != rank:
+            assert manager.seeds[-1] == 17
+    for invalid_slot in (-1, capacity * replicas):
+        with pytest.raises(ValueError, match="outside"):  # allow-pytest.raises: host-only bounds regression
+            Generator.release_request(generator, invalid_slot)
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 

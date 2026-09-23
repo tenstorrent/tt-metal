@@ -1451,6 +1451,16 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
+                # Long Llama 8B prefill on N150 needs a smaller K staging
+                # block so its static circular buffers fit alongside resident
+                # trace buffers.
+                in0_block_w=(
+                    4
+                    if self.device_name == "N150"
+                    and self.base_model_name == "Llama-3.1-8B"
+                    and seq_len >= self.prefill_len_cutoff
+                    else None
+                ),
                 per_core_N=(
                     math.ceil(
                         (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)

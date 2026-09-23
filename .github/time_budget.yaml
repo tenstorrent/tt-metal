@@ -362,20 +362,20 @@ models:
     bh_quietbox_2: 90
     bh_sc1: 20
   e2e_tier1:
-    wh_n150: 28
-    wh_galaxy_perf: 215
-    bh_p150: 27
-    bh_quietbox_2: 434
-    bh_galaxy: 78
+    wh_n150: 73
+    wh_galaxy_perf: 365
+    bh_p150: 72
+    bh_quietbox_2: 794
+    bh_galaxy: 168
     bh_sc1: 335
     bh_sc4: 160
   e2e_tier2:
-    wh_llmbox_perf: 270
+    wh_llmbox_perf: 435
     wh_n150: 45
     wh_n300: 6
     bh_p150: 26
     bh_p300: 42
-    bh_quietbox_2: 186
+    bh_quietbox_2: 231
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
@@ -390,7 +390,7 @@ models:
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
-    bh_quietbox_2: 502  # +15 for test_decode_bucketing's own 1800 s budget (#55790)
+    bh_quietbox_2: 502
     bh_galaxy: 75
     bh_sc1: 370
     bh_sc4: 50

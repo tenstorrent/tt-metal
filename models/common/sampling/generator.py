@@ -1076,6 +1076,16 @@ class SeedManager:
             self.seed_salts[slot] = self._next_free_salt(slot, seed)
             self.rngs[slot].seed(int(seed))
 
+    def release_slot(self, slot: int) -> None:
+        """Release a finished request before another prefill can reuse its seed.
+
+        Waiting for decode's live-slot reconciliation is too late.
+        Live siblings keep their salts and counters unchanged.
+        """
+        if not 0 <= slot < self.max_batch_size:
+            raise ValueError(f"Seed slot {slot} is outside capacity {self.max_batch_size}")
+        self.deactivate_slots_except(user for user in range(self.max_batch_size) if user != slot)
+
     def deactivate_slots_except(self, live_slots) -> None:
         """Drop seed state of slots that are no longer live.
 

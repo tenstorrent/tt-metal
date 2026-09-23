@@ -1272,7 +1272,7 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if keep_sharded_for_sampling:
+            if keep_sharded_for_sampling or (not is_decode and getattr(self, "_prefill_keep_logits_sharded", False)):
                 pass  # On-device sampling module consumes TP-sharded logits.
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather

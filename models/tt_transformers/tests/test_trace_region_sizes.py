@@ -157,7 +157,7 @@ def test_ci_hf_model_jobs_resolve_trace_region_size(job_name, hf_model, sku):
         ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150", 30000000),
         ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2", 70000000),
         ("models/demos/gemma4/configs/gemma-4-E4B-it", "bh_p150", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 1073741824),
         ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_n150", 70000000),
         ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "bh_p150", 70000000),
         ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2", 70000000),
