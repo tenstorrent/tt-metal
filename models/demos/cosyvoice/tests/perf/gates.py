@@ -4,39 +4,33 @@
 """The bring-up's numeric acceptance thresholds, and the code that enforces them.
 
 Every threshold below is quoted verbatim from the bring-up requirements, and every
-perf test that produces one of these numbers calls `enforce()` on it. Before this
-module existed the perf suite printed its figures and asserted `total_s > 0` -- a
-timing harness, not a gate -- so a regression that halved throughput would still have
-run green. That is the gap this closes.
+perf test that produces one of these numbers calls `enforce()` on it, so a regression
+fails the suite.
 
 ## The rule, in one paragraph
 
-A threshold that one part meets and another misses cannot be a single unconditional
-`assert`: on the part that misses it, the suite would simply be red forever, which is
-not enforcement so much as a broken build. So the thresholds are declared once, in
-`GATES`, and the **per-architecture verdict** is declared separately, in
-`EXPECTATIONS`:
+A threshold that one part meets and another does not cannot be a single
+unconditional `assert`: on the part that falls short, the suite would be red forever.
+So the thresholds are declared once, in `GATES`, and the per-architecture verdict is
+declared separately, in `EXPECTATIONS`:
 
-* a gate recorded as **`Meets`** is asserted directly -- if the measured value stops
-  clearing the threshold, the test fails;
-* a gate recorded as **`Misses`** is asserted against the *recorded measurement*, both
-  bounds, exactly as `models/perf/device_perf_utils.check_device_perf` does. Slower
-  than the band fails, because that is a regression. **Faster than the band also
-  fails**, because it means the recorded number -- which `PERF.md` publishes -- is
-  stale, and a stale published number is the thing this module exists to prevent.
+* a threshold recorded as `Meets` is asserted directly -- if the measured value stops
+  clearing it, the test fails;
+* a threshold recorded as `Misses` is asserted against the recorded measurement, in
+  both directions, as `models/perf/device_perf_utils.check_device_perf` does. Slower
+  than the band fails, because that is a regression. Faster than the band also fails,
+  because it means the recorded number -- which `PERF.md` publishes -- is stale.
 
-Nothing here is `xfail`-ed. A missed target gets a measured number, a named lever and
-a band it has to stay inside; it does not get a marker that hides it from the summary
-line.
+Nothing here is `xfail`-ed. An unmet target gets a measured number, a named lever and
+a band it has to stay inside, not a marker that hides it from the summary line.
 
 ## What is recorded, and from where
 
 Every value in `EXPECTATIONS` comes from the certification run described in
 `../../PERF.md` Part I -- one commit, one day, Blackhole `p150a`, Blackhole `p150b`
-and Wormhole n300, five configurations each. Two boards is not a matrix; the third is
-what makes it one.
+and Wormhole n300, five configurations each.
 
-**A `recorded` value is the centre of a band, not the last run's figure.** PERF.md
+A `recorded` value is the centre of a band, not the last run's figure. PERF.md
 publishes what a given run measured; this table holds the reference those measurements
 have to stay near. Re-centring it after every run would defeat the point — the band
 exists because the same board measures a few per cent apart from day to day. What must
@@ -102,11 +96,11 @@ class Meets:
 
 @dataclass(frozen=True)
 class Misses:
-    """The gate is not cleared; assert the recorded measurement instead.
+    """The threshold is not met; assert the recorded measurement instead.
 
     `recorded` is the published figure, `tol` the fractional half-width of the band
     around it. `lever` names what would close the gap -- it is printed on failure and
-    on every run, because a missed target without a stated lever is just a number.
+    on every run, because an unmet target without a stated lever is just a number.
     """
 
     recorded: float
@@ -118,15 +112,15 @@ class Misses:
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
-    # End-to-end traced decode: 174.8 tok/s default on p150a, 168.5 on p150b, 201.3 with
-    # the in-place KV cache. Every configuration clears both gates by a wide margin.
+    # Every configuration clears both throughput thresholds by a wide margin (PERF.md
+    # §3.3).
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.379 default on p150a, 0.402 on p150b, 0.342 best (p150a, in-place KV cache).
+    # PERF.md §3.2.
     "rtf": Meets(),
-    # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own; the step is
-    # 4.98 ms at its best measured and is bandwidth-bound on the AR decoder's weights.
-    # Band is centred between the two boards' default configurations.
+    # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own, several times
+    # below its best measured step (PERF.md §3.4). The band is centred between the two
+    # boards' default configurations.
     "rtf_stretch": Misses(
         0.385, 0.35, "no op-level lever left; needs a smaller decoder or multi-chip tensor parallelism"
     ),
@@ -136,24 +130,15 @@ BLACKHOLE = {
 # band below rather than silently inherit n300's verdict, which is the intended
 # behaviour -- see the module docstring.
 WORMHOLE = {
-    # End-to-end traced decode: 127.3 tok/s default, 130.6 with COSYVOICE_FF2_GRID,
-    # 128.0 with the in-place KV cache made explicit. That last row measures the same
-    # thing as the default -- `kv_inplace_default` reads the architecture and turns the
-    # in-place cache on for Wormhole -- and lands within noise of it, as it should.
+    # PERF.md §3.3. The explicit in-place row measures the same configuration as the
+    # default -- `kv_inplace_default` turns the in-place cache on for Wormhole -- and
+    # comes within noise of it, as it should.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.553 / 0.552 / 0.564 across the certification run's three configurations
-    # (PERF.md Part I ~S3.2). The full-suite run twenty minutes earlier, at a tree
-    # differing only in this file, measured 0.539 / 0.554 / 0.542 -- so **the same board
-    # moves ~2.6 % between runs**, which is the flow decoder's documented run-to-run
-    # variation and is precisely why the band is +/-20 % rather than tight. The centre
-    # sits between the two runs rather than on either.
-    #
-    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part.** It lands within noise of
-    # the default (0.552 against 0.553), where an earlier vintage had it winning clearly
-    # (0.577 -> 0.550). The flag stays opt-in and Blackhole-favoured for exactly this
-    # reason: its best shape is not portable, and on n300 its benefit is not even
-    # reliably positive.
+    # PERF.md §3.2. The same board moves a few per cent between runs -- the flow
+    # decoder's run-to-run variation -- so the band is +/-20 %, centred between two
+    # same-day runs. `COSYVOICE_FF2_GRID=8x2` is within noise of the default on this
+    # part, which is one reason the flag stays opt-in: its best shape is not portable.
     "rtf": Misses(
         0.55,
         0.20,

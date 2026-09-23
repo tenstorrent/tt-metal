@@ -51,7 +51,7 @@ def test_exported_weights_are_self_consistent():
     assert tuple(bag.sub("ups.1").tensor("weight").shape) == (256, 128, 16)
     assert tuple(bag.sub("conv_post").tensor("weight").shape) == (18, 128, 7)
 
-    # The source branch must land on exactly the lengths the main path reaches.
+    # The source branch must reach exactly the lengths the main path reaches.
     t = shape_trace(282)
     for i, stage in enumerate(t["stages"]):
         k = bag.sub(f"source_downs.{i}").tensor("weight").shape[-1]

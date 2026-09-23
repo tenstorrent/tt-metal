@@ -108,7 +108,7 @@ def test_device_decode_throughput(device):
 def test_device_decode_throughput_fixed_cache(device):
     """The same measurement with the right-aligned fixed-width cache.
 
-    This is the honest number for real generation. The growing-cache figure only
+    This is the number that describes real generation. The growing-cache figure only
     looks acceptable on a second pass over sizes that are already compiled; an
     actual utterance visits each key size exactly once, so it pays every compile.
     Holding the width fixed leaves two shapes for the whole utterance, and the
@@ -187,15 +187,10 @@ def test_device_decode_throughput_fixed_cache(device):
 def test_device_decode_bfloat8_weights(device):
     """`bfloat8_b` weights against `bfloat16`, on the traced decode step.
 
-    Once tracing removed the dispatch overhead, what is left of a decode step is
-    reading the AR decoder's weights out of DRAM to produce a single token. At
-    batch 1 there is no reuse to amortise that against -- every matmul is a matrix
-    against one row -- so the step is bandwidth-bound and halving the weight width
-    is the lever that matches the bottleneck. Activations stay `bfloat16`; only the
-    matrices narrow.
-
-    Both halves of the trade get measured, because either one alone is misleading:
-    throughput, and the drift the narrower mantissa costs after 14 blocks.
+    Halving the weight width halves the bytes each decode step reads; activations
+    stay `bfloat16`. Both halves of the trade are measured, because either alone
+    misleads: throughput, and the drift the narrower mantissa costs after 14 blocks.
+    PERF.md §6 has the result.
     """
     import ttnn
     from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TtARDecoder, right_aligned_bias
@@ -255,7 +250,7 @@ def test_device_decode_bfloat8_weights(device):
     print(f"    hidden-state PCC, bf8 vs bf16      {pcc:.10f}")
     print(f"    LLM RTF at 164 tokens / 3.27 s: {bf16_ms * 164 / 3270:.3f} -> {bf8_ms * 164 / 3270:.3f}")
 
-    # The gate is accuracy, not speed: a faster decoder that drifts is not a win,
+    # What is asserted is accuracy, not speed: a faster decoder that drifts is not a win,
     # and the speedup is reported rather than asserted because it is the thing
     # being measured.
     assert pcc >= 0.99, f"bfloat8_b weights cost too much accuracy: PCC {pcc}"

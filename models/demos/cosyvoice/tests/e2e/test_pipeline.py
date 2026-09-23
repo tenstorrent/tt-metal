@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The whole model, end to end on device.
 
-Every earlier test checks one stage against a golden captured at that stage's own
-boundary. This one runs **semantic tokens straight through to a waveform** and
+Every other test checks one stage against a golden captured at that stage's own
+boundary. This one runs semantic tokens straight through to a waveform and
 compares against the reference's final audio, so an error that each stage absorbs
 individually but that compounds across the chain has somewhere to show up.
 
@@ -15,7 +15,7 @@ nothing. The tokens the reference actually emitted are captured, so the
 deterministic part of the pipeline is tested against the reference's own audio,
 and the LLM is tested separately against its logits (`tests/pcc/test_llm.py`).
 
-That split is the honest one: 'flow + vocoder reproduce the reference waveform'
+That split keeps both claims checkable: 'flow + vocoder reproduce the reference waveform'
 and 'the LLM reproduces the reference logits' are both checkable claims. 'the
 whole pipeline reproduces the reference audio' is not, for any sampler.
 """
@@ -44,7 +44,7 @@ needs_golden = pytest.mark.skipif(
 def waveform_metrics(got: torch.Tensor, want: torch.Tensor) -> dict:
     """Sample correlation plus an energy-envelope check.
 
-    Raw sample PCC is the strict measure and the right primary gate. The envelope
+    Raw sample PCC is the strict measure and the right primary check. The envelope
     correlation is reported alongside it because it separates the two ways a
     vocoder can be wrong: a small phase error tanks sample PCC while leaving the
     envelope intact and the audio perceptually identical, whereas a wrong
@@ -157,14 +157,14 @@ def _build_flow_mel(device, ttnn):
 @needs_golden
 @needs_l1_small
 def test_device_tokens_to_waveform(device):
-    """**The integration gate.** Semantic tokens in, audio out, both stages on
+    """The integration test. Semantic tokens in, audio out, both stages on
     device: the flow decoder's ten Euler steps and the whole HiFT vocoder,
     against the reference's actual output audio.
 
     The excitation is the reference's, injected -- and that is a requirement, not
     a shortcut. NSF phase is chaotically sensitive to f0: drift is
     `sum(delta_f0)/sr` over samples, so holding it under a tenth of a cycle across
-    72192 samples needs a **0.03 Hz** mean f0 error, 1.5e-4 relative. No
+    72192 samples needs a 0.03 Hz mean f0 error, 1.5e-4 relative. No
     implementation reaches that on Tensix, where HiFi4 is four bfloat16 passes
     rather than true fp32. Injecting the source is the same discipline the CFM's
     `z` and `SineGen`'s draws already follow, for the same reason.
@@ -203,7 +203,7 @@ def test_device_self_computed_source(device):
     `SineGen`, `SourceModuleHnNSF`, then the full decode -- nothing injected but
     the two RNG draws.
 
-    Gated on the **energy envelope**, not on samples, and the module docstring in
+    Checked on the energy envelope, not on samples, and the module docstring in
     `tt/hifigan/source.py` explains at length why: the phase of a self-computed
     excitation is a different valid realisation, so sample correlation measures
     the f0 predictor's last decimal place rather than whether the audio is right.

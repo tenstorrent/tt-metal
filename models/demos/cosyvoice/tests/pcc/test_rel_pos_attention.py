@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """ESPnet relative-position attention, and whether it fits into flash attention.
 
-This was flagged up front as one of the two hardest risks: both the LLM and the
-flow encoder use `rel_selfattn`, not RoPE and not vanilla attention, so the
-tt-metal LLM demos under `models/demos/wormhole/` are a structural reference
-rather than a drop-in.
+Both the LLM and the flow encoder use `rel_selfattn`, not RoPE and not vanilla
+attention, so the tt-metal LLM demos under `models/demos/wormhole/` are a
+structural reference rather than a drop-in.
 
 The reference computes
 
@@ -15,17 +14,18 @@ The reference computes
     scores    = (matrix_ac + matrix_bd) / sqrt(d_k)
     out       = softmax(scores) @ v
 
-The claim these tests exist to settle: **matrix_bd is an additive bias on the
-attention scores**, so the whole thing is ordinary scaled-dot-product attention
-with `q' = q + pos_bias_u` and `attn_mask = matrix_bd / sqrt(d_k)`. TTNN's SDPA
-already accepts `attn_mask` (sdpa.hpp:20, :170), so if the claim holds, flash
-attention needs no new C++ at all.
+These tests check that `matrix_bd` is an additive bias on the attention scores, so
+the whole thing is ordinary scaled-dot-product attention with `q' = q + pos_bias_u`.
+TTNN's SDPA accepts `attn_mask` (sdpa.hpp:20, :170), so flash attention needs no new
+C++.
 
-The scaling is the part that is easy to get wrong and impossible to notice: SDPA
-applies `1/sqrt(d_k)` to `q @ k^T` and then adds the mask, whereas the reference
-divides the ALREADY-SUMMED `ac + bd`. So the bias handed to SDPA must be
-pre-divided. Passing raw `matrix_bd` yields plausible-looking attention that is
-quietly wrong by a factor of 8 on this model.
+The scaling is easy to get wrong and hard to notice. The reference divides the
+already-summed `ac + bd`. Under torch's SDPA order -- scale `q @ k^T`, then add the
+mask -- the bias must be pre-divided, `attn_mask = matrix_bd / sqrt(d_k)`, and raw
+`matrix_bd` gives plausible-looking attention wrong by a factor of 8 on this model;
+the host tests below check that identity both ways. TTNN's `sdpa_decode` adds the
+mask before it scales, so the device path passes `matrix_bd` unscaled
+(`TtRelPosAttention.forward_cached`).
 
 Everything is checked against a golden captured from a real
 RelPositionMultiHeadedAttention layer inside the flow encoder, so the reference
@@ -64,8 +64,7 @@ def rel_shift(x: torch.Tensor) -> torch.Tensor:
 
     A skew of the score matrix: pad a zero column, reinterpret the last two axes
     transposed, drop the first row, then keep the left half. In tile layout this
-    is a strided gather, not an elementwise op -- which is why a native rel-pos SDPA
-    was scoped as high-risk.
+    is a strided gather, not an elementwise op.
     """
     b, h, t1, n = x.shape
     zero_pad = torch.zeros((b, h, t1, 1), dtype=x.dtype)
@@ -225,7 +224,7 @@ def test_rel_shift_fast_path_only_holds_at_t1_1(key_len):
     element of the `(n + 1, 1)` reinterpretation gives back the same `n` elements in
     the same order, leaving only the trailing slice.
 
-    The second half of this test is the important half. The identity is **false** for
+    The second half of this test is the important half. The identity is false for
     `t1 >= 2`, where the skew genuinely permutes, so asserting only the `t1 == 1` case
     would leave a guard that could be widened later without anything failing.
     """

@@ -9,7 +9,7 @@ Three tiers, cheapest first:
    without loading anything.
 2. **Graph**, via `tt/flow/reference.py` -- a pure-torch reimplementation driven
    only by the flat export. If this matches the captured golden then the
-   architecture is right and any device miss is a TTNN question, not an
+   architecture is right and any device failure is a TTNN question, not an
    architecture question. That split is what makes the device tier cheap to debug.
 3. **Device**, the TTNN UNet against the same golden.
 """

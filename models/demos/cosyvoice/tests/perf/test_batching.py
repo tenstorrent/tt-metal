@@ -3,20 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Batched decode: what running several utterances through one decode step is worth.
 
-A decode step at one row is **bound by reading the AR decoder's weights out of
-DRAM**. Every matmul is a matrix against a single row, so nothing amortises the read;
-`test_device_decode_bfloat8_weights` measures the same bottleneck from the other side
-by halving the weight width. Batching attacks the numerator instead -- one weight read
-serves `B` rows -- so the interesting quantity is not the step time, which must grow,
-but the *per-utterance* cost, which should fall until the step becomes compute bound.
+At one row, every decode matmul multiplies a weight matrix by a single row, so each
+weight read and each op serves one utterance. A batched step serves `B` rows with the
+same ops, so the quantity that matters is not the step time, which must grow, but the
+per-utterance cost, which falls until the step becomes compute-limited (PERF.md §4).
 
 Two tests, in the order that makes the second meaningful:
 
-1. **Correctness first.** A batched step must compute, for each row, what the same
-   row computes alone. Batching is exactly the kind of change that produces plausible
-   audio from subtly wrong attention, so this is a PCC gate against the single-row
+1. Correctness first. A batched step must compute, for each row, what the same row
+   computes alone. Batching is exactly the kind of change that produces plausible
+   audio from subtly wrong attention, so this is a PCC check against the single-row
    path, not a smoke test.
-2. **Then the curve.** Step time and per-utterance time at `B = 1, 2, 4, 8`, with the
+2. Then the curve. Step time and per-utterance time at `B = 1, 2, 4, 8`, with the
    crossover reported rather than assumed.
 
 Both run on the moving KV cache: it is the mechanism `TracedDecodeStep` batches, and
@@ -61,12 +59,11 @@ def _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d, seeds=None):
     Deliberately ragged: the rows have different prompt lengths, which is the case a
     real batch presents and the case a left-aligned cache could not serve.
 
-    **`seeds` is explicit, not derived from the loop index.** The correctness test
-    calls this once for the whole batch and then once per row, and a seed taken from
-    the enclosing loop is 0 on every single-row call -- so rows 1..n would be
-    prefilled with different content in the two runs, and the comparison would report
-    a model bug that is really a harness bug. (It did, first time round: PCC 0.80 on
-    exactly rows 1..3 and 1.0 on row 0.)
+    `seeds` is explicit, not derived from the loop index. The correctness test calls
+    this once for the whole batch and then once per row, and a seed taken from the
+    enclosing loop is 0 on every single-row call -- so rows 1..n would be prefilled
+    with different content in the two runs, and the comparison would report a model
+    bug that is really a harness bug.
     """
     from models.demos.cosyvoice.tt.llm.decoder import TtARDecoder, right_aligned_bias
 
@@ -173,9 +170,9 @@ def test_device_batched_decode_matches_single(device):
     # single-row step, so the partial sums regroup. That is a rounding difference,
     # not a wrong answer, and Wormhole shows more of it than Blackhole -- which also
     # warns at runtime that HiFi4 with fp32 accumulation is worse than HiFi3 there,
-    # on a hardware bug. Blackhole measures 0.9999998808 and holds the tight bound;
-    # Wormhole measures ~0.9985, the same order as the in-place cache's documented
-    # 0.9986 on the same part, which is why that test's 0.995 is the bound here too.
+    # on a hardware bug. Blackhole meets the tight threshold; Wormhole's deviation is
+    # the same order as the in-place cache's on that part (PERF.md §4), so that test's
+    # 0.995 applies here too.
     wormhole = "WORMHOLE" in str(device.arch()).upper()
     floor = 0.995 if wormhole else 0.999
 
@@ -186,7 +183,7 @@ def test_device_batched_decode_matches_single(device):
 
     assert worst >= floor, f"batched row diverges from single-row at {worst_at}: PCC {worst}"
 
-    # **Non-accumulation is the real gate**, and it is the one a loosened bound would
+    # Non-accumulation is the real check, and it is the one a looser threshold would
     # otherwise hide. Rounding that regroups per step stays put; a wrong mask, a
     # mis-strided cache or a batch axis read as something else compounds, because each
     # step's error feeds the next through the KV cache. So the last step must be no
@@ -249,9 +246,8 @@ def test_device_batched_decode_throughput(device):
     print(f"    equivalently {1e3/(best_ms/best_b):.1f} tok/s of aggregate semantic-token throughput")
 
     # Batching must actually amortise something. If the per-utterance cost at the
-    # sweep's best batch is no better than at B=1, the step was not weight-bound
-    # after all and this whole path is dead weight -- that is a result worth failing
-    # on, not printing.
+    # sweep's best batch is no better than at B=1, batching amortises nothing and this
+    # whole path is dead weight -- a result worth failing on, not printing.
     assert best_ms / best_b < base * 0.9, (
         f"batching bought nothing: best per-utterance {best_ms/best_b:.2f} ms at B={best_b} "
         f"against {base:.2f} ms at B=1"
