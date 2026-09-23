@@ -15,7 +15,6 @@
 #include <cstring>
 #include <cstdint>
 #include <span>
-#include <utility>
 #include <vector>
 
 // SIMDe uses native AVX2 where available and supported host instructions otherwise.
@@ -282,27 +281,29 @@ constexpr bool spsc_is_zone_or_sticky(Kind k) { return k == Kind::Zone || k == K
 // false when there is none. The chain unrolls in table order. always_inline, like the handlers it takes: a handler
 // left out of line captures the walk's locals by address and pushes them all out of registers.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handle) {
     if constexpr (I == kFormats.size()) {
         return false;
     } else if constexpr (!Pred(kFormats[I].kind)) {
-        return spsc_for_format<Pred, I + 1>(t, std::forward<H>(handle));
+        return spsc_for_format<Pred, I + 1>(t, handle);
     } else {
         if (t == kFormats[I].type) {
             handle.template operator()<kFormats[I]>();
             return true;
         }
-        return spsc_for_format<Pred, I + 1>(t, std::forward<H>(handle));
+        return spsc_for_format<Pred, I + 1>(t, handle);
     }
 }
 // Runs handle.template operator()<F>() for every row whose kind Pred accepts, in table order.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline void spsc_for_each_format(H&& handle) {
     if constexpr (I < kFormats.size()) {
         if constexpr (Pred(kFormats[I].kind)) {
             handle.template operator()<kFormats[I]>();
         }
-        spsc_for_each_format<Pred, I + 1>(std::forward<H>(handle));
+        spsc_for_each_format<Pred, I + 1>(handle);
     }
 }
 
