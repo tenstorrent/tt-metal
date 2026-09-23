@@ -95,67 +95,80 @@ jobs:
       contents: read
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    # Same env as multihost-tests: `run:` steps in a container job execute on the CPU
+    # orchestrator pod by default (no /mnt/models or /mnt/weka there), so every read
+    # below is dispatched via mpirun --pernode to actually run on the allocated worker.
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
     runs-on: exabox-multihost-ci-sc1
     steps:
       - name: Time /mnt/models Kimi checkpoint read
-        env:
-          ROOT: /mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.safetensors' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+            sample=$(find "$ROOT" -type f -name "*.safetensors" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
       - name: Time /mnt/weka Kimi checkpoint read
-        env:
-          ROOT: /mnt/weka/model-weights/llm/moonshotai/Kimi-K2_7-Code-dequantized
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.safetensors' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2_7-Code-dequantized
+            sample=$(find "$ROOT" -type f -name "*.safetensors" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
       - name: Time /mnt/models Kimi TTNN cache read
-        env:
-          ROOT: /mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.tensorbin' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+            sample=$(find "$ROOT" -type f -name "*.tensorbin" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
       - name: Time /mnt/weka Kimi TTNN cache read
-        env:
-          ROOT: /mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.tensorbin' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+            sample=$(find "$ROOT" -type f -name "*.tensorbin" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
       - name: Time /mnt/models Kimi trace read
-        env:
-          ROOT: /mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.safetensors' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+            sample=$(find "$ROOT" -type f -name "*.safetensors" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
       - name: Time /mnt/weka Kimi trace read
-        env:
-          ROOT: /mnt/weka/model-cache/scratch/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
         run: |
-          set -euo pipefail
-          sample=$(find "$ROOT" -type f -name '*.safetensors' -print -quit)
-          test -n "$sample"
-          echo "Reading $sample"
-          time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            set -euo pipefail
+            ROOT=/mnt/weka/model-cache/scratch/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+            sample=$(find "$ROOT" -type f -name "*.safetensors" -print -quit)
+            test -n "$sample"
+            echo "Reading $sample"
+            time dd if="$sample" of=/dev/null bs=4M count=16 status=none
+          '
 
   Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
