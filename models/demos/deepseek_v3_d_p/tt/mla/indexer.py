@@ -51,6 +51,7 @@ class IndexerSelectionState:
     requires_tp_redistribution: bool
     valid_length_tensor: ttnn.Tensor | None = None
     valid_length_offset: int = 0
+    valid_end_tensor: ttnn.Tensor | None = None
 
 
 def _fused_ring_host_timing_enabled() -> bool:
@@ -1014,16 +1015,15 @@ class TtIndexer:
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
             block_cyclic_cache_tp_sharded=True,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
-            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local, i.e. end_pos --
-            # NOT valid_pos. The two coincide on a full chunk; on a partial final chunk the scored window
-            # runs past the real tokens. The WRITE is clamped to actual_end (valid_global in write_k), so
-            # those trailing rows hold whatever the cache held before rather than this chunk's pad keys,
-            # and only PAD QUERY rows can rank them -- real rows are causally shielded, since every key
-            # past actual_end sits at s > t. Their outputs are discarded downstream.
-            # Bounding the score itself needs metadata[2] on-device in this op and in topk_large_indices
-            # (both currently derive from metadata[1] + glob); until then this is the documented gap, not
-            # an assumed invariant.
+            # Metadata path: the kernel derives kv_len as chunk_start + sp*chunk_local (= end_pos) and then
+            # CAPS it at ceil32(valid_end_tensor), which is exactly the scalar path's
+            # min(end_pos, ceil32(actual_end)). Passing the real end is what makes the two paths agree on a
+            # PARTIAL chunk: uncapped, the traced score covered columns the request never wrote, and while
+            # real query rows are causally shielded from them (every such key sits at s > t), PAD query rows
+            # are not, so their top-k diverged from the scalar path's. It also narrows the scored extent
+            # instead of always paying for the full padded window.
             kv_len=None if metadata is not None else valid_pos,
+            valid_end_tensor=metadata[2] if metadata is not None else None,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -1052,6 +1052,9 @@ class TtIndexer:
             logits=logits,
             topk_valid_length=topk_valid_length,
             valid_length_tensor=metadata[1] if metadata is not None else None,
+            # Same cap as the score op above, from the same tensor. These two bounds MUST match: a looser
+            # score with a tighter top-k drops real keys, the reverse ranks a stale tail.
+            valid_end_tensor=metadata[2] if metadata is not None else None,
             valid_length_offset=glob if metadata is not None else 0,
             requires_tp_redistribution=tpsp and not self.output_tp_sequence_sharded,
         )
@@ -1067,7 +1070,9 @@ class TtIndexer:
         metadata_kwargs = {}
         if state.valid_length_tensor is not None:
             metadata_kwargs.update(
-                valid_length_tensor=state.valid_length_tensor, valid_length_offset=state.valid_length_offset
+                valid_length_tensor=state.valid_length_tensor,
+                valid_length_offset=state.valid_length_offset,
+                valid_end_tensor=state.valid_end_tensor,
             )
         return ttnn.experimental.topk_large_indices(
             state.logits,

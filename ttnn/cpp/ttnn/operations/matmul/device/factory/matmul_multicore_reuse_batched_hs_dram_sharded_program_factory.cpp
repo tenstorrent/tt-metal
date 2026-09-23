@@ -193,25 +193,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t interm0_num_entries = out_block_tiles;
 
-    uint32_t in0_shard_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_tile_shape()[0] *
-                               in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in0_shard_size_bytes = in0_shard_tiles * in0_single_tile_size;
-
     uint32_t in3_block_tiles = per_core_N;
 
     uint32_t out_shard_tiles = out_tensor.shard_spec()->shape[0] / output_tile.get_tile_shape()[0] *
                                out_tensor.shard_spec()->shape[1] / output_tile.get_tile_shape()[1];
     uint32_t out_num_entries = out_shard_tiles;
-    uint32_t out_shard_size_bytes = out_shard_tiles * output_single_tile_size;
 
     // Page sizes for DRAM reads
     uint32_t in1_buffer_page_size, in1_buffer_num_pages;
     get_max_page_size_and_num_pages(
         device, in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
-
-    uint32_t bias_buffer_page_size, bias_buffer_num_pages;
-    get_max_page_size_and_num_pages(
-        device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     // Tensor stride calculations
     uint32_t in0_batch_stride_bytes = per_core_M * K * in0_single_tile_size;
@@ -259,7 +250,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     };
-    const bool share_out_interm_buffer = interm0_data_format == output_data_format;
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_num_entries == interm0_num_entries);
     DataflowBufferSpec intermed0_dfb_spec{
         .unique_id = INTERMED0_DFB,
         .entry_size = interm0_single_tile_size,
@@ -435,7 +427,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
                 {"num_blocks", num_blocks},
                 {"num_batches_per_core", batches_per_core},
                 {"in0_tensor_stride_batch_bytes", in0_batch_stride_bytes},
-                {"in0_shard_size_bytes", in0_shard_size_bytes},
             },
         .runtime_arg_schema =
             {
@@ -478,15 +469,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         .compile_time_args =
             {
                 {"in1_page_size", in1_buffer_page_size},
-                {"in1_num_pages", in1_buffer_num_pages},
-                {"in1_block_w", per_core_N},
                 {"in1_block_num_tiles", in1_block_tiles},
                 {"num_blocks", num_blocks},
                 {"out_block_num_tiles", out_block_tiles},
                 {"num_batches_per_core", batches_per_core},
                 {"in1_tensor_stride_batch_bytes", in1_batch_stride_bytes},
                 {"out_tensor_stride_batch_bytes", out_batch_stride_bytes},
-                {"out_shard_size_bytes", out_shard_size_bytes},
             },
         .runtime_arg_schema =
             {
@@ -505,8 +493,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
             .tensor_parameter_name = BIAS,
             .accessor_name = "bias",
         });
-        in1_writer.compile_time_args.insert({"in3_page_size", bias_buffer_page_size});
-        in1_writer.compile_time_args.insert({"in3_num_pages", bias_buffer_num_pages});
         in1_writer.compile_time_args.insert({"in3_block_tiles", in3_block_tiles});
     }
 
