@@ -8,9 +8,14 @@ produce-data shares one GitHub installation token bucket with many other workflo
 collection script counts only its OWN REST calls (by category) and emits one `[api-usage]` line
 per execution. These tests pin:
   1. the counters survive the command-substitution / pipe subshells the collectors run in, and
-     sum correctly into the `[api-usage]` line (unit), and
-  2. a full first-attempt collection against a stubbed `gh` reports the expected per-category
+     sum correctly into the `[api-usage]` line (unit),
+  2. an arbitrary run name stays parseable (unit), and
+  3. a full first-attempt collection against a stubbed `gh` reports the expected per-category
      counts (integration).
+
+The bash snippets are written to a file and run as `bash <file>`, with all dynamic values passed
+through the environment rather than interpolated into a `bash -c` command string -- both to keep
+the snippets readable and to avoid constructing shell commands from formatted strings.
 """
 
 import os
@@ -39,22 +44,61 @@ def _api_usage_fields(stdout: str) -> dict:
     return fields
 
 
-def test_counters_survive_subshells_and_sum(tmp_path):
-    # api_count must work from a command-substitution subshell and a pipe subshell (the two
-    # shapes the real collectors run inside), because it writes to a file, not a shell variable.
-    snippet = f"""
-      set -eo pipefail
-      source "{SCRIPT}"
-      export API_COUNT_FILE="{tmp_path/'counts'}"
-      : > "$API_COUNT_FILE"
-      workflow_name="Sanity tests (push) SKUs[WH,Sim]"; workflow_run_id=123; attempt_number=1
-      api_count jobs_list 1                                   # direct
-      x=$(api_count artifact_download 56; echo ok)            # command-substitution subshell
-      echo hi | {{ api_count artifact_list 2; cat >/dev/null; }}   # pipe subshell
-      api_count log_archive 1
-      emit_api_usage
+def _run_snippet(tmp_path: pathlib.Path, snippet: str, env_extra: dict) -> subprocess.CompletedProcess:
+    """Run a static bash snippet from a file with dynamic values supplied via the environment.
+
+    The snippet is a constant (no interpolation) and reads its inputs from env vars, so no shell
+    command is built from formatted strings.
     """
-    r = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True)
+    snippet_file = tmp_path / "snippet.sh"
+    snippet_file.write_text(snippet)
+    env = {**os.environ, "SCRIPT_PATH": str(SCRIPT), **env_extra}
+    return subprocess.run(["bash", str(snippet_file)], capture_output=True, text=True, env=env)
+
+
+# Exercises the two subshell shapes the real collectors run inside: command substitution
+# (get_jobs_with_pagination_fallback) and a pipe-into-while (the per-job loop).
+_SUBSHELL_SNIPPET = """
+set -eo pipefail
+source "$SCRIPT_PATH"
+: > "$API_COUNT_FILE"
+workflow_name="$WORKFLOW_NAME"; workflow_run_id="$RUN_ID"; attempt_number=1
+api_count jobs_list 1                                      # direct
+x=$(api_count artifact_download 56; echo ok)              # command-substitution subshell
+echo hi | { api_count artifact_list 2; cat >/dev/null; } # pipe subshell
+api_count log_archive 1
+emit_api_usage
+"""
+
+_NASTY_NAME_SNIPPET = """
+set -eo pipefail
+source "$SCRIPT_PATH"
+: > "$API_COUNT_FILE"
+workflow_name="$WORKFLOW_NAME"; workflow_run_id="$RUN_ID"; attempt_number=1
+api_count jobs_list 2
+emit_api_usage
+"""
+
+_NOOP_SNIPPET = """
+set -eo pipefail
+source "$SCRIPT_PATH"
+unset API_COUNT_FILE
+api_count jobs_list 3   # no-op, must not fail
+emit_api_usage          # no-op, prints nothing
+echo done
+"""
+
+
+def test_counters_survive_subshells_and_sum(tmp_path):
+    r = _run_snippet(
+        tmp_path,
+        _SUBSHELL_SNIPPET,
+        {
+            "API_COUNT_FILE": str(tmp_path / "counts"),
+            "WORKFLOW_NAME": "Sanity tests (push) SKUs[WH,Sim]",
+            "RUN_ID": "123",
+        },
+    )
     assert r.returncode == 0, r.stderr
     f = _api_usage_fields(r.stdout)
     assert f["workflow"] == "Sanity tests (push) SKUs[WH,Sim]"  # spaces/brackets survive quoting
@@ -71,16 +115,11 @@ def test_arbitrary_workflow_name_stays_parseable(tmp_path):
     # Names are arbitrary user text; a double quote / newline must not break the quoted field or
     # the numeric fields that follow it.
     nasty = 'weird " name\nwith [brackets] and 🛠️'
-    snippet = f"""
-      set -eo pipefail
-      source "{SCRIPT}"
-      export API_COUNT_FILE="{tmp_path/'counts'}"
-      : > "$API_COUNT_FILE"
-      workflow_name={nasty!r}; workflow_run_id=7; attempt_number=1
-      api_count jobs_list 2
-      emit_api_usage
-    """
-    r = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True)
+    r = _run_snippet(
+        tmp_path,
+        _NASTY_NAME_SNIPPET,
+        {"API_COUNT_FILE": str(tmp_path / "counts"), "WORKFLOW_NAME": nasty, "RUN_ID": "7"},
+    )
     assert r.returncode == 0, r.stderr
     # exactly one [api-usage] line (the newline in the name did not split the record)
     assert len([ln for ln in r.stdout.splitlines() if ln.startswith("[api-usage]")]) == 1
@@ -90,17 +129,9 @@ def test_arbitrary_workflow_name_stays_parseable(tmp_path):
     assert "[brackets]" in f["workflow"] and "🛠" in f["workflow"]
 
 
-def test_emit_is_noop_without_counter_file():
-    # Sourcing/using the helpers without API_COUNT_FILE set must not error or print a line.
-    snippet = f"""
-      set -eo pipefail
-      source "{SCRIPT}"
-      unset API_COUNT_FILE
-      api_count jobs_list 3   # no-op, must not fail
-      emit_api_usage          # no-op, prints nothing
-      echo done
-    """
-    r = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True)
+def test_emit_is_noop_without_counter_file(tmp_path):
+    # Using the helpers without API_COUNT_FILE set must not error or print a line.
+    r = _run_snippet(tmp_path, _NOOP_SNIPPET, {})
     assert r.returncode == 0, r.stderr
     assert "[api-usage]" not in r.stdout
     assert "done" in r.stdout
