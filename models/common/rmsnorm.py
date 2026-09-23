@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
@@ -114,10 +116,15 @@ class RMSNorm(LightweightModule):
         self.sharded_program_config = sharded_program_config
         self.output_mem_config = output_mem_config
 
+        # QWEN_NORM_LOFI_APPROX=1: LoFi + approx (fp32 acc off) for every RMSNorm. On
+        # pplx-embed-4B at bs=32 the per-head q_norm ([32,32,512,128] bf16) is 24 ms/iter;
+        # traced on P150 it drops 764 -> 692 us (-11%) with this config, while the
+        # 2560-wide norms are insensitive (260 -> 256 us). Accuracy must be re-validated.
+        _lofi_approx = os.getenv("QWEN_NORM_LOFI_APPROX", "0") == "1"
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi_approx else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=_lofi_approx,
+            fp32_dest_acc_en=False if _lofi_approx else fp32_dest_acc_en,
             packer_l1_acc=True,
         )
 

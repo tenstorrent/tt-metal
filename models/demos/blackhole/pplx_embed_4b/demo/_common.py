@@ -542,7 +542,7 @@ def run_perf(
     *,
     emit_signposts: bool,
     is_ci_env: bool = False,
-    full_pipeline: bool = False,
+    full_pipeline: bool = True,
 ):
     """Build, compile, and benchmark pplx-embed-v1-4B."""
     profiler = BenchmarkProfiler()
@@ -579,8 +579,18 @@ def run_perf(
     # per-iteration Python overhead (page table reset, prefill_forward_text
     # loop, process_hidden_states_after_prefill_trace, D2H copy). This gives
     # us pure device-execution + sync latency.
+    # The Generator keys prefill traces as f"{seq_len}_{model_id}_{batch_size}_{use_start_pos}";
+    # this lookup used the older 3-part key and never matched, so use_direct_trace was
+    # always False and every timed iteration went through the Generator path: eager
+    # post-processing ops (slice + norm + to_layout) dispatched outside any trace, four
+    # H2D copies and a blocking readback -- ~3.4 ms/iter at bs=1 (13%), ~3.8 ms at bs=32.
+    # Match on the 3-part prefix so the suffix format cannot silently break it again.
     trace_key = f"{seq_len}_0_{batch_size}"
-    trace_id = generator.trace_id_prefill.get(trace_key)
+    _prefix = trace_key + "_"
+    trace_id = next(
+        (v for k, v in generator.trace_id_prefill.items() if k == f"{seq_len}_0_{batch_size}" or k.startswith(_prefix)),
+        None,
+    )
     use_direct_trace = (trace_id is not None) and not full_pipeline
 
     # --- Optimized full-pipeline path ---
@@ -676,14 +686,36 @@ def run_perf(
             _tracy_signpost("start")
         try:
             if use_direct_trace:
+                _t0 = time.perf_counter()
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                _t1 = time.perf_counter()
                 ttnn.synchronize_device(mesh_device)
+                if os.getenv("QWEN_ITER_TIMING", "0") == "1":
+                    logger.info(
+                        f"  iter-timing trace_issue={(_t1-_t0)*1000:.2f} sync={(time.perf_counter()-_t1)*1000:.2f} ms"
+                    )
             elif ext_trace_id is not None:
+                # QWEN_ITER_TIMING=1 logs where the per-iteration host time goes. The
+                # device profile shows ~3.4 ms/iter at bs=1 of device idle inside the
+                # first ops of each replay (waiting on the host), for inputs of a few KB.
+                _tt = os.getenv("QWEN_ITER_TIMING", "0") == "1"
+                _t = [time.perf_counter()]
                 copy_host_to_device(ext_host_inputs, device_tensors=ext_device_inputs, mesh_device=mesh_device)
+                _t.append(time.perf_counter())
                 ttnn.execute_trace(mesh_device, ext_trace_id, cq_id=0, blocking=False)
+                _t.append(time.perf_counter())
                 hidden_host = ext_trace_output.cpu(blocking=False)
+                _t.append(time.perf_counter())
                 ttnn.synchronize_device(mesh_device)
+                _t.append(time.perf_counter())
                 _ = ttnn.to_torch(ttnn.get_device_tensors(hidden_host)[0])
+                _t.append(time.perf_counter())
+                if _tt:
+                    d = [(_t[j + 1] - _t[j]) * 1000 for j in range(len(_t) - 1)]
+                    logger.info(
+                        f"  iter-timing h2d={d[0]:.2f} trace_issue={d[1]:.2f} readback_enq={d[2]:.2f} "
+                        f"sync={d[3]:.2f} to_torch={d[4]:.2f} ms"
+                    )
             else:
                 generator.prev_page_table = None
                 generator.prefill_forward_text(
@@ -721,7 +753,12 @@ def run_perf(
         "total_input_tokens": total_input_tokens,
     }
 
-    mode_label = "full pipeline" if full_pipeline else "direct trace"
+    if ext_trace_id is not None:
+        mode_label = "full pipeline (extended trace: forward + pooling + I/O)"
+    elif use_direct_trace:
+        mode_label = "direct trace (device-only forward replay)"
+    else:
+        mode_label = "generator fallback (eager post-processing, no trace reuse)"
     time_label = "full pipeline time" if full_pipeline else "prefill time"
 
     logger.info("")
@@ -770,7 +807,7 @@ def run_perf(
 
 
 def standalone_main(
-    batch_size: int, seq_len: int, iterations: int, device_id: int = 0, full_pipeline: bool = False
+    batch_size: int, seq_len: int, iterations: int, device_id: int = 0, full_pipeline: bool = True
 ) -> None:
     """`python <entry_file>` path — opens its own device, no pytest fixture."""
     apply_workload_env(batch_size, seq_len)

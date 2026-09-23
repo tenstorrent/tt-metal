@@ -546,6 +546,31 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Measurement fix: the extended trace is now the timed path (2026-09-23)
+
+The demo looked up the Generator's prefill trace with a stale 3-part key
+(`f"{seq_len}_0_{batch_size}"`; the Generator keys it 4-part with an `_sp0/_sp1`
+suffix), so `use_direct_trace` was always False and every timed iteration fell
+back to the Generator path: eager post-processing ops (slice + norm + to_layout)
+dispatched outside any trace, four H2D copies and a blocking readback per call.
+`serve.py` calls `execute_trace` directly and never paid this; only the demo's
+numbers were inflated. The demos now default to `--full-pipeline` (forward +
+pooling + I/O in one traced replay — the mode the README already described as
+the optimised path; `--no-full-pipeline` times the bare forward replay), the
+lookup matches on the 3-part prefix, and the printed mode label reports the
+branch actually taken.
+
+| batch | H200 | before (Generator fallback) | **now (extended trace)** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 25.9  | **25.2**  | −2.7% | 4.63× |
+| bs8  | 33.081  | 156.4 | **155.6** | −0.5% | 4.70× |
+| bs16 | 67.225  | 290.9 | **288.7** | −0.8% | 4.29× |
+| bs32 | 139.150 | 557.8 | **543.5** | −2.6% | 3.91× |
+
+Per-iteration host cost in this mode at bs1 (`QWEN_ITER_TIMING=1`): h2d 0.08 +
+trace issue 0.02 + readback enqueue 0.04 + to_torch 0.16 = **0.3 ms**; the
+remaining 25.05 ms is the device. bs1 is device-bound end to end.
+
 ### Correction: use DEVICE KERNEL DURATION, not FW DURATION, for op shares (2026-09-23)
 
 `DEVICE FW DURATION` starts when a core receives the launch, which on a traced
