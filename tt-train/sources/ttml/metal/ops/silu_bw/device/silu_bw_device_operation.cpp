@@ -51,8 +51,32 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
 
     check_tensor(input_tensor, "Input");
     check_tensor(dL_dout_tensor, "dL_dout");
+
+    const auto& expected_logical_shape = input_tensor.logical_shape();
+    const auto& expected_padded_shape = input_tensor.padded_shape();
+    TT_FATAL(
+        dL_dout_tensor.logical_shape() == expected_logical_shape,
+        "SiLUBackward: dL_dout logical shape {} does not match input logical shape {}",
+        dL_dout_tensor.logical_shape(),
+        expected_logical_shape);
+    TT_FATAL(
+        dL_dout_tensor.padded_shape() == expected_padded_shape,
+        "SiLUBackward: dL_dout padded shape {} does not match input padded shape {}",
+        dL_dout_tensor.padded_shape(),
+        expected_padded_shape);
+
     if (preallocated_da_tensor.has_value()) {
         check_tensor(preallocated_da_tensor.value(), "Preallocated dL_da");
+        TT_FATAL(
+            preallocated_da_tensor->logical_shape() == expected_logical_shape,
+            "SiLUBackward: preallocated dL_da logical shape {} does not match input logical shape {}",
+            preallocated_da_tensor->logical_shape(),
+            expected_logical_shape);
+        TT_FATAL(
+            preallocated_da_tensor->padded_shape() == expected_padded_shape,
+            "SiLUBackward: preallocated dL_da padded shape {} does not match input padded shape {}",
+            preallocated_da_tensor->padded_shape(),
+            expected_padded_shape);
     }
 }
 
@@ -64,10 +88,7 @@ spec_return_value_t SiLUBackwardDeviceOperation::compute_output_specs(
     if (tensor_args.preallocated_da.has_value()) {
         output_specs.push_back(tensor_args.preallocated_da->tensor_spec());
     } else {
-        output_specs.emplace_back(
-            tensor_args.input.logical_shape(),
-            tt::tt_metal::TensorLayout(
-                tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+        output_specs.push_back(tensor_args.input.tensor_spec());
     }
 
     return output_specs;
@@ -88,8 +109,9 @@ ttsl::hash::hash_t SiLUBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SiLUBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape, input_padded_shape);
 
     return hash;
 }
