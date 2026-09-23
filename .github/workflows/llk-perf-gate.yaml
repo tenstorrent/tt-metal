@@ -83,5 +83,7 @@ jobs:
       perf_run_id: ${{ inputs.perf_run_id || '' }}
       baseline_run_id: ${{ inputs.baseline_run_id || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
+      threshold: ${{ (inputs.arch || 'wormhole') == 'blackhole' && '0.02' || '0.08' }}
+      min_cycles: "30"
       fail_on_regression: false
     secrets: inherit
