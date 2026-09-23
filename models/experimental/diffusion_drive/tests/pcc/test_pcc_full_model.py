@@ -89,15 +89,18 @@ def test_full_model_pcc_random(device, model_config, checkpoint_path, missing_as
     from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
     ref_model = _load_ref_model(ckpt, anchors)
-    ttnn_model = TtnnDiffusionDriveModel(ref_model, model_config, device)
-    ttnn_model.build_all(device)
-    assert ttnn_model._perception is not None, "build_all did not install the TTNN perception path"
-
     features = _random_features(batch=batch)
 
+    # Run the PyTorch reference BEFORE building the TTNN wrapper: TtnnDiffusionDriveModel
+    # keeps `ref_model` as its `_model` and build_all() swaps its backbone, perception and
+    # trajectory modules in place, so a reference forward taken afterwards already runs TTNN.
     torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     with torch.no_grad():
         ref_out = ref_model(features)
+
+    ttnn_model = TtnnDiffusionDriveModel(ref_model, model_config, device)
+    ttnn_model.build_all(device)
+    assert ttnn_model._perception is not None, "build_all did not install the TTNN perception path"
 
     torch.manual_seed(1234)  # same noise stream
     ttnn_out = ttnn_model(features)
