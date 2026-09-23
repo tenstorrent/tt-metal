@@ -395,12 +395,100 @@ class QwenModel:
             tokens, positions, cache=cache, page_table=page_table, rope_indices=rope_indices, active_slots=active_slots
         )
 
+    def prepare_decode_bucket(self, cache, active_slots):
+        """Allocate resident recurrent state before capture, never inside a trace."""
+        self.flush_decode_bucket()
+        if not getattr(self, "decode_buckets", False):
+            return cache
+        slots = tuple(range(cache.batch_size)) if active_slots is None else tuple(active_slots)
+        bucket = next(b for b in (1, 8, 16) if b >= len(slots))
+        if bucket == cache.batch_size and slots == tuple(range(cache.batch_size)):
+            return cache
+        layers = []
+        for state in cache.layers:
+            packed = DecoderState(key=state.key, value=state.value)
+            for name in ("conv", "recurrent"):
+                tensor = getattr(state, name)
+                if tensor is not None:
+                    rows = [tensor[i : i + 1] for i in slots]
+                    value = ttnn.concat(rows, dim=0) if len(rows) > 1 else ttnn.clone(rows[0])
+                    if len(slots) < bucket:
+                        value = ttnn.pad(value, [(0, bucket - len(slots))] + [(0, 0)] * (len(value.shape) - 1), value=0)
+                    setattr(packed, name, value)
+            layers.append(packed)
+        packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
+        self._resident_decode_bucket = (cache, slots, packed_cache)
+        self._resident_decode_valid = True
+        # Warm both directions before traces reserve scratch addresses. Later
+        # prefill boundaries can reuse these programs without recapturing.
+        self.suspend_decode_bucket()
+        self.resume_decode_bucket()
+        return packed_cache
+
+    def suspend_decode_bucket(self, *, discard_slots=()):
+        """Publish live state once before prefill/reset mutates scheduler state."""
+        resident = getattr(self, "_resident_decode_bucket", None)
+        if resident is not None and self._resident_decode_valid:
+            cache, slots, packed_cache = resident
+            # New requests replace these states immediately. If every resident
+            # row is being reset, publishing their old contents is unnecessary.
+            if not set(slots).issubset(discard_slots):
+                self._scatter_decode_state(cache, packed_cache.layers, slots)
+            self._resident_decode_valid = False
+
+    def resume_decode_bucket(self):
+        """Refresh resident buffers in place, preserving captured addresses."""
+        resident = getattr(self, "_resident_decode_bucket", None)
+        if resident is None or self._resident_decode_valid:
+            return
+        cache, slots, packed_cache = resident
+        for original, packed in zip(cache.layers, packed_cache.layers):
+            for name in ("conv", "recurrent"):
+                source, target = getattr(original, name), getattr(packed, name)
+                if source is None:
+                    continue
+                rows = [source[i : i + 1] for i in slots]
+                value = ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0]
+                if len(slots) < packed_cache.batch_size:
+                    value = ttnn.pad(
+                        value, [(0, packed_cache.batch_size - len(slots))] + [(0, 0)] * (len(value.shape) - 1), value=0
+                    )
+                ttnn.copy(value, target)
+        self._resident_decode_valid = True
+
+    def flush_decode_bucket(self):
+        """Publish resident state after releasing traces and before cache mutations."""
+        resident = getattr(self, "_resident_decode_bucket", None)
+        if resident is not None:
+            self.suspend_decode_bucket()
+            self._resident_decode_bucket = None
+
+    def _scatter_decode_state(self, cache, layers, slots):
+        inverse = {slot: row for row, slot in enumerate(slots)}
+        for original, packed in zip(cache.layers, layers):
+            for name in ("conv", "recurrent"):
+                target, source = getattr(original, name), getattr(packed, name)
+                if target is None:
+                    continue
+                rows = []
+                start = 0
+                while start < cache.batch_size:
+                    live = start in inverse
+                    end = start + 1
+                    while end < cache.batch_size and (end in inverse) == live:
+                        if live and inverse[end] != inverse[start] + end - start:
+                            break
+                        end += 1
+                    rows.append(source[inverse[start] : inverse[start] + end - start] if live else target[start:end])
+                    start = end
+                ttnn.copy(ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0], target)
+
     def _decode_bucket(self, tokens, positions, cache, page_table, rope_indices, slots, bucket):
         """Pack active rows on device, execute one fixed bucket, restore scheduler rows.
 
         Page IDs keep their original ownership in the shared KV pool. Linear
-        state is gathered/scattered within the trace, so prefill, slot remapping,
-        and warmup backups always see the authoritative full-capacity state.
+        state stays resident when prepared by the generator; direct callers
+        retain the per-token gather/scatter fallback.
         Sampling stays in scheduler order, preserving per-request RNG streams.
         """
 
@@ -422,17 +510,23 @@ class QwenModel:
         if rope_indices is not None:
             packed_rope = ttnn.reshape(pack(ttnn.reshape(rope_indices, [cache.batch_size, 1])), [bucket])
         packed_table = pack(page_table)
-        layers = []
-        for state in cache.layers:
-            layers.append(
-                DecoderState(
-                    key=state.key,
-                    value=state.value,
-                    conv=pack(state.conv) if state.conv is not None else None,
-                    recurrent=pack(state.recurrent) if state.recurrent is not None else None,
+        resident = getattr(self, "_resident_decode_bucket", None)
+        if resident is not None:
+            if resident[0] is not cache or resident[1] != slots:
+                raise RuntimeError("Resident decode state must be flushed before changing slots")
+            packed_cache = resident[2]
+        else:
+            layers = []
+            for state in cache.layers:
+                layers.append(
+                    DecoderState(
+                        key=state.key,
+                        value=state.value,
+                        conv=pack(state.conv) if state.conv is not None else None,
+                        recurrent=pack(state.recurrent) if state.recurrent is not None else None,
+                    )
                 )
-            )
-        packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
+            packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
         logits = self._decode_fixed(
             ids,
             packed_positions,
@@ -442,25 +536,14 @@ class QwenModel:
             # Padding state is disposable; only live rows are scattered below.
         )
         inverse = {slot: row for row, slot in enumerate(slots)}
-        for original, packed in zip(cache.layers, layers):
-            for name in ("conv", "recurrent"):
-                target, source = getattr(original, name), getattr(packed, name)
-                if target is None:
-                    continue
-                # Coalesce adjacent scheduler rows instead of copying each
-                # inactive row separately (the usual mapping is a prefix).
-                rows = []
-                start = 0
-                while start < cache.batch_size:
-                    live = start in inverse
-                    end = start + 1
-                    while end < cache.batch_size and (end in inverse) == live:
-                        if live and inverse[end] != inverse[start] + end - start:
-                            break
-                        end += 1
-                    rows.append(source[inverse[start] : inverse[start] + end - start] if live else target[start:end])
-                    start = end
-                ttnn.copy(ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0], target)
+        if resident is None:
+            self._scatter_decode_state(cache, packed_cache.layers, slots)
+        if slots == tuple(range(len(slots))):
+            return ttnn.pad(
+                logits[:, :, : len(slots), :],
+                [(0, 0), (0, 0), (0, cache.batch_size - len(slots)), (0, 0)],
+                value=0,
+            )
         zero = ttnn.zeros_like(logits[:, :, :1, :])
         rows = [logits[:, :, inverse[i] : inverse[i] + 1, :] if i in inverse else zero for i in range(cache.batch_size)]
         return ttnn.concat(rows, dim=2) if len(rows) > 1 else rows[0]

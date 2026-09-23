@@ -59,6 +59,8 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 "_capture",
                 "_ensure_cache",
                 "bind_cache",
+                "_prefill_trace_logits",
+                "reset_recurrent_slots",
             ],
             self.ops,
         )
@@ -274,6 +276,50 @@ class ServingPrefillTraceTests(unittest.TestCase):
         fourth = self.events.index(("begin", 4))
         self.assertEqual(self.events[fourth : fourth + 3], [("begin", 4), ("sample", self.owned), ("end", 4)])
         self.assertEqual(self.gen.counters["prefill_sampling_trace_captures"], 1)
+
+    def test_release_publishes_resident_state_after_releasing_traces(self):
+        self.gen.trace = "decode"
+        self.gen.sample_trace = "sample"
+        self.gen.model._resident_decode_bucket = object()
+        self.gen.model.flush_decode_bucket = lambda: self.events.append(("flush",))
+        self.gen._release_traces()
+        self.assertEqual(self.events, [("release", "decode"), ("release", "sample"), ("flush",)])
+
+    def test_capture_restores_resident_state_not_stale_scheduler_state(self):
+        conv, recurrent = object(), object()
+        resident = SimpleNamespace(layers=[SimpleNamespace(conv=conv, recurrent=recurrent)])
+        self.gen.active_slots = (0,)
+        self.gen.model.decode_buckets = True
+        self.gen.model.prepare_decode_bucket = lambda cache, slots: resident
+        self.capture(serving=False)
+        restored = [event[2] for event in self.events if event[0] == "copy"]
+        self.assertIn(conv, restored)
+        self.assertIn(recurrent, restored)
+
+    def test_single_slot_prefill_uses_resident_state(self):
+        resident = SimpleNamespace(batch_size=1)
+        self.gen.model._resident_decode_bucket = (self.gen.cache, (0,), resident)
+        self.gen.model._resident_decode_valid = True
+        self.gen.prefill_prepared = dict(tokens=object(), positions=object(), length=128)
+        calls = []
+        self.gen.model.prefill = lambda tokens, **kw: calls.append(kw) or FakeLogits()
+        self.methods["_prefill_trace_logits"](self.gen)
+        self.assertIs(calls[0]["cache"], resident)
+
+    def test_single_slot_reset_zeros_resident_state_in_place(self):
+        state = SimpleNamespace(conv=torch.ones(1, 3, 4), recurrent=torch.ones(1, 2, 4, 4))
+        resident = SimpleNamespace(layers=[state], batch_size=1)
+        self.gen.model._resident_decode_bucket = (self.gen.cache, (0,), resident)
+        self.gen.model._resident_decode_valid = True
+        self.ops.zeros_like = torch.zeros_like
+        self.ops.copy = lambda source, target: target.copy_(source)
+        conv, recurrent = state.conv, state.recurrent
+        self.methods["reset_recurrent_slots"](self.gen, [0])
+        self.assertIs(state.conv, conv)
+        self.assertIs(state.recurrent, recurrent)
+        self.assertEqual(conv.count_nonzero().item(), 0)
+        self.assertEqual(recurrent.count_nonzero().item(), 0)
+        self.assertTrue(self.gen.model._resident_decode_valid)
 
     def test_standalone_keeps_three_trace_contract(self):
         self.capture(serving=False)

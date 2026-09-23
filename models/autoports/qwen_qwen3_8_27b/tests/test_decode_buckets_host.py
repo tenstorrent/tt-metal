@@ -20,17 +20,29 @@ class DecodeBucketsTests(unittest.TestCase):
             concat=lambda rows, dim: torch.cat(rows, dim=dim),
             full_like=lambda x, fill_value: torch.full_like(x, fill_value),
             zeros_like=torch.zeros_like,
+            clone=torch.clone,
             copy=lambda source, target: target.copy_(source),
             pad=pad,
         )
-        methods = load_methods("model.py", "QwenModel", ["decode", "_decode_bucket"], ops)
-        methods["DecoderState"] = SimpleNamespace
+        names = [
+            "decode",
+            "_decode_bucket",
+            "_scatter_decode_state",
+            "prepare_decode_bucket",
+            "flush_decode_bucket",
+            "suspend_decode_bucket",
+            "resume_decode_bucket",
+        ]
+        methods = load_methods("model.py", "QwenModel", names, ops)
+        methods["DecoderState"] = lambda **kw: SimpleNamespace(
+            **{**dict(key=None, value=None, conv=None, recurrent=None), **kw}
+        )
         methods["ModelCache"] = lambda layers, batch, capacity, pages: SimpleNamespace(
             layers=layers, batch_size=batch, capacity=capacity, num_pages=pages
         )
         model = SimpleNamespace(decode_buckets=True, calls=[])
-        model.decode = MethodType(methods["decode"], model)
-        model._decode_bucket = MethodType(methods["_decode_bucket"], model)
+        for name in names:
+            setattr(model, name, MethodType(methods[name], model))
 
         def fixed(tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):
             model.calls.append((cache.batch_size, positions.clone(), page_table.clone(), rope_indices.clone()))
@@ -100,6 +112,54 @@ class DecodeBucketsTests(unittest.TestCase):
                 self.run_decode(self.make_model(), self.cache(), slots)
         with self.assertRaisesRegex(ValueError, "capacity"):
             self.run_decode(self.make_model(), self.cache(32), (0,))
+
+    def test_resident_state_publishes_only_at_transition(self):
+        model, cache = self.make_model(), self.cache()
+        expected = cache.layers[0].conv.clone()
+        for slots in ((15,), tuple(range(5)), tuple(range(12)), (7,), (2, 9)):
+            resident = model.prepare_decode_bucket(cache, slots)
+            before = cache.layers[0].conv.clone()
+            for _ in range(3):
+                self.run_decode(model, cache, slots)
+                expected[list(slots)] += 1
+            self.assertTrue(torch.equal(cache.layers[0].conv, before))
+            self.assertEqual(resident.batch_size, 1 if len(slots) == 1 else 8 if len(slots) <= 8 else 16)
+            model.flush_decode_bucket()
+            self.assertTrue(torch.equal(cache.layers[0].conv, expected))
+            self.assertIsNone(model._resident_decode_bucket)
+
+    def test_prefill_refresh_keeps_resident_addresses_and_does_not_overwrite_reset(self):
+        model, cache = self.make_model(), self.cache()
+        resident = model.prepare_decode_bucket(cache, (3,))
+        conv = resident.layers[0].conv
+        self.run_decode(model, cache, (3,))
+        model.suspend_decode_bucket()
+        self.assertEqual(cache.layers[0].conv[3].item(), 4)
+        cache.layers[0].conv[3] = 100  # A new prompt replaces this slot.
+        model.suspend_decode_bucket()  # A second prefill boundary is a no-op.
+        model.resume_decode_bucket()
+        self.assertIs(resident.layers[0].conv, conv)
+        self.assertEqual(conv.item(), 100)
+        self.run_decode(model, cache, (3,))
+        model.flush_decode_bucket()
+        self.assertEqual(cache.layers[0].conv[3].item(), 101)
+
+    def test_flushing_suspended_state_preserves_prefill_updates(self):
+        model, cache = self.make_model(), self.cache()
+        model.prepare_decode_bucket(cache, (0,))
+        self.run_decode(model, cache, (0,))
+        model.suspend_decode_bucket()
+        cache.layers[0].conv[0] = 42
+        model.flush_decode_bucket()
+        self.assertEqual(cache.layers[0].conv[0].item(), 42)
+
+    def test_new_requests_can_discard_only_when_all_resident_slots_reset(self):
+        for reset in ((0,), (0, 3)):
+            model, cache = self.make_model(), self.cache()
+            model.prepare_decode_bucket(cache, (0, 3))
+            self.run_decode(model, cache, (0, 3))
+            model.suspend_decode_bucket(discard_slots=reset)
+            self.assertEqual(cache.layers[0].conv[3].item(), 4 if reset == (0,) else 3)
 
 
 if __name__ == "__main__":

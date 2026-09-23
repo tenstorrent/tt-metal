@@ -129,6 +129,8 @@ class QwenGenerator(Generator):
             if trace is not None:
                 ttnn.release_trace(self.mesh, trace)
         self.trace = self.sample_trace = self.prefill_trace = self.prefill_sample_trace = None
+        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+            self.model.flush_decode_bucket()
         self.trace_records_history = None
         if not keep_prefill:
             self.prefill_prepared = None
@@ -136,9 +138,13 @@ class QwenGenerator(Generator):
     def _prefill_trace_logits(self):
         """Device-only prefill over generator-owned inputs; output remains transient."""
         prepared = self.prefill_prepared
+        resident = getattr(self.model, "_resident_decode_bucket", None)
+        cache = self.cache
+        if resident is not None and resident[1] == (0,) and self.model._resident_decode_valid:
+            cache = resident[2]
         logits = self.model.prefill(
             prepared["tokens"],
-            cache=self.cache,
+            cache=cache,
             page_table=self.page_table,
             length=prepared["length"],
             positions=prepared["positions"],
@@ -152,6 +158,9 @@ class QwenGenerator(Generator):
 
     def _prefill_for_generate(self, tokens, *, trace_sampling=False):
         """Own one prefill result until first-token sampling consumes it."""
+        resident = getattr(self.model, "_resident_decode_bucket", None)
+        if resident is not None and not (resident[1] == (0,) and self.model._resident_decode_valid):
+            self.model.suspend_decode_bucket()
         length = tokens.shape[-1]
         if (tokens < 0).any() or (tokens >= self.model.config.vocab_size).any():
             raise ValueError("Token IDs lie outside the vocabulary")
@@ -340,6 +349,8 @@ class QwenGenerator(Generator):
         self.page_host = table.clone()
 
     def reset(self):
+        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+            self.model.suspend_decode_bucket()
         if self.cache is not None:
             self.model.reset_cache(self.cache)
         if self.positions is not None:
@@ -365,6 +376,8 @@ class QwenGenerator(Generator):
         start_pos=None,
         **kwargs,
     ):
+        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+            self.model.suspend_decode_bucket()
         # Public outputs retain their original independent ownership. They must
         # not be allocated while a future owned-prefill replay reserves scratch.
         if self.prefill_prepared is not None:
@@ -483,7 +496,11 @@ class QwenGenerator(Generator):
             active_slots=self.active_slots,
         )
         b = self.cache.batch_size
-        if self.active_slots is not None and len(self.active_slots) != b:
+        if (
+            self.active_slots is not None
+            and len(self.active_slots) != b
+            and not getattr(self.model, "decode_buckets", False)
+        ):
             # Inactive SDPA rows are unwritten; never sample their undefined logits.
             zero = ttnn.zeros_like(logits[:, :, :1, :])
             rows = [logits[:, :, slot : slot + 1, :] if slot in self.active_slots else zero for slot in range(b)]
@@ -518,6 +535,19 @@ class QwenGenerator(Generator):
 
     def reset_recurrent_slots(self, slots):
         """Start new requests without clearing any scheduler-owned attention pages."""
+        resident = getattr(self.model, "_resident_decode_bucket", None)
+        if resident is not None and resident[1] == (0,) and list(slots) == [0] and self.model._resident_decode_valid:
+            # The owned slot-zero prefill trace uses this same B1 state. Reset
+            # it directly; publishing/resetting/regathering all 16 rows would
+            # add latency without preserving any live request in slot zero.
+            for state in resident[2].layers:
+                for name in ("conv", "recurrent"):
+                    tensor = getattr(state, name)
+                    if tensor is not None:
+                        ttnn.copy(ttnn.zeros_like(tensor), tensor)
+            return
+        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+            self.model.suspend_decode_bucket(discard_slots=slots)
         if getattr(self, "_recurrent_reset_warmed", None) is not self.cache:
             self._release_traces(keep_prefill=True)
         for state in self.cache.layers:
@@ -561,9 +591,12 @@ class QwenGenerator(Generator):
 
     def _capture(self, *, record_history=False):
         """Warm both graphs before capture; restore only mutable request state."""
+        decode_cache = self.cache
+        if getattr(self.model, "decode_buckets", False):
+            decode_cache = self.model.prepare_decode_bucket(self.cache, self.active_slots)
         backups = [
             (state, name, ttnn.clone(getattr(state, name)))
-            for state in self.cache.layers
+            for state in decode_cache.layers
             for name in ("conv", "recurrent")
             if getattr(state, name) is not None
         ]
@@ -733,6 +766,8 @@ class QwenGenerator(Generator):
             self._release_traces(keep_prefill=True)
         if self.trace is None:
             self._capture(record_history=record_history)
+        elif getattr(self.model, "_resident_decode_bucket", None) is not None:
+            self.model.resume_decode_bucket()
         ttnn.execute_trace(self.mesh, self.trace, cq_id=0, blocking=False)
         self.counters["model_replays"] += 1
         self.remaining_steps -= 1
