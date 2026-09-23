@@ -71,20 +71,41 @@ pytest models/demos/wormhole/qwen38/demo/text_demo.py -v -s -k "determinism_128"
 
 ## Measured performance (batch 1)
 
-Targets: `models/model_targets.yaml` under `qwen3.8-27b` / `wh_llmbox_perf`. The Blackhole
-QuietBox (`bh_quietbox_2`, TP=4) column is the cross-arch reference point.
+Two different things get measured here, and they are **not** interchangeable.
 
-| ISL  | TTFT T3K | TTFT BH ref | t/s/u T3K | t/s/u BH ref |
-| ---- | -------- | ----------- | --------- | ------------ |
-| 128  | 0.57 s   | 0.15 s      | 16.8      | 26.0         |
-| 4k   | 1.47 s   | 2.03 s      | 16.8      | 18.1         |
-| 8k   | 3.18 s   | 4.62 s      | 16.4      | 18.0         |
-| 16k  | 6.44 s   | 9.47 s      | 16.3      | 17.9         |
-| 32k  | 13.76 s  | 19.96 s     | 16.0      | 17.6         |
-| 128k | 56.45 s  | 77.61 s     | 14.2      | 16.7         |
+**Demo** (`demo/text_demo.py`) times the model forward plus first-token sampling:
 
-TTFT beats the Blackhole reference at every ISL >= 4k; decode runs ~90% of it, except at
-ISL 128. Single runs on one box with the fused GDN prefill path (the default).
+| ISL  | TTFT    | t/s/u | BH QuietBox ref (TP=4) |
+| ---- | ------- | ----- | ---------------------- |
+| 128  | 0.57 s  | 16.8  | 0.15 s / 26.0          |
+| 4k   | 1.47 s  | 16.8  | 2.03 s / 18.1          |
+| 8k   | 3.18 s  | 16.4  | 4.62 s / 18.0          |
+| 16k  | 6.44 s  | 16.3  | 9.47 s / 17.9          |
+| 32k  | 13.76 s | 16.0  | 19.96 s / 17.6         |
+| 128k | 56.45 s | 14.2  | 77.61 s / 16.7         |
+
+**vLLM serving** (tt-inference-server benchmarks workflow, concurrency 1) times a full request.
+This is what `models/model_targets.yaml` grades against:
+
+| ISL  | TTFT       | t/s/u (1000/TPOT) | t/s (OSL/E2EL) |
+| ---- | ---------- | ----------------- | -------------- |
+| 128  | 1298.3 ms  | 16.89             | 14.5           |
+| 1024 | 1395.6 ms  | 16.78             | 14.3           |
+| 4k   | 2465.6 ms  | 16.50             | 12.6           |
+| 32k  | 14856.3 ms | 15.90             | 5.6            |
+
+Serving adds a roughly fixed **0.7-1.1 s per request** on top of the demo TTFT, and that cost does
+not grow with prompt length (2.3x the demo at ISL 128, only 1.08x at 32k). It is **not** the model
+forward: the demo takes the identical eager `prefill_masked_bucket` path at ISL 128 and still
+reaches 0.57 s. Look for it in the serving layer -- tokenization, scheduling, page-table
+construction, host<->device copies -- not in `tt/`.
+
+Decode is healthy and agrees across both harnesses: 16.89 t/s/u through vLLM vs 16.8 in the demo.
+Only `t/s` differs, because `output_throughput` divides by E2EL and therefore includes TTFT; do not
+expect it to equal the per-token rate even at batch 1.
+
+Concurrency >1 is measured but deliberately left ungraded: prefill runs one user at a time, so TTFT
+at 8 users rises to ~9.9 s, roughly 8x the single-user figure.
 
 ## Tensor-parallel tests
 
