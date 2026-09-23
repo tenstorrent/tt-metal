@@ -3591,9 +3591,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         logger.warning(
             f"Gemma4DFlash speculative contract: the bounded ring ({ring}) equals the sliding "
             f"window ({window}) and a verify writes P_v={p_v} rows, so proposals decline once a "
-            f"request passes position {ring - p_v} and it continues as plain decode. Set "
-            f"{SPEC_RING_HEADROOM_ENV}={window // _RING_HEADROOM_BLOCK} (ring {2 * window}) and "
-            "lower GEMMA4_MAX_TOKENS_ALL_USERS to pay for it."
+            f"request passes position {ring - p_v} and it continues as plain decode. "
+            f"{SPEC_RING_HEADROOM_ENV}={window // _RING_HEADROOM_BLOCK} (ring {2 * window}) would "
+            "lift that, once the bounded page tables are sized from the ring (tt-metal#57573); "
+            "it also needs a lower GEMMA4_MAX_TOKENS_ALL_USERS to fit."
         )
 
     # -- identity: state slot plus generation ---------------------------------
