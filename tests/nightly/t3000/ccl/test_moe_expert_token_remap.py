@@ -228,6 +228,11 @@ def test_moe_expert_token_remap_multiple_reduction_groups_per_core(
     The reduced output is only exercised across group boundaries when a core owns more than one
     reduction group, which requires batch*seq/reduction_size to exceed the core count the work is
     split over. test_moe_expert_token_remaps stays below that threshold."""
+    # Seeded so a T3000 failure is reproducible from the test id alone, matching
+    # test_all_to_all_dispatch.py where these generators come from.
+    torch.manual_seed(2005)
+    random.seed(2005)
+
     devices = prod(mesh_shape)
     batch = devices * batches_per_device
     experts = devices * experts_per_device
