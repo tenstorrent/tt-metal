@@ -1,39 +1,28 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Which of Snake's five ops returns `inf` on Wormhole, and what fixes it?
+"""Which of Snake's five ops returns `inf` on Wormhole, and what avoids it?
 
-The chain so far:
+On Wormhole, `snake act2[0]` in the vocoder's source branch comes back non-finite for
+`stft_frames` in [8193, 8577], where Blackhole runs the same lengths finite. Snake is
+`x + sin^2(alpha*x)/alpha`, and each op stays finite for finite input of ordinary
+magnitude: `sin` is in [-1, 1], its square in [0, 1], and `1/alpha` is a host-folded
+constant.
 
-    streaming chunk 1 is 15x too loud    (probe_streaming_amplitude)
-    -> the hift_mel cache carries it     (probe_streaming_bisect)
-    -> not the cache's values: it is the *length*, 110 -> 130   (probe_hift_isolate)
-    -> `src1` is inf while everything else is finite            (probe_hift_isolate)
-    -> `snake act2[0]`, for stft_frames in [8193, 8577]         (probe_hift_source_branch)
+`act1[0]` and `act2[0]` are the same activation on tensors of the same logical shape in
+the same call, and only the second fails. What differs is the producer -- `act1[0]`
+reads a `k=1` convolution's output and `act2[0]` a dilated one -- and convolutions
+choose their output sharding from their own geometry. So this:
 
-and Blackhole runs the identical lengths with `conv_post` at 5.15-5.19 where Wormhole has
-`inf`, so this is architecture-specific.
+  1. prints the memory config of both activations' inputs;
+  2. walks Snake one op at a time on the failing tensor, reporting magnitude as well as
+     finiteness, so the report names a kernel -- or shows the input already at 1e38,
+     which is finite, from the convolution before it;
+  3. reruns the computation with the input moved to interleaved DRAM and to interleaved
+     L1, either of which would also be a workaround.
 
-Snake is `x + sin^2(alpha*x)/alpha`. Every op in it is bounded for finite input: `sin` is in
-[-1, 1], `square` of that is in [0, 1], and `1/alpha` is a host-folded constant. **There is
-no arithmetic path from a finite input to `inf` here**, so one of the five kernels is
-returning something it should not.
-
-The strangest part is what rules the *shape* out on its own: `act1[0]` and `act2[0]` are the
-same activation applied to tensors of the **same logical shape** in the same call, and only
-the second one fails. What differs is where the tensor came from -- `act1[0]` reads a `k=1`
-convolution's output and `act2[0]` reads a `k=3` dilated one -- and convolutions choose
-their output sharding from their own geometry. So the suspect is a **sharded** elementwise
-kernel at a particular shard geometry, not the op in the abstract.
-
-This probe therefore does three things:
-
-  1. prints the memory config of both activations' inputs, so "they differ" is shown rather
-     than assumed;
-  2. walks Snake one op at a time on the failing tensor, so the report names a kernel;
-  3. re-runs the same computation with the input pushed to interleaved DRAM and to
-     interleaved L1 -- which, if either works, is the model's workaround as well as
-     evidence about the cause.
+On Wormhole the input is the fault: the convolution before Snake is the prepared-weight
+defect in `docs/VALIDATION.md`.
 
     python3 models/demos/cosyvoice/scripts/probe_snake_inf.py [--frames 8321]
 """
@@ -90,10 +79,9 @@ def main() -> int:
         a1 = rb.act1[0](si)
         c1, _ = rb.convs1[0](a1, frames, 1)
 
-        # `n_inf` alone is not enough here and an earlier run of this probe proved it: a
-        # convolution can hand back values of 1e38 -- finite, so every isfinite check
-        # passes -- and the activation downstream then gets the blame for the overflow it
-        # merely completes. Magnitude is the diagnostic; finiteness is the symptom.
+        # `n_inf` alone is not enough: a convolution can return values of 1e38 -- finite,
+        # so every isfinite check passes -- and the activation downstream then overflows.
+        # Magnitude is the diagnostic; finiteness is the symptom.
         print(f"\n  {'tensor':<30}{'shape':<18}{'memory config':<26}{'n_inf':>7}{'max|finite|':>14}")
         print("  " + "-" * 96)
         for name, t in (

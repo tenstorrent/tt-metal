@@ -1,30 +1,20 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Confirm the corruption is in the *prepared weight*, and that skipping preparation fixes it.
+"""Is the Wormhole conv1d corruption in the prepared weight, and does skipping preparation fix it?
 
-`probe_conv_bisect.py` narrowed the Wormhole vocoder failure to one variable:
+At the failing geometry the model's convolution returns the same wrong value for a
+completely different input, while a bare `ttnn.conv1d` with the same weight is correct
+(`probe_conv_bisect.py`). An output that no longer depends on the activation points at
+the operand that did not change: the weight `ttnn.prepare_conv_weights` produced.
 
-    A  model conv (prepared weights) + model input     1.23e38   wrong
-    B  model conv (prepared weights) + RANDOM input    1.23e38   wrong  <- same value
-    C  bare ttnn.conv1d, same weight  + model input      3.766   correct
+This establishes the two things an upstream report needs:
 
-B returning the identical figure for a completely different input is the tell: the output no
-longer depends on the activation, so the corruption is in the operand that did not change --
-the weight tensor `ttnn.prepare_conv_weights` produced.
+  1. the prepared weight's own magnitude, at a length that works and one that does not;
+  2. that the unprepared weight is a working fix, and what it costs -- the fallback
+     `TtConv1d._prepared` takes when preparation raises, taken deliberately.
 
-`TtConv1d` hoists that call out of the op so convolutions can be captured in a trace; the op
-otherwise transfers weights at call time, which trace capture rejects. So the fast path and
-the correct path are, at this geometry, different paths.
-
-Two things to establish, both of which an upstream report needs:
-
-  1. **the prepared weight's own magnitude**, at a length that works and one that does not.
-     A weight of order 0.18 coming back at 1e38 is not an inference from the output, it is
-     the defect itself.
-  2. **that the unprepared weight is a working fix**, and what it costs -- because
-     `_prepared` already falls back to the raw weight when preparation *raises*, and this
-     is the same fallback taken deliberately rather than on an exception.
+It is also the check to rerun once the upstream defect is fixed (`docs/VALIDATION.md`).
 
     python3 models/demos/cosyvoice/scripts/probe_prepared_weights.py
 """

@@ -5,7 +5,7 @@
 
 This is the baseline the TTNN port is measured against: it produces the audio
 that `eval_wer_sim.py` scores, and the tok/s + RTF numbers that make the Stage 1
-perf gates (>= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
+perf thresholds (>= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
 
 RUN THIS IN THE CosyVoice VENV:
 
@@ -64,12 +64,9 @@ SPK_PREF = {
 # <|endofprompt|> marking the boundary. A description-shaped prefix conditions the
 # voice; a DIRECTIVE-shaped one gets read aloud.
 #
-# That is not hypothetical. An earlier version of this file used CosyVoice-2
-# instruct2 phrasing ("用四川话说这句话，语气轻快活泼。"), and the model dutifully
-# spoke the instruction before the sentence:
-#     "用四川话说这句话,语气轻快活泼。收到好友从远方寄来的生日礼物,..."
-# -- 42% CER against the intended text, and entirely self-inflicted. Directive
-# phrasing belongs to inference_instruct2 (CosyVoice-2), not inference_instruct.
+# CosyVoice-2's instruct2 phrasing ("用四川话说这句话，语气轻快活泼。") is spoken aloud
+# before the sentence. Directive phrasing belongs to inference_instruct2
+# (CosyVoice-2), not inference_instruct.
 #
 # English descriptions are used for every language because that is the form the
 # 300M-Instruct checkpoint was trained on; the spoken text stays in-language.

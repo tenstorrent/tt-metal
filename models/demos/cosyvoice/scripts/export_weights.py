@@ -97,8 +97,8 @@ def llm_meta(llm) -> dict:
     Two stacks with different shapes share one checkpoint: a 6-block Conformer
     text encoder (`text_encoder`) and a 14-block Transformer AR decoder (`llm`).
     They differ in more than depth -- the decoder's input layer is
-    `LegacyLinearNoSubsampling`, which appends a **ReLU** after the LayerNorm that
-    the plain `LinearNoSubsampling` does not have. Missing that produces a network
+    `LegacyLinearNoSubsampling`, which appends a ReLU after the LayerNorm that the
+    plain `LinearNoSubsampling` does not have. Leaving it out produces a network
     that runs and drifts.
     """
 

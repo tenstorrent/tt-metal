@@ -3,15 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """What does one TTNN op cost inside a trace, at decode-step tensor sizes?
 
-The AR decode step is a chain of a few hundred ops on one-row tensors, and every
-optimisation so far has been "issue fewer ops". That strategy has a floor, and the
-floor is what decides whether the remaining RTF targets are reachable by fusion at
-all or need a different kind of change. Measuring it converts "we did not reach
-0.5" into "0.5 is N ops away and the floor is M us", which is a statement someone
-can act on.
-
-Trace replay is the right setting: it removes host dispatch, so what is left is
-whatever the device charges per program, and that is the quantity in question.
+The AR decode step is a chain of a few hundred ops on one-row tensors, so issuing fewer
+ops has a floor: what the device charges per program. Trace replay removes host
+dispatch, so what this measures is that floor (PERF.md Part II §1.3).
 
     python models/demos/cosyvoice/scripts/probe_op_floor.py
 """

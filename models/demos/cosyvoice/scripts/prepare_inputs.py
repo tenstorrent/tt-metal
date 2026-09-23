@@ -30,7 +30,7 @@ Three mode-specific shapes, all of them easy to get wrong:
   tokens and mel. The text carries a `<|zh|>`-style language tag instead.
 * **instruct** deletes `llm_embedding` -- the LLM runs with no speaker vector at
   all -- and puts the instruction in the `prompt_text` slot. It must be a style
-  *description*, not a directive; see `run_reference.py` for what that cost.
+  *description*, not a directive; see `run_reference.py`.
 * **sft** and **instruct** have no prompt audio, so the flow has no
   `prompt_speech_feat` and the generated mel starts at frame 0.
 """

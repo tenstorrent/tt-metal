@@ -3,18 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Is the KV-cache shift expensive because of bytes, or because of tile alignment?
 
-Per-op pricing put `slice` + `concat` on the `[1, 16, 256, 64]` cache at ~228 us a
-layer -- 0.5 MB moved in 134 us is about 3.7 GB/s, two orders below what a copy of
-that size should cost. So the cost is probably not the bytes.
-
-The hypothesis is layout. In `TILE_LAYOUT` rows live in 32-row tiles, and both halves
-of the shift are misaligned to that: slicing from row 1 and concatenating a 1-row
-tensor onto a 255-row one each require re-tiling the whole buffer by one row. If that
-is right, the same operations at a 32-row granularity should be far cheaper, and the
-fix is to shift a tile at a time rather than a row at a time.
-
-This measures the same ops at row and tile granularity, and `bfloat8_b` alongside, to
-separate layout from bytes.
+`slice` + `concat` on the `[1, 16, 256, 64]` cache moves 0.5 MB far more slowly than a
+copy that size should take, so the bytes are probably not the price. In `TILE_LAYOUT`
+rows live in 32-row tiles, and slicing from row 1 or concatenating a 1-row tensor onto
+a 255-row one re-tiles the whole buffer. This measures the same ops at row and tile
+granularity, with `bfloat8_b` alongside, to separate layout from bytes (PERF.md Part II
+§1.4).
 
     python models/demos/cosyvoice/scripts/probe_kv_alignment.py
 """

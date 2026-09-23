@@ -1,24 +1,15 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""`ttnn.snake_beta` already exists. What is it worth here?
+"""`ttnn.snake_beta` against the port's composed Snake.
 
-`ttnn.snake` was proposed as the contribution portfolio's opener -- "the strongest
-opener", "no tt-llk change", propose it first. `tt/hifigan/snake.py` says the same
-thing in its docstring: *"TTNN has no native `snake`, so it is composed from primitives
-here."*
-
-Both are out of date. `ttnn.snake_beta` landed in **PR #43614 on 2026-05-26**, ten weeks
-before that proposal was written, as a ternary SFPU op at
-`eltwise/ternary/ternary_nanobind.cpp:337`. It computes `x + sin^2(alpha*x)/beta`, so
-`snake_beta(x, alpha, alpha)` is exactly the Snake this vocoder wants, and its
-broadcasting contract -- alpha and beta non-1 only on the **last** dimension -- is
-exactly the channels-last `[B, T, C]` layout `conv.py` already uses.
-
-So it is not a contribution to propose. The question that replaces it is whether swapping the
-composed five-op form for the native one is worth anything, at the two shapes HiFT
-actually runs: after the first upsample (256 channels, 2256 frames) and after the second
-(128 channels, 18048 frames). 48 activations per vocoder call.
+`ttnn.snake_beta(x, alpha, beta)` computes `x + sin^2(alpha*x)/beta` as one ternary SFPU
+op (`eltwise/ternary/ternary_nanobind.cpp`), so `snake_beta(x, alpha, alpha)` is the
+Snake this vocoder uses. Its broadcasting contract -- alpha and beta non-1 only on the
+last dimension -- matches the channels-last `[B, T, C]` layout `conv.py` uses. This
+times it against `TtSnake`'s composed five-op form at the vocoder's two shapes: after
+the first upsample (256 channels, 2256 frames) and after the second (128 channels,
+18048 frames), 48 activations per vocoder call.
 
     python3 models/demos/cosyvoice/scripts/probe_snake_native.py
 """

@@ -3,29 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """What does the flow solver's depth cost, and what does cutting it buy?
 
-The flow decoder is `0.603 s` of a `1.470 s` total — 41 %, and the largest single
-obstacle to `RTF < 0.2`, which allows `0.654 s` for everything. Its cost is **linear in
-`n_timesteps`**: ten forward-Euler steps, each one full estimator evaluation, and nothing
-else in the stage scales with it.
+The flow decoder is the largest obstacle to `RTF < 0.2` after the LLM (PERF.md §3.4),
+and its cost scales with `n_timesteps`: ten forward-Euler steps, each one full
+estimator evaluation. Two questions are answered together:
 
-So the arithmetic is inviting, and that is exactly the shape of claim this project has
-learned to distrust. Two questions have to be answered together:
+  1. Is the speed-up linear, or does a fixed per-call cost dominate at low step counts?
+     If the fixed cost is per stage rather than per step, halving the steps buys much
+     less than half.
+  2. What does the output lose? The checkpoint ships `n_timesteps = 10`, and PERF.md's
+     accuracy figures are measured there. Fewer steps is a coarser ODE solve, not a
+     numerical shortcut -- the error is in the trajectory, not the arithmetic -- so PCC
+     against the 10-step result is the metric.
 
-  1. Is the speed-up actually linear, or does a fixed per-call cost dominate at low step
-     counts? An earlier length sweep found the flow's cost-per-tile *falls* with length,
-     the signature of a
-     large fixed cost — if that cost is per-*stage* rather than per-*step*, halving the
-     steps buys much less than half.
-  2. What does the output lose? The checkpoint ships `n_timesteps = 10` and every
-     accuracy figure in PERF.md is measured there. Fewer steps is a **coarser ODE
-     solve**, not a numerical shortcut — the error is in the trajectory, not the
-     arithmetic, so PCC against the 10-step result is the honest metric.
+`COSYVOICE_FLOW_STEPS` is the knob; this sweeps it.
 
-The issue asks for this experiment directly: *"optimize iterative refinement process /
-consider approximations for faster inference"*. It does not say the approximation is
-acceptable, which is what this measures.
-
-    COSYVOICE_FLOW_STEPS is the knob; this sweeps it directly.
     python3 models/demos/cosyvoice/scripts/probe_flow_steps.py
 """
 from __future__ import annotations

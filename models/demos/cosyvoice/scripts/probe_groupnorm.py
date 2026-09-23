@@ -1,40 +1,19 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""GroupNorm is a third of the flow estimator. Is the native op faster, and by how much?
+"""Native `ttnn.group_norm` against the port's GroupNorm, for speed and accuracy.
 
-The traced per-block profile (`probe_flow_ops_traced.py`) found the estimator's largest
-single item, and it is not a matmul or a convolution:
-
-    inside one resnet block, Blackhole, traced
-      conv1d k3 256->256 @141    0.0320 ms
-      groupnorm(8) @141          0.2197 ms      <- 6.9x the convolution it follows
-      mish @141                  0.0076 ms
-
-Two GroupNorms per ResNet block puts them at ~78% of the block, and ResNet blocks are ~43%
-of an Euler step -- so **GroupNorm is roughly a third of the whole estimator**. Untraced it
-looked ordinary (0.44 ms against the conv's 0.43), which is why it went unexamined: the
-dispatch cost of both swamped the difference.
-
-`TtGroupNorm` reaches the statistic through a shape change:
+GroupNorm is a large share of the flow estimator in a traced profile
+(`probe_flow_ops_traced.py`; PERF.md Part II §2.3). The permute form reaches the
+statistic through a shape change:
 
     [B, T, C] -> [B, T, G, C/G] -> permute(0,2,1,3) -> [B, G, T, C/G] -> [B, G, T*C/G]
     -> layer_norm -> the same three steps back -> per-channel affine
 
-Under `TILE_LAYOUT` those two permutes swap the tiled row axis, which is a real re-tiling
-shuffle rather than a view -- and after the first reshape the tiled face is `G x C/G` =
-`8 x 32`, one tile carrying 8 useful rows out of 32.
-
-`estimator.py` records why the native `ttnn.group_norm` was not used, and every reason is
-about **accuracy**:
-
-    native DRAM group_norm       PCC 0.9999231835
-    native, use_welford=True     PCC 0.9998651553
-    this, permute + layer_norm   PCC 0.9999931119
-
-No speed number is attached to that decision. If native is several times faster traced, a
-PCC of 0.99992 against a 0.99 gate is a different trade entirely. This probe measures both
-halves at the shapes the estimator actually uses, so the decision can be made on the pair.
+Under `TILE_LAYOUT` those two permutes swap the tiled row axis, a re-tiling shuffle,
+and after the first reshape the tiled face is `G x C/G` = `8 x 32`, one tile carrying 8
+useful rows out of 32. This measures native `group_norm` against the port's forms for
+both speed and PCC, at the shapes the estimator uses, so the choice is made on the pair.
 
     python3 models/demos/cosyvoice/scripts/probe_groupnorm.py
 """

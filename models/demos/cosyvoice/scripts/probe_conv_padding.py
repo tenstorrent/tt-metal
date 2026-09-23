@@ -3,40 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does the failing `ttnn.conv1d` read its input's tile padding?
 
-`probe_snake_inf.py` moved the blame off Snake and onto the convolution before it:
+On Wormhole, a convolution in the vocoder's source branch turns an input with max 1.46
+into an output with max 1.6e38 at some lengths. `COSYVOICE_FIDELITY=HiFi3` does not fix
+it, and `COSYVOICE_FP32_ACC=0` moves the failing band of `stft_frames` rather than
+removing it; at `HiFi2`, length 8193 fails with two bad elements. Two isolated bad
+elements in a million-element tensor look like a read of memory that was never written,
+not an overflow.
 
-    source_downs[1] out  max 0.8516
-    act1[0] out          max 1.461        <- the conv's input
-    convs1[0] out        max 1.582e+38    <- the conv's output
-
-A `k=3` convolution cannot turn a max-1.46 input into 1.6e38 by arithmetic. Two further
-results say what kind of fault it is:
-
-  - `COSYVOICE_FIDELITY=HiFi3` does not fix it, so the "HiFi4 + fp32 accumulation is buggy
-    on Wormhole" warning tt-metal prints is **not** the cause;
-  - `COSYVOICE_FP32_ACC=0` does not fix it either -- it *moves* the band, from
-    `stft_frames` 8193-8577 to 8705 and 9217. At `HiFi2`, length 8193 fails with **two**
-    bad elements.
-
-Two bad elements is not an overflow. Arithmetic that overflows does so across a region;
-two isolated infinities in a million-element tensor is a **read of memory that was never
-written**, and "which bytes" changing with the compute config is exactly what that looks
-like.
-
-The natural candidate is the input's tile padding. `stft_frames = 64L + 1` is always
-`1 (mod 32)`, so every one of these tensors carries 31 padding rows past its logical end,
-and a `k=3` convolution computing the last output row reads one row beyond it. If those
-rows hold whatever the allocator last left there, and the "same" padding is not being
-applied as zeros, the result is precisely this.
-
-Three arms separate the mechanism from the symptom:
+The candidate here is the input's tile padding. `stft_frames = 64L + 1` is always
+`1 (mod 32)`, so these tensors carry 31 padding rows past their logical end, and a
+convolution computing the last output rows reads beyond it. If those rows hold stale
+data and the "same" padding is not applied as zeros, the result is this. Three cases:
 
     A  as-is                    the failing path
     B  input round-tripped through the host    `from_torch` zero-fills padding by
                                                construction, so if B is clean the
                                                padding is the carrier
     C  input re-tiled on device (row-major and back)   the same fix without a host
-                                               round trip -- i.e. an affordable one
+                                               round trip
+
+`docs/VALIDATION.md` has the defect as reported upstream.
 
     python3 models/demos/cosyvoice/scripts/probe_conv_padding.py
 """
@@ -103,7 +89,7 @@ def main() -> int:
             cells.append(summarise(out))
             ttnn.deallocate(out)
 
-            # B: `from_torch` builds the tile padding as zeros, so this arm differs from A
+            # B: `from_torch` builds the tile padding as zeros, so this case differs from A
             # only in what lies past the logical end of the tensor.
             host = ttnn.to_torch(a1)
             a1b = ttnn.from_torch(host, dtype=a1.dtype, layout=ttnn.TILE_LAYOUT, device=device)

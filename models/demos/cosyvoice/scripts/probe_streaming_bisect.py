@@ -1,26 +1,18 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Which of the three streaming caches blows up chunk 1 on Wormhole?
+"""Which of the three streaming caches changes chunk 1's amplitude?
 
-`probe_streaming_amplitude.py` localised the failure precisely:
-
-    mel RMS, every chunk    6.67 - 7.39     the flow is fine
-    waveform, non-streamed  0.04970
-    waveform, chunk 0       0.06015         fine
-    waveform, chunk 1       0.92929         15x too loud
-
-Chunk 0 and chunk 1 run identical code. The *only* difference is that chunk 1 receives
-the three carried caches instead of `None`:
+Chunk 0 and chunk 1 run identical code; the only difference is that chunk 1 receives the
+three carried caches instead of `None`:
 
     hift_mel     [1, 20, 80]     prepended mel context
     hift_source  [1, 5120, 1]    NSF excitation tail, passed as `cache_source`
     hift_speech  [1, 5120, 1]    previous waveform tail, crossfaded into this one
 
-So null them one at a time and see which one takes the amplitude back to normal.
-Disabling any of them makes the *seam* worse -- that is what they are for -- but none of
-them should change the overall level by 15x. Whichever disable restores the level is the
-one carrying the bad data.
+This disables them one at a time. Disabling any of them makes the seam worse -- that is
+what they are for -- but none should change the overall level; whichever disable
+restores the level is the one carrying the bad data.
 
     python3 models/demos/cosyvoice/scripts/probe_streaming_bisect.py
 """

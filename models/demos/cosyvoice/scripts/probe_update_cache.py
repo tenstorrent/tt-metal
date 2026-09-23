@@ -3,17 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Can a KV slot be written in place, at an index a trace can bake?
 
-This is the linchpin for the tile-aligned cache. The shift costs 78 + 207 us a tensor
-a layer purely because slicing from row 1 and appending one row re-tiles a 32-row-tiled
-buffer. The way out is to stop shifting: keep a 288-row buffer, write the new token at
-row 256+i with `update_cache`, and let a 32-row tile-aligned shift happen once every 32
-steps instead of a 1-row shift every step.
-
-That only works if the write is (a) in place, (b) cheap, and (c) expressible with an
-index that a trace can capture. If the index has to be a device tensor read at replay
-time, one trace suffices; if it is a Python int baked at capture, the design needs 32
-traces, one per sub-step. Either is workable, and which one decides the shape of the
-implementation -- so it is worth knowing before writing any of it.
+The tile-aligned cache (`TracedDecodeStepInPlace`) writes the new token into a scratch
+row with `update_cache` and shifts the buffer by a whole tile periodically, instead of
+by one row every step. That works only if the write is in place, cheap, and expressible
+with an index a trace can capture: a device-tensor index needs one trace, a Python int
+baked at capture needs one per sub-step. This checks all three.
 
     python models/demos/cosyvoice/scripts/probe_update_cache.py
 """

@@ -1,36 +1,19 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Where inside the vocoder does the streamed chunk blow up, and is it length or content?
+"""Where inside the vocoder does a streamed chunk go wrong, and is it length or content?
 
-`probe_streaming_bisect.py` named `hift_mel` -- the 20 prepended mel frames -- as the
-carrier. But "the cache is the carrier" has two very different readings, and the streaming
-harness cannot tell them apart because prepending 20 frames changes **both**:
+Prepending the 20-frame `hift_mel` cache changes both a chunk's length (110 -> 130 mel
+frames) and its content, so a streaming run cannot tell a bad length from bad content.
+This vocodes a real, known-good mel at a sweep of lengths with no streaming machinery
+-- no fades, no splices, `cache_source=None` -- so a length that fails on its own clears
+the content.
 
-    with hift_mel     130 mel frames    RMS 0.929   <- 15x too loud
-    without           110 mel frames    RMS 0.036
-
-So is 130 a bad *length*, or are those 20 frames bad *content*? This probe answers that by
-vocoding a **real, known-good mel** at a sweep of lengths, with no streaming machinery
-anywhere: no fades, no splices, `cache_source=None`. If a length explodes on its own the
-content is exonerated and the bug is a shape.
-
-The second question is *where*. `wav` RMS 0.93 against the `+-0.99` clamp is not "loud", it
-is **saturated** -- the signal is railed almost everywhere. Working backwards through
-`decode`:
-
-    wav = clamp(istft(mag*cos, mag*sin), +-0.99)      saturated
-    mag = clamp(exp(conv_post_out), 0, 1e2)           => railed at 100
-                                                      => conv_post_out >= ln(100) ~ 4.6
-
-so something upstream of `conv_post` went large. Two things feed it: the mel (measured
-normal, 6.67-7.39) and the NSF excitation `s`, which is the interesting one -- it is the
-only fp32 path in the vocoder and its phase comes from a **blocked cumsum whose block count
-is exactly `mel_frames`** (`source.py:phase_mod1` reshapes `[1, L*256, 9] -> [1, L, 256, 9]`
-and scans dim 1 across L tiles). A length-dependent, architecture-dependent failure in a
-scan over a non-tiled axis would look precisely like this.
-
-So print RMS and max for every intermediate, at every length, and run it on both parts.
+It prints RMS and max for every intermediate of `decode`, at every length. A waveform
+railed at the `+-0.99` clamp means `mag = clamp(exp(conv_post_out), 0, 1e2)` hit its
+ceiling, so `conv_post_out >= ln(100)` and something upstream of `conv_post` went large;
+the mel and the NSF excitation `s` are the two inputs to check. Run it on both
+architectures.
 
     python3 models/demos/cosyvoice/scripts/probe_hift_isolate.py [--lengths 110,130,172]
 """

@@ -1,25 +1,20 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Do several traces of the *same program* keep their own runtime arguments?
+"""Do several traces of the same program keep their own runtime arguments?
 
-`TracedDecodeStepInPlace` rests on this and nothing else. It captures 32 traces that
-differ only in two integers -- `update_cache`'s write row and `slice`'s start column --
-and neither integer is part of a program-cache key: `UpdateKVCacheOperation::compute_
-program_hash` hashes the op type and the tensors, not `update_idx`. So all 32 traces
-share one compiled program, and each is supposed to carry its own copy of the dispatch
-commands that set that program's runtime args.
+`TracedDecodeStepInPlace` depends on this. It captures traces that differ only in two
+integers -- `update_cache`'s write row and `slice`'s start column -- and neither is part
+of a program-cache key: `UpdateKVCacheOperation::compute_program_hash` hashes the op
+type and the tensors, not `update_idx`. So the traces share one compiled program, and
+each must carry its own copy of the dispatch commands that set its runtime args. If
+instead they referenced one shared runtime-arg region, capturing the last trace would
+rewrite what the first replays, and in the model attention would drift a few rows out
+without raising.
 
-"Supposed to" is doing real work in that sentence. If instead a trace referenced a
-single shared runtime-arg region, capturing trace 31 would silently rewrite what trace
-0 replays, and every slot would behave like the last one captured. In the full model
-that surfaces as attention drifting a few rows out -- fluent, plausible, wrong output
-several hundred tokens later, which is the worst way to find out.
-
-So: capture three traces at three different indices, then replay them **one at a time
-from a freshly zeroed buffer** and ask which row actually moved. Separate state per
-replay is the point; sharing it is how a probe of this kind talks itself into a
-false pass.
+So this captures three traces at three different indices, then replays them one at a
+time from a freshly zeroed buffer and checks which row moved. Separate state per replay
+is the point: shared state could hide the fault.
 
     python models/demos/cosyvoice/scripts/probe_multi_trace_args.py
 """
@@ -82,11 +77,9 @@ def main() -> int:
         offs = (0, 17, 31)
         straces = {}
         for off in offs:
-            # Warm the *whole* body, not just the op under test. The first attempt
-            # warmed the slice and left the `copy` behind it cold, and capture failed
-            # with "Cannot load new binaries during trace capture" -- which is the
-            # reassuring failure mode: an unwarmed program raises at capture rather
-            # than quietly recording something else.
+            # Warm the whole body, not just the op under test: an unwarmed program fails
+            # capture with "Cannot load new binaries during trace capture" rather than
+            # recording something else.
             s = ttnn.slice(src, [0, 0, 0, off], [1, H, 1, off + W])
             ttnn.copy(s, dst)
             ttnn.deallocate(s)

@@ -1,26 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Which `k_chunk_size` values does `sdpa_decode` accept and then get wrong?
+"""Which `k_chunk_size` values does `sdpa_decode` accept and then compute wrongly?
 
-The fused-decode-attention work found that `k_chunk_size = 32` passes validation on this
-model's key widths and
-returns a wrong answer -- PCC 0.016 at width 384 against 0.99998 at 128. That is enough
-to fix the model and not enough to report upstream: "32 is bad, 128 is good" is an
-anecdote. A useful report needs the boundary.
-
-The op validates one thing about this parameter
-(`sdpa_decode_device_operation.cpp:137`):
-
-    mask_shape[3] % k_chunk_size == 0
-
-The values that actually work are encoded nowhere in the op -- they live in a **test
-helper**, `sdpa_test_utils.py:get_chunk_size`, which returns 128 for any sequence
-between 129 and 1024 and then caps to the largest power of two dividing it. A caller
-reading the API sees a free tuning knob.
-
-So: sweep every divisor of two real key widths, score each against a torch golden, and
-report which of them the op takes without complaint.
+The op validates one property of this parameter, `mask_shape[3] % k_chunk_size == 0`
+(`sdpa_decode_device_operation.cpp:137`); the values that work are encoded in a test
+helper, `sdpa_test_utils.py:get_chunk_size`, not in the op. This sweeps every divisor of
+two real key widths, scores each against a torch golden, and reports which the op takes
+without complaint. `docs/VALIDATION.md` records the result.
 
     python3 models/demos/cosyvoice/scripts/probe_sdpa_chunk_sweep.py
 """

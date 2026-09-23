@@ -3,19 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does keeping the CFM trace across utterances stay correct, and what does it save?
 
-`probe_cfm_capture.py` measured the split: of a `0.675 s` flow solve, **`0.314 s` is
-trace capture** and `0.357 s` is the ten Euler replays. Capture was being paid on every
-call and thrown away.
+Reusing the trace needs the conditioning refilled in place, because the trace holds
+`_packed_const`'s address. If that is wrong, the replay reads the previous utterance's
+conditioning and produces fluent audio in the wrong voice: no exception, no shape
+mismatch, and nothing a per-module PCC against one golden would see.
 
-Reusing it needs the conditioning refilled *in place*, because the trace holds
-`_packed_const`'s address. The failure mode if that is wrong is the nastiest kind
-available here: the replay reads the **previous utterance's** conditioning and produces
-fluent audio in the wrong voice. No exception, no shape mismatch, and a per-module PCC
-against a single golden would not see it either.
-
-So the test is deliberately built to catch exactly that: **three consecutive solves with
-different conditioning**, cached against uncached, compared solve by solve. A stale
-`_packed_const` shows up as solve 2 and 3 disagreeing while solve 1 matches.
+So this runs three consecutive solves with different conditioning, cached against
+uncached, compared solve by solve. A stale `_packed_const` shows up as solves 2 and 3
+disagreeing while solve 1 matches.
 
     python3 models/demos/cosyvoice/scripts/probe_cfm_reuse.py
 """

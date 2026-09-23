@@ -4,9 +4,9 @@
 """Minimal repro: `prepare_conv_weights` disagrees with `ttnn.conv1d` on Wormhole.
 
 No model and no checkpoint -- a random weight, a random input, one convolution run two
-ways. It exists to be pasted into an upstream issue.
+ways. Reported upstream as tenstorrent/tt-metal#55545.
 
-**What happens.** For `Conv1d(128 -> 128, k=11, stride 1, padding 5)` over a `[1, L, 128]`
+What happens. For `Conv1d(128 -> 128, k=11, stride 1, padding 5)` over a `[1, L, 128]`
 bfloat16 activation, `ttnn.conv1d` gives two different answers depending on whether its
 weight was pre-transformed by `ttnn.prepare_conv_weights` or left for the op to prepare
 itself. At some `L` the difference is a few percent; at others it is `1e37`. Blackhole
@@ -15,22 +15,20 @@ agrees exactly at every `L` tested, on two boards.
 The two paths are supposed to be interchangeable -- preparation is hoisted out so that
 convolutions can be captured in a trace, which the op's own weight transfer forbids.
 
-**How it was found.** CosyVoice-300M's HiFT vocoder emits a 15x-too-loud waveform for one
-streamed chunk on Wormhole and is correct on Blackhole. Bisecting inward: the streaming mel
-cache -> the length it changes (110 -> 130 mel frames) -> the NSF source branch -> a Snake
-activation returning `inf` -> the convolution feeding it, whose input maxes at 1.46 and
-whose output reaches 1.58e38. `sin()` of that is `inf`, the vocoder's magnitude spectrum
-rails at its `1e2` clip, and the waveform saturates.
+Where it shows up. In CosyVoice-300M's HiFT vocoder on Wormhole, the NSF source branch's
+convolution turns an input with max 1.46 into an output reaching 1.58e38 at the lengths a
+streamed chunk hits; `sin()` of that is `inf`, the magnitude spectrum rails at its `1e2`
+clip, and the waveform saturates.
 
-**What it is not**, each ruled out by measurement rather than argument:
+What it is not, each ruled out by measurement:
 
   - *not the input's tile padding.* Zeroing it -- by round-tripping the input through the
     host, or by re-tiling it on device -- changes nothing.
   - *not the HiFi4 + fp32-accumulate combination* tt-metal warns about on Wormhole:
     `HiFi3` fails identically.
-  - *not fp32 accumulation.* Turning it off does not fix the failure, it **moves** the
+  - *not fp32 accumulation.* Turning it off does not fix the failure, it moves the
     affected lengths.
-  - *not arithmetic.* At `HiFi2` one length came back with **two** bad elements out of a
+  - *not arithmetic.* At `HiFi2` one length comes back with two bad elements out of a
     million. Overflow does not produce two bad elements.
   - *not the input data.* Feeding the same conv a completely different activation returns
     the identical wrong value.
@@ -57,8 +55,7 @@ DEFAULT = "8064,8096,8128,8129,8160,8192,8193,8224,8256,8320,8321,8448,8576,8577
 
 IN_C = OUT_C = 128
 # The failing convolution is HiFT's source ResBlock: kernel 11, "same" padding,
-# dilation 1. Kernel size matters -- an earlier version of this repro used k=3 and did
-# not reproduce at any length.
+# dilation 1. Kernel size matters: at k=3 it does not reproduce at any length.
 K, PAD, DIL = 11, 5, 1
 
 

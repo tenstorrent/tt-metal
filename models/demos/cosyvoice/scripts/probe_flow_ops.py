@@ -1,19 +1,17 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Which op class is Wormhole's flow penalty in?
+"""Which op class carries Wormhole's flow-decoder penalty?
 
-The flow decoder is the model's most architecture-penalised stage -- ~1.8x Blackhole on
-Wormhole -- and an earlier probe closed off the obvious explanation: it is **not**
-parallelism-shaped.
-The estimator at batch 2 costs 0.90x batch 1, so its cores are already idle at the size it
-runs; splitting the two classifier-free-guidance rows across chips would buy nothing. That
-leaves per-op cost, which is what this measures.
+The flow decoder is the stage Wormhole trails Blackhole on most. It is not
+parallelism-limited: the estimator at batch 2 costs 0.90x batch 1, so its cores are
+already idle at the size it runs, and splitting the two classifier-free-guidance rows
+across chips would buy nothing. That leaves per-op cost.
 
-The estimator is 16 ResnetBlock1D + 64 BasicTransformerBlock + 6 convolutions per call, ten
-Euler steps per utterance. Rather than a flat profile, time each **class** at the exact
-shapes the real forward uses and multiply by its count, so the per-class totals reconstruct
-the stage and the Wormhole/Blackhole ratio is attributable:
+The estimator is 16 ResnetBlock1D + 64 BasicTransformerBlock + 6 convolutions per call,
+ten Euler steps per utterance. This times each class at the exact shapes the real
+forward uses and multiplies by its count, so the per-class totals reconstruct the stage
+and the Wormhole/Blackhole ratio is attributable:
 
     transformer @ T=282   x  8      down[0], up[1]
     transformer @ T=141   x 56      down[1], mid x12, up[0]
@@ -21,13 +19,13 @@ the stage and the Wormhole/Blackhole ratio is attributable:
     conv1d / conv_transpose1d       the down/up path
     time_embedding        x  1
 
-Nothing is re-implemented here: the modules are pulled off a built `TtConditionalDecoder`,
-so the shapes and the compute-kernel configs are the ones production uses. A class whose
-ratio is far above the stage's overall 1.8x is where the Wormhole work is.
+The modules are pulled off a built `TtConditionalDecoder`, so the shapes and the
+compute-kernel configs are the ones production uses. The transformer block is broken
+down further -- layer_norm, fused QKV, SDPA, out-projection, feed-forward -- because at
+64 calls per step it dominates by count.
 
-The transformer block is broken down further -- layer_norm, fused QKV, SDPA, out-projection,
-feed-forward -- because at 64 calls per step it dominates by count, and "attention is slow"
-and "the feed-forward is slow" imply completely different fixes.
+These timings are untraced, so they include host dispatch and can invert the
+architecture ranking; `probe_flow_ops_traced.py` is the traced version.
 
     python3 models/demos/cosyvoice/scripts/probe_flow_ops.py [--reps 20]
 """

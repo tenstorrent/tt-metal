@@ -4,17 +4,12 @@
 """Where a generated token's time goes, outside the traced decode step.
 
 The tail is the output head, the device-to-host transfer of the distribution, RAS
-sampling on the host, and the embedding lookup back onto the device. This script
-times those four directly, which is the point of it: subtracting the traced-step
-microbenchmark from the `generate()` per-token figure suggested ~2.7 ms of tail,
-and the measurement came back at **0.352 ms**. The two benchmarks differed in
-cache warmth, not only in scope. Subtracting two benchmarks is not a profile.
+sampling on the host, and the embedding lookup back onto the device. This times those
+four directly; subtracting a traced-step microbenchmark from the `generate()` per-token
+figure is not a substitute, because the two differ in cache warmth as well as scope.
 
-The question it answers is whether moving RAS onto `ttnn.sampling` is worth
-building. That trade only pays if the transfer and the host sampling are a real
-share of the tail; if the output head dominates, on-device sampling is
-rearranging a rounding error. Measured, it is the latter: `ttnn.sampling` could
-remove at most 0.217 ms, 1.7 % of a token, so RAS stays on the host.
+It decides whether moving RAS onto `ttnn.sampling` pays: only if the transfer and the
+host sampling are a real share of a token. PERF.md Part II §1.6 has the result.
 
     python models/demos/cosyvoice/scripts/profile_token_tail.py
 """
@@ -106,11 +101,8 @@ def main() -> int:
         print(f"    RAS sampling on host      {ras_ms:7.3f} ms  {100 * ras_ms / tail:5.1f}%")
         print(f"    embedding row -> device   {embed_ms:7.3f} ms  {100 * embed_ms / tail:5.1f}%")
         print(f"    tail total                {tail:7.3f} ms")
-        # The step this is a fraction *of* differs by architecture and by cache width, so
-        # it is an argument rather than a constant. It was hardcoded to 12.52 ms, which
-        # stopped being true the moment tracing and the in-place KV cache landed --
-        # PERF.md now measures 4.99 ms on Blackhole and 8.20 on Wormhole, and the same
-        # tail is twice the share of a Blackhole token that it is of a Wormhole one.
+        # The step this is a fraction of differs by architecture and by cache width, so
+        # it is an argument rather than a constant (PERF.md §6 has the current steps).
         print(
             f"    against a {args.step_ms:.2f} ms decode step, the tail is "
             f"{100 * tail / (args.step_ms + tail):4.1f}% of a token"
