@@ -176,6 +176,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize("specify_grid", [True])
@@ -2022,6 +2023,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", OPTIONAL_WEIGHT_BIAS_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize(

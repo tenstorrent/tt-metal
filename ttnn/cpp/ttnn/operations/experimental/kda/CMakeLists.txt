@@ -41,9 +41,9 @@ install(
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda
         COMPONENT ttnn-runtime
-    LIBRARY
-        COMPONENT tar
 )
+
+install(TARGETS ttnn_op_experimental_kda_common LIBRARY COMPONENT tar)
 
 add_subdirectory(chronological_selections)
 add_subdirectory(sigmoid_gated_rms_norm)

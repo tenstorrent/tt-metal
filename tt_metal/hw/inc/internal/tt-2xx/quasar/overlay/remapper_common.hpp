@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
-#ifndef __DM__REMAPPER_COMMON_HPP__
-#define __DM__REMAPPER_COMMON_HPP__
+#ifndef DM_REMAPPER_COMMON_HPP
+#define DM_REMAPPER_COMMON_HPP
 
 // Base addresses for 64 pairs of ClientL/ClientR config registers
 #define REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32 0x01842000
@@ -126,4 +126,4 @@ typedef union {
 
 }  // namespace overlay
 
-#endif  // __DM__REMAPPER_COMMON_HPP__
+#endif  // DM_REMAPPER_COMMON_HPP

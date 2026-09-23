@@ -18,6 +18,25 @@ tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*(\[.*\])')
 # Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
 timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
+# JIT build telemetry is emitted once per job as a block of self-contained lines, one
+# per metric. Two historical formats are supported:
+#   JIT telemetry [JitBuildState::compile] (ms): count=5660, total=6211227.967, min=438.541, max=2617.981, mean=1097.390
+#   JIT telemetry [JitBuildState::build]: count=82, total=372398.904ms, min=912.363ms, max=6393.631ms, mean=4541.450ms
+# The first carries the unit in "(unit)"; the older second one suffixes it on each value.
+# Numeric groups match digits only, so int()/float() on them never raise. Lines that are
+# not a fully-formed metric record (e.g. "JIT telemetry: 39 registered TelemetryTokens" or
+# "JIT cache stats: ...") simply do not match, so the parser never has to guess.
+jit_telemetry_pattern = re.compile(
+    r"JIT telemetry \[(?P<metric_name>[^\]]+)\]"
+    r"(?:\s*\((?P<unit_paren>[^)]+)\))?"
+    r":\s*"
+    r"count=(?P<sample_count>\d+)\s*,\s*"
+    r"total=(?P<total_value>\d+(?:\.\d+)?)(?P<unit_suffix>ms|B)?\s*,\s*"
+    r"min=(?P<min_value>\d+(?:\.\d+)?)(?:ms|B)?\s*,\s*"
+    r"max=(?P<max_value>\d+(?:\.\d+)?)(?:ms|B)?\s*,\s*"
+    r"mean=(?P<mean_value>\d+(?:\.\d+)?)(?:ms|B)?"
+)
+
 
 def search_for_tt_smi_version_in_log_file_(log_file):
     # Defense-in-depth: resolve and confirm this is a real file before opening.
@@ -175,6 +194,74 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     ]
 
 
+def search_for_jit_telemetry_in_log_file_(log_file):
+    """
+    Extract JIT build-telemetry metric records from a single job log.
+
+    Each metric line is self-contained and already carries its aggregates
+    (count/total/min/max/mean), so parsing is a plain per-line regex match with no
+    cross-line state and no heuristics: a line either is a well-formed metric record
+    or it is ignored. A log with no telemetry returns an empty list.
+
+    ``BuildCacheTelemetry`` is process-wide and emits its block from the process
+    destructor, so a job that runs multiple processes contributes several
+    independent blocks, each cumulative for its own process only. Occurrences of the
+    same metric are therefore aggregated across blocks (counts and totals summed,
+    min/max reduced, mean recomputed as total/count) to give a job-level figure. A
+    metric seen once is passed through with its reported mean. Returns a list of
+    dicts with keys: metric_name, unit, sample_count, total_value, min_value,
+    max_value, mean_value.
+    """
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
+
+    metrics_by_name = {}
+    # errors="replace" so a stray non-UTF-8 byte in a log never aborts the scan.
+    with open(log_file, "r", errors="replace") as log_f:
+        for line in log_f:
+            match = jit_telemetry_pattern.search(line)
+            if match is None:
+                continue
+
+            metric_name = match.group("metric_name").strip()
+            if not metric_name:
+                continue
+
+            unit = match.group("unit_paren") or match.group("unit_suffix")
+            sample_count = int(match.group("sample_count"))
+            total_value = float(match.group("total_value"))
+            min_value = float(match.group("min_value"))
+            max_value = float(match.group("max_value"))
+            mean_value = float(match.group("mean_value"))
+
+            existing = metrics_by_name.get(metric_name)
+            if existing is None:
+                metrics_by_name[metric_name] = {
+                    "metric_name": metric_name,
+                    "unit": unit.strip() if unit else None,
+                    "sample_count": sample_count,
+                    "total_value": total_value,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "mean_value": mean_value,
+                }
+                continue
+
+            # Second or later block for this metric: fold it into the running total.
+            existing["sample_count"] += sample_count
+            existing["total_value"] += total_value
+            existing["min_value"] = min(existing["min_value"], min_value)
+            existing["max_value"] = max(existing["max_value"], max_value)
+            # Recompute from the aggregate rather than averaging per-block means,
+            # which would be wrong when blocks have different sample counts.
+            existing["mean_value"] = (
+                existing["total_value"] / existing["sample_count"] if existing["sample_count"] else 0.0
+            )
+
+    return list(metrics_by_name.values())
+
+
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
     logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
 
@@ -187,6 +274,7 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
     github_job_ids_to_tt_smi_versions = {}
     github_job_ids_to_tt_smi_resets = {}
+    github_job_ids_to_jit_telemetry = {}
 
     for log_file in log_files:
         filename = log_file.stem
@@ -214,7 +302,16 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
         github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
 
-    return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
+        jit_telemetry = search_for_jit_telemetry_in_log_file_(safe_log_file)
+        for metric in jit_telemetry:
+            metric["workflow_attempt"] = workflow_attempt
+        github_job_ids_to_jit_telemetry[github_job_id] = jit_telemetry
+
+    return (
+        github_job_ids_to_tt_smi_versions,
+        github_job_ids_to_tt_smi_resets,
+        github_job_ids_to_jit_telemetry,
+    )
 
 
 def parse_github_log_timestamp(line):

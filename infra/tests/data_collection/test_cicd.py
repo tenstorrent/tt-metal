@@ -1,3 +1,4 @@
+import json
 import pytest
 import pathlib
 from datetime import datetime
@@ -8,6 +9,8 @@ from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityE
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
     get_job_row_from_github_job,
+    get_jobs_that_started_,
+    get_pipeline_row_from_github_info,
     _card_type_from_job_labels,
     _generic_runner_labels,
     _load_sku_config_skus,
@@ -688,3 +691,224 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
     ]
     assert partial_n300_jobs
     assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)
+
+
+def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path):
+    log_file = tmp_path / "123.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                # Non-metric lines that must be ignored (no fully-formed record).
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT cache stats: 0/5660 hits (0.0%) [0 cached]",
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry: 39 registered TelemetryTokens",
+                # Current format: unit in parentheses, plain numeric values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [JitBuildState::compile] (ms): "
+                "count=5660, total=6211227.967, min=438.541, max=2617.981, mean=1097.390 (build_cache_telemetry.cpp:356)",
+                # Current format, byte unit with integer values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [kernel_elf_size.brisc] (B): "
+                "count=1577, total=1121896316, min=398236, max=1786228, mean=711412 (build_cache_telemetry.cpp:356)",
+                # Older format: no "(unit)", unit suffixed on each value.
+                "2026-09-03 18:49:41.712 | info | BuildKernels | JIT telemetry [jit_build]: "
+                "count=79, total=368533.488ms, min=1004.938ms, max=6393.632ms, mean=4664.981ms",
+            ]
+        )
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    assert set(metrics) == {"JitBuildState::compile", "kernel_elf_size.brisc", "jit_build"}
+
+    compile_metric = metrics["JitBuildState::compile"]
+    assert compile_metric["unit"] == "ms"
+    assert compile_metric["sample_count"] == 5660
+    assert compile_metric["total_value"] == pytest.approx(6211227.967)
+    # A metric seen once keeps its reported mean.
+    assert compile_metric["mean_value"] == pytest.approx(1097.390)
+
+    elf_metric = metrics["kernel_elf_size.brisc"]
+    assert elf_metric["unit"] == "B"
+    assert elf_metric["total_value"] == pytest.approx(1121896316)
+
+    # Older inline-unit format still resolves the unit and the values.
+    build_metric = metrics["jit_build"]
+    assert build_metric["unit"] == "ms"
+    assert build_metric["sample_count"] == 79
+    assert build_metric["max_value"] == pytest.approx(6393.632)
+
+
+def test_search_for_jit_telemetry_aggregates_across_process_blocks(tmp_path):
+    # A job that runs multiple processes emits one telemetry block per process, each
+    # cumulative for its own process. The same metric across blocks must be summed
+    # (not overwritten), with min/max reduced and mean recomputed as total/count.
+    log_file = tmp_path / "789.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=100, total=200.0, min=1.0, max=5.0, mean=2.0",
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=300, total=900.0, min=0.5, max=9.0, mean=3.0",
+            ]
+        )
+    )
+
+    (metric,) = workflows.search_for_jit_telemetry_in_log_file_(log_file)
+    assert metric["metric_name"] == "JitBuildState::compile"
+    assert metric["sample_count"] == 400  # 100 + 300
+    assert metric["total_value"] == pytest.approx(1100.0)  # 200 + 900
+    assert metric["min_value"] == pytest.approx(0.5)  # min(1.0, 0.5)
+    assert metric["max_value"] == pytest.approx(9.0)  # max(5.0, 9.0)
+    assert metric["mean_value"] == pytest.approx(1100.0 / 400)  # total / count
+
+
+def test_search_for_jit_telemetry_returns_empty_when_absent(tmp_path):
+    log_file = tmp_path / "456.log"
+    log_file.write_text("nothing of interest here\nanother ordinary log line\n")
+
+    assert workflows.search_for_jit_telemetry_in_log_file_(log_file) == []
+
+
+def _make_run_json(run_id=35744836559, conclusion="cancelled"):
+    """The workflow.json that produce-data analyses, for a run with the given id and conclusion."""
+    return {
+        "id": run_id,
+        "name": "PR Gate",
+        "status": "completed",
+        "conclusion": conclusion,
+        "run_attempt": 1,
+        "created_at": "2026-09-22T15:00:00Z",
+        "updated_at": "2026-09-22T15:05:03Z",
+        "head_branch": "some-contributor/some-branch",
+        "head_sha": "d2f4e2b6a1c3e5d7f9b0a2c4e6d8f0b2a4c6e8d0",
+        "head_commit": {"author": {"name": "Some Contributor"}},
+        "html_url": f"https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}",
+        "repository": {"html_url": "https://github.com/tenstorrent/tt-metal", "name": "tt-metal"},
+    }
+
+
+def _write_run_json(tmp_path, jobs, run_id=35744836559, conclusion="cancelled"):
+    """
+    Write the workflow.json / workflow_jobs.json pair that produce-data analyses, and return
+    the (workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path) triple for it.
+    """
+    workflow_json = _make_run_json(run_id=run_id, conclusion=conclusion)
+    workflow_jobs_json = {"total_count": len(jobs), "jobs": jobs}
+
+    workflow_json_path = tmp_path / "workflow.json"
+    workflow_json_path.write_text(json.dumps(workflow_json))
+
+    workflow_jobs_json_path = tmp_path / "workflow_jobs.json"
+    workflow_jobs_json_path.write_text(json.dumps(workflow_jobs_json))
+
+    workflow_outputs_dir = tmp_path / "generated" / "cicd"
+    workflow_outputs_dir.mkdir(parents=True)
+
+    return workflow_outputs_dir, str(workflow_json_path), str(workflow_jobs_json_path)
+
+
+def _make_cancelled_run_job(job_id, conclusion, run_id=35744836559, started_at="2026-09-22T15:02:00Z"):
+    return {
+        "id": job_id,
+        "run_id": run_id,
+        "run_attempt": 1,
+        "runner_name": "tt-ubuntu-2204-large-stable-w77km-runner-djpn9",
+        "labels": ["tt-ubuntu-2204-large-stable"],
+        "status": "completed",
+        "conclusion": conclusion,
+        "created_at": "2026-09-22T15:00:00Z",
+        "started_at": started_at,
+        "completed_at": "2026-09-22T15:05:03Z",
+        "name": "some gated job",
+        "html_url": f"https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}/job/{job_id}",
+        "steps": [],
+    }
+
+
+def test_create_pipeline_json_skips_run_cancelled_before_any_job_started(workflow_run_gh_environment, tmp_path):
+    # A run that its concurrency group cancelled before any job started reports no jobs at all
+    # E.g. https://github.com/tenstorrent/tt-metal/actions/runs/35744836559
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=[])
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        workflow_run_gh_environment,
+        workflow_json_path,
+        workflow_jobs_json_path,
+    )
+
+    assert pipeline is None
+
+
+def test_create_pipeline_json_skips_run_where_every_job_was_skipped(workflow_run_gh_environment, tmp_path):
+    # Same cancellation, but GitHub reports the jobs it never ran as skipped
+    # E.g. https://github.com/tenstorrent/tt-metal/actions/runs/35716965498
+    jobs = [_make_cancelled_run_job(job_id, "skipped") for job_id in (1, 2, 3)]
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=jobs)
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        workflow_run_gh_environment,
+        workflow_json_path,
+        workflow_jobs_json_path,
+    )
+
+    assert pipeline is None
+
+
+def test_create_pipeline_json_still_fails_when_a_started_job_has_no_logs(workflow_run_gh_environment, tmp_path):
+    # A job did run, so missing logs are a data collection problem and must stay a hard error
+    run_id = 35744836559
+    jobs = [_make_cancelled_run_job(1, "skipped"), _make_cancelled_run_job(2, "cancelled")]
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=jobs)
+    (workflow_outputs_dir / str(run_id) / "logs").mkdir(parents=True)
+
+    with pytest.raises(AssertionError, match="No log files found"):  # allow-pytest.raises: no expect_error fixture
+        create_cicd_json_for_data_analysis(
+            workflow_outputs_dir,
+            workflow_run_gh_environment,
+            workflow_json_path,
+            workflow_jobs_json_path,
+        )
+
+
+def test_get_jobs_that_started_ignores_jobs_carried_over_from_a_previous_attempt():
+    workflow_json = {"created_at": "2026-09-22T15:00:00Z"}
+
+    previous_attempt_job = _make_cancelled_run_job(1, "success", started_at="2026-09-22T14:30:00Z")
+    this_attempt_job = _make_cancelled_run_job(2, "success", started_at="2026-09-22T15:02:00Z")
+
+    assert get_jobs_that_started_(workflow_json, {"jobs": [previous_attempt_job]}) == []
+    assert get_jobs_that_started_(workflow_json, {"jobs": [previous_attempt_job, this_attempt_job]}) == [
+        this_attempt_job
+    ]
+
+
+def test_create_pipeline_json_for_run_with_started_jobs_is_unaffected(workflow_run_gh_environment):
+    # The normal path must keep producing a pipeline row
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
+
+    assert pipeline is not None
+    assert pipeline.jobs
+
+
+def test_get_jobs_that_started_ignores_jobs_with_no_start_timestamp():
+    workflow_json = {"created_at": "2026-09-22T15:00:00Z"}
+
+    never_started_job = _make_cancelled_run_job(1, "cancelled", started_at=None)
+    started_job = _make_cancelled_run_job(2, "success")
+
+    assert get_jobs_that_started_(workflow_json, {"jobs": [never_started_job]}) == []
+    assert get_jobs_that_started_(workflow_json, {"jobs": [never_started_job, started_job]}) == [started_job]
+
+
+def test_pipeline_start_reads_only_jobs_that_started(workflow_run_gh_environment):
+    # A job with no start timestamp used to reach strptime and raise TypeError, and a skipped
+    # job's invalid start timestamp used to be eligible to set the pipeline start
+    workflow_json = _make_run_json()
+
+    never_started_job = _make_cancelled_run_job(1, "cancelled", started_at=None)
+    skipped_job_started_early = _make_cancelled_run_job(2, "skipped", started_at="2026-09-22T15:01:00Z")
+    started_job = _make_cancelled_run_job(3, "success", started_at="2026-09-22T15:07:00Z")
+    jobs = {"jobs": [never_started_job, skipped_job_started_early, started_job]}
+
+    raw_pipeline = get_pipeline_row_from_github_info(workflow_run_gh_environment, workflow_json, jobs)
+
+    assert raw_pipeline["pipeline_start_ts"].startswith("2026-09-22T15:07:00")

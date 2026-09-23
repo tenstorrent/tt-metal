@@ -58,8 +58,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           BroadcastType::NONE,
           false /*is_int_en*/,
           PackMode::Tilize>(icb)));
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE)
     PACK((llk_pack_init<PackMode::Tilize, false /* zero_output */>(ocb, 1 /* num_tiles */, icb)));
+#elif defined(ARCH_WORMHOLE)
+    // WH: reprogram packer for OCB tile geometry; PackMode::Default matches tilize_block's pack execute (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 #else
     // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
@@ -126,8 +129,11 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE)
     PACK((llk_pack_init<PackMode::Tilize, false /* zero_output */>(ocb, 1 /* num_tiles */, new_icb)));
+#elif defined(ARCH_WORMHOLE)
+    // WH: reprogram packer for OCB tile geometry; PackMode::Default matches tilize_block's pack execute (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 #endif  // !ARCH_QUASAR
@@ -222,6 +228,7 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
+    // BH-only: restore packer from PackMode::Tilize (armed by tilize_init) to Default (#52175).
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
@@ -249,7 +256,8 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
     UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_icb, new_icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init(ocb)));
+    // BH-only: restore packer from PackMode::Tilize (armed by tilize_init_short_with_dt) to Default (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 
