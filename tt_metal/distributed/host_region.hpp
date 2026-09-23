@@ -70,6 +70,10 @@ public:
     uint64_t alias_fill_bytes(AliasArena arena, uint32_t core) const;
     uint64_t alias_tail_offset(AliasArena arena, uint32_t core) const;
 
+    // The mapping's 2 MiB-aligned base, valid from reservation. Reading it does not
+    // allocate -- reserved_base() is the entry point that maps.
+    uint8_t* base() const { return region_; }
+
     // The mapping's real extent. An overlay MUST stay inside it: MAP_FIXED past the end
     // succeeds, unmapping whatever is there, and neither mmap nor the caller can see it.
     uint64_t region_bytes() const { return region_bytes_; }

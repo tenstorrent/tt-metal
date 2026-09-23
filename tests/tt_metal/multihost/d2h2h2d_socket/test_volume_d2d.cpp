@@ -21,11 +21,11 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include <tt-metalium/experimental/sockets/internal/host_rdma_window.hpp>
+#include "tt_metal/distributed/host_rdma_window.hpp"
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
-#include <tt-metalium/experimental/sockets/d2h2h2d_socket.hpp>
+#include "tt_metal/distributed/d2h2h2d_socket.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
