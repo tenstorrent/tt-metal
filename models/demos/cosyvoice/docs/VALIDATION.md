@@ -88,9 +88,9 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 
 | requirement | status | validated by | evidence |
 |---|---|---|---|
-| Optimal sharded / interleaved memory configs | **measured; the default wins almost everywhere** | `scripts/probe_linear_grid.py`, `scripts/probe_ff2_shard.py` — no check, these are sweeps | `PERF.md` *Tuning flags*, *What limits the step* |
+| Optimal sharded / interleaved memory configs | **measured; the default wins almost everywhere** | `probe_linear_grid.py`, `probe_ff2_shard.py` (scratch probes, not in this tree) — no check, these are sweeps | `PERF.md` *Tuning flags*, *What limits the step* |
 | Sharding: token embeddings | not sharded — the tensors are one row at decode | inspection | *What limits the step* |
-| Sharding: transformer layers | see above; explicit grids lost in 10 of 12 combinations tried | `scripts/probe_linear_grid.py` | *Tuning flags* |
+| Sharding: transformer layers | see above; explicit grids lost in 10 of 12 combinations tried | `probe_linear_grid.py` (a scratch probe, not in this tree) | *Tuning flags* |
 | Sharding: multi-head attention | superseded by the fused kernel — `sdpa_decode` owns its own parallelisation | `test_device_fused_attention_matches_explicit` | *Fused decode attention* |
 | Sharding: flow decoder layers | superseded by fused `sdpa` in the estimator | `test_device_estimator_matches_golden` | *Flash attention* |
 | Fuse simple ops | ✅ | `test_device_rel_pos_attention_matches_golden`, `test_device_ar_prefill_and_decode` | *Fused decode attention* |
@@ -104,7 +104,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 
 | requirement | status | validated by | evidence |
 |---|---|---|---|
-| Maximize core counts | **measured; TTNN's default wins on most ops** — one exception shipped as a flag, and it is a *smaller* grid | `scripts/probe_linear_grid.py` | `PERF.md` *Tuning flags* |
+| Maximize core counts | **measured; TTNN's default wins on most ops** — one exception shipped as a flag, and it is a *smaller* grid | `probe_linear_grid.py` (a scratch probe, not in this tree) | `PERF.md` *Tuning flags* |
 | Efficient KV-cache for long sequences | ✅ | `test_device_fixed_shape_cache_matches_the_growing_one` | *Fixed-width KV cache* |
 | Flash attention or equivalent | ✅ both stages | `test_device_fused_attention_matches_explicit` | *Fused decode attention*, *Flash attention* |
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
@@ -350,13 +350,15 @@ the multi-core split of the key axis when chunks are one tile deep.
 `TtRelPosAttention._sdpa_program` uses the largest power of two dividing the key width,
 capped at 128; `scripts/probe_sdpa_chunk_sweep.py` is the sweep.
 
-### Ops TTNN lacks
+### Ops composed from primitives
 
 `ttnn.conv_transpose1d` does not exist: the vocoder's two upsamplers run as
 `conv_transpose2d` at `H = 1` (`tt/hifigan/upsample.py`), and they dominate the
-vocoder's time. There is no native Snake activation: `TtSnake` composes it from five
-elementwise ops. There is no FFT; the iSTFT is a matmul, a `conv_transpose2d` and a
-multiply (`README.md` has the derivation).
+vocoder's time. There is no FFT; the iSTFT is a matmul, a `conv_transpose2d` and a
+multiply (`README.md` has the derivation). Snake is composed from five elementwise ops in
+`TtSnake`, although `ttnn.snake_beta(x, alpha, alpha)` computes the same activation
+natively; the port does not use it yet, and `scripts/probe_snake_native.py` compares the
+two.
 
 ### The simulator
 

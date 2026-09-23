@@ -5,8 +5,8 @@
 
     Snake(x) = x + (1/alpha) * sin^2(alpha * x)
 
-TTNN has no native `snake`, so it is composed from primitives here. The composed
-form costs five dispatches and four intermediates per activation:
+It is composed from primitives here, at five dispatches and four intermediates per
+activation:
 
     t = multiply(x, alpha)      ->  sin(t)  ->  square(.)
       ->  multiply(., 1/alpha)  ->  add(x, .)
@@ -16,18 +16,16 @@ dilations); there are 2 stages x 3 kernels = 6 main ResBlocks plus 2 source
 ResBlocks = 8 ResBlocks, so ~48 Snake activations per vocoder call, i.e. ~240
 dispatches and ~192 intermediates at 512 channels and audio-rate length.
 
-That is the case for a native `ttnn.snake` -- and the case is
-broader than CosyVoice: Snake is the standard activation in BigVGAN and its
-derivatives, so any HiFi-GAN-family vocoder brought up on Tenstorrent pays this.
-This module is written so a native op can replace `__call__` without touching
-anything else.
+`ttnn.snake_beta(x, alpha, beta)` computes `x + sin^2(alpha*x)/beta` natively, so
+`snake_beta(x, alpha, alpha)` is this activation; `scripts/probe_snake_native.py` times
+it against the composed form. `__call__` is the one place to swap it in.
 
 Two implementation notes that matter numerically:
 
 1. `alpha_logscale=False` for CosyVoice, so alpha is used directly rather than
    exponentiated. The reference's Snake supports both; only the direct form is
    reachable from this checkpoint's config.
-2. `1/alpha` is folded ON HOST at construction. The reference computes
+2. `1/alpha` is folded on the host at construction. The reference computes
    `reciprocal(alpha + 1e-9)` every forward pass; alpha is frozen at inference, so
    that is a per-call division of a [1, C, 1] tensor for a constant result. The
    epsilon is kept -- dropping it would change the result if any alpha is 0.

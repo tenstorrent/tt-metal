@@ -108,7 +108,7 @@ class Misses:
     lever: str
 
 
-# Recorded on the boards named in PERF.md's *Environment*. Blackhole figures are the
+# Recorded on the boards named in PERF.md §1, *The boards*. Blackhole figures are the
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
