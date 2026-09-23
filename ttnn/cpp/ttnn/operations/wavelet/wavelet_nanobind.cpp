@@ -37,6 +37,9 @@ DRAM tensors and preserve the optional batch dimensions.
 ``wavelet`` names one of the 106 supported discrete wavelet schemes and
 ``boundary_mode`` is one of ``zero``, ``constant``, ``symmetric``,
 ``reflect``, ``periodic``, ``smooth``, ``antisymmetric``, or ``antireflect``.
+``periodic`` uses PyWavelets plain periodic wrapping, not ``periodization``.
+``dmey`` executes but is excluded from numerical validation because its
+generated lifting factorization has a known error.
 
 Returns ``(approximation, detail)``. Let
 ``C = ttnn.dwt_coeff_len(input.shape[-1], wavelet)``. Each output has
@@ -65,6 +68,8 @@ stick-native shape ``[S,32]``/``[B,1,S,32]`` in DRAM or L1 on the same device.
 Their placements may differ. The output remains an INTERLEAVED DRAM tensor.
 ``original_length`` restores the exact odd or even logical length and must be
 consistent with the coefficient shape, wavelet, and boundary mode.
+``boundary_mode`` checks coefficient geometry; for supported modes, inverse
+reconstruction itself is mode-independent. ``periodization`` is unsupported.
 
 Returns a stick-native tensor with shape ``[ceil(original_length/32),32]``
 or ``[B,1,ceil(original_length/32),32]``. Only the first
@@ -91,6 +96,11 @@ Compute one level of the FP32 separable 2D discrete wavelet transform.
 shape ``[H,W]`` or ``[B,1,H,W]`` in DRAM or L1 on one physical device. Outputs
 remain INTERLEAVED DRAM tensors and preserve the optional batch dimensions. The operation preserves
 the standalone vertical-first execution order and returns ``(LL, LH, HL, HH)``.
+``LH`` is vertical detail/horizontal approximation (PyWavelets ``cV``);
+``HL`` is vertical approximation/horizontal detail (PyWavelets ``cH``).
+``periodic`` means plain periodic wrapping, not ``periodization``.
+``dmey`` executes but is excluded from numerical validation because its
+generated lifting factorization has a known error.
 
 ``output_tensors`` may provide four pairwise non-aliasing tensors with the exact
 inferred specifications.
@@ -114,6 +124,9 @@ or ``[B,1,Hc,Wc]`` in DRAM or L1 on the same physical device. Their placements
 may differ. The output remains an
 INTERLEAVED DRAM tensor. ``output_shape=(height, width)`` restores the exact odd or even logical
 dimensions and must be consistent with the coefficient shape.
+The band order is ``(LL, LH/cV, HL/cH, HH)``. ``boundary_mode`` checks
+coefficient geometry; inverse reconstruction itself is mode-independent for
+supported modes. ``periodization`` is unsupported.
 
 Returns one tensor matching the input rank and batch. ``output_tensor`` may provide exact-spec
 preallocated storage and must not alias an input band.
