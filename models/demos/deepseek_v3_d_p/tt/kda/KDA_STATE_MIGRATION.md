@@ -6,12 +6,18 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | config | name | holds | position axis | segment |
 |---|---|---|---|---|
 | 0 | `"0"` | MLA kvpe cache | tokens (32 per chunk) | `[32, 576]` bfp8, 19584 B |
-| 1 | `"1"` | KDA recurrent state | segment index, `chunk_n_tokens = 1` | `[128, 32]` FP32 V-band, 16384 B |
-| 2 | `"2"` | KDA convolution tail | segment index, `chunk_n_tokens = 1` | `[3, 64]` BF16 rectangle, 384 B |
+| 1 | `"1"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
+| 2 | `"2"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
-for KDA). `max_sequence_length` of a KDA config is the number of unique segments per layer: 384 and
-576 at 96 heads of 128. The runtime declares the three caches as migration stages in this order
+for KDA). A KDA config has no token axis, so it uses the synthetic axis of the K3 disaggregation
+contract (`k3_disagg_contract.md`, tt-blaze #3634): one version of both states spans a window of
+`W = lcm(384, 576) * 32 = 36864` positions, global segment `i` sits at `i * 96` (recurrent) or `i * 64`
+(convolution) inside it, and the table repeats each segment in all 8 windows (`v * W + i * stride`,
+`max_sequence_length = 8 * W`) because decode keeps 8 versions and every window aliases the one
+prefill state (`kda_position` in `utils/kv_cache_utils.py`). The KV Manager needs this: it requires
+equal `chunk_n_tokens` on both sides and walks one position range for every config of a layer, so
+both states must fill the same window. The runtime declares the three caches as migration stages in this order
 (`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter maps configs
 back to layers with `cache_kind` / `cache_layer_rows`.
 
@@ -75,9 +81,10 @@ devices, so run it once per host of a multi-rank run.
 
 ## For the decode side
 
-* A KDA config is whole-state: migrate all `max_sequence_length` positions of every KDA layer's
-  row, not `[0, real_len)`. A worker that issues token positions per config must clamp to the
-  config's own `max_sequence_length` (or treat `chunk_n_tokens == 1` configs as whole-row).
+* A KDA config is whole-state: a KDA layer run migrates one whole window, not `[0, real_len)`. With
+  `v = (real_len - 1) % 8`, the version decode reads next, the call is `[v * W, (v + 1) * W)` on both
+  sides (contract section 5), or source `[0, W)` to destination `[v * W, (v + 1) * W)` where the
+  caller can pass separate ranges. MLA and KDA layers need separate calls.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.
