@@ -169,6 +169,39 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+# MPI-only: this leg is two ranks talking through an RdmaWindow, with no device in the path.
+# Guarded the same way test_h2h_bw.cpp is, so a non-MPI build simply does not build it.
+if(TARGET OpenMPI::MPI)
+    add_executable(h2h_leg_benchmark)
+    target_sources(h2h_leg_benchmark PRIVATE benchmark_h2h_leg.cpp)
+
+    target_link_libraries(
+        h2h_leg_benchmark
+        PRIVATE
+            tt_metal
+            test_common_libs
+            benchmark::benchmark
+            OpenMPI::MPI
+    )
+
+    target_compile_definitions(h2h_leg_benchmark PRIVATE TT_METAL_HOST_BRIDGE=1)
+
+    target_include_directories(
+        h2h_leg_benchmark
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}
+    )
+
+    set_target_properties(
+        h2h_leg_benchmark
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+    )
+endif()
+
 add_executable(multiproc_loopback_test)
 target_sources(multiproc_loopback_test PRIVATE test_multiproc_loopback.cpp)
 
