@@ -178,7 +178,13 @@ class Qwen36ModelArgs(ModelArgs):
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
         # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
         # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
-        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
+        # a and b get a WHOLE TILE of columns each, not their bare nv_tp (=8), so that both start
+        # on a 32-column boundary in the fused output. A slice whose start is tile-aligned is a
+        # cheap width truncation; one starting mid-tile (b at qkvz+8 under the old packing) forces
+        # an untilize -> slice -> tilize round trip every layer. The padding costs 48 extra output
+        # columns (3088 -> 3136, and 3104 -> 3136 after tile padding, so +1 tile of matmul N) and
+        # buys -3.0% on the GDN decode layer. See _project_qkvzab and load_gdn_weights_tp.
+        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * tpc.TILE_SIZE
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
@@ -255,8 +261,14 @@ class Qwen36ModelArgs(ModelArgs):
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
         # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
+        # 44 cores (11x4) on BH, fastest measured (~59us). On WH the full 8x8=64-core grid measured
+        # 150.4us vs 8x6's 156.5us (-3.9%, no accuracy cost), matching attn_qkv above. PR #54572.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44, grid_w=self.decode_grid_w
+            M,
+            self.dim,
+            self.gdn_qkvzab_dim_tp,
+            num_cores=44 if tpc.is_blackhole() else 64,
+            grid_w=self.decode_grid_w,
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
@@ -266,9 +278,18 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.attn_out_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
         # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
-        # vs the old 8x4; same 1536x5120 shape as attn_wo). On WH (decode_grid_w=8) this falls back to 8x5.
+        # vs the old 8x4; same 1536x5120 shape as attn_wo). 33 was never swept on Wormhole, where it
+        # merely falls back to 8x5; the full 8x8=64-core grid is faster there. SWEPT on n150x4
+        # (35B-A3B, traced decode, 3 rounds each -- every 64 run beat every 33 run):
+        #     cores  24      32      33(old) 40      48      56      64
+        #     ms     0.3043  0.3020  0.3021  0.3022  0.3020  0.3016  0.3013
+        # -0.13% end to end, PCC unchanged. Same treatment gdn_qkvz above already gets on WH.
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M,
+            self.gdn_value_dim_tp,
+            self.dim,
+            num_cores=33 if tpc.is_blackhole() else 64,
+            grid_w=self.decode_grid_w,
         )
 
         # Prefill matmul factory (M = seq_len)
