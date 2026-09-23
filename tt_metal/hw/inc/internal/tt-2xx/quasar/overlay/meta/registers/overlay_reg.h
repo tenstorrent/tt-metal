@@ -21,6 +21,7 @@
 #include "tt_cluster_clint_reg.h"
 #include "tt_cluster_ctrl_reg.h"
 #include "tt_cluster_ctrl_t6_l1_csr_reg.h"
+#include "tt_cluster_plic_reg.h"
 #include "tt_overlay_llk_tile_counters_reg.h"
 #include "tt_rocc_accel_reg.h"
 
