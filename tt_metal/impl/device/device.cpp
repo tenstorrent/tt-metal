@@ -517,7 +517,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(MetalEnvAccessor(*env_).impl(), this);
     return fabric_program_ != nullptr;
 }
 
@@ -526,7 +526,7 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(MetalEnvAccessor(*env_).impl(), this);
 
     fabric_program_->impl().finalize_offsets(this);
 
