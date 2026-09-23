@@ -69,7 +69,8 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
     const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
-        auto pipe = create_dram_sender_pipe(space, sender_logical, receivers, bases[s], factory_id);
+        auto pipe = create_dram_sender_pipe(
+            space, sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size()));
         pipes.push_back(std::make_shared<PrefetcherPipe>(std::move(pipe)));
     }
     return pipes;

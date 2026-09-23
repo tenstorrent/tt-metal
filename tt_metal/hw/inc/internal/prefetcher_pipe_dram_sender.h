@@ -242,20 +242,26 @@ FORCE_INLINE void pipe_set_entry_size(PipeSenderCtx& ctx, uint32_t entry_bytes, 
     }
 }
 
-// Post num_entries' worth of payload to one receiver at its stored write position, as
-// entries_per_packet-sized packets. Does not touch credits, so it does not move that cursor:
+// Post num_entries' worth of payload to one receiver at its stored write position, as packets of
+// at most NOC_MAX_BURST_SIZE bytes. Does not touch credits, so it does not move that cursor:
 // repeating a write before crediting overwrites the same slots.
 FORCE_INLINE void pipe_write_to_receiver(
     const PipeSenderCtx& ctx, uint32_t r, uint32_t src_l1_addr, uint32_t num_entries, uint8_t noc) {
     const uint32_t wr_offset = pipe_sender_wr_offset(ctx, r);
-    const uint32_t bytes = num_entries * ctx.entry_bytes;
+    uint32_t bytes = num_entries * ctx.entry_bytes;
     // Contiguous-write rule: a write must not straddle the usable limit, past which the ring holds
     // only the trailing gap.
     ASSERT(wr_offset + bytes <= pipe_usable_bytes(ctx));
 
     const uint32_t remote_noc_xy = pipe_receiver_noc_xy(ctx, r, noc);
-    const uint64_t dst = get_noc_addr_helper(remote_noc_xy, ctx.fifo_start_addr + wr_offset);
-    noc_async_write_one_packet</*enable_noc_tracing=*/false, /*posted=*/true>(src_l1_addr, dst, bytes, noc);
+    uint64_t dst = get_noc_addr_helper(remote_noc_xy, ctx.fifo_start_addr + wr_offset);
+    while (bytes != 0) {
+        const uint32_t packet_bytes = bytes < NOC_MAX_BURST_SIZE ? bytes : NOC_MAX_BURST_SIZE;
+        noc_async_write_one_packet</*enable_noc_tracing=*/false, /*posted=*/true>(src_l1_addr, dst, packet_bytes, noc);
+        src_l1_addr += packet_bytes;
+        dst += packet_bytes;
+        bytes -= packet_bytes;
+    }
 }
 
 // Spin until every receiver has acked everything this core has sent.

@@ -641,6 +641,45 @@ TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {
     expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, 2 * ring_size));
 }
 
+TEST_F(PrefetcherPipeDramSenderFixture, EntryLargerThanNocBurstIsSplitIntoPackets) {
+    // A block larger than one NoC packet has to go out as several packets; a single oversized
+    // packet command would not deliver it intact. One receiver and a two-entry ring keep the
+    // sender's DRISC-side pattern (receivers * entries * entry_size) inside its working region.
+    constexpr uint32_t kNumReceivers = 1;
+    constexpr uint32_t kNumEntries = 2;
+    constexpr uint32_t kLargeEntrySize = 20 * 1024;
+    const uint32_t max_packet_bytes =
+        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_noc_max_burst_size_bytes();
+    ASSERT_GT(kLargeEntrySize, max_packet_bytes) << "this test needs an entry that spans several NoC packets";
+    ASSERT_LE(
+        kNumReceivers * kNumEntries * kLargeEntrySize,
+        mesh_device_->impl().drisc_l1_arena().kernel_working_region_size());
+
+    const CoreRangeSet receiver_cores(CoreRange({0, 0}));
+    const PipeSet set = make_pipe_set(
+        *mesh_device_,
+        {{/*bank_id=*/0, receiver_cores}},
+        /*dual_senders_per_bank=*/false,
+        kLargeEntrySize,
+        kNumEntries);
+    const CoreCoord sender_logical = set.mapping.at(0).first;
+
+    preload_pattern(*mesh_device_, sender_logical, kNumEntries, kNumReceivers, /*entry_label=*/0, kLargeEntrySize);
+    run_push_and_pop(*mesh_device_, set, kNumEntries, kLargeEntrySize);
+
+    for (uint32_t i = 0; i < kNumEntries; ++i) {
+        expect_ring_slot(
+            *mesh_device_,
+            *set.pipes[0],
+            receiver_cores.ranges().front().start_coord,
+            /*slot=*/i,
+            /*receiver_label=*/0,
+            /*entry_label=*/i,
+            kLargeEntrySize);
+    }
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kNumEntries * kLargeEntrySize));
+}
+
 TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
     // Two consumers of one pipe set that read different block sizes. The ring size is fixed at
     // creation and both sizes divide it, so the DRAM sender snaps each cursor onto the new grid and

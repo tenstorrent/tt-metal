@@ -896,10 +896,11 @@ def test_validator_pipe_mixed_num_receivers(device, dual_senders):
 def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, expect_error):
     """A pipe carries the bank-local slabs its sender owns, so the request list's order does not.
 
-    What the list must still be is the pipes of a single
+    What the list must still be is every pipe of a single
     create_prefetcher_pipes_for_tensor_prefetcher call, each appearing once. Every call numbers a
     bank's slabs from 0, so two calls' pipes for one bank claim the same slabs however they are
-    ordered, and a repeated pipe delivers to a receiver twice.
+    ordered; a repeated pipe delivers to a receiver twice; and a subset leaves a pipe's slab base
+    pointing past the slabs a tensor laid out for that subset has on its bank.
     """
     num_dram_banks = device.dram_grid_size().x
     tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
@@ -923,6 +924,9 @@ def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, exp
         # pipes stamped by one factory call.
         with expect_error(RuntimeError, "one CreatePrefetcherPipesForTensorPrefetcher call"):
             queue([pipes[0], pipes_b[0]])
+        # Only a bank's trailing sender: its slab base is past the leading sender's slabs.
+        with expect_error(RuntimeError, "in any order, but"):
+            queue(pipes[1:])
         # Interleaved: no bank's two pipes are adjacent any more. Each keeps its own slab base, so
         # delivery is unchanged.
         _queue_and_validate_pipes(device, tt_weight, pipes[::2] + pipes[1::2], bank_to_receivers, ring_size)

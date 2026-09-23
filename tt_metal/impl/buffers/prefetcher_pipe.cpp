@@ -513,7 +513,11 @@ void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<Cor
 }
 
 PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
-    CoreCoord sender, const CoreRangeSet& receivers, uint32_t recv_index_base, uint64_t tensor_prefetcher_factory_id) {
+    CoreCoord sender,
+    const CoreRangeSet& receivers,
+    uint32_t recv_index_base,
+    uint64_t tensor_prefetcher_factory_id,
+    uint32_t tensor_prefetcher_factory_num_pipes) {
     validate_dram_carve(sender, receivers);
     return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(
         *this,
@@ -521,7 +525,8 @@ PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
         receivers,
         dram_sender_allocations_.at(sender),
         recv_index_base,
-        tensor_prefetcher_factory_id));
+        tensor_prefetcher_factory_id,
+        tensor_prefetcher_factory_num_pipes));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -555,7 +560,8 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     const CoreRangeSet& receiver_cores,
     std::shared_ptr<DriscL1Allocation> drisc_config_page,
     uint32_t recv_index_base,
-    uint64_t tensor_prefetcher_factory_id) :
+    uint64_t tensor_prefetcher_factory_id,
+    uint32_t tensor_prefetcher_factory_num_pipes) :
     space_(&space),
     identity_(next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)),
     sender_core_(dram_sender),
@@ -565,6 +571,7 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     initial_entry_size_(l1_alignment_for(space_->get_device())),
     recv_index_base_(recv_index_base),
     tensor_prefetcher_factory_id_(tensor_prefetcher_factory_id),
+    tensor_prefetcher_factory_num_pipes_(tensor_prefetcher_factory_num_pipes),
     drisc_config_page_(std::move(drisc_config_page)) {
     TT_FATAL(drisc_config_page_ != nullptr, "DRAM-sender PrefetcherPipe requires reserved DRISC L1");
     space_->validate_dram_carve(sender_core_, receiver_cores_);
@@ -883,8 +890,10 @@ PrefetcherPipe create_dram_sender_pipe(
     CoreCoord dram_sender,
     const CoreRangeSet& receivers,
     uint32_t recv_index_base,
-    uint64_t tensor_prefetcher_factory_id) {
-    return space.impl().create_dram_sender_pipe(dram_sender, receivers, recv_index_base, tensor_prefetcher_factory_id);
+    uint64_t tensor_prefetcher_factory_id,
+    uint32_t tensor_prefetcher_factory_num_pipes) {
+    return space.impl().create_dram_sender_pipe(
+        dram_sender, receivers, recv_index_base, tensor_prefetcher_factory_id, tensor_prefetcher_factory_num_pipes);
 }
 
 std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(

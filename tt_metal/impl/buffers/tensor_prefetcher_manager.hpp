@@ -95,8 +95,8 @@ public:
     // PrefetcherPipe delivery. Receiver-contiguous tensors support batched delivery and streaming
     // rotation. Block sizes may vary per tensor and need not match the initial applied size or divide
     // the fixed ring; the ring must hold at least one block (consumers may require more for lookahead).
-    // `prefetcher_pipes` may be any order or subset of one CreatePrefetcherPipesForTensorPrefetcher
-    // result.
+    // `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result, in
+    // any order.
     void queue(
         const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
