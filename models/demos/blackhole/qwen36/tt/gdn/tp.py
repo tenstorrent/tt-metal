@@ -305,6 +305,21 @@ class TPGatedDeltaNet:
             # depthwise conv the op wants; at tp=1 the split is a no-op). Tap order matches: tap j
             # multiplies x[t-(K-1)+j], the same contract the decode FIR MAC path uses.
             self._kda_taps = tw["conv_taps"]
+            # actual_start: the op wants a replicated UINT32 row-major [1] scalar holding the chunk's
+            # absolute start position. Ours is ALWAYS 0: sequence parallelism is handled outside the
+            # op by the socket wavefront (each span's conv history arrives as cs_rm), and on the
+            # (1, tp) submesh sequence_parallel_axis=0 is a degenerate 1-rank SP, so every device is
+            # the chronological head and reads `history`. The captured trace bakes in this tensor's
+            # ADDRESS ("keep its address stable ... before replay"), so it is allocated exactly once,
+            # here, before any capture -- never per forward. Same recipe as
+            # tests/.../kda/kda_test_utils.py::make_actual_start.
+            self._kda_actual_start = ttnn.from_torch(
+                torch.tensor([0], dtype=torch.int64),
+                device=self.mesh,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
         # L1-resident DRAM-bound eltwise intermediates (SP prefill). His one-die T=1024 profile:
         # Unary (SiLU of z) 19.5us L1->DRAM, BinaryNg (gate multiply) 36us L1->DRAM, then the
         # out-proj matmul reads DRAM->DRAM (84us); also gates the KDA-conv row-major intermediates
@@ -438,6 +453,9 @@ class TPGatedDeltaNet:
                 kd,
                 kd,
                 vd,
+                # Our binding (newer than Aniruddha's tree) requires these two; his call omitted them.
+                actual_start=self._kda_actual_start,
+                predecessor_carry=cs_rm,  # 'for local execution, alias history' (op docstring)
                 program_config=ttnn.QkvCausalConv1dSiluProgramConfig(
                     channel_chunk_size=tpc.kda_channel_chunk(self.qkv_dim_tp)
                 ),

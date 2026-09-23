@@ -913,12 +913,11 @@ def atupe_opts_enabled():
     ``MeshShape(1, 8)``, so as written every one of those gates is False and the code is inert.
     Nothing in the optimisations themselves is TP=1-specific (the conv taps are already
     per-device sharded by shard_small, and the intermediates only get SMALLER at TP>1), so this
-    predicate replaces the device-count test. **Default OFF until the SP=4 x TP=8 A/B verifies
-    it** (same discipline as QWEN36_REPL_RESIDUAL); unset is byte-identical to before the port,
+    predicate replaces the device-count test. **Default ON since 2026-09-23: the SP=4 x TP=8 A/B verified 42.78 -> 39.80 ms, PCC 0.9994, argmax equal.** Before that it was off until verified (same discipline as QWEN36_REPL_RESIDUAL); unset is byte-identical to before the port,
     which is what makes the A/B clean. The A/B run sets ``=1`` explicitly. The per-feature opt-outs he added
     (QWEN36_SP_KDA_CONV, QWEN36_SP_L1_RES, QWEN36_SP_SDPA_LEGACY) still work underneath it.
     """
-    return os.environ.get("QWEN36_ATUPE_OPTS", "0") == "1"
+    return os.environ.get("QWEN36_ATUPE_OPTS", "1") != "0"
 
 
 def kda_channel_chunk(channels):

@@ -14,8 +14,10 @@ measurements, and they were not always kept apart. This section is the line betw
 
 **Exactly one performance number in this document is a result:**
 
-> **42.79 ms** prefill wavefront, SP=4 x TP=8, all 32 chips, PCC 0.9991, commit `b9356ef71e3`
-> (reproduced 2026-09-23 on the reset device: **42.78 ms**, min 42.74, in 34 s -- HEAD default path intact).
+> **39.80 ms** prefill wavefront (min 39.77), SP=4 x TP=8, all 32 chips, **PCC 0.9994**, argmax equal,
+> 2026-09-23 -- `QWEN36_ATUPE_OPTS` on (now the default).
+>
+> Prior best **42.79 ms**, commit `b9356ef71e3` (reproduced 2026-09-23 on the reset device at 42.78 ms).
 
 Everything else is one of:
 
@@ -24,10 +26,11 @@ Everything else is one of:
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
 | **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B runs all timed out -- now attributed to a **device wedge**, not the code (see *Hang diagnosis*); re-verification pending |
-| **implemented, failing** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | baseline verified 42.78 ms; ported run fails with a nanobind TypeError on the KDA op call (binding differs from his tree) -- being fixed |
+| **verified, default ON** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | **42.78 -> 39.80 ms**, PCC 0.9994, argmax equal (2026-09-23); per-feature attribution pending |
 
-**Verified savings so far: zero.** The 8-11 ms plan below is a budget of estimated cuts against
-measured costs; none of the cuts has been demonstrated.
+**Verified savings so far: one -- 2.98 ms (42.78 -> 39.80), from porting Aniruddha's round-4
+GDN/SDPA/L1 changes to TP=8.** Everything else in the 8-11 ms plan below is still an estimated cut
+against a measured cost.
 
 ## The 42.79 ms result: exact configuration and run details
 
@@ -50,6 +53,9 @@ work and 4.3 ms is wavefront tail.** Any optimisation has to attack the 38.5, no
 Starting point was **180 ms** (demo TTFT), a 4.2x reduction. The last two steps were turning
 AGMM off (44.19 -> 42.79 ms; the fusion was a pessimisation) and Linear topology. The other
 32-chip split, SP=8 x TP=4 on the 2D mesh, measured 43.58 ms.
+
+**Superseded 2026-09-23:** 39.80 ms with `QWEN36_ATUPE_OPTS` on (now default); same config
+otherwise, PCC 0.9994. See the port section.
 
 **What 42.79 ms excludes:** logits readback, the prefill -> decode handoff, all 8 decode
 steps, and host dispatch. It is the device wavefront only. See the next section.
@@ -395,7 +401,17 @@ the real cause.
 | run | wavefront | per-die finish | PCC | status |
 |---|---|---|---|---|
 | baseline (HEAD, opts unset) | **42.78 ms** (min 42.74) | | | **PASS** in 34 s -- reproduces 42.79; wedge diagnosis confirmed, refactor cleared |
-| ported, all three on | -- | | -- | **FAILED** in 12 s: `TypeError: qkv_causal_conv1d_silu(): incompatible function arguments` -- our nanobind signature differs from his tree; no hang, no device issue |
+| **ported, all three on** | **39.80 ms** (min 39.77) | d0=35.89 d1=36.78 d2=37.91 d3=39.82 | **0.9994**, argmax 11 = 11 | **PASS** -- both tests, 22 s + 26 s. **-2.98 ms (-7.0%)**; per-die own work 38.51 -> 35.89 |
+
+The first ported attempt failed in 12 s with `TypeError: qkv_causal_conv1d_silu(): incompatible
+function arguments`: our nanobind binding is a newer revision of the op than Aniruddha's tree and
+requires two extra keyword-only tensors his call omitted -- `actual_start` (a replicated UINT32
+row-major `[1]` scalar; `[0]` for zero-offset, allocated **once before any trace capture** because
+the trace bakes in its address) and `predecessor_carry` ("for local execution, alias history", so
+`cs_rm`). Fixed and re-run; the row above is the fixed run.
+
+**Per-feature isolation (TTFT only, one feature off at a time) and `channel_chunk_size` points:**
+*pending -- results appended below when the sweep lands.*
 
 Results to be filled in when the runs land; per-feature isolation runs follow only if the
 combined run moves the number.

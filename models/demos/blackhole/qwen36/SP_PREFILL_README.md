@@ -49,7 +49,7 @@ warm traced replay:
 | SP=8 x TP=4 | 32 | 512 | 33.86 ms | 9.7 ms | 43.58 ms |
 | **SP=4 x TP=8** | **32** | **1024** | **38.51 ms** | **4.27 ms** | **42.79 ms** |
 
-Best: `SP_DIES=4 SP_TP=8 QWEN36_NO_AGMM=1` on FABRIC_1D. PCC 0.9991 vs the TP=4 oracle,
+Best (2026-09-23): `SP_DIES=4 SP_TP=8 QWEN36_NO_AGMM=1` on FABRIC_1D with `QWEN36_ATUPE_OPTS` on (the default) -- **39.80 ms** wavefront, PCC 0.9994 vs the TP=4 oracle, argmax equal. `QWEN36_ATUPE_OPTS=0` gives the previous 42.79 ms path. Details and per-op accounting: `PERF_ROOFLINE.md`.
 argmax equal. `QWEN36_CCL_BF8=1` adds ~0.5% (42.59 ms) for PCC 0.9990 -- opt-in.
 
 There is a real optimum, not a monotone trend: each extra span costs a ~1.4 ms hop, and past
