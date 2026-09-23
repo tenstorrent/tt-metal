@@ -130,7 +130,7 @@ ALWI void write_direct_interleaved_signal(
         const bool has_updated_values = group < updated_group_count;
         uint32_t output_tiles = 0;
         if (has_updated_values) {
-            output_buffer.wait_front(3);
+            output_buffer.wait_front(device_protocol::kLwtOutputBlocksPerRow);
             output_tiles = output_buffer.get_read_ptr();
         }
 
@@ -204,7 +204,7 @@ ALWI void write_direct_interleaved_signal(
         }
 
         if (has_updated_values) {
-            output_buffer.pop_front(3);
+            output_buffer.pop_front(device_protocol::kLwtOutputBlocksPerRow);
         }
     }
 }

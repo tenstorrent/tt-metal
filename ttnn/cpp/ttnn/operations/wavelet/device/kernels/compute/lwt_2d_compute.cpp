@@ -37,6 +37,11 @@ constexpr bool kInverse = true;
 constexpr bool kInverse = false;
 #endif
 
+constexpr uint32_t kDstSource0 = 0;
+constexpr uint32_t kDstSource1 = 1;
+constexpr uint32_t kDstBase = 2;
+constexpr uint32_t kDstOutput = 3;
+
 #define WAVELET_2D_STENCIL_ATTRIBUTES __attribute__((noinline, noclone, optimize("Os")))
 #define WAVELET_2D_AXIS_ATTRIBUTES __attribute__((noinline, noclone, optimize("Os")))
 
@@ -206,38 +211,38 @@ WAVELET_2D_STENCIL_ATTRIBUTES void run_stencil(
         tile_regs_acquire();
         source0_buffer.wait_front(1);
         copy_init(cb_source0);
-        copy_tile(cb_source0, 0, 0);
+        copy_tile(cb_source0, 0, kDstSource0);
         source0_buffer.pop_front(1);
 
         source1_buffer.wait_front(1);
         copy_init(cb_source1);
-        copy_tile(cb_source1, 0, 1);
+        copy_tile(cb_source1, 0, kDstSource1);
         source1_buffer.pop_front(1);
 
         base_buffer.wait_front(1);
         copy_init(cb_base);
-        copy_tile(cb_base, 0, 2);
+        copy_tile(cb_base, 0, kDstBase);
         base_buffer.pop_front(1);
 
-        scale_policy.scale_sources(0, 1);
-        scale_policy.scale_base(2);
+        scale_policy.scale_sources(kDstSource0, kDstSource1);
+        scale_policy.scale_base(kDstBase);
         if constexpr (Vertical) {
             vstencil_init();
-            vstencil_tile<K>(coefficients, 0, 1, 3, 2);
+            vstencil_tile<K>(coefficients, kDstSource0, kDstSource1, kDstOutput, kDstBase);
         } else {
             hstencil_init();
-            hstencil_dense_tile<K>(coefficients, 0, 1, 2, 3);
+            hstencil_dense_tile<K>(coefficients, kDstSource0, kDstSource1, kDstBase, kDstOutput);
         }
         if constexpr (InlineTerminalScale) {
             constexpr ttnn::operations::wavelet::StepType scale_type = inline_terminal_scale_type();
             constexpr uint32_t scale_bits = terminal_scale_bits<scale_type>();
             static_assert(scale_bits != 0, "2D terminal scale fusion could not find its scale coefficient");
-            scale_tile(3, scale_bits);
+            scale_tile(kDstOutput, scale_bits);
         }
         tile_regs_commit();
         tile_regs_wait();
         output_buffer.reserve_back(1);
-        pack_tile(3, cb_output);
+        pack_tile(kDstOutput, cb_output);
         output_buffer.push_back(1);
         tile_regs_release();
     }

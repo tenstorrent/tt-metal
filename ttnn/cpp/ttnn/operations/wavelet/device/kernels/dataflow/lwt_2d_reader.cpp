@@ -45,11 +45,7 @@ struct Rect {
         x_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength]) {}
 };
 
-#if defined(LWT_2D_COMPACT_BOUNDARY_CODE) || defined(ILWT_2D_COMPACT_BOUNDARY_CODE)
 #define LWT_2D_BOUNDARY_FUNCTION __attribute__((noinline))
-#else
-#define LWT_2D_BOUNDARY_FUNCTION ALWI
-#endif
 
 [[nodiscard]] ALWI uint32_t aligned_begin(const uint32_t value) { return (value / kTileSide) * kTileSide; }
 
@@ -81,9 +77,10 @@ struct SourceAxisTileCollector {
                 return;
             }
         }
-        if (count < capacity) {
-            tiles[count++] = source_tile;
+        if (count >= capacity) {
+            __builtin_trap();
         }
+        tiles[count++] = source_tile;
     }
 };
 
@@ -104,8 +101,7 @@ template <uint32_t Capacity>
             return index;
         }
     }
-    ASSERT(false);
-    return 0;
+    __builtin_trap();
 }
 
 template <ttnn::operations::wavelet::BoundaryMode Mode>
@@ -120,7 +116,10 @@ LWT_2D_BOUNDARY_FUNCTION void collect_boundary_source_axis_tiles(
             for (uint32_t index = 0; index < count; ++index) {
                 found = found || tiles[index] == source_tile;
             }
-            if (!found && count < capacity) {
+            if (!found) {
+                if (count >= capacity) {
+                    __builtin_trap();
+                }
                 tiles[count++] = source_tile;
             }
         }
@@ -166,6 +165,9 @@ ALWI void collect_source_axis_tiles(
         const uint32_t source_begin = static_cast<uint32_t>(raw_begin);
         const uint32_t source_end = source_begin + 2 * kTileSide - 1;
         for (uint32_t tile = source_begin / kTileSide; tile <= source_end / kTileSide; ++tile) {
+            if (count >= capacity) {
+                __builtin_trap();
+            }
             tiles[count++] = tile;
         }
     } else {
@@ -335,20 +337,11 @@ template <ttnn::operations::wavelet::BoundaryMode Mode>
         });
 }
 
-#if defined(LWT_2D_COMPACT_BOUNDARY_CODE) || defined(ILWT_2D_COMPACT_BOUNDARY_CODE)
 #define LWT_2D_POLYPHASE_TEMPLATE template <bool Interior, ttnn::operations::wavelet::BoundaryMode Mode>
 #define LWT_2D_POLYPHASE_FUNCTION __attribute__((noinline))
 #define LWT_2D_POLYPHASE_PARITY_PARAMETERS const uint32_t parity_y, const uint32_t parity_x,
 #define LWT_2D_POLYPHASE_PARITY_Y parity_y
 #define LWT_2D_POLYPHASE_PARITY_X parity_x
-#else
-#define LWT_2D_POLYPHASE_TEMPLATE \
-    template <bool Interior, ttnn::operations::wavelet::BoundaryMode Mode, uint32_t ParityY, uint32_t ParityX>
-#define LWT_2D_POLYPHASE_FUNCTION ALWI
-#define LWT_2D_POLYPHASE_PARITY_PARAMETERS
-#define LWT_2D_POLYPHASE_PARITY_Y ParityY
-#define LWT_2D_POLYPHASE_PARITY_X ParityX
-#endif
 
 LWT_2D_POLYPHASE_TEMPLATE
 LWT_2D_POLYPHASE_FUNCTION void write_polyphase_tile(
@@ -423,7 +416,6 @@ ALWI void write_polyphase_tile_dispatch(
     const uint32_t tile_x,
     const SplitSourceTiles<Mode>& source_tiles,
     const uint32_t scratch_addr) {
-#if defined(LWT_2D_COMPACT_BOUNDARY_CODE) || defined(ILWT_2D_COMPACT_BOUNDARY_CODE)
     write_polyphase_tile<Interior, Mode>(
         input_height,
         input_width,
@@ -438,21 +430,9 @@ ALWI void write_polyphase_tile_dispatch(
         tile_x,
         source_tiles,
         scratch_addr);
-#else
-    write_polyphase_tile<Interior, Mode, ParityY, ParityX>(
-        input_height,
-        input_width,
-        pad_y,
-        pad_x,
-        rectangle,
-        plane_addr,
-        plane_tile_columns,
-        tile_y,
-        tile_x,
-        source_tiles,
-        scratch_addr);
-#endif
 }
+
+#undef LWT_2D_BOUNDARY_FUNCTION
 
 struct SplitSourceColumn {
     uint32_t scratch_tile_byte_offset;
@@ -1223,6 +1203,7 @@ void kernel_main() {
         zero_tile[word] = 0;
     }
     const uint32_t noc_scratch_addr = CircularBuffer(cb_noc_scratch).get_write_ptr();
+    // Writer access begins after the first output tile and its chunk-end sync prevents reader restaging.
     const uint32_t reader_config_addr = noc_scratch_addr;
 
     for (uint32_t local_chunk = 0; local_chunk < chunk_count; ++local_chunk) {

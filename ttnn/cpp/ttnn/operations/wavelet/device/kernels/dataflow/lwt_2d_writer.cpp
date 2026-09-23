@@ -19,11 +19,15 @@ namespace {
 using ttnn::operations::wavelet::kernels::primitives::ConfigWords;
 using ttnn::operations::wavelet::kernels::primitives::kFaceSide;
 using ttnn::operations::wavelet::kernels::primitives::kTileBytes;
+using ttnn::operations::wavelet::kernels::primitives::kTileElements;
 using ttnn::operations::wavelet::kernels::primitives::kTileSide;
 using ttnn::operations::wavelet::kernels::primitives::load_config_page;
 using ttnn::operations::wavelet::kernels::primitives::preload_config_pages;
 using ttnn::operations::wavelet::kernels::primitives::tile_element_offset;
 using ttnn::operations::wavelet::kernels::primitives::tiled_element_offset;
+
+constexpr uint32_t kFragmentScratchBytes = 64;
+constexpr uint32_t kFragmentWriteBatch = 16;
 
 struct Rect {
     uint32_t y_begin{0};
@@ -97,6 +101,7 @@ ALWI void write_band_fragmented(
     Noc noc;
     const uint32_t source_y_origin = aligned_begin(source.y_begin);
     const uint32_t source_x_origin = aligned_begin(source.x_begin);
+    uint32_t outstanding = 0;
     for (uint32_t local_y = 0; local_y < final_y_length; ++local_y) {
         uint32_t local_x = 0;
         while (local_x < final_x_length) {
@@ -112,21 +117,28 @@ ALWI void write_band_fragmented(
                 (destination_y / kTileSide) * output_tile_columns + destination_x / kTileSide;
             const uint32_t destination_offset =
                 tile_element_offset(destination_y % kTileSide, destination_x % kTileSide) * sizeof(float);
-            const uint32_t scratch_lane = destination_offset & 63U;
-            auto* staged = reinterpret_cast<volatile tt_l1_ptr float*>(noc_scratch_addr + scratch_lane);
+            const uint32_t scratch_lane = destination_offset & (kFragmentScratchBytes - 1);
+            const uint32_t fragment_addr = noc_scratch_addr + outstanding * kFragmentScratchBytes + scratch_lane;
+            auto* staged = reinterpret_cast<volatile tt_l1_ptr float*>(fragment_addr);
             const auto* source_values = reinterpret_cast<volatile tt_l1_ptr float*>(plane_addr + source_offset);
             for (uint32_t value = 0; value < count; ++value) {
                 staged[value] = source_values[value];
             }
             noc.async_write(
-                CoreLocalMem<uint32_t>(noc_scratch_addr + scratch_lane),
+                CoreLocalMem<uint32_t>(fragment_addr),
                 output,
                 count * sizeof(float),
                 {},
                 {.page_id = output_tile_base + destination_tile, .offset_bytes = destination_offset});
-            noc.async_write_barrier();
+            if (++outstanding == kFragmentWriteBatch) {
+                noc.async_write_barrier();
+                outstanding = 0;
+            }
             local_x += count;
         }
+    }
+    if (outstanding != 0) {
+        noc.async_write_barrier();
     }
 }
 
@@ -378,6 +390,10 @@ ALWI void write_interleaved_output(
                     {},
                     {.page_id = output_tile_base + destination_tile});
             } else {
+#pragma GCC unroll 8
+                for (uint32_t element = 0; element < kTileElements; ++element) {
+                    tile[element] = 0.0f;
+                }
                 for (uint32_t y = std::max(tile_y, final_y_begin); y < y_end; ++y) {
                     const uint32_t padded_y = y + pad_y;
                     const uint32_t parity_y = padded_y & 1U;
@@ -396,22 +412,12 @@ ALWI void write_interleaved_output(
                             polyphase_x);
                     }
                 }
-                const uint32_t valid_y_begin = std::max(tile_y, final_y_begin);
-                const uint32_t valid_x_begin = std::max(tile_x, final_x_begin);
-                for (uint32_t y = valid_y_begin; y < y_end; ++y) {
-                    for (uint32_t x = valid_x_begin; x < x_end;) {
-                        const uint32_t local_x = x - tile_x;
-                        const uint32_t count = std::min(x_end - x, kFaceSide - local_x % kFaceSide);
-                        const uint32_t byte_offset = tile_element_offset(y - tile_y, local_x) * sizeof(float);
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(scratch_addr + byte_offset),
-                            output,
-                            count * sizeof(float),
-                            {},
-                            {.page_id = output_tile_base + destination_tile, .offset_bytes = byte_offset});
-                        x += count;
-                    }
-                }
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(scratch_addr),
+                    output,
+                    kTileBytes,
+                    {},
+                    {.page_id = output_tile_base + destination_tile});
             }
             noc.async_write_barrier();
         }
@@ -465,9 +471,11 @@ void kernel_main() {
     constexpr auto band_args = TensorAccessorArgs<route_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<band_args.next_compile_time_args_offset()>();
     constexpr uint32_t split_scratch_bytes = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    static_assert(split_scratch_bytes / 2 >= kFragmentWriteBatch * kFragmentScratchBytes);
     CircularBuffer output_buffer(cb_output);
     CircularBuffer sync_buffer(cb_sync);
     const uint32_t noc_scratch_addr = CircularBuffer(cb_noc_scratch).get_write_ptr();
+    // Route pages stay in the half disjoint from the reader's route pages and tile staging.
     const uint32_t writer_config_addr = noc_scratch_addr + split_scratch_bytes / 2;
 
     for (uint32_t local_chunk = 0; local_chunk < chunk_count; ++local_chunk) {
@@ -508,6 +516,7 @@ void kernel_main() {
             cb_band_config,
             band_words,
             ttnn::operations::wavelet::device_protocol::kLwt2DBandConfigWordCount);
+        // The route syncs leave the reader in its final wait before this half of scratch is reused for band writes.
         const uint32_t final_y_begin = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalYBegin];
         const uint32_t final_y_length = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalYLength];
         const uint32_t final_x_begin = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalXBegin];
