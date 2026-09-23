@@ -60,7 +60,7 @@ struct zero_comp_traits {
     // every float width, else the per-format integer container.
     using container_t = std::conditional_t<is_float, sfpi::vFloat, typename dst_container<FMT>::type>;
 
-    // Load and store avoids convertign SM8 to/from 2's complement
+    // Load and store avoids converting SM8 to/from 2's complement
     static inline __attribute__((always_inline)) sfpi::vInt load() {
         if constexpr (FMT == DataFormat::UInt8) {
             return sfpi::vInt(sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>());
