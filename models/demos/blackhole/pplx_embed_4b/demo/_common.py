@@ -294,6 +294,20 @@ def apply_recommended_env(batched_l1: bool) -> None:
     # q=768 and q=1024 overflow L1 ("statically allocated circular buffers");
     # k=128 ties k=256 at bs32 (681.1 vs 682.1 ms) so k=256 is kept as the safer
     # of the two.
+    # MinimalMatmul output subblock. ttnn.MinimalMatmulConfig defaults subblock_h
+    # and subblock_w to 1 in its Python binding and the callers in model_config
+    # never set them, so every batched prefill matmul was running a 1x1 output
+    # subblock -- one tile at a time in DST. That is what made those rows come
+    # back SLOW at ~48% of BFP4/LoFi peak with only 16-31% DRAM utilisation:
+    # neither compute nor bandwidth saturated, just per-tile overhead. 1x8 uses
+    # the whole 8-tile DST budget (2x8 fails "subblock_h * subblock_w must be <=
+    # max_dest_volume"). Measured on P150, best prefill / best tok/s:
+    #   bs8    1x1 182.0 ms / 22.5k    1x8 160.3 ms / 25.6k   (-11.9%)
+    #   bs16   1x1 355.6 ms / 23.0k    1x8 308.7 ms / 26.5k   (-13.2%)
+    #   bs32   1x1 684.2 ms / 23.9k    1x8 559.0 ms / 29.3k   (-18.3%)
+    # bs=1 is unaffected: it uses the legacy MatmulMultiCoreReuseMultiCast path,
+    # which derives its own out_subblock_w via get_out_subblock_w.
+    os.environ.setdefault("QWEN_MM_SUBBLOCK", "1,8")
     os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "512")
     os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
     if batched_l1:
