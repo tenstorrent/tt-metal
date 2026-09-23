@@ -247,34 +247,26 @@ OpConfig::OpConfig(
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // max(a, b) + log1p(exp(-|a - b|)): the composed log(exp(a) + exp(b)) form
-        // overflows at |x| > 88.7 even though the result is bounded by its inputs.
-        // The else arms below are unreachable under today's dtype policy: LOGADDEXP is
-        // float_only, supports_mixed_float_inputs is false for it, and the SFPU gate in
-        // binary_ng_device_operation.cpp accepts exactly that set. They are kept rather than
-        // replaced with TT_THROW because the two sets answer different questions and only
-        // coincide today -- the same reason mixed_float and float_only are kept distinct in
-        // binary_op_dtype_policy.hpp -- so a widening of either reopens this path.
+        // max(a, b) + log1p(exp(-|a - b|)), in the fused SFPU kernel. There is no FPU form:
+        // the composed log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the result
+        // is bounded by its inputs, so the FPU arm refuses instead of building it. Today that
+        // arm is unreachable -- LOGADDEXP is float_only, supports_mixed_float_inputs is false
+        // for it, and the SFPU gate accepts exactly that set -- and the throw keeps a future
+        // widening of either set from silently bringing the overflow back.
         case BinaryOpType::LOGADDEXP:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LOGADDEXP;
             } else {
-                process_lhs = unary::UnaryOpType::EXP;
-                process_rhs = unary::UnaryOpType::EXP;
-                binary_op = EnumT::ADD;
-                postprocess = unary::UnaryOpType::LOG;
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
-        // max(a, b) + log2(1 + 2**-|a - b|): the composed log2(2**a + 2**b) form
-        // overflows at |x| > 127, one binade earlier than logaddexp's 88.7.
+        // max(a, b) + log2(1 + 2**-|a - b|): same reasoning, the composed log2(2**a + 2**b)
+        // overflowing at |x| > 127.
         case BinaryOpType::LOGADDEXP2:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LOGADDEXP2;
             } else {
-                process_lhs = unary::UnaryOpType::EXP2;
-                process_rhs = unary::UnaryOpType::EXP2;
-                binary_op = EnumT::ADD;
-                postprocess = unary::UnaryOpType::LOG2;
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
         case BinaryOpType::BITWISE_AND:
