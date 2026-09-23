@@ -15,7 +15,9 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace tt::tt_fabric {
 
@@ -145,6 +147,12 @@ public:
     void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
+    // Ethernet channels whose routers were configured for dispatch (INTERVAL context switching). These
+    // routers yield to the base firmware frequently, so they are the only ones host-side remote transfers
+    // (UMD non-MMIO reads/writes, watcher, debug tools) should be routed through while fabric is running.
+    void set_dispatch_router_chans(ChipId chip_id, const std::unordered_set<chan_id_t>& chans);
+    const std::set<uint32_t>& get_dispatch_router_chans(ChipId chip_id) const;
+
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
@@ -215,6 +223,7 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+    std::vector<std::set<uint32_t>> dispatch_router_chans_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

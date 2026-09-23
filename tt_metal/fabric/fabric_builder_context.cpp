@@ -216,6 +216,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
+    dispatch_router_chans_.assign(num_devices_, {});
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
@@ -265,6 +266,19 @@ void FabricBuilderContext::set_num_fabric_initialized_routers(ChipId chip_id, si
         "Error, tried to set num initialized routers again for device {}",
         chip_id);
     num_initialized_routers_[chip_id] = num_routers;
+}
+
+void FabricBuilderContext::set_dispatch_router_chans(ChipId chip_id, const std::unordered_set<chan_id_t>& chans) {
+    TT_FATAL(chip_id < dispatch_router_chans_.size(), "Chip id {} out of range for dispatch router chans", chip_id);
+    dispatch_router_chans_[chip_id].clear();
+    for (const auto chan : chans) {
+        dispatch_router_chans_[chip_id].insert(chan);
+    }
+}
+
+const std::set<uint32_t>& FabricBuilderContext::get_dispatch_router_chans(ChipId chip_id) const {
+    TT_FATAL(chip_id < dispatch_router_chans_.size(), "Chip id {} out of range for dispatch router chans", chip_id);
+    return dispatch_router_chans_[chip_id];
 }
 
 uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id) const {

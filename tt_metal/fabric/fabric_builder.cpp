@@ -137,6 +137,7 @@ void FabricBuilder::create_routers() {
 
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
+    builder_context_.set_dispatch_router_chans(device_->id(), dispatch_links_);
     if (!routers_.empty()) {
         master_router_chan_ = routers_.begin()->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);

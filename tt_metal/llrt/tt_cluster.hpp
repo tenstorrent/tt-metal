@@ -316,6 +316,12 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
+    // Restricts the ethernet cores UMD uses on this MMIO device for host<->remote-chip (non-MMIO) transfers to the
+    // given channels. Used while fabric routers run: only dispatch-link routers yield to the base ethernet firmware
+    // often enough to service host requests quickly. An empty set restores UMD's default (all active channels).
+    // No-op on architectures without ethernet remote transfers (anything other than Wormhole).
+    void configure_ethernet_cores_for_remote_transfers(ChipId mmio_device_id, const std::set<uint32_t>& channels);
+
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 

@@ -40,6 +40,8 @@ private:
 
     // Wait for fabric router handshake on all devices.
     void wait_for_fabric_router_sync(uint32_t timeout_ms) const;
+    void restrict_remote_transfers_to_dispatch_routers();
+    void restore_remote_transfer_cores();
 
     // Compute the fabric router sync timeout from runtime options.
     uint32_t get_fabric_router_sync_timeout_ms() const;

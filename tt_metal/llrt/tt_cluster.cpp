@@ -1263,6 +1263,57 @@ void Cluster::configure_ethernet_cores_for_fabric_routers(
     }
 }
 
+void Cluster::configure_ethernet_cores_for_remote_transfers(ChipId mmio_device_id, const std::set<uint32_t>& channels) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 || this->target_type_ != TargetDevice::Silicon) {
+        return;
+    }
+    if (!this->get_cluster_desc()->is_chip_mmio_capable(mmio_device_id)) {
+        return;
+    }
+    // Only MMIO devices that actually tunnel to remote chips need this.
+    if (this->get_devices_controlled_by_mmio_device(mmio_device_id).size() <= 1) {
+        return;
+    }
+    const std::set<uint32_t> all_active = this->get_cluster_desc()->get_active_eth_channels(mmio_device_id);
+    std::set<uint32_t> candidates;
+    for (const auto chan : channels) {
+        if (all_active.contains(chan)) {
+            candidates.insert(chan);
+        }
+    }
+    // Prefer channels whose link goes directly to a remote (non-MMIO) chip. A request entering on a link to
+    // another MMIO chip has to be forwarded across several hops, each serviced by whatever router runs on that
+    // hop's ethernet core, and those are typically WAIT_FOR_IDLE routers that yield only every few tens of ms.
+    std::set<uint32_t> selected;
+    const auto& eth_connections = this->get_cluster_desc()->get_ethernet_connections();
+    if (eth_connections.contains(mmio_device_id)) {
+        for (const auto& [chan, remote] : eth_connections.at(mmio_device_id)) {
+            const ChipId connected_chip = std::get<0>(remote);
+            if (candidates.contains(chan) && !this->get_cluster_desc()->is_chip_mmio_capable(connected_chip)) {
+                selected.insert(chan);
+            }
+        }
+    }
+    if (selected.empty()) {
+        selected = candidates;
+    }
+    if (selected.empty()) {
+        selected = all_active;
+    }
+    std::unordered_set<tt::umd::CoreCoord> cores;
+    const auto& soc_desc = this->get_soc_desc(mmio_device_id);
+    for (const auto chan : selected) {
+        cores.insert(soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL));
+    }
+    log_debug(
+        tt::LogMetal,
+        "Restricting UMD remote-transfer ethernet cores on MMIO device {} to {} of {} active channels",
+        mmio_device_id,
+        selected.size(),
+        all_active.size());
+    this->driver_->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, cores);
+}
+
 void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes) {
     if (num_routing_planes == std::numeric_limits<uint8_t>::max()) {
         // default behavior, reserve whatever cores are available

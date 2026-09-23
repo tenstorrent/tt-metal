@@ -1,0 +1,13 @@
+diff --git a/device/tt_device/remote_communication.cpp b/device/tt_device/remote_communication.cpp
+index deedc356..97d066df 100644
+--- a/device/tt_device/remote_communication.cpp
++++ b/device/tt_device/remote_communication.cpp
+@@ -46,6 +46,8 @@ void RemoteCommunication::set_remote_transfer_ethernet_cores(
+     // This overrides the default ethernet cores tagged for host to cluster routing in the constructor and must be
+     // called for all MMIO devices, if default behaviour is not desired.
+     remote_transfer_eth_cores_.assign(remote_transfer_eth_cores.begin(), remote_transfer_eth_cores.end());
++    // The active index was chosen against the previous list; a shorter list would make it out of range.
++    active_eth_core_idx = 0;
+ }
+ 
+ TTDevice* RemoteCommunication::get_local_device() { return local_tt_device_; }

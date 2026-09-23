@@ -342,8 +342,36 @@ void FabricFirmwareInitializer::configure() {
     }
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
+        restrict_remote_transfers_to_dispatch_routers();
     }
     initialized_.test_and_set();
+}
+
+// While fabric routers occupy the ethernet cores, only the dispatch-link routers yield to the base ethernet
+// firmware at a fixed interval; the others (WAIT_FOR_IDLE) yield only after ~10k idle iterations (tens of ms).
+// UMD picks one ethernet core per remote chip for all host<->remote reads/writes and never rotates it on
+// reads, so if that core hosts a WAIT_FOR_IDLE router every remote read waits for a rare yield and tools that
+// poll remote chips (watcher, debug readers) slow down by orders of magnitude. Point UMD at the dispatch cores.
+void FabricFirmwareInitializer::restrict_remote_transfers_to_dispatch_routers() {
+    const auto& builder_ctx = control_plane_.get_fabric_context().get_builder_context();
+    for (auto* dev : devices_) {
+        if (!dev->is_mmio_capable() || builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+        const auto& dispatch_chans = builder_ctx.get_dispatch_router_chans(dev->id());
+        if (dispatch_chans.empty()) {
+            continue;
+        }
+        cluster_.configure_ethernet_cores_for_remote_transfers(dev->id(), dispatch_chans);
+    }
+}
+
+void FabricFirmwareInitializer::restore_remote_transfer_cores() {
+    for (auto* dev : devices_) {
+        if (dev->is_mmio_capable()) {
+            cluster_.configure_ethernet_cores_for_remote_transfers(dev->id(), {});
+        }
+    }
 }
 
 void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
@@ -413,6 +441,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         detail::WriteToDeviceL1(
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
+
+    // Routers are exiting back to base firmware; every active channel can service remote transfers again.
+    restore_remote_transfer_cores();
 
     devices_.clear();
     initialized_.clear();
