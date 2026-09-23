@@ -68,10 +68,16 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import passed_test
 
-#: Every variant here is a real 64-tile device run, and the PR gate runs this directory
-#: with `--timeout=60 -x` under a 15-minute budget. Unmarked, the first slow variant reds
-#: the gate; `pr-gate.yaml` filters on `not nightly`.
-pytestmark = pytest.mark.nightly
+#: Every variant here is a real 64-tile device run, and the whole sweep is ~7 minutes on
+#: hardware. Unmarked, the PR gate collects it and runs it with `--timeout=60 -x` under a
+#: 15-minute budget, where the first slow variant reds the gate.
+#:
+#: `accuracy` rather than `nightly`, which pytest.ini defines as exactly this -- "marks
+#: SFPU accuracy-sweep tests". It is the marker every LLK workflow deselects
+#: (`not perf and not quasar and not accuracy`); `nightly` is deselected only by
+#: pr-gate.yaml, so marking it that way would still have left llk-e2e running the sweep
+#: on every push. Run it deliberately, by name.
+pytestmark = pytest.mark.accuracy
 
 #: 64 tiles: the whole bf16/fp16 value set in one run, and the generator's own ceiling.
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
