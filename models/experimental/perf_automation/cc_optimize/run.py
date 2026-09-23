@@ -311,6 +311,42 @@ def _node_path(perf_test) -> str:
     return str(perf_test or "").split("::")[0].strip()
 
 
+def _cache_node(node, repo_root=None) -> str:
+    """ONE SPELLING PER TEST FILE, for every coverage-cache key and fingerprint.
+
+    THE 2026-09-23 OOM. Three callers asked the cache about the same perf test and spelled it three
+    ways: before_loop with the operator's ABSOLUTE --perf-test path (it wrote the ops-per-step signal
+    there), the orchestrator's coverage step with the tt-root-relative node WITH its ::case, and the
+    profiling server with the tt-root-relative file alone. Three slots, three fingerprints (the
+    absolute one hashed the operator's checkout, the relative ones this worktree). The server's
+    lookup missed, _capacity_scaled_osl saw no signal, and the loop's first profile ran the full
+    declared OSL under tracy -- 233 GB, killed by the run's own memory cap 14 minutes in -- while
+    the baseline it was to be compared with had been measured at the 2-step cap.
+
+    So every key is built from this: the case dropped (_node_path), an absolute path moved into
+    THIS tree by the same helper that re-roots --pcc-test (agent.model_files.reroot_into_tree, no
+    second copy of that logic), and expressed relative to repo_root. A path with no counterpart in
+    the tree keeps its own spelling -- still one spelling, still case-free. The fingerprint hashes
+    the same canonical file, so all callers agree on validity too."""
+    file_part = _node_path(node)
+    if not file_part or not repo_root:
+        return file_part
+    p = Path(file_part)
+    if not p.is_absolute():
+        return p.as_posix()
+    root = Path(repo_root).resolve()
+    try:
+        from agent.model_files import reroot_into_tree
+
+        p = reroot_into_tree(p.resolve(), root)
+    except Exception:  # noqa: BLE001 -- an unresolvable helper must not stop the run; keep the spelling
+        pass
+    try:
+        return p.relative_to(root).as_posix()
+    except ValueError:
+        return p.as_posix()
+
+
 def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, kernel_log: str) -> dict:
     env = {
         "PERF_MCP_MANIFEST": manifest_path,
@@ -940,7 +976,7 @@ def _coverage_fingerprint(node, repo_root=None) -> str:
     storing an entry nothing can match.
     """
     try:
-        base = Path(str(node).split("::", 1)[0])
+        base = Path(_cache_node(node, repo_root))
         if not base.is_absolute() and repo_root:
             base = Path(repo_root) / base
         mts = [f.stat().st_mtime for f in base.parent.rglob("*.py")]
@@ -954,7 +990,7 @@ def _coverage_cache_get(repo_root: Path, node, case):
         _fp = _coverage_fingerprint(node, repo_root)
         if not _fp:
             return None  # unfingerprintable: a cache that cannot be invalidated must not be read
-        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{_cache_node(node, repo_root)}|{case}")
         if entry and entry.get("fp") == _fp:
             return int(entry["k"])
     except Exception:  # noqa: BLE001
@@ -976,7 +1012,7 @@ def coverage_cache_get_ops_per_step(repo_root: Path, node, case):
         _fp = _coverage_fingerprint(node, repo_root)
         if not _fp:
             return None
-        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{_cache_node(node, repo_root)}|{case}")
         if entry and entry.get("fp") == _fp and entry.get("ops"):
             return int(entry["ops"])
     except Exception:  # noqa: BLE001
@@ -994,7 +1030,7 @@ def _coverage_cache_put(repo_root: Path, node, case, k: int, ops_per_step: int |
         entry = {"k": int(k), "fp": _fp}
         if ops_per_step:
             entry["ops"] = int(ops_per_step)
-        data[f"{node}|{case}"] = entry
+        data[f"{_cache_node(node, repo_root)}|{case}"] = entry
         path.write_text(json.dumps(data, indent=1))
     except Exception:  # noqa: BLE001
         pass
@@ -1005,7 +1041,7 @@ def _depth_cache_get(repo_root: Path, node):
         _fp = _coverage_fingerprint(node, repo_root)
         if not _fp:
             return None
-        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"depth|{node}")
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"depth|{_cache_node(node, repo_root)}")
         if entry and entry.get("fp") == _fp:
             return dict(entry["env"])
     except Exception:  # noqa: BLE001
@@ -1020,7 +1056,7 @@ def _depth_cache_put(repo_root: Path, node, env) -> None:
         _fp = _coverage_fingerprint(node, repo_root)
         if not _fp:
             return
-        data[f"depth|{node}"] = {"env": dict(env), "fp": _fp}
+        data[f"depth|{_cache_node(node, repo_root)}"] = {"env": dict(env), "fp": _fp}
         path.write_text(json.dumps(data, indent=1))
     except Exception:  # noqa: BLE001
         pass

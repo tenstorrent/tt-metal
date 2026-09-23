@@ -520,7 +520,7 @@ def _extract_pcc_threshold(pcc_file: Path, default: float = 0.99) -> float:
     return default
 
 
-def _reroot_into_tree(abs_path: Path, tt_root: Path) -> Path:
+def reroot_into_tree(abs_path: Path, tt_root: Path) -> Path:
     """An absolute --pcc-test typed against ANOTHER checkout (the operator's working copy) is moved
     into THIS run's tree when the same file exists there.
 
@@ -556,7 +556,7 @@ def resolve_pcc_node(
     file_part, _, fn = str(pcc_node).partition("::")
     pcc_abs = (Path(file_part) if os.path.isabs(file_part) else tt_root / file_part).resolve()
     if os.path.isabs(file_part):
-        pcc_abs = _reroot_into_tree(pcc_abs, tt_root)
+        pcc_abs = reroot_into_tree(pcc_abs, tt_root)
     if not pcc_abs.is_file():
         raise ModelFilesError(f"--pcc-test file {file_part!r} not found (looked under {tt_root})")
     node_rel = os.path.relpath(pcc_abs, model_root) + (f"::{fn}" if fn else "")
