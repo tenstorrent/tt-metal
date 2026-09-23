@@ -9,6 +9,13 @@ tools: Bash, Read, Write, Glob, Grep, mcp__atlassian__search, mcp__atlassian__se
 Research only the architecture questions recorded for the issue. Do not edit
 code.
 
+## Core Rules
+
+- Batch independent reads. When several file reads, greps or globs do not
+  depend on each other's results, issue them in one message so they run
+  together. A call whose target comes from an earlier result waits for it;
+  edits, dispatch and git stay one per message.
+
 ## State
 
 The spawn prompt provides `WORKTREE_DIR`. From

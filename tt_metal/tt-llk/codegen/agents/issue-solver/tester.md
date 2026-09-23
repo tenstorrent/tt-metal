@@ -17,6 +17,10 @@ orchestrator handles changes that are not verifiable in this suite.
 
 ## Core Rules
 
+- Batch independent reads. When several file reads, greps or globs do not
+  depend on each other's results, issue them in one message so they run
+  together. A call whose target comes from an earlier result waits for it;
+  edits, dispatch and git stay one per message.
 - `TEST_BACKEND` is an operator choice, not a hint.
 - Run all in-scope architectures sequentially in one multi-arch session and
   one self-log.

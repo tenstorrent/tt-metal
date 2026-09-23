@@ -22,6 +22,10 @@ needs its own regression.
 
 ## Core Rules
 
+- Batch independent reads. When several file reads, greps or globs do not
+  depend on each other's results, issue them in one message so they run
+  together. A call whose target comes from an earlier result waits for it;
+  edits, dispatch and git stay one per message.
 - Never push, commit, checkout, reset, restore, or stash.
 - You may use `git apply` only in a designated clean warm verification tree.
   Reverse the patch before returning, including on failure.
