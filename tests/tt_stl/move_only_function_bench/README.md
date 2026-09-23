@@ -9,21 +9,9 @@ Building tt-metal itself twice to cover gcc and clang is not practical.
 
 ## Contenders
 
-All three are pinned to **whatever inline capacity `std::function` actually has in the current
-configuration**, so no side gets a bigger buffer than the baseline.
-
-That capacity belongs to the **standard library, not the compiler** — clang with libstdc++ behaves
-exactly like gcc. Measured by `sbo_probe`:
-
-| Configuration | Buffer | `sizeof(std::function<void()>)` | Buffer on LP64 |
-| --- | --- | --- | --- |
-| libstdc++ (g++-12, clang++-20 default) | 2 pointers | 32 B | **16 B** |
-| libc++ (clang++-20 `-stdlib=libc++`) | 3 pointers | 48 B | **24 B** |
-
-It cannot be computed from `sizeof`: libstdc++ has 2 pointers of overhead and libc++ has 3, so
-`sizeof - 2 * sizeof(void*)` is right for the first and overstates the second by 8 bytes. The
-constants are therefore measured, and `sbo_probe` **exits non-zero** if a standard library ever
-moves the boundary — a silent mismatch would skew every number in the table.
+All three are pinned to whatever inline capacity `std::function` has in the current configuration,
+so no side gets a bigger buffer than the baseline. That capacity varies by standard library; see
+`inline_capacity.hpp`, and run `sbo_probe` to check it.
 
 | Name | Type |
 | --- | --- |
