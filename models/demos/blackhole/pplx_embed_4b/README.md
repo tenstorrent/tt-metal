@@ -577,9 +577,27 @@ runs — so it exercises the bfp8 Q/K/V path directly:
 
 STS-B: 0.8134 (before) → 0.8164 (Q bfp8) → **0.8190** (Q + K/V bfp8). bs1 gains
 little because the bs1 path never had the Typecast (bf16 Q went to SDPA directly);
-its 0.2 ms is SDPA reading half the Q/K/V bytes. Under evaluation next:
-`QWEN_QKV_OUT_BFP8=1` — the QKV projection itself writing bfp8 (upstream pins bf16
-only because the stock rotary asserted it; the fused op is now its only reader).
+its 0.2 ms is SDPA reading half the Q/K/V bytes.
+
+**Follow-on, same day — `QWEN_QKV_OUT_BFP8=1` (default on):** the QKV projection
+itself now writes bfp8. Upstream pins its output to bf16 only because the stock
+rotary op asserted bf16; with norm + RoPE fused, the head-split op is the
+projection's only reader and unpacks bfp8 directly, so the projection writes half
+the bytes and the fused op reads half (201 MB → 100 MB per layer at bs32). The
+subclass wraps `minimal_matmul`/`ttnn.linear` for the call whose weight is
+`self.wqkv` and switches `dtype` to bfp8; Q/K/V are then already quantised, so the
+fused op emits all three in bfp8 (single output CB).
+
+| batch | H200 | Q+K/V bfp8 | **+ QKV out bfp8 (shipped)** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 23.7  | **23.7**  | 0.0%  | 4.36× |
+| bs8  | 33.081  | 135.3 | **127.5** | **−5.8%** | 3.85× |
+| bs16 | 67.225  | 250.4 | **240.9** | **−3.8%** | 3.58× |
+| bs32 | 139.150 | 474.3 | **456.7** | **−3.7%** | 3.28× |
+
+STS-B 0.8190 → **0.8161** (still above the 0.8134 this day started at). bs1 is
+unchanged: its QKV output is 6 MB, so the bytes saved are ~15 µs per layer against
+a launch-bound op sequence.
 
 ### Fused head-split + Q/K RMSNorm + RoPE — landed (2026-09-23)
 
