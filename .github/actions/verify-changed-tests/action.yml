@@ -1,0 +1,73 @@
+name: "Verify changed tests"
+description: >-
+  Scope tests/pipeline_reorg changes, narrow the matrix, and enforce owner
+  review for highly contended SKUs. Intended to be pinned to @main by every
+  caller so a PR branch always runs the current version of this gate, never
+  a stale or missing copy from its own head -- the caller currently uses a
+  local path (./...) since this action does not exist on main yet, and
+  should switch to @main once this PR merges. Runs
+  .github/scripts/utils/verify_changed_tests.py in place -- that script is
+  not duplicated here, so pinning this action to a ref pins that script to
+  the same ref.
+
+inputs:
+  event:
+    description: "GitHub event name (pull_request or merge_group)"
+    required: true
+  base:
+    description: "Base ref or sha to diff against"
+    required: true
+  repo:
+    description: "owner/repo, for the reviews API"
+    required: true
+  pr:
+    description: "PR number"
+    required: false
+    default: ""
+  output:
+    description: "Path to also write the JSON scope result to"
+    required: false
+    default: ""
+
+outputs:
+  status:
+    description: "Gate status: no_op, blocked, or run"
+    value: ${{ steps.gate.outputs.status }}
+  expected-leg-count:
+    value: ${{ steps.gate.outputs.expected-leg-count }}
+  review-leg-count:
+    value: ${{ steps.gate.outputs.review-leg-count }}
+  review-met:
+    value: ${{ steps.gate.outputs.review-met }}
+  leg-digest:
+    value: ${{ steps.gate.outputs.leg-digest }}
+  needs-default:
+    value: ${{ steps.gate.outputs.needs-default }}
+  needs-profiler:
+    value: ${{ steps.gate.outputs.needs-profiler }}
+  matrix:
+    value: ${{ steps.gate.outputs.matrix }}
+  sim-libs:
+    value: ${{ steps.gate.outputs.sim-libs }}
+  leg-count:
+    value: ${{ steps.gate.outputs.leg-count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Scope the changed tests, narrow the matrix, enforce owner review
+      id: gate
+      shell: bash
+      run: |
+        # GITHUB_ACTION_PATH is this action's directory inside the checkout of
+        # this repo at the ref the caller's `uses:` line resolved (@main, once
+        # the caller is updated post-merge). The script two levels up from
+        # there is that same checkout's copy, so running it in place -- rather
+        # than a copy bundled into this action -- is what makes pinning this
+        # action pin the script.
+        python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/verify_changed_tests.py" \
+          --event "${{ inputs.event }}" \
+          --base "${{ inputs.base }}" \
+          --repo "${{ inputs.repo }}" \
+          --pr "${{ inputs.pr }}" \
+          --output "${{ inputs.output }}"

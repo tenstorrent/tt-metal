@@ -58,11 +58,11 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "wh_galaxy" \
-            ./.github/sku_config.yaml
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "wh_galaxy"
+          sku-config: ./.github/sku_config.yaml
 
   galaxy-profiler-tests:
     needs: load-test-matrix
