@@ -22,6 +22,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "gelu_bw/device/gelu_bw_device_operation.hpp"
+#include "device/unary_backward_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -468,14 +469,32 @@ std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor sig_result = ttnn::sigmoid(
+
+    // The fused device operation is interleaved-only: it sizes its circular buffers from
+    // tt::tile_size and splits work by physical_volume() / TILE_HW. The composite it replaces
+    // was built from unary and binary ops that do support sharding, and callers rely on that
+    // (a height-sharded call returns a height-sharded result), so sharded operands -- or a
+    // request for a sharded output -- keep the composite path rather than being rejected.
+    // Adding sharding to the shared factory would let this fall away.
+    const auto& output_memory_config = output_mem_config.value_or(input.memory_config());
+    if (grad.is_sharded() || input.is_sharded() || output_memory_config.is_sharded()) {
+        Tensor sig_result = ttnn::sigmoid(
+            input,
+            (int)ttnn::operations::unary::VecMode::RC,
+            ttnn::operations::unary::SigmoidMode::ACCURATE,
+            output_mem_config);
+        Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
+        Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
+        return grad_tensor;
+    }
+
+    grad_tensor.emplace_back(ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW,
+        grad,
         input,
-        (int)ttnn::operations::unary::VecMode::RC,
-        ttnn::operations::unary::SigmoidMode::ACCURATE,
-        output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
-    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
+        input.dtype(),
+        output_memory_config));
     return grad_tensor;
 }
 

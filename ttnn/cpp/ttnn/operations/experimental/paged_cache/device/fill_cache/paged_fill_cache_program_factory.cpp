@@ -38,6 +38,14 @@ const DFBSpecName FC_PAGE_TABLE{"page_table"};
 const DFBSpecName FC_BATCH_IDX{"batch_idx"};
 const DFBSpecName FC_VALID_SEQ_LEN{"valid_seq_len"};
 
+// Quasar (Gen2) rejects self-loop DFBs on data-movement kernels. The writer's three metadata buffers
+// (page_table/batch_idx/valid_seq_len) are self-loops — it NoC-reads a stick and reads it straight
+// back, never pushing — so on Quasar they become node-local scratchpads instead. The accessor names
+// match the DFB ones, so the writer kernel selects dfb::… or scratch::… under #ifdef ARCH_QUASAR.
+const ScratchpadSpecName FC_PAGE_TABLE_SCRATCH{"page_table"};
+const ScratchpadSpecName FC_BATCH_IDX_SCRATCH{"batch_idx"};
+const ScratchpadSpecName FC_VALID_SEQ_LEN_SCRATCH{"valid_seq_len"};
+
 const TensorParamName FC_INPUT{"input"};
 const TensorParamName FC_CACHE{"cache"};
 const TensorParamName FC_PAGE_TABLE_T{"page_table"};
@@ -211,7 +219,12 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
     // enforced in the validator, so the divide is exact.
     const uint32_t capacity_t = operation_attributes.cache_position_modulo.value_or(0u) / TILE_HEIGHT;
 
-    // ---------------- Dataflow buffers ----------------
+    // ---------------- Dataflow buffers / scratchpads ----------------
+
+    // On Quasar the three writer metadata buffers are node-local scratchpads (Gen2 forbids self-loop
+    // DFBs on DM kernels); elsewhere they stay self-loop DFBs. FC_IN_TILES is a real reader->writer DFB
+    // on every arch.
+    const bool metadata_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
 
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
@@ -220,30 +233,47 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             .num_entries = num_input_tiles,
             .data_format_metadata = dfb_data_format,
         },
-        DataflowBufferSpec{
+    };
+    Group<ScratchpadSpec> scratchpads;
+
+    if (metadata_as_scratchpad) {
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = FC_PAGE_TABLE_SCRATCH, .size_per_node = page_table_stick_size_B});
+    } else {
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = FC_PAGE_TABLE,
             .entry_size = page_table_stick_size_B,
             .num_entries = 1,
             .data_format_metadata = page_table_data_format,
-        },
-    };
+        });
+    }
     if (use_batch_idx_tensor) {
         // Holds all `batch_idx_num_elements` entries so the writer kernel can pick
         // the right entry per batch row in the batched case.
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = FC_BATCH_IDX,
-            .entry_size = batch_idx_stick_size_B,
-            .num_entries = batch_idx_num_elements,
-            .data_format_metadata = batch_idx_data_format,
-        });
+        if (metadata_as_scratchpad) {
+            scratchpads.push_back(ScratchpadSpec{
+                .unique_id = FC_BATCH_IDX_SCRATCH, .size_per_node = batch_idx_stick_size_B * batch_idx_num_elements});
+        } else {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = FC_BATCH_IDX,
+                .entry_size = batch_idx_stick_size_B,
+                .num_entries = batch_idx_num_elements,
+                .data_format_metadata = batch_idx_data_format,
+            });
+        }
     }
     if (use_valid_seq_len) {
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = FC_VALID_SEQ_LEN,
-            .entry_size = valid_seq_len_stick_size_B,
-            .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::UInt32,
-        });
+        if (metadata_as_scratchpad) {
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = FC_VALID_SEQ_LEN_SCRATCH, .size_per_node = valid_seq_len_stick_size_B});
+        } else {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = FC_VALID_SEQ_LEN,
+                .entry_size = valid_seq_len_stick_size_B,
+                .num_entries = 1,
+                .data_format_metadata = tt::DataFormat::UInt32,
+            });
+        }
     }
 
     // ---------------- Reader ----------------
@@ -286,17 +316,19 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             .accessor_name = "in",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
-        DFBBinding{
-            .dfb_spec_name = FC_PAGE_TABLE,
-            .accessor_name = "page_table",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = FC_PAGE_TABLE,
-            .accessor_name = "page_table",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
     };
+    // On Quasar the metadata buffers are scratchpads: bound once (not a self-loop DFB PRODUCER/CONSUMER
+    // pair). The writer kernel reads/reads-back through scratch::… under #ifdef ARCH_QUASAR.
+    Group<KernelSpec::ScratchpadBinding> writer_scratchpad_bindings;
+    if (metadata_as_scratchpad) {
+        writer_scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = FC_PAGE_TABLE_SCRATCH, .accessor_name = "page_table"});
+    } else {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = FC_PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = FC_PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     Group<TensorBinding> writer_tensor_bindings = {
         TensorBinding{
             .tensor_parameter_name = FC_CACHE,
@@ -330,16 +362,21 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
 
     if (use_batch_idx_tensor) {
         writer_defines.emplace("USE_BATCH_IDX_TENSOR", "1");
-        writer_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_BATCH_IDX,
-            .accessor_name = "batch_idx",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        writer_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_BATCH_IDX,
-            .accessor_name = "batch_idx",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        if (metadata_as_scratchpad) {
+            writer_scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+                .scratchpad_spec_name = FC_BATCH_IDX_SCRATCH, .accessor_name = "batch_idx"});
+        } else {
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = FC_BATCH_IDX,
+                .accessor_name = "batch_idx",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = FC_BATCH_IDX,
+                .accessor_name = "batch_idx",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
         writer_tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = FC_BATCH_IDX_T,
             .accessor_name = "batch_idx",
@@ -352,16 +389,21 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
 
     if (use_valid_seq_len) {
         writer_defines.emplace("USE_VALID_SEQ_LEN", "1");
-        writer_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_VALID_SEQ_LEN,
-            .accessor_name = "valid_seq_len",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        writer_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_VALID_SEQ_LEN,
-            .accessor_name = "valid_seq_len",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        if (metadata_as_scratchpad) {
+            writer_scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+                .scratchpad_spec_name = FC_VALID_SEQ_LEN_SCRATCH, .accessor_name = "valid_seq_len"});
+        } else {
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = FC_VALID_SEQ_LEN,
+                .accessor_name = "valid_seq_len",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = FC_VALID_SEQ_LEN,
+                .accessor_name = "valid_seq_len",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
         writer_tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = FC_VALID_SEQ_LEN_T,
             .accessor_name = "valid_seq_len",
@@ -375,6 +417,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             "writer_fill_cache_interleaved.cpp",
         .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb_bindings),
+        .scratchpad_bindings = std::move(writer_scratchpad_bindings),
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_runtime_arg_names)},
@@ -411,6 +454,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
                 },
             },
     };
+    // Empty on non-Quasar; on Quasar carries the writer's metadata scratchpads.
+    spec.scratchpads = std::move(scratchpads);
 
     // ---------------- Run args ----------------
 

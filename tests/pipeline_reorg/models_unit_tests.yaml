@@ -244,7 +244,7 @@
 
 - name: Qwen3.6-35B-A3B MoE unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_moe_tp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_moe.py
@@ -285,13 +285,7 @@
 
 - name: Mistral-Small-3.1-24B vision unit tests
   cmd: |
-    # models-unit-tests-impl.yaml passes enable-watcher: true, which the legacy
-    # t3000-unit-tests-impl and the e2e impl do not. With the watcher on,
-    # test_vision_model aborts on a NOC circular-buffer overflow that the other pipelines
-    # never surfaced -- the same test passes in the tiered e2e job, which runs no watcher.
-    # Unset here (matching the Llama entries above) to unblock the suite. NOTE this hides
-    # a real illegal NOC read rather than fixing it; tracked separately.
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-3.1-24B-Instruct-2503
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
@@ -304,10 +298,8 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # Still the carried-over legacy value; the job has never completed end-to-end, so
-    # there is no usable measurement yet. Re-measure once it is green.
     wh_llmbox:
-      timeout: 20
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -714,12 +706,15 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    # Watcher setup is per SKU: this cmd is shared by wh_galaxy_perf and bh_galaxy, and only
+    # the Blackhole leg has been revalidated. See the skus block below.
+    {watcher_setup}
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
+    pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_model_config.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -732,9 +727,16 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
+      watcher_setup: "export TT_METAL_WATCHER=30"
     bh_galaxy:
       timeout: 15
       tier: 1
+      # The #53330 slice fault is fixed by #56176, so the watcher goes back on here.
+      # DISABLE_ETH is required: with the watcher on ethernet cores the fabric program needs
+      # 27328 bytes against a 26624 byte ACTIVE_ETH kernel config buffer, so open_mesh_device
+      # throws in FabricFirmwareInitializer::compile_and_configure_fabric() and no test runs.
+      # Worker cores stay watched, which is where the #50886 faults have been.
+      watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   budget_type: unit
@@ -757,7 +759,7 @@
 
 - name: MiniMax-M3 unit tests (BH Galaxy 8x4)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (Watcher data corruption on mesh open)
+    export TT_METAL_WATCHER=30
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp@8x4
     pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k "8x4"
@@ -1064,7 +1066,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
@@ -1180,7 +1182,7 @@
 
 - name: TT-DiT Flux.2-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
     status=0
@@ -1692,7 +1694,7 @@
     bh_quietbox_2:
       timeout: 10
       tier: 3
-  owner_id: D0B8130N4BW # Dalar Vartanians
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: unit
 
@@ -1958,7 +1960,7 @@
 
 - name: TT-Transformers attention module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
     pytest models/common/tests/modules/attention/test_attention_1d.py \
@@ -2003,7 +2005,7 @@
 
 - name: TT-Transformers sampling module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     fail=0
     pytest models/common/tests/modules/sampling/test_penalties_1d.py \
@@ -2082,7 +2084,7 @@
 
 - name: TT-Transformers auto-compose 2D unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/test_auto_compose.py \
@@ -2141,7 +2143,7 @@
 
 - name: DeepSeek-V3 TG MoE tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -2167,7 +2169,7 @@
 - name: xtts-v2 unit tests
   cmd: |
     set -e
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     uv pip install -r models/experimental/xtts/requirements.txt
     # test_empty_generation runs in the e2e job instead: it needs a full traced pipeline, which
     # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already

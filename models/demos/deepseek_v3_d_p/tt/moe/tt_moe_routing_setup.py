@@ -102,6 +102,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 
 
 class TtMoERoutingSetup(LightweightModule):
@@ -215,7 +216,8 @@ class TtMoERoutingSetup(LightweightModule):
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok

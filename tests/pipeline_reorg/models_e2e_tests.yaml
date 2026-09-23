@@ -1192,7 +1192,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 3
-  owner_id: D0B8130N4BW # Dalar Vartanians
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: e2e
 
@@ -2055,8 +2055,8 @@
     '
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
-    bh_sc1:
-      timeout: 45
+    bh_sc1_high_power:
+      timeout: 40
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2089,8 +2089,8 @@
     '
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
-    bh_sc1:
-      timeout: 20
+    bh_sc1_high_power:
+      timeout: 25
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2105,7 +2105,7 @@
     '
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 75
       tier: 3
       release_ready: false
