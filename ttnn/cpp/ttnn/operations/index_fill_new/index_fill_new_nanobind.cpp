@@ -17,11 +17,8 @@ namespace ttnn::operations::index_fill_new {
 void bind_index_fill_new_operation(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Descriptor-based port of :func:`ttnn.index_fill` (migration scaffolding for #42392).
-
-        Identical arguments and semantics to ``ttnn.index_fill``; only the host-side program
-        construction differs (``ProgramDescriptor`` instead of the legacy ``CachedProgram``
-        factory). Temporary: removed once the port replaces the original operation.
+        Descriptor-based port of :func:`ttnn.index_fill` (#42392); identical arguments and semantics.
+        Temporary until it replaces the original operation.
     )doc";
 
     ttnn::bind_function<"index_fill_new">(

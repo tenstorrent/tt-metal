@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "index_fill_new_device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -14,19 +14,12 @@ namespace ttnn::operations::index_fill_new {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Descriptor port of index_fill::IndexFillOperation::MultiCore::create. The parameter setup, work
-// split, CB layout, compile-time args and per-core runtime-arg layout are unchanged so the kernels
-// in ttnn/cpp/ttnn/operations/index_fill/device/kernels/ are reused as-is. The legacy
-// override_runtime_arguments (which rewrote reader args 0/1 and writer arg 0 with fresh buffer
-// addresses) is replaced by Buffer* bindings at exactly those positions; the framework patches
-// them on every cache hit. No hash-excluded attribute exists, so nothing else needs re-applying.
+// Same work split, CBs, compile-time args and runtime-arg layout as the legacy factory, so its
+// kernels are reused as-is.
 ProgramDescriptor IndexFillNewOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    ////////////////////////////////////////////////////////////////////////////
-    //                         Parameters Setup
-    ////////////////////////////////////////////////////////////////////////////
     const ttnn::Tensor& index = tensor_args.index;
     const ttnn::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
@@ -39,21 +32,18 @@ ProgramDescriptor IndexFillNewOperation::create_descriptor(
     }
     const uint32_t dim_size = input_shape[dim];
 
-    // Prepare fill_value to send as a uint32_t kernel arg
-    auto fill_value_ = operation_attributes.value;
+    // fill_value goes to the kernel as a uint32_t
+    const auto& value = operation_attributes.value;
     uint32_t fill_value{};
     switch (input.dtype()) {
         case DataType::BFLOAT16:
-            fill_value = pack_two_bfloat16_into_uint32({bfloat16(std::get<float>(fill_value_)), bfloat16(0.0f)});
+            fill_value = pack_two_bfloat16_into_uint32({bfloat16(std::get<float>(value)), bfloat16(0.0f)});
             break;
-        case DataType::FLOAT32: fill_value = std::bit_cast<uint32_t>(std::get<float>(fill_value_)); break;
-        case DataType::INT32: fill_value = static_cast<uint32_t>(std::get<int>(fill_value_)); break;
+        case DataType::FLOAT32: fill_value = std::bit_cast<uint32_t>(std::get<float>(value)); break;
+        case DataType::INT32: fill_value = static_cast<uint32_t>(std::get<int>(value)); break;
         default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                            Program Setup
-    ////////////////////////////////////////////////////////////////////////////
     ProgramDescriptor desc;
 
     // Distribute work across core grid
@@ -181,7 +171,6 @@ ProgramDescriptor IndexFillNewOperation::create_descriptor(
         }}},
     });
 
-    // Kernels are shared with the legacy op; nothing is duplicated.
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/index_fill/device/kernels/";
 
     // Create reader kernel
@@ -282,8 +271,6 @@ ProgramDescriptor IndexFillNewOperation::create_descriptor(
             start_row_id += num_rows_per_core;
         }
 
-        // Reader runtime args. Buffer* entries (input, index) register BufferBindings at
-        // positions 0 and 1 — the slots the legacy override_runtime_arguments rewrote.
         reader_desc.emplace_runtime_args(
             core,
             {
@@ -334,7 +321,6 @@ ProgramDescriptor IndexFillNewOperation::create_descriptor(
             out_num_col_shards = 1;
         }
 
-        // Writer runtime args. The output Buffer* registers a BufferBinding at position 0.
         writer_desc.emplace_runtime_args(
             core,
             {
@@ -354,7 +340,6 @@ ProgramDescriptor IndexFillNewOperation::create_descriptor(
             });
     }
 
-    // Kernel push order: reader = 0, writer = 1 (kernel indices in the cached Program).
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
 

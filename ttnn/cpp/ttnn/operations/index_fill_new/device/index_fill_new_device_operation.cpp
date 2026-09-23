@@ -9,9 +9,7 @@
 
 namespace ttnn::operations::index_fill_new {
 
-// validate / compute_output_specs / create_output_tensors are verbatim copies of
-// index_fill::IndexFillOperation; only the program construction (create_descriptor) differs.
-void IndexFillNewOperation::validate(
+void IndexFillNewOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& index = tensor_args.index;
@@ -67,7 +65,7 @@ void IndexFillNewOperation::validate(
         index.dtype() == DataType::UINT32, "Index fill: Index tensor must have UINT32 dtype; got {}", index.dtype());
     TT_FATAL(index.device() == input.device(), "Index fill: Index tensor must be on the same device as input");
 
-    TT_FATAL(dim < input.logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
+    TT_FATAL(dim < input.logical_shape().rank(), "Index fill: Invalid dimension");
 
     // Check that value variant type matches input tensor dtype
     const auto& value = operation_attributes.value;
@@ -88,11 +86,6 @@ void IndexFillNewOperation::validate(
         input_dtype,
         value_is_float ? "float" : "int");
 }
-void IndexFillNewOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-}
-
 IndexFillNewOperation::spec_return_value_t IndexFillNewOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& old_spec = tensor_args.input.tensor_spec();
