@@ -340,6 +340,35 @@ def agmm_k_block_size(k_local, default=8):
     return b
 
 
+def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
+    """Persistent gather buffer for all_gather_minimal_matmul_async on activation x [.,S,K/tp].
+
+    The op writes every device's K-slice straight into its peers' gather buffer with no receiver-ready
+    handshake (its barrier_semaphore is not wired up). Without a persistent buffer the op allocates one per
+    call, on the host, from whatever the preceding ops just freed — so a device that reaches the op early can
+    write into memory a lagging peer's preceding kernels still use. A persistent buffer never aliases
+    transient data. DRAM, one ping-pong pair per (S, K) shared by every layer through tt_ccl, allocated on
+    first use (the warm-up run, before any trace capture).
+
+    TODO(#57458): once all_gather_minimal_matmul_async honours barrier_semaphore (an in-kernel receiver-ready
+    handshake), drop this buffer and pass barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+    instead; test_gdn_out_agmm_deterministic_under_device_skew must keep passing."""
+    cache = tt_ccl.__dict__.setdefault("_agmm_gather_buffers", {})
+    mesh = tt_ccl.mesh_device
+    S, K_local = x.shape[-2], x.shape[-1]
+    key = (S, K_local, cluster_axis, x.dtype)
+    if key not in cache:
+        shape = ttnn.Shape([1, 1, S, K_local * mesh.shape[cluster_axis]])
+        pair = [
+            ttnn.allocate_tensor_on_device(shape, x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+            for _ in range(2)
+        ]
+        cache[key] = [pair, 0]
+    pair, idx = cache[key]
+    cache[key][1] = idx ^ 1
+    return pair[idx]
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -350,13 +379,15 @@ def all_gather_matmul_prefill(
     cluster_axis=1,
     fused_activation=None,
     out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    persistent_output_buffer=None,
 ):
     """Fused all-gather(dim=3) + column-parallel matmul for prefill (all_gather_minimal_matmul_async).
 
     x: K-sharded activation [.,S,K/tp]; weight: [K,N] col-sharded (K full). Gathers x to full K and
     matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
     before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). out_memory_config places the result
-    (default DRAM; L1 keeps it resident for downstream slices)."""
+    (default DRAM; L1 keeps it resident for downstream slices). persistent_output_buffer: the gather buffer
+    (agmm_gather_buffer); None lets the op allocate one per call."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
@@ -387,6 +418,7 @@ def all_gather_matmul_prefill(
         force_transpose=True,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
+        persistent_output_buffer=persistent_output_buffer,
     )[0]
 
     return out

@@ -673,6 +673,9 @@ class TPGatedDeltaNet:
             gated = _silu_mul(out_f, z, _L1, dtype=ttnn.bfloat16)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
+            # Persistent gather buffer: the op's per-call one would be allocated over out_f, which a lagging
+            # device's gate multiply may still be reading when its peers start writing their slices.
+            # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
             out = tpc.all_gather_matmul_prefill(
                 gated,
                 tw["out_colpar"],
@@ -680,6 +683,7 @@ class TPGatedDeltaNet:
                 self.cfg,
                 self.args.ccl_topology(),
                 out_memory_config=_L1,
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
             )
             ttnn.deallocate(gated)
             if return_state:

@@ -604,3 +604,67 @@ def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure
     passing, pcc = comp_pcc(ref, got, 0.99)
     logger.info(f"GDN out-proj AGMM vs MMRS PCC (OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}) = {pcc}")
     assert passing, f"AGMM/MMRS mismatch at OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}: {pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """The column-parallel out-projection must not depend on device timing.
+
+    all_gather_minimal_matmul_async writes each device's K-slice straight into its peers' gather buffer, with
+    no receiver-ready handshake. A per-call gather buffer is allocated on the host from L1 the previous ops
+    just freed (here: the gate multiply's fp32 input), so a device that reaches the op early overwrites data a
+    lagging peer's gate multiply is still reading. Delay each device in turn right before the gate
+    (ttnn.apply_device_delay) and require every run to be bit-identical to a reference computed with the
+    devices synchronized before the out-projection."""
+    import models.demos.blackhole.qwen36.tt.gdn.tp as gdn_tp
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    os.environ.setdefault("HF_MODEL", model_path())
+    nd = mesh_device.get_num_devices()
+    if nd == 1:
+        pytest.skip("TP-only")
+    T = 2048
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
+    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    composer = tp_composer(mesh_device)
+    x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
+
+    def run():
+        gdn.reset_state()
+        o = gdn.forward_prefill(x_tt)
+        out = ttnn.to_torch(o, mesh_composer=composer)[0, 0].float().clone()
+        ttnn.deallocate(o)
+        return out
+
+    agmm, silu_mul = tpc.all_gather_matmul_prefill, gdn_tp._silu_mul
+
+    def synced_agmm(*a, **kw):
+        ttnn.synchronize_device(mesh_device)
+        return agmm(*a, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(tpc, "all_gather_matmul_prefill", synced_agmm)
+        ref = run()
+
+    for late in range(nd):
+        delays = [[600_000 if d == late else 0 for d in range(nd)]]
+
+        def delayed_silu_mul(x, z, memory_config, dtype=None):
+            if dtype is not None:  # the column-parallel arm only
+                ttnn.apply_device_delay(mesh_device, delays)
+            return silu_mul(x, z, memory_config, dtype)
+
+        with monkeypatch.context() as m:
+            m.setattr(gdn_tp, "_silu_mul", delayed_silu_mul)
+            got = run()
+        bad = torch.nonzero((got - ref).abs().sum(-1)).flatten()
+        assert bad.numel() == 0, (
+            f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
+            f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
+        )
