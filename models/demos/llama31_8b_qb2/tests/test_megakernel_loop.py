@@ -121,6 +121,7 @@ def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
             )
             ttnn.copy_host_to_device_tensor(host, x)
             copy_to(torch.tensor([pos], dtype=torch.int32), position, mesh)
+            loop.reserve_invocations()
             for trace in traces:
                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             expected, actual = [to_host(output) for output in outputs]
@@ -128,6 +129,7 @@ def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
                 record = {"position": pos, "output": compare(actual, expected), "cache": []}
                 for native, fused in zip(baseline_cache, loop_cache):
                     record["cache"].append([compare(to_host(b), to_host(a)) for a, b in zip(native, fused)])
+                loop.reserve_invocations(8)
                 for _ in range(8):
                     ttnn.execute_trace(mesh, traces[1], cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh)

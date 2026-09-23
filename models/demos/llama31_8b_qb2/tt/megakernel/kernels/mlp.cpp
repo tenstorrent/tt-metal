@@ -123,14 +123,16 @@ void QB2_ENTRY() {
     if (bank < 8) {
 #ifdef FUSE_ATTENTION
         {
-    #ifndef LOOP_RT_OFFSET
+#ifndef LOOP_RT_OFFSET
         // Keep all32 layer read/math/barrier phases within the marker buffer.
         DeviceZoneScopedN("MLP-WAIT-ATTENTION");
 #endif
             wait_phase(14);
         }
 #endif
+#if !SHARED_QKV
         DeviceZoneScopedN("MLP-O-READ");
+#endif
         const auto attn = TensorAccessor(o_input_args, get_arg_val<uint32_t>(7), 2048);
         const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
         stream_projection<6, 7, 4, 16, 32, 8>(attn, weight, bank);
@@ -210,7 +212,9 @@ void QB2_ENTRY() {
     notify_coordinator(0);
     if (bank == 0) {
         {
-            DeviceZoneScopedN("MLP-GU-BARRIER");
+    #if !SHARED_QKV
+        DeviceZoneScopedN("MLP-GU-BARRIER");
+#endif
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), GU_WORKERS);
         }
         release_workers(1, GU_WORKERS, GU_WORKERS + 16);
@@ -300,7 +304,9 @@ void QB2_ENTRY() {
 #endif
 #ifdef FUSE_OUTPUT
     if (get_arg_val<uint32_t>(0) < 8) {
+#if !SHARED_QKV
         DeviceZoneScopedN("MLP-O-MATH");
+#endif
         compute_kernel_hw_startup<SrcOrder::Reverse>(6, 7, 25);
         projection<6, 7, 17, 25, 4, 16, 32, PROJECTION_WIDE ? 8 : 4>();
     }
