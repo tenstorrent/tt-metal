@@ -629,6 +629,7 @@ def _run_moe_compute_single_card_test(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "trace_region_size": 500000,
         }
@@ -671,6 +672,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 500000,
         }
@@ -744,7 +746,7 @@ _MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
     indirect=True,
 )
 @pytest.mark.parametrize("tokens_per_device", _MOE_50669_SWEEP_TOKENS)
@@ -782,7 +784,7 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
