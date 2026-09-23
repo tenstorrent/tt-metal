@@ -30,7 +30,7 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
         words[Transfer::Chunks] = state.processed_chunks;
         uint32_t flags = 0;
 #ifndef SDPA_RECIPE_FP32
-        for (uint32_t i = 0; i < 4; ++i) {
+        for (uint32_t i = 0; i < kRecipeMaxRowGroups; ++i) {
             flags |= uint32_t(state.group_local_valid[i]) << i;
         }
 #endif
@@ -42,7 +42,7 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
         state.processed_chunks = ack.read_tile_value(0, Transfer::Chunks);
 #ifndef SDPA_RECIPE_FP32
         const uint32_t flags = ack.read_tile_value(0, Transfer::ValidGroups);
-        for (uint32_t i = 0; i < 4; ++i) {
+        for (uint32_t i = 0; i < kRecipeMaxRowGroups; ++i) {
             state.group_local_valid[i] = (flags >> i) & 1;
         }
 #endif

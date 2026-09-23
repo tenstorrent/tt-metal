@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t scale = get_compile_time_arg_val(1);
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
     const uint32_t jobs = get_arg_val<uint32_t>(0);
-    static_assert(q_tiles == 8, "Named recipes currently require Q256/K512/D128");
+    static_assert(q_tiles % 2 == 0 && q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320 in 64-row steps");
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 16);
     matmul_init(0, 1);
     cb_wait_front(0, q_tiles * 4);

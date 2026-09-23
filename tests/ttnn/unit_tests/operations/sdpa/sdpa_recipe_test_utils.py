@@ -90,14 +90,14 @@ def prepare(inputs, variant):
     ]
 
 
-def run(inputs, variant, *, cores=1):
+def run(inputs, variant, *, cores=1, q_chunk_size=256):
     return ttnn.transformer.scaled_dot_product_attention(
         *inputs,
         is_causal=False,
         precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
         inputs_prepared=variant.startswith("E_"),
         program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(cores, 1), q_chunk_size=256, k_chunk_size=512
+            compute_with_storage_grid_size=(cores, 1), q_chunk_size=q_chunk_size, k_chunk_size=512
         ),
     )
 

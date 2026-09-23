@@ -80,11 +80,15 @@ struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
 
+// Q chunks up to 320 rows (10 tiles) form at most five BF16 row pairs.
+constexpr uint32_t kRecipeMaxQTiles = 10;
+constexpr uint32_t kRecipeMaxRowGroups = kRecipeMaxQTiles / 2;
+
 struct RecipeAccumulatorState {
     AccumulatorHalf prev, cur;
     uint32_t processed_chunks = 0;
 #ifndef SDPA_RECIPE_FP32
-    bool group_local_valid[4] = {};
+    bool group_local_valid[kRecipeMaxRowGroups] = {};
 #endif
 };
 
@@ -1054,7 +1058,10 @@ static void sdpa_inner_loop_step(
     PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
     sdpa_skip_prev_sum_pop = false;
 #else
-    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && vDHt == 4 && qkt_subblock_h == 2 && qktv_subblock_h == 2);
+    // Row groups pair two query tile rows; odd Q chunks need a single-row group (not yet supported).
+    static_assert(
+        Sq_chunk_t % 2 == 0 && Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && vDHt == 4 &&
+        qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1092,8 +1099,8 @@ static void sdpa_inner_loop_step(
     };
 #else
     static_assert(
-        Sq_chunk_t == 8 && qkt_subblock_h == 2 && qktv_subblock_h == 2,
-        "Early guard is qualified only for the fixed Q256/K512 materialized-V geometry");
+        Sq_chunk_t % 2 == 0 && qkt_subblock_h == 2 && qktv_subblock_h == 2,
+        "Early guard pairs query tile rows; K512 materialized-V geometry only");
     // Per-K-step flags; only UNPACK fills these. Other threads obtain the
     // matching decision at the original correction mailbox rendezvous.
     uint32_t sdpa_identity_flags[Sq_chunk_t] = {};
@@ -1310,8 +1317,8 @@ static void sdpa_inner_loop_step(
         uint32_t qktv_in0_wait_tiles = qktv_in0_row_tiles;
 
 #ifdef SDPA_RECIPE_FP32
-        static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && vDHt == 4 && qktv_h == 1);
-        static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16);
+        static_assert(
+            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && vDHt == 4 && qktv_h == 1);
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
             CircularBuffer(prev.max).wait_front(Sq_chunk_t);
@@ -1496,31 +1503,44 @@ static void sdpa_inner_loop_step(
 #else
             constexpr auto denom_fidelity = MathFidelity::LoFi;
 #endif
-            MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
+            // Rows are batched four at a time (the FP32 half-sync dest capacity). A Q
+            // chunk that is not a multiple of four finishes with a two-row batch;
+            // batching only changes which rows share a dest pass, not any element's sum.
+            static_assert(Sq_chunk_t % 2 == 0, "FP32 denominator batches whole row pairs");
+            auto denominator_init = [&](uint32_t rows) {
+                MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, rows)));
 #ifdef SDPA_RECIPE_ACCURATE
-            static_assert(denom_fidelity == MathFidelity::HiFi2, "Phase-0/2 denominator requires the two-phase MOP");
-            // SrcA is exactly zero/one: its low mantissa is zero. Execute phases
-            // 0 and 2, not ordinary HiFi2's 0 and 1, to retain all SrcB bits.
-            MATH((addr_mod_t{
-                .srca = {.incr = 0, .clr = 1, .cr = 1},
-                .srcb = {.incr = 0, .clr = 1, .cr = 1},
-                .dest = {.incr = 0, .clr = 1, .cr = 1},
-                .fidelity = {.incr = 2, .clr = 0},
-            }
-                      .set(ADDR_MOD_5)));
+                static_assert(
+                    denom_fidelity == MathFidelity::HiFi2, "Phase-0/2 denominator requires the two-phase MOP");
+                // SrcA is exactly zero/one: its low mantissa is zero. Execute phases
+                // 0 and 2, not ordinary HiFi2's 0 and 1, to retain all SrcB bits.
+                MATH((addr_mod_t{
+                    .srca = {.incr = 0, .clr = 1, .cr = 1},
+                    .srcb = {.incr = 0, .clr = 1, .cr = 1},
+                    .dest = {.incr = 0, .clr = 1, .cr = 1},
+                    .fidelity = {.incr = 2, .clr = 0},
+                }
+                          .set(ADDR_MOD_5)));
 #endif
+            };
+            denominator_init(4);
             configure_single_tile_pack(cur.sum);
             PACK((llk_pack_reconfig_l1_acc(inplace_numerator ? 1 : 0)));
             for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
+                const uint32_t rows = Sq_chunk_t - row < 4 ? Sq_chunk_t - row : 4;
+                if (rows != 4) {
+                    UNPACK((llk_unpack_AB_matmul_init(cb_qkt_im, cb_col_identity, 0, 1, rows, KT_stride)));
+                    denominator_init(rows);
+                }
                 tile_regs_acquire();
                 for (uint32_t col = 0; col < active_Sk; ++col) {
-                    UNPACK(
-                        (llk_unpack_AB_matmul(cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
-                    MATH((llk_math_matmul<denom_fidelity, MM_THROTTLE>(0, 1, 4)));
+                    UNPACK((llk_unpack_AB_matmul(
+                        cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, rows, KT_stride)));
+                    MATH((llk_math_matmul<denom_fidelity, MM_THROTTLE>(0, 1, rows)));
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t j = 0; j < 4; ++j) {
+                for (uint32_t j = 0; j < rows; ++j) {
                     pack_tile<true>(j, cur.sum, row + j);
                 }
                 tile_regs_release();
@@ -1801,7 +1821,7 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
-    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
+    static_assert(Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
@@ -1809,7 +1829,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
     const uint32_t cb_out_im_A = prev.out;
     const uint32_t cb_out_im_B = cur.out;
     if (state.processed_chunks == 0) {
-        group2_initialize_root(cb_out_im_A);
+        group2_initialize_root(cb_out_im_A, Sq_chunk_t * vDHt * sdpa_out_stride);
     }
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {

@@ -128,7 +128,8 @@ def test_sdpa_recipe_rejects_unsupported(device, invalid):
         if invalid == "exp":
             cfg["exp_approx_mode"] = False
         elif invalid == "chunks":
-            cfg["q_chunk_size"] = 128
+            # Q128-Q320 are supported; K blocking is still fixed at 512.
+            cfg["k_chunk_size"] = 256
         else:
             cfg["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
         kwargs["program_config"] = ttnn.SDPAProgramConfig(**cfg)

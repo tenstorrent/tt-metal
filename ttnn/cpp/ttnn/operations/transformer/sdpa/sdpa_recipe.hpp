@@ -11,8 +11,11 @@
 namespace ttnn::operations::transformer::sdpa::detail {
 
 RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataType kv_type);
+// Q tiles per chunk for a validated recipe program config (defaults to Q256).
+uint32_t recipe_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
+
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
-    const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks);
+    const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks, uint32_t q_tiles = 8);
 
 PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,

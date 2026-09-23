@@ -8,8 +8,8 @@ inline void group2_pack_visibility_fence() {
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 }
 
-inline void group2_initialize_root(uint32_t root_cb) {
-    CircularBuffer(root_cb).reserve_back(64);
+inline void group2_initialize_root(uint32_t root_cb, uint32_t tiles) {
+    CircularBuffer(root_cb).reserve_back(tiles);
     tile_regs_acquire();
     MATH((
         SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_zero_sum, 0, VectorMode::None)));
@@ -17,11 +17,11 @@ inline void group2_initialize_root(uint32_t root_cb) {
     tile_regs_wait();
     configure_single_tile_pack(root_cb);
     PACK((llk_pack_reconfig_l1_acc(0)));
-    for (uint32_t i = 0; i < 64; ++i) {
+    for (uint32_t i = 0; i < tiles; ++i) {
         pack_tile<true>(0, root_cb, i);
     }
     tile_regs_release();
-    CircularBuffer(root_cb).push_back(64);
+    CircularBuffer(root_cb).push_back(tiles);
 }
 
 inline void group2_bootstrap_row(uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row) {
