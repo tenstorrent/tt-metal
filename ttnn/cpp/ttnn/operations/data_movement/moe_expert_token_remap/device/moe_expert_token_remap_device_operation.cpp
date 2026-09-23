@@ -77,6 +77,17 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
 
     const uint32_t batch_seq = batch_size * seq_size;
     const auto& reduction_size = operation_attributes.reduction_size;
+    // Both reduction_size checks belong here rather than in validate_on_program_cache_miss. launch() calls
+    // create_output_tensors (hence this) before either validator, so reduction_size == 0 integer-divides
+    // below and SIGFPEs before a check in the validator could fire; and because this op defines an (empty)
+    // validate_on_program_cache_hit, the miss validator is skipped entirely on a program cache hit.
+    TT_FATAL(reduction_size > 0, "reduction_size must be positive, got {}", reduction_size);
+    TT_FATAL(
+        batch_seq % reduction_size == 0,
+        "batch * seq ({}) must be divisible by reduction_size ({}); the writer emits one reduced page "
+        "every reduction_size metadata pages and does not flush a partial trailing group",
+        batch_seq,
+        reduction_size);
     const ttnn::Shape output_reduced_shape{1, 1, std::ceil(batch_seq / reduction_size), num_local_experts};
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(MemoryConfig());

@@ -33,7 +33,9 @@ Keyword Args:
     memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
     output_mapping_tensor (ttnn.Tensor, optional): Preallocated output mapping tensor. Defaults to `None`.
     output_reduced_tensor (ttnn.Tensor, optional): Preallocated output reduced tensor. Defaults to `None`.
-    reduction_size (int, optional): reduction chunk size
+    reduction_size (int, optional): reduction chunk size. Must be positive, and must divide
+        `batch * seq` exactly - the writer emits one reduced page per chunk and does not flush a
+        partial trailing group.
 
 Returns:
     Tuple:
