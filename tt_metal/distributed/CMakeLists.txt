@@ -97,8 +97,7 @@ if(TT_METAL_USE_EMULE)
     # The slow-dispatch mesh command queue routes per-device dispatch through the emule
     # register/run split — gated on this define.
     target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
-    # Those emule entry headers come from tt-emule::runtime.
-    target_include_directories(distributed PRIVATE $<TARGET_PROPERTY:tt_emule_runtime,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(distributed PRIVATE tt_emule_runtime)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
