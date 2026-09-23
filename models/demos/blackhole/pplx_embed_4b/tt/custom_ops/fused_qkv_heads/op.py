@@ -50,6 +50,15 @@ def _split_work_to_cores(num_units: int, grid_x: int, grid_y: int):
     if num_units <= 0:
         return 0, []
     num_cores = min(grid_x * grid_y, num_units)
+    # Fewest cores that keep the same per-core maximum: the op is as long as its busiest
+    # core, and every extra core adds launch cost (bs1: 128 units -> 64 cores x 2, not
+    # 120 cores of which 8 carry 2 units; measured 60.3 -> 51.7 us/op for norm+rope).
+    per_core_max = -(-num_units // num_cores)
+    num_cores = -(-num_units // per_core_max)
+    # Probe knob: cap the core count (dispatch-overhead vs per-core-work trade at small shapes).
+    _cap = int(os.getenv("QWEN_HEADSPLIT_MAX_CORES", "0") or 0)
+    if _cap > 0:
+        num_cores = min(num_cores, _cap)
     base, extra = divmod(num_units, num_cores)
     cores = []
     for i in range(num_cores):
@@ -57,6 +66,37 @@ def _split_work_to_cores(num_units: int, grid_x: int, grid_y: int):
         cx, cy = divmod(i, grid_y)
         cores.append((cx, cy, n))
     return num_cores, cores
+
+
+def _core_ranges(per_core) -> "ttnn.CoreRangeSet":
+    """Cover the (cx, cy, n) work list with as few rectangles as possible.
+
+    One ``CoreRange`` per core makes the dispatcher unicast the kernel binaries to
+    every core on each launch (measured: 55.9 us/op at 120 cores vs 19.7 at 32 for a
+    20 us kernel). Merged rectangles get one multicast per kernel like native ops.
+    """
+    cols = {}
+    for cx, cy, _ in per_core:
+        cols.setdefault(cx, []).append(cy)
+    strips = []  # (cx, y0, y1) contiguous runs per column
+    for cx in sorted(cols):
+        ys = sorted(cols[cx])
+        y0 = prev = ys[0]
+        for y in ys[1:]:
+            if y != prev + 1:
+                strips.append((cx, y0, prev))
+                y0 = y
+            prev = y
+        strips.append((cx, y0, prev))
+    ranges = []  # merge horizontally adjacent strips with the same y extent
+    for cx, y0, y1 in strips:
+        if ranges and ranges[-1][2] == y0 and ranges[-1][3] == y1 and ranges[-1][1] == cx - 1:
+            ranges[-1][1] = cx
+        else:
+            ranges.append([cx, cx, y0, y1])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in ranges]
+    )
 
 
 @dataclass(frozen=True)
@@ -178,9 +218,7 @@ def nlp_create_qkv_heads_headsplit(
     if num_cores == 0:
         raise RuntimeError("nlp_create_qkv_heads_headsplit: nothing to do")
 
-    used_cores = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for (cx, cy, _) in per_core]
-    )
+    used_cores = _core_ranges(per_core)
 
     # Reader pushes Q then K then V per work unit; the writer drains in the same
     # order. Size the CB for a whole unit (Q + K + V) double-buffered so the

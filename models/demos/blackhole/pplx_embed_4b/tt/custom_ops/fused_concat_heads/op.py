@@ -23,6 +23,7 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_qkv_heads.op import _core_ranges
 
 READER_KERNEL = (
     "models/demos/blackhole/pplx_embed_4b/tt/custom_ops/fused_concat_heads/kernels/" "reader_concat_heads_headsplit.cpp"
@@ -51,6 +52,11 @@ def _split_work_to_cores(num_units: int, grid_x: int, grid_y: int):
     if num_units <= 0:
         return 0, []
     num_cores = min(grid_x * grid_y, num_units)
+    # Fewest cores that keep the same per-core maximum: the op is as long as its busiest
+    # core, and every extra core adds launch cost (bs1: 128 units -> 64 cores x 2, not
+    # 120 cores of which 8 carry 2 units; measured 60.3 -> 51.7 us/op for norm+rope).
+    per_core_max = -(-num_units // num_cores)
+    num_cores = -(-num_units // per_core_max)
     base, extra = divmod(num_units, num_cores)
     cores = []
     for i in range(num_cores):
@@ -149,9 +155,7 @@ def nlp_concat_heads_headsplit(
     if num_cores == 0:
         raise RuntimeError("nlp_concat_heads_headsplit: nothing to do")
 
-    used_cores = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for (cx, cy, _) in per_core]
-    )
+    used_cores = _core_ranges(per_core)
 
     # Reader and writer share cb 0; double-buffered so the reader can stage the
     # next group while the writer drains the current one.

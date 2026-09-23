@@ -15,6 +15,7 @@ import os
 import ttnn
 from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_qkv_heads.op import (
     _TILE_BYTES,
+    _core_ranges,
     _Plan,
     _split_work_to_cores,
 )
@@ -82,9 +83,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     num_cores, per_core = _split_work_to_cores(plan.num_blocks_total * head_groups, int(grid.x), int(grid.y))
     if num_cores == 0:
         raise RuntimeError("nlp_create_qkv_heads_norm_headsplit: nothing to do")
-    used_cores = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for (cx, cy, _) in per_core]
-    )
+    used_cores = _core_ranges(per_core)
 
     Wt = plan.head_dim_tiles
     group_q_tiles = heads_per_group * plan.q_heads_per_kv * Wt
