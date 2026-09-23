@@ -27,10 +27,13 @@ class ProjectionTuning:
     early_weight_phases: int = 15
     share_qkv_workers: bool = False
 
+    profiler_phase: int = 0
     split_gu_bank_rows: bool = False
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.profiler_phase not in (0, 1, 2, 3):
+            raise ValueError("Profiler phase must select main/O/GU/down")
         if self.split_gu_bank_rows and self.reader == "original":
             raise ValueError("Split GU bank rows require a tuned projection reader")
         if self.multicast_barrier and not self.bounded_barrier:
@@ -73,6 +76,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("PROFILER_PROJECTION_PHASE", str(self.profiler_phase)),
             ("GU_BANK_SPLIT", str(int(self.split_gu_bank_rows))),
             ("BATCH_SWIGLU", str(int(self.batch_swiglu))),
             ("EARLY_WEIGHT_BLOCKS", str(self.early_weight_blocks)),

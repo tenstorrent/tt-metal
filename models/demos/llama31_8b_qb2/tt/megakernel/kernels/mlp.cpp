@@ -124,7 +124,9 @@ void QB2_ENTRY() {
     if (bank < 8) {
 #if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 2)
         {
-            DeviceZoneScopedN("MLP-O-LOCAL-WEIGHT-PREFETCH");
+    #if PROFILER_PROJECTION_PHASE == 1
+        DeviceZoneScopedN("MLP-O-LOCAL-WEIGHT-PREFETCH");
+#endif
             const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
             prefetch_local_projection_weights<7, 4, 16, 8, 1088>(weight, bank);
         }
@@ -139,7 +141,9 @@ void QB2_ENTRY() {
         }
 #endif
 #if !SHARED_QKV
+#if (PROFILER_PROJECTION_PHASE == 0 || PROFILER_PROJECTION_PHASE == 1)
         DeviceZoneScopedN("MLP-O-READ");
+#endif
 #endif
         const auto attn = TensorAccessor(o_input_args, get_arg_val<uint32_t>(7), 2048);
         const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
@@ -149,7 +153,9 @@ void QB2_ENTRY() {
 #if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 4)
     wait_phase(8);  // The local O writer has finished consuming aliased weight storage.
     {
+#if PROFILER_PROJECTION_PHASE == 2
         DeviceZoneScopedN("MLP-GU-LOCAL-WEIGHT-PREFETCH");
+#endif
         const auto weight = TensorAccessor(gu_args, addresses[0], 576);
         prefetch_local_projection_weights<1, 8, 28, 8, 576>(weight, bank);
     }
@@ -172,14 +178,18 @@ void QB2_ENTRY() {
     const auto down = TensorAccessor(down_args, addresses[1], 1088);
     const auto product = TensorAccessor(product_args, get_arg_val<uint32_t>(3), 2048);
     {
+#if (PROFILER_PROJECTION_PHASE == 0 || PROFILER_PROJECTION_PHASE == 2)
         DeviceZoneScopedN("MLP-GU-READ");
+#endif
         const uint32_t gu_column = DRAM_NEAR_PROJECTION && GU_WORKERS == 16 ? 2 * (bank % 8) + bank / 8 : bank;
         stream_projection<0, 1, 8, gu_width, 128, GU_WORKERS>(input, gu, gu_column);
     }
 #if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 8)
     wait_phase(9);  // The local GU writer has finished consuming aliased weight storage.
     {
+#if PROFILER_PROJECTION_PHASE == 3
         DeviceZoneScopedN("MLP-DOWN-LOCAL-WEIGHT-PREFETCH");
+#endif
         prefetch_local_projection_weights<3, 7, 16, 8, 1088>(down, bank);
     }
 #endif
@@ -192,7 +202,9 @@ void QB2_ENTRY() {
     }
     if (bank >= 8) { return; }
     {
+#if (PROFILER_PROJECTION_PHASE == 0 || PROFILER_PROJECTION_PHASE == 3)
         DeviceZoneScopedN("MLP-DOWN-READ");
+#endif
         stream_projection<4, 3, 7, 16, 112, 8>(product, down, bank);
     }
 }

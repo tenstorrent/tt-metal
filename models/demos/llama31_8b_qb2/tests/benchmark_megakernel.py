@@ -81,6 +81,7 @@ def parse_args():
         help="Optional HF accuracy gate; otherwise report BF16-reference drift separately from matched TT checks",
     )
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--profiler-phase", choices=("main", "o", "gu", "down"), default="main")
     parser.add_argument("--require-exact", action="store_true", help="Require exact teacher logits, touched KV and greedy output against reference")
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
@@ -111,6 +112,8 @@ def parse_args():
         parser.error("context >= 1, tokens >= 3 and repeats >= 1 are required")
     if args.profile != (os.environ.get("TT_METAL_DEVICE_PROFILER", "0") not in ("0", "")):
         parser.error("--profile must match TT_METAL_DEVICE_PROFILER; keep profiling and latency runs separate")
+    if not args.profile and args.profiler_phase != "main":
+        parser.error("Selected profiler phases require --profile")
     if args.profile and os.environ.get("TT_METAL_WATCHER"):
         parser.error("Watcher and profiler must run separately")
     return args
@@ -126,6 +129,7 @@ def run(args):
     from models.demos.utils.trace_region_sizes import build_trace_device_params
 
     tuning = ProjectionTuning(
+        profiler_phase={"main":0, "o":1, "gu":2, "down":3}[args.profiler_phase],
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
