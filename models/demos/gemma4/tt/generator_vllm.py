@@ -3565,6 +3565,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         self._dflash_live_owner = None
         self._dflash_owner_tables = None
         self._dflash_last_pt = None
+        self._dflash_stale_rows = set()
         self._dflash_ring = self._dflash_ring_geometry()
 
     def _dflash_ring_geometry(self):
@@ -3692,11 +3693,29 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             pass
 
     def _dflash_mark_stale(self, row):
-        """The plain decode trace's resident token for ``row`` was not produced by it."""
+        """The plain decode's device-resident token and position for ``row`` are stale.
+
+        The traced decode keeps each row's token and position on the device
+        and reloads them from the host only on a batch layout change. A row
+        answered from the drafter never went through that trace, so its next
+        plain decode must reload every row's inputs from the host
+        (``_dflash_plain_kwargs``); under async decode the merge keeps host
+        inputs for the rows listed in ``_slots_prefilled_since_decode``.
+        """
+        self._dflash_stale_rows.add(int(row))
         slots = getattr(self, "_slots_prefilled_since_decode", None)
         if slots is None:
             slots = self._slots_prefilled_since_decode = set()
         slots.add(int(row))
+
+    def _dflash_plain_kwargs(self, kwargs):
+        """Keyword arguments for a plain decode, with a host reload when a drafter-served row needs one."""
+        if not self._dflash_stale_rows:
+            return kwargs
+        self._dflash_stale_rows.clear()
+        kwargs = dict(kwargs)
+        kwargs["reset_batch"] = True
+        return kwargs
 
     def _dflash_note_step(self, row, kwargs, page_tables_per_layer):
         """Record the owner's tables from this step for the next page-table refresh."""
@@ -3909,7 +3928,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         """
 
         def plain():
-            return Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+            return Gemma4ForCausalLM.decode_forward(
+                self, *args, page_tables_per_layer=page_tables_per_layer, **self._dflash_plain_kwargs(kwargs)
+            )
 
         if len(live) != 1:
             self._dflash_leave_speculation("several live rows")
@@ -4058,7 +4079,6 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             for r in range(int(rows)):
                 if r != row:
                     ids[r, 0] = plain[r]
-            self._dflash_mark_stale(row)
             self._dflash_leave_speculation("peer joined while a proposal was outstanding")
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         if len(live) == 1:
@@ -4183,8 +4203,13 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         step's row count and argmaxed over the vocabulary.
         """
         args, kwargs = self._dflash_column_zero(args, kwargs, rows, exclude_row)
+        kwargs = self._dflash_plain_kwargs(kwargs)
         is_tokens = kwargs.get("sampling_params") is not None
         tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        if exclude_row is not None:
+            # The excluded row ran at position -1 and left a stale resident
+            # position behind; its next plain decode must reload.
+            self._dflash_mark_stale(exclude_row)
         if self._dflash_is_host(tt_out):
             host = tt_out[0] if isinstance(tt_out, tuple) else tt_out
         else:

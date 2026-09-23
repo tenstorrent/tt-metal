@@ -232,6 +232,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model._SPEC_CONTRACT_K = 5
     model._slots_prefilled_since_decode = set()
     model.results = []
+    model.reloads = []
     model._dflash_init_state()
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._effective_paged_block_size = lambda kv_cache: 64
@@ -274,6 +275,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
 
     def decode(self, *args, page_tables_per_layer=None, **kwargs):
         model.events.append(("decode", kwargs["tokens"].reshape(-1).tolist(), kwargs["start_pos"].reshape(-1).tolist()))
+        model.reloads.append(bool(kwargs.get("reset_batch", False)))
         assert model.results, "Supply a plain decode result before submitting the step"
         return model.results.pop(0)
 

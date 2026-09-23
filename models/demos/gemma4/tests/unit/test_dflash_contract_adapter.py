@@ -530,6 +530,46 @@ def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model):
     assert proposal.num_valid.tolist() == [0]
 
 
+# -- device-resident decode inputs after drafter-served steps ---------------------
+
+
+def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
+    """The traced decode keeps tokens and positions on the device and reloads them
+    only on a layout change. The owner's rows were answered from the drafter, so
+    the peers' decode in the straddle and the owner's first plain decode after
+    it both carry reset_batch."""
+    _start_solo(model)
+    _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_tensor([0, 600])),
+    )
+    assert model.reloads == [True]
+    _ordinary(model, [251, 600], [6, 10], [10, 20], result="device")
+    assert model.reloads == [True, True]
+    _ordinary(model, [7, 8], [7, 11], [10, 20], result="device")
+    assert model.reloads == [True, True, False]
+
+
+def test_the_first_plain_decode_after_a_decline_reloads_host_inputs(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model.model_args[0].max_seq_len = 11
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    _ordinary(model, [251], [6], [10], result="device")
+    _ordinary(model, [9], [7], [10], result="device")
+    assert model.reloads == [True, False]
+
+
+def test_a_plain_decode_with_no_drafter_history_does_not_force_a_reload(model):
+    _prefill(model, prompt_len=2, key=10, rows=2)
+    _ordinary(model, [3, 4], [2, 2], [10, 12], result="device")
+    assert model.reloads == [False]
+
+
 # -- identity and release --------------------------------------------------------
 
 
