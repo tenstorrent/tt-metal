@@ -169,7 +169,14 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     if (fp32_llk_acc) {
         compute_gen1.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    // Quasar gets only the common fields set above; WH/BH use compute_gen1 as is.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        ComputeHardwareConfig compute_gen2;
+        compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
+        compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from WH/BH
+        compute_hw = compute_gen2;
+    }
 
     // One KernelSpec per legacy compute KernelDescriptor: the per-group block count stays a CTA, so
     // the two groups keep their distinct specialization instead of collapsing onto a runtime arg.
