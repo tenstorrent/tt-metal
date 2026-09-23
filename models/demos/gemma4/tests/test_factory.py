@@ -246,28 +246,52 @@ def _assistant_repo_id():
     return f"{model_path}-assistant"
 
 
-def _assistant_hub_snapshot(repo_id):
+def _assistant_dir_has_weights(path):
+    """True when ``path`` has weight files, not only ``config.json``.
+
+    The non-CI branch accepts a hub snapshot only in this shape, so a
+    config-only directory must not count as cached.
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    if not os.path.isfile(os.path.join(path, "config.json")):
+        return False
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    if any(name.endswith(".safetensors") for name in names):
+        return True
+    return os.path.isfile(os.path.join(path, "model.safetensors.index.json"))
+
+
+def _assistant_hub_cache():
     hf_home = os.environ.get("HF_HOME", "/mnt/MLPerf/huggingface")
-    hub_cache = os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
-    snapshots_root = os.path.join(hub_cache, f"models--{repo_id.replace('/', '--')}", "snapshots")
+    return os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+
+
+def _assistant_hub_snapshot(repo_id):
+    snapshots_root = os.path.join(_assistant_hub_cache(), f"models--{repo_id.replace('/', '--')}", "snapshots")
     if not os.path.isdir(snapshots_root):
         return None
     for name in sorted(os.listdir(snapshots_root)):
         snap = os.path.join(snapshots_root, name)
-        if os.path.isfile(os.path.join(snap, "config.json")):
+        if _assistant_dir_has_weights(snap):
             return snap
     return None
 
 
 def resolve_assistant_model_path(*, allow_download=None):
-    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local directory with ``config.json``.
+    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local directory with weights.
 
-    Search order: existing local dir → HF hub snapshot → ``GEMMA4_ASSISTANT_CACHE`` /
-    ``/tmp/<repo>``. When ``allow_download`` is true (default in CI only), fetch
-    the assistant snapshot from the Hub into the cache dir.
+    Search order: existing local dir → shared HF hub snapshot
+    (``/mnt/MLPerf/huggingface/hub`` in CI) → ``GEMMA4_ASSISTANT_CACHE`` /
+    ``/tmp/<repo>``. A download writes the Hub cache layout, not ``/tmp``,
+    so a later job on another runner can reuse it. The mount must be
+    writable (``mlperf-read-only: false``).
     """
     existing = os.environ.get("GEMMA4_ASSISTANT_MODEL")
-    if existing and os.path.isfile(os.path.join(existing, "config.json")):
+    if _assistant_dir_has_weights(existing):
         return existing
 
     repo_id = _assistant_repo_id()
@@ -281,7 +305,7 @@ def resolve_assistant_model_path(*, allow_download=None):
 
     repo_tail = repo_id.split("/")[-1]
     cache_dir = os.environ.get("GEMMA4_ASSISTANT_CACHE", f"/tmp/{repo_tail}")
-    if os.path.isfile(os.path.join(cache_dir, "config.json")):
+    if _assistant_dir_has_weights(cache_dir):
         os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
         return cache_dir
 
@@ -295,12 +319,15 @@ def resolve_assistant_model_path(*, allow_download=None):
 
     # Popping HF_HUB_OFFLINE alone is not enough: hub caches the flag into
     # constants.HF_HUB_OFFLINE at import (see generator_vllm._hf_resolve_repo).
+    # cache_dir (not local_dir) keeps the snapshots/<rev> layout the other
+    # branch scans under HF_HUB_CACHE.
+    hub_cache = _assistant_hub_cache()
     prev_offline = os.environ.get("HF_HUB_OFFLINE")
     prev_const = _hf_constants.HF_HUB_OFFLINE
     os.environ["HF_HUB_OFFLINE"] = "0"
     _hf_constants.HF_HUB_OFFLINE = False
     try:
-        snapshot_download(repo_id, local_dir=cache_dir)
+        downloaded = snapshot_download(repo_id, cache_dir=hub_cache)
     finally:
         _hf_constants.HF_HUB_OFFLINE = prev_const
         if prev_offline is None:
@@ -308,8 +335,10 @@ def resolve_assistant_model_path(*, allow_download=None):
         else:
             os.environ["HF_HUB_OFFLINE"] = prev_offline
 
-    os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
-    return cache_dir
+    if not _assistant_dir_has_weights(downloaded):
+        return None
+    os.environ["GEMMA4_ASSISTANT_MODEL"] = downloaded
+    return downloaded
 
 
 def configure_spec_decode_smoke_env():
