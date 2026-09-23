@@ -9,10 +9,9 @@
 namespace ckernel::sfpu {
 
 inline void _lwt_scale_register_(
-    const std::uint32_t value_reg, const std::uint32_t scalar_reg, const std::uint32_t product_reg) {
-    TTI_SFPMUL(value_reg, scalar_reg, p_sfpu::LCONST_0, product_reg, 0);
-    TTI_NOP;
-    TTI_SFPMOV(0, product_reg, value_reg, 0);
+    const std::uint32_t value_reg, const std::uint32_t scalar_reg) {
+    TTI_SFPMUL(value_reg, scalar_reg, p_sfpu::LCONST_0, value_reg, 0);
+    TTI_SFPNOP;
 }
 
 template <DstTileShape TileShape, uint32_t FaceCount>
@@ -46,12 +45,12 @@ inline void _scale_lwt_tile(const uint32_t tile, const uint32_t scalar_packed) {
         for (uint32_t row = 0; row < 16; row += 4) {
             TT_SFPLOAD(value, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, face_base + row);
             TTI_SFPMUL(value, scalar, p_sfpu::LCONST_0, product, 0);
-            TTI_NOP;
+            TTI_SFPNOP;
             TT_SFPSTORE(product, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, face_base + row);
 
             TT_SFPLOAD(value, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, face_base + row + 2);
             TTI_SFPMUL(value, scalar, p_sfpu::LCONST_0, product, 0);
-            TTI_NOP;
+            TTI_SFPNOP;
             TT_SFPSTORE(product, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, face_base + row + 2);
         }
     }

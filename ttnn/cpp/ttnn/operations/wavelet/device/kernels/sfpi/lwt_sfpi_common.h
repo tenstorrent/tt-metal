@@ -15,8 +15,6 @@
 #error "TT-Metal JIT must define exactly one supported architecture"
 #endif
 
-using namespace sfpi;
-
 namespace ckernel::sfpu {
 
 inline uint32_t _lwt_dst_base(const std::uint32_t tile_index, const std::uint32_t face_index) {

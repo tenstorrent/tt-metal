@@ -17,9 +17,14 @@
 #include <array>
 
 #include "lwt_sfpi_common.h"
+#include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
 
 namespace ckernel {
 namespace sfpu {
+
+constexpr uint32_t kUnusedDstAddress = 512;
+constexpr uint8_t kSmallStencilOutputGroupCount = 3;
+constexpr uint8_t kSmallStencilTailOutputGroupCount = 2;
 
 inline uint32_t _get_dst_base(
     const uint32_t tile_index, const uint32_t face_index, const uint32_t row_index, const uint32_t col_index) {
@@ -62,7 +67,7 @@ inline void _vertical_stencil_rotate_() {
     TT_SFPTRANSP(0, 0, 0, 0);
 }
 
-template <uint8_t K>
+template <uint8_t K, uint8_t OutputGroupCount = kSmallStencilOutputGroupCount>
 inline void _vertical_stencil_block(
     const uint32_t h_packed[K],
     const uint32_t dst_f0,
@@ -76,10 +81,13 @@ inline void _vertical_stencil_block(
     const uint32_t dst_g0,
     const uint32_t dst_g1,
     const uint32_t dst_g2,
-    const uint32_t dst_base0 = 512,
-    const uint32_t dst_base1 = 512,
-    const uint32_t dst_base2 = 512) {
-    static_assert(K > 0 && K <= 17, "Vertical stencil supports 1..17 coefficients");
+    const uint32_t dst_base0 = kUnusedDstAddress,
+    const uint32_t dst_base1 = kUnusedDstAddress,
+    const uint32_t dst_base2 = kUnusedDstAddress) {
+    static_assert(
+        K > 0 && K <= ttnn::operations::wavelet::device_protocol::kStepCoeffCapacity,
+        "Vertical stencil coefficient count exceeds device capacity");
+    static_assert(OutputGroupCount > 0 && OutputGroupCount <= kSmallStencilOutputGroupCount);
 
     const auto& f_0 = p_sfpu::LREG0;
     const auto& f_1 = p_sfpu::LREG1;
@@ -95,20 +103,24 @@ inline void _vertical_stencil_block(
     TT_SFPLOAD(f_2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f2);
     TT_SFPLOAD(f_3, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f3);
 
-    if (dst_base0 < 512) {
+    if (dst_base0 < kUnusedDstAddress) {
         TT_SFPLOAD(g_0, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base0);
     } else {
         TTI_SFPMOV(0, p_sfpu::LCONST_0, g_0, 0);
     }
-    if (K < 10 && dst_base1 < 512) {
-        TT_SFPLOAD(g_1, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base1);
-    } else if (K < 10) {
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, g_1, 0);
+    if constexpr (K < 10 && OutputGroupCount >= 2) {
+        if (dst_base1 < kUnusedDstAddress) {
+            TT_SFPLOAD(g_1, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base1);
+        } else {
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, g_1, 0);
+        }
     }
-    if (K < 6 && dst_base2 < 512) {
-        TT_SFPLOAD(g_2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base2);
-    } else if (K < 6) {
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, g_2, 0);
+    if constexpr (K < 6 && OutputGroupCount >= 3) {
+        if (dst_base2 < kUnusedDstAddress) {
+            TT_SFPLOAD(g_2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base2);
+        } else {
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, g_2, 0);
+        }
     }
 
 #pragma GCC unroll 13
@@ -117,11 +129,17 @@ inline void _vertical_stencil_block(
         TT_SFPLOADI(tmp, sfpi::SFPLOADI_MOD0_LOWER, (h_packed[(K - 1) - j]) & 0xFFFF);
         if constexpr (K < 6) {
             TTI_SFPMAD(f_0, tmp, g_0, g_0, 0);
-            TTI_SFPMAD(f_1, tmp, g_1, g_1, 0);
-            TTI_SFPMAD(f_2, tmp, g_2, g_2, 0);
+            if constexpr (OutputGroupCount >= 2) {
+                TTI_SFPMAD(f_1, tmp, g_1, g_1, 0);
+            }
+            if constexpr (OutputGroupCount >= 3) {
+                TTI_SFPMAD(f_2, tmp, g_2, g_2, 0);
+            }
         } else if constexpr (K < 10) {
             TTI_SFPMAD(f_0, tmp, g_0, g_0, 0);
-            TTI_SFPMAD(f_1, tmp, g_1, g_1, 0);
+            if constexpr (OutputGroupCount >= 2) {
+                TTI_SFPMAD(f_1, tmp, g_1, g_1, 0);
+            }
         } else {
             TTI_SFPMAD(f_0, tmp, g_0, g_0, 0);
         }
@@ -132,7 +150,7 @@ inline void _vertical_stencil_block(
     }
 
     if constexpr (K > 13) {
-        // Four output rows with K=14..17 require at most 20 contiguous
+        // Four output rows above 13 coefficients require at most 20 contiguous
         // source rows. Keep g_0 live, reload a tail window beginning at
         // source row + 12, and rotate once so tap 13 observes row + 13.
         // No partial accumulator is materialized, and coefficients remain in
@@ -156,11 +174,15 @@ inline void _vertical_stencil_block(
     }
 
     TT_SFPSTORE(g_0, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g0);
-    if (K < 10 && dst_g1 < 512) {
-        TT_SFPSTORE(g_1, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g1);
+    if constexpr (K < 10 && OutputGroupCount >= 2) {
+        if (dst_g1 < kUnusedDstAddress) {
+            TT_SFPSTORE(g_1, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g1);
+        }
     }
-    if (K < 6 && dst_g2 < 512) {
-        TT_SFPSTORE(g_2, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g2);
+    if constexpr (K < 6 && OutputGroupCount >= 3) {
+        if (dst_g2 < kUnusedDstAddress) {
+            TT_SFPSTORE(g_2, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g2);
+        }
     }
 }
 
@@ -176,13 +198,10 @@ inline void _vertical_stencil(
     _lwt_clear_addr_mod_base_();
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-    constexpr uint32_t ROW_STRIDE = (K >= 10) ? 4 : (K >= 6) ? 8 : 12;
-
-#pragma GCC unroll 8
-    for (uint32_t row = 0; row < 32; row += ROW_STRIDE) {
+    const auto run_block = [&]<uint8_t OutputGroupCount>(const uint32_t row) {
 #pragma GCC unroll 4
         for (uint32_t col = 0; col < 4; col += 1) {
-            _vertical_stencil_block<K>(
+            _vertical_stencil_block<K, OutputGroupCount>(
                 h_packed,
                 _get_block(input1, input2, row, col),
                 _get_block(input1, input2, row + 4, col),
@@ -194,10 +213,22 @@ inline void _vertical_stencil(
                 _get_block(input1, input2, row + 24, col),
                 _get_block(output, 8, row, col),
                 _get_block(output, 8, row + 4, col),
-                _get_block(output, 8, row + 8, col),
+                OutputGroupCount >= 3 ? _get_block(output, 8, row + 8, col) : kUnusedDstAddress,
                 _get_block(base, base, row, col),
                 _get_block(base, base, row + 4, col),
-                _get_block(base, base, row + 8, col));
+                OutputGroupCount >= 3 ? _get_block(base, base, row + 8, col) : kUnusedDstAddress);
+        }
+    };
+
+    if constexpr (K < 6) {
+        run_block.template operator()<kSmallStencilOutputGroupCount>(0);
+        run_block.template operator()<kSmallStencilOutputGroupCount>(12);
+        run_block.template operator()<kSmallStencilTailOutputGroupCount>(24);
+    } else {
+        constexpr uint32_t row_stride = (K >= 10) ? 4 : 8;
+#pragma GCC unroll 8
+        for (uint32_t row = 0; row < 32; row += row_stride) {
+            run_block.template operator()<(K < 10 ? 2 : 1)>(row);
         }
     }
 
