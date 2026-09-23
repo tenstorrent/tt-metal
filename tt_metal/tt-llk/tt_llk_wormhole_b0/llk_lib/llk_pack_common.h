@@ -235,12 +235,13 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @param pack_dst_format: Packer output (L1) data format, as last programmed by the caller's pack reconfig.
  * @param tensor_shape: Output face dimensions and face grid.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -340,9 +341,7 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFA
     if constexpr (reduce_type == PoolType::MAX)
     {
         // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
-        const std::uint32_t output_format =
-            (cfg_read(THCON_SEC0_REG1_Out_data_format_ADDR32) & THCON_SEC0_REG1_Out_data_format_MASK) >> THCON_SEC0_REG1_Out_data_format_SHAMT;
-        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(output_format));
+        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format));
     }
 
     TTI_NOP;

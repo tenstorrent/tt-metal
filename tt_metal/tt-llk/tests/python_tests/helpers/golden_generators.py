@@ -4445,7 +4445,7 @@ class ReduceGolden:
     def padding_value(pool_type, data_format):
         if pool_type != ReducePool.Max:
             return 0
-        if data_format in {
+        if data_format.is_mx_format() or data_format in {
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
             DataFormat.Bfp4_b,

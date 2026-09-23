@@ -265,7 +265,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
     // reduce_block_max_row_init: mask so only the reduced row-max column [0] is packed.
-    _llk_pack_reduce_mask_config_<PoolType::MAX, ReduceDim::REDUCE_ROW>(tensor_shape);
+    _llk_pack_reduce_mask_config_<PoolType::MAX, ReduceDim::REDUCE_ROW>(formats.pack_dst, tensor_shape);
 
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 

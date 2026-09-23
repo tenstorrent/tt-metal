@@ -15,7 +15,7 @@
  * ocb is unused on Quasar (different packer architecture); accepted to keep
  * the API arch-agnostic with Blackhole/Wormhole B0 callers that thread the output CB through.
  *
- * @tparam reduce_type: Pool type; selects negative-infinity filling for MAX and zero otherwise.
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity filling, except MX outputs retain zero fill.
  * @tparam reduce_dim: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam pack_mode: Unused on Quasar
  * @param ocb: The output Dataflow Buffer identifier
@@ -24,7 +24,7 @@ template <PoolType reduce_type, ReduceDim reduce_dim, PackMode pack_mode /*maybe
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
     static_assert(pack_mode == PackMode::Default, "Quasar pack reduce mask does not support pack_mode != Default");
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(ocb);
-    _llk_pack_reduce_mask_config_<reduce_type, reduce_dim>(tensor_shape);
+    _llk_pack_reduce_mask_config_<reduce_type, reduce_dim>(get_output_dst_format(ocb), tensor_shape);
 }
 
 /**
