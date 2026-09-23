@@ -35,15 +35,35 @@ modified.
 | `ATTN_MM_CFG` size gate (`rows/device ≥ 1024`) | no-op, ±0.5 ms | Reverted rather than shipped on ambiguous data |
 | chunk 1536 | illegal — `(chunk/CP) % k_chunk ≠ 0` | Corrected the published legality rule to `chunk % 1024 == 0` |
 | variable chunk width PoC | dropped — loses to fixed 8192 mid-range | — |
-| whole-model tracy capture | **infeasible** — 1.19e9 zones, OOM-killed while saving | Why per-op numbers are isolated-layer × 50/10, and why 11.4 ms of `a` is unattributed |
+| whole-model tracy capture | **infeasible at 60 layers** — 1.19e9 zones, OOM-killed while saving. **Feasible at 6 layers, ctx 32k** (~1.5e7 zones, 254 MB CSV, ~20 min host post-processing) | Why per-op numbers are isolated-layer × 50/10; the 6-layer traced capture (2026-09-23) replaced that for attribution |
 
 ## Open
 
 | item | size @2048 | status |
 |---|---|---|
 | sliding SDPA halo | 21.3 ms (26%) | Mechanism understood; fix is **inside** the fused `ring_joint_sdpa` op, not a flag |
-| residual outside the layer loop | 11.4 ms | Unattributed — blocked on capture method |
-| `MLP_MM_CFG` slope at chunk 4096 | +3.07% (39σ) | Real. Localised to **outside** the 60 layers. Zero impact when ISL ≤ chunk |
+| ~~residual outside the layer loop~~ | ~~11.4 ms~~ | **Resolved 2026-09-23: it is not outside the loop.** See below |
+| `MLP_MM_CFG` slope at chunk 4096 | +3.07% (39σ) | Real, and **in-layer**: the layer-count fit's slope intercept is ~0 (`slope(L) = 0.0015 + 0.0246·L`). Zero impact when ISL ≤ chunk |
+
+## Resolved: the "11.4 ms outside the layer loop" (2026-09-23)
+
+The 11.4 ms was `a` minus isolated-layer per-op sums × 50/10 — a subtraction, never a measurement. Two
+measurements replace it (chunk 2048, all fixes on):
+
+- **Layer-count fit** (traced demo, ctx 32k, `L` = 6 / 12 / 30 / 60 layers built from the warm cache):
+  `a(L) = 0.54 ms + 1.503 ms/layer · L`, residuals < 0.1 ms. Only **~0.5 ms** per chunk sits outside the
+  layer loop.
+- **6-layer traced tracy capture** (PR2's final config on this branch): kernel-time sum per chunk is
+  9.12-9.25 ms across the 32 devices, against 9.5 ms unprofiled, so **≥ 96% of a chunk is inside op
+  kernels**. Op-to-op gaps are a median of 0.6 µs, p99 2.0 µs per op, about 2 ms per 60-layer chunk.
+
+So the residual was never dispatch or glue. Ops run slower inside the full model than in the isolated-layer
+captures, ~1.52 vs ~1.36 ms/layer. **Isolated-layer per-op captures understate in-model op time.** Use them
+to rank ops, not to size the floor.
+
+Chunk-0 kernel time by op in the 6-layer capture: Matmul 36.5%, RingJointSDPA 18.7%, ReduceScatter +
+AllGather 17.2%, LayerNorm 7.9% (41 calls per 6 layers: the 4 hidden-size norms plus the per-head q/k/v
+norms), NlpCreateHeads 3.8%.
 
 ## Two results that are easy to misread
 

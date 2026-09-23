@@ -136,6 +136,9 @@ counts** and difference them — that gives the true per-layer marginal cost *an
 fixed cost with no isolated-layer inflation at all. Check whether `gemma4_d_p` supports a layer
 count override first.
 
+> **Done 2026-09-23** (see EXPERIMENTS.md, "Resolved"): `a(L) = 0.54 + 1.503·L` ms. Only ~0.5 ms per chunk is
+> outside the layers, and a 6-layer traced tracy capture shows ≥ 96% of each chunk inside op kernels.
+
 ### 3. ~~Mechanism of the floor's two biggest items~~ — LARGELY ANSWERED 2026-09-17
 
 Standalone microbenchmarks (`scripts/micro_floor.py`, `scripts/micro_norm.py`):
