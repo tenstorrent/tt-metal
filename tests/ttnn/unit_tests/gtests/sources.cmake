@@ -35,6 +35,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_matmul.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
+    test_random.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
