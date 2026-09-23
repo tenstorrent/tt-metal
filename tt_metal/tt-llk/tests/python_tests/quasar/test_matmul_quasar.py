@@ -194,12 +194,17 @@ def matmul_implied_math_formats(format, *, is_perf=False):
 
 
 def matmul_register_format_hints(format):
-    return (
-        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
-        else [None]
-    )
+    # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+    if format.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
+        return [None]
+    # One hint per exponent family. infer_downstream_unpack_out maps 2x_A to
+    # Float16 and 2x_B to Float16_b; the crossed output is a pack conversion
+    # owned by test_pack_quasar.
+    if format.output_format == DataFormat.Float16:
+        return [DataFormat.MxFp4_2x_A]
+    if format.output_format == DataFormat.Float16_b:
+        return [DataFormat.MxFp4_2x_B]
+    return [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
 
 
 def matmul_enable_direct_indexing(register_format_hint):
@@ -239,10 +244,9 @@ def matmul_tiny_transpose_modes(
     return [Transpose.No, Transpose.Yes]
 
 
-# MxFp4 is an input-only (L1) format here: matmul_register_format_hints always pairs it
-# with MxFp4_2x_A/B, so these two entries are the 2x src-register sweep and the output
-# stays a plain 16-bit float. One entry per exponent family, because the hint picks the
-# math format (2x_A -> Float16, 2x_B -> Float16_b).
+# MxFp4 is an input-only (L1) format here. Each row is one exponent family:
+# matmul_register_format_hints pairs Float16 with MxFp4_2x_A and Float16_b with
+# MxFp4_2x_B, so the output matches the math format the hint selects.
 MATMUL_2X_FORMATS = [
     InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16),
     InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),

@@ -444,8 +444,11 @@ def quasar_mx_smoke(
     the exact same math and pack configuration as the Float16_b row beside it in the
     same sweep, and an op writing an MX output only exercises the packer. Sweeping MX
     across a whole test therefore re-measures one unpacker descriptor field against an
-    unchanged pipeline: the MX codec belongs to test_pack_quasar and
-    test_unpack_unary_operand_quasar, which own those two conversions.
+    unchanged pipeline. test_pack_quasar and test_unpack_unary_operand_quasar own
+    those two conversions: MxFp4 / MxInt8 / MxInt4 / MxInt2 as a full cross product,
+    and MxFp8R / MxFp8P as one directed pair each (unpack decodes MxFp8* to
+    Float16_b, pack encodes Float16_b to MxFp8*). MxFp8 stays out of that cross
+    product because those two suites are already the bulk of the Quasar compile.
 
     Every other test keeps exactly one pair, so the MX-conditional plumbing it does
     own stays covered: format-inference bypass, the ImpliedMathFormat.Yes requirement,
