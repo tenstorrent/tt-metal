@@ -4509,7 +4509,11 @@ class ModelArgs:
         # ~3 us savings several times over (measured: bs=8 ISL=512 went 45 -> 62
         # ms with sharded LN over DRAM activations). When activations are L1-
         # resident the conversions are L1-to-L1 (~3 TB/s) and the savings hold.
-        if not self.use_short_seq_l1_prefill(seq_len):
+        # QWEN_LN_SHARDED_FORCE=1 bypasses the L1-residency requirement so the
+        # sharded-norm path can be measured over DRAM-resident activations
+        # (batched prefill). The comment above records that this lost on 0.6B;
+        # re-test per model rather than assuming.
+        if os.getenv("QWEN_LN_SHARDED_FORCE", "0") != "1" and not self.use_short_seq_l1_prefill(seq_len):
             return None
 
         m_tiles = seq_len // ttnn.TILE_SIZE
