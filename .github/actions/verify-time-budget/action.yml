@@ -1,0 +1,26 @@
+name: "Verify time budget"
+description: >-
+  Runs .github/scripts/utils/verify_time_budget.py in place, pinned to
+  whatever ref the caller's own @ref resolves to. The caller currently uses a
+  local path (./...) since this action does not exist on main yet; once this
+  PR merges, it should switch to @main so budget verification always runs
+  the current script rather than whatever copy (or lack of one) the calling
+  branch carries.
+
+inputs:
+  args:
+    description: >-
+      Flags passed through verbatim, e.g. --comment-file <path> or
+      --tests-dir <dir> --budget-file <file>. Omit for the script's defaults.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify test timeouts against budget
+      shell: bash
+      run: |
+        # See .github/actions/prepare-test-matrix/action.yml for why this runs
+        # the script in place rather than a copy bundled into this action.
+        python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/verify_time_budget.py" ${{ inputs.args }}

@@ -157,6 +157,10 @@ In the summary you will see:
 
     `type` indicates whether the non-finite was `inf`, `nan`, or another non-finite category.
 
+### Very large sweeps
+
+Above 100,000 points (only exhaustive FP32 sweeps get there), the plot draws an even sample of the points plus the 2,000 worst errors, because drawing millions of markers is slow and unreadable. **All statistics still use every point**: the summary box, the ULP CDF, the per-bin percentiles, and the monotonicity check. When this happens the subtitle says so.
+
 ### Error statistics
 
 For all **finite** points:

@@ -23,7 +23,7 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.dense_mlp import DenseMLP
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 
 def _torch_dense_mlp(x, gate_w, up_w, down_w, alpha, limit):
@@ -47,8 +47,7 @@ def _torch_dense_mlp(x, gate_w, up_w, down_w, alpha, limit):
 )
 def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, reset_seeds):
     """DenseMLP vs torch reference, random weights. (1,1)=TP=1; (8,4)=TP=4 (gate/up col-parallel +
-    down-proj all-reduce). Output is full-hidden post-allreduce -> device[0] holds it. (8,4) needs
-    TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy."""
+    down-proj reduce-scatter/all-reduce). (8,4) needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy."""
     alpha, limit = 1.702, 7.0
     x = torch.randn(1, 1, seq_len, hidden) * 0.1
     # HF Linear layout [out, in]; small scale so post-clamp distribution isn't degenerate.
@@ -83,7 +82,8 @@ def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, re
     )
 
     out_tt = mlp(x_tt)
-    out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, 1, seq_len, hidden)
+    cols = mesh_device.shape[1]
+    out = compose_tp_hidden(ttnn.get_device_tensors(out_tt), 0, cols).reshape(1, 1, seq_len, hidden)
 
     passing, pcc = comp_pcc(ref, out, 0.99)
     logger.info(f"dense_mlp seq={seq_len} hidden={hidden} inter={inter}: {pcc}")

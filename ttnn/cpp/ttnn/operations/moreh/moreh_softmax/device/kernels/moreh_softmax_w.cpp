@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto dfb_x_m_max = dfb::x_minus_max;
     DataflowBuffer dfb_x_m_max_obj(dfb_x_m_max);
     constexpr auto dfb_tmp = dfb::tmp;
-    DataflowBuffer dfb_tmp_obj(dfb_tmp);
+    const DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_out0);
 
@@ -39,8 +39,8 @@ void kernel_main() {
 
     // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
     // force-unrolling the per-Wt loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
-    std::uint32_t N = get_arg(args::N);
-    std::uint32_t Wt = get_arg(args::Wt);
+    const std::uint32_t N = get_arg(args::N);
+    const std::uint32_t Wt = get_arg(args::Wt);
 
     dfb_mask_obj.wait_front(onetile);
     dfb_max_scaler_obj.wait_front(onetile);
@@ -49,7 +49,7 @@ void kernel_main() {
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Wt == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
@@ -69,7 +69,7 @@ void kernel_main() {
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into dfb_max via Accumulate. The accumulator and output are both dfb_max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -77,8 +77,8 @@ void kernel_main() {
         }
 
         // compute x - max(x)
-        dfb_x_m_max_obj.reserve_back(Wt);
-        dfb_in0_obj.wait_front(Wt);
+        dfb_x_m_max_obj.reserve_back(static_cast<uint16_t>(Wt));
+        dfb_in0_obj.wait_front(static_cast<uint16_t>(Wt));
         dfb_max_obj.wait_front(1);
 
         for (std::uint32_t w = 0; w < Wt; ++w) {
@@ -92,12 +92,12 @@ void kernel_main() {
             tile_regs_release();
         }
         dfb_max_obj.pop_front(1);
-        dfb_in0_obj.pop_front(Wt);
-        dfb_x_m_max_obj.push_back(Wt);
+        dfb_in0_obj.pop_front(static_cast<uint16_t>(Wt));
+        dfb_x_m_max_obj.push_back(static_cast<uint16_t>(Wt));
 
         // compute exp(x - max(x))
-        dfb_exps_obj.reserve_back(Wt);
-        dfb_x_m_max_obj.wait_front(Wt);
+        dfb_exps_obj.reserve_back(static_cast<uint16_t>(Wt));
+        dfb_x_m_max_obj.wait_front(static_cast<uint16_t>(Wt));
         for (std::uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
             copy_tile_init_with_dt(dfb_x_m_max_obj);
@@ -124,7 +124,7 @@ void kernel_main() {
             pack_tile_with_dt(dst0, dfb_exps_obj);
             tile_regs_release();
         }
-        dfb_exps_obj.push_back(Wt);
+        dfb_exps_obj.push_back(static_cast<uint16_t>(Wt));
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -161,12 +161,12 @@ void kernel_main() {
 #endif
 
         // compute final result
-        dfb_out0_obj.reserve_back(Wt);
-        dfb_x_m_max_obj.wait_front(Wt);
+        dfb_out0_obj.reserve_back(static_cast<uint16_t>(Wt));
+        dfb_x_m_max_obj.wait_front(static_cast<uint16_t>(Wt));
         dfb_recipsumexps_obj.wait_front(1);
 
 #ifndef LOG
-        dfb_exps_obj.wait_front(Wt);
+        dfb_exps_obj.wait_front(static_cast<uint16_t>(Wt));
 #endif
 
         for (std::uint32_t w = 0; w < Wt; w += onetile) {
@@ -194,10 +194,10 @@ void kernel_main() {
         }
 
         dfb_recipsumexps_obj.pop_front(1);
-        dfb_x_m_max_obj.pop_front(Wt);
-        dfb_out0_obj.push_back(Wt);
+        dfb_x_m_max_obj.pop_front(static_cast<uint16_t>(Wt));
+        dfb_out0_obj.push_back(static_cast<uint16_t>(Wt));
 #ifndef LOG
-        dfb_exps_obj.pop_front(Wt);
+        dfb_exps_obj.pop_front(static_cast<uint16_t>(Wt));
 #endif
     }
 }

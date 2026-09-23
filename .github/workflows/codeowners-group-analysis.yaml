@@ -1800,6 +1800,12 @@ jobs:
           APPROVED_REVIEWERS: ${{ needs.get-reviews.outputs.approved-reviewers }}
           MOREH_TEAM_MEMBERS: ${{ steps.setup-notifications.outputs.moreh-team-members }}
           PR_AUTHOR_LOGIN: ${{ steps.setup-notifications.outputs.pr-author-login }}
+          # Availability inputs. The Slack user list is the one the previous step
+          # already fetched, so ranking owners by working hours and out-of-office
+          # status costs no extra users.list calls.
+          SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
         run: |
           python3 .github/scripts/select_owners_to_ping.py
       - name: Send notifications

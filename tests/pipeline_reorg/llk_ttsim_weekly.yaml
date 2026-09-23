@@ -20,4 +20,5 @@
     sim_quasar_xl:
       timeout: 180
   team: llk
+  budget_type: weekly
   owner_id: U09UC143684 # Nemanja Divnic

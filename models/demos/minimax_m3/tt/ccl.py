@@ -5,8 +5,21 @@ import torch
 
 import ttnn
 
+# L1_SMALL reservation for every M3 mesh open (adapter, harnesses, unit tests): high_bw_all_gather parks its
+# two global semaphores there and otherwise falls back to general L1 with a warning, which fragmented L1
+# enough on 8x4 for a later op's circular buffers to collide (deepseek_v3_d_p/tests/test_mla.py). Same size
+# the DeepSeek/GLM/Kimi adapters reserve.
+L1_SMALL_SIZE = 1152
+
 
 class CCLManager:
+    """Semaphores, topology and persistent scratch for M3's collectives.
+
+    ``topology`` goes to all_gather_async / reduce_scatter_minimal_async (ring_joint_sdpa hardcodes Linear,
+    high_bw_all_gather derives ring vs line from the fabric). The galaxy runtime passes Linear; Ring is
+    measured in PR #55668.
+    """
+
     def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
         self.num_links = num_links
@@ -19,6 +32,10 @@ class CCLManager:
         # Persistent ring-gather scratch buffers for ring_joint SDPA, allocated once and reused across
         # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
         self._ring_gather_buffers = {}
+
+        # Persistent worst-case outputs for high_bw_all_gather (MSA K/V/index_k SP gathers), one per
+        # (key, shape, dtype), shared across layers/chunks. See get_high_bw_gather_buffer.
+        self._high_bw_gather_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -130,6 +147,24 @@ class CCLManager:
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]
+
+    def get_high_bw_gather_buffer(self, key, shape, dtype, layout=ttnn.TILE_LAYOUT):
+        """Persistent replicated DRAM output for ``high_bw_all_gather``, sized for the worst-case gathered
+        shape (rank r lands at the fixed slot r*input_rows regardless of ``gathered_dim_size``). ``key``
+        separates buffers live at the same time (K / V / index_k). Allocated on device, uninitialised: the
+        never-written tail is never read (indexer bounded by ``kv_len``, top-k by ``valid_length``).
+        Mirrors DeepSeek's ``get_mla_high_bw_all_gather_buffer``.
+        """
+        cache_key = (key, tuple(shape), str(dtype), str(layout))
+        if cache_key not in self._high_bw_gather_buffers:
+            self._high_bw_gather_buffers[cache_key] = ttnn.empty(
+                list(shape),
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._high_bw_gather_buffers[cache_key]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

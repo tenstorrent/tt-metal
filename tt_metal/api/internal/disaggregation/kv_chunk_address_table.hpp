@@ -181,6 +181,7 @@ public:
     // alternative (UnrolledGrid / StridedRowMap) and must return the same type
     // (e.g. void) for each — range objects do not escape the dispatch.
     template <typename F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
     decltype(auto) visit_map(uint32_t config_id, F&& fn) const {
         validate_config_id(config_id);
         if (const auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id])) {
@@ -194,7 +195,13 @@ public:
     // StridedRowRangeView (strided). Same single-return-type constraint.
     template <typename F>
     decltype(auto) visit_range(
-        uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, uint32_t config_id, F&& fn) const {
+        uint32_t layer,
+        uint32_t start_pos,
+        uint32_t end_pos,
+        uint32_t slot,
+        uint32_t config_id,
+        // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
+        F&& fn) const {
         validate_args(config_id, layer, start_pos, slot);
         const auto& cfg = configs_[config_id];
         TT_FATAL(

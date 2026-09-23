@@ -32,7 +32,6 @@
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
@@ -514,36 +513,6 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
-
-    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) &&
-        device_params.init_device) {
-        // Configure TLBs on all MMIO devices in parallel
-        std::vector<std::shared_future<void>> futures;
-        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
-        futures.reserve(mmio_device_ids.size());
-
-        for (const auto& mmio_device_id : mmio_device_ids) {
-            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
-                bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
-                if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
-                    // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
-                    // are configured. RTL sim uses a directory simulator path and still needs them.
-                    include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
-                }
-                ll_api::configure_static_tlbs(
-                    this->arch_,
-                    mmio_device_id,
-                    this->get_soc_desc(mmio_device_id),
-                    *this->driver_,
-                    include_dram_tlbs);
-            }));
-        }
-
-        // Wait for all TLB configurations to complete
-        for (auto& future : futures) {
-            future.get();
-        }
-    }
 }
 
 Cluster::~Cluster() {
@@ -871,7 +840,9 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -901,7 +872,9 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -927,7 +900,9 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -959,7 +934,9 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -984,7 +961,9 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -1018,7 +997,9 @@ void Cluster::noc_multicast_write(
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_multicast_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             {core_start.x, core_start.y},

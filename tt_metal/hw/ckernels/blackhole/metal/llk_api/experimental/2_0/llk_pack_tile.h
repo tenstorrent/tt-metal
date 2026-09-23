@@ -9,6 +9,7 @@
 #include "llk_pack_rows_api.h"  // legacy CB-id row pack + raw _llk_pack_rows_ / get_pack_dest_max_tiles
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -76,6 +77,7 @@ template <
     bool out_of_order_output = false,
     PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
+    SAN_HOOK(unsupported());
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, base_ptr);
 }
 
@@ -88,6 +90,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
 // (not reproducible id-free), keeping the retained DST-capacity bound check.
 template <ckernel::experimental::LLKMemDescriptor DESC>
 inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
@@ -103,6 +106,7 @@ inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
 // stand-in for fifo_page_size): geometry-exact for linear formats, exp section included for block floats.
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
     // tile_size in 16B words (fifo_page_size units) == a single tile's L1 size.
     constexpr std::uint32_t tile_size = ckernel::experimental::tile_stride_words(DESC.format, DESC.shape);

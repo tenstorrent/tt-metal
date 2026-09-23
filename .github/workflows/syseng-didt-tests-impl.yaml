@@ -6,6 +6,15 @@ on:
       docker-image:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       build-artifact-name:
         required: true
         type: string
@@ -43,21 +52,13 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "integration"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
 
   syseng-didt-tests:
     needs: load-test-matrix
@@ -68,15 +69,23 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
-        PYTHONPATH: /work
+        # Only on the image path. There /work/ttnn is required because no wheel is
+        # installed: it is a namespace dir whose package is /work/ttnn/ttnn, and
+        # /work/tools carries the `tracy` module _ttnn imports during init on a
+        # tracy-enabled build, which the L2 nightly is. On the artifact path a wheel
+        # IS installed and prepending the source tree would shadow it, which matters
+        # because release-build-test-publish reaches this impl with a manylinux wheel.
+        PYTHONPATH: ${{ inputs.prebuilt-image != '' && '/work:/work/ttnn:/work/tools' || '/work' }}
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole_b0' || 'blackhole' }}
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -88,7 +97,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: Mark repository as safe directory
         run: |
@@ -99,6 +111,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
@@ -119,7 +132,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}"

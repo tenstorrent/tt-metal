@@ -304,7 +304,11 @@ jobs:
           done
 
       - name: 🔍 Analyze code with clang-tidy
-        timeout-minutes: 120
+        # Fork PRs run without ccache/ctcache credentials and need more time.
+        timeout-minutes: >-
+          ${{ github.event_name == 'pull_request' &&
+              github.event.pull_request.head.repo.fork &&
+              180 || 120 }}
         run: |
           # Record the exit code rather than failing here: violations fail compile
           # edges but still export, so the gate below decides pass/fail from counts.

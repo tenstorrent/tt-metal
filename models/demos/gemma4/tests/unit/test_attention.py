@@ -570,7 +570,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
     vLLM-driven token-chunked prefill makes separate ``__call__`` invocations
     for each chunk. The first call slices the sliding tail from tt_k/tt_v and
-    stores it on ``self._sliding_prefill_tail``. After the call returns, tt_k
+    stores it in ``self._sliding_tails_by_key`` (demo/non-vLLM path keys the single legacy ``None`` slot). After the call returns, tt_k
     and tt_v are deallocated. If the tail is a view (not an independent copy)
     of tt_k, the second call finds an unallocated tensor and crashes with
     ``TT_FATAL: Input Tensor is not allocated``.
@@ -638,7 +638,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     out1.deallocate(True)
 
     # The tail must be alive after the first call.
-    tail = getattr(tt_attn, "_sliding_prefill_tail", None)
+    tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Sliding tail was not persisted after chunk 1"
     assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
     # endregion
@@ -668,7 +668,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # Under vLLM async_scheduling, another request's decode can interleave
     # between APC continuation prefills. Decode must NOT wipe the sliding
     # tail; a new prefill at chunk_start_idx==0 releases it instead.
-    tail_before_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
+    tail_before_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_before_decode is not None, "Tail should still be present after chunk 2 (not yet in decode)"
 
     x_dec = torch.randn(1, 1, 1, config.hidden_size, dtype=torch.bfloat16)
@@ -689,7 +689,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
         kv_cache=kv_cache,
     )
 
-    tail_after_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
+    tail_after_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
     assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
 
@@ -708,7 +708,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
         chunk_page_table=chunk_new_pt_tt,
     )
     out_new.deallocate(True)
-    tail_after_reset = getattr(tt_attn, "_sliding_prefill_tail", None)
+    tail_after_reset = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
     assert all(t.is_allocated() for t in tail_after_reset)
     # endregion
@@ -778,7 +778,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         valid_seq_len=short_len,
     )
     out1.deallocate(True)
-    tail = getattr(tt_attn, "_sliding_prefill_tail", None)
+    tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Short first chunk must stash a padded sliding tail"
     assert all(t.is_allocated() for t in tail)
     assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"

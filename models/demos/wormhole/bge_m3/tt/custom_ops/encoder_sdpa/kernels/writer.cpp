@@ -218,7 +218,11 @@ void kernel_main() {
                 valid_Sqt,
                 windowed_valid_Skt,
                 k_num_chunks,
-                cu_window_seqlens_eles);
+                cu_window_seqlens_eles,
+                // q_tok_offset. Upstream added this for chunked prefill, where a q
+                // chunk starts partway into the sequence. This op always starts at
+                // token 0, and use_windowed_mask is 0, so the generator is discarded.
+                0);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

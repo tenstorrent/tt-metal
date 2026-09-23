@@ -10,6 +10,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.tile_loop import LoopBlockRow, LoopTileByTile, TileLoop
 from helpers.llk_params import DestAccumulation, EltwiseBinaryReuseDestType
 
@@ -118,7 +119,11 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id = compute_unit.src_a.buf_desc_id
+        engine = (
+            BfdResource.UNP1
+            if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            else BfdResource.UNP0
+        )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
@@ -132,8 +137,9 @@ class UnpackerA(Unpacker):
         )
 
         return (
-            f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"({buf_desc_id}, {tensor_shape}, {num_tiles});\n"
+            compute_unit.src_a.bfd_alloc_and_program(engine)
+            + f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
+            f"({bfd_current(engine)}, {tensor_shape}, {num_tiles});\n"
         )
 
     def unpack(

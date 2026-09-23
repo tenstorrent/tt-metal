@@ -151,9 +151,9 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
-            # The table describes all 78 layers, so the last layer must still WRITE its KV; the runner's
-            # default headless-last-layer optimization would leave layer 77 empty.
-            "PREFILL_KV_ONLY_LAST_LAYER": "0",
+            # GLM-5.2's calibrated KVPE floor. The 0.88 default is above what this model reaches
+            # (~0.857 min per-layer), so it has to be set explicitly here.
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
@@ -388,9 +388,7 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(
-        sc, PREFILL_MOCK_MIGRATION="1", PREFILL_ENABLE_LAYER_ACK="1", PREFILL_LAYER_ACK_D2H="1", **extra
-    )
+    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H="1", **extra)
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":

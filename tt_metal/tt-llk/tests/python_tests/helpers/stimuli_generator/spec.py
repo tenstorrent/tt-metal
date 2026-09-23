@@ -114,17 +114,17 @@ class StimuliSpec:
         "ulp_sweep"
             Exhaustive 1-ULP sweep: enumerates every finite representable
             value in [low, high] for the target format (sorted, deduplicated),
-            pads with zeros to fill the tensor.  Only Float16_b and
-            Float16 formats are supported.  Bypasses the face loop
-            (tensor-level operation).  Ignores *seed*, *mean*, *std*,
-            *value*, *intervals*, *face_specs*, *masked_faces*.
+            pads with zeros to fill the tensor.  Float16_b, Float16, and
+            Float32 are supported (Float32 over a range only — its full domain
+            is far too large to enumerate).  Bypasses the face loop
+            (tensor-level operation).  Uses *low*, *high*, and *offset*;
+            ignores *seed*, *mean*, *std*, *value*, *intervals*, *face_specs*,
+            *masked_faces*.
 
-            **Dimension auto-sizing (operand A only):** when spec_A uses
-            ULP_SWEEP, generate_stimuli ignores any caller-supplied
-            input_dimensions_A and computes a 32×(32*N) layout large
-            enough to hold all representable values.  When spec_B is
-            omitted, input_dimensions_B is mirrored from A.  If spec_B
-            is provided explicitly, input_dimensions_B is *not*
+            **Dimension sizing (operand A only):** if input_dimensions_A is
+            given, it is used as-is; otherwise generate_stimuli auto-sizes a
+            32×(32*N) layout large enough to hold the values.  When spec_B is
+            omitted, input_dimensions_B mirrors A; an explicit spec_B is *not*
             auto-sized — the caller must supply compatible dimensions.
 
         callable
@@ -203,6 +203,10 @@ class StimuliSpec:
         Example::
 
             StimuliSpec.uniform(intervals=[(-10.0, -1.0), (1.0, 10.0)])
+    offset: int
+        For "ulp_sweep" only: skip the first *offset* in-range values before
+        filling the tensor.  This lets a range too large for one run be swept
+        in batches (offset = 0, N, 2N, …). Defaults to 0.
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -216,6 +220,7 @@ class StimuliSpec:
     face_specs: Optional[List[Optional["StimuliSpec"]]] = None
     masked_faces: Optional[Set[int]] = None
     intervals: Optional[List[Tuple[float, float]]] = None
+    offset: int = 0
 
     def __post_init__(self) -> None:
         if not (
@@ -393,11 +398,11 @@ class StimuliSpec:
 
         Enumerates every finite representable value for the target format,
         sorted and deduplicated, padding with zeros to fill the tensor.
-        Only Float16_b and Float16 formats are supported.
+        Float16_b, Float16, and Float32 are supported (Float32 over a range
+        only — its full domain is too large to enumerate).
 
-        When used as spec_A, generate_stimuli auto-sizes input_dimensions_A
-        and mirrors it to B if spec_B is omitted.  Explicit spec_B is not
-        auto-sized — the caller must supply compatible input_dimensions_B.
+        When used as spec_A, generate_stimuli uses input_dimensions_A if given,
+        otherwise auto-sizes it (mirroring to B when spec_B is omitted).
         """
         return cls(
             distribution=DistributionKind.ULP_SWEEP, low=low, high=high, **kwargs

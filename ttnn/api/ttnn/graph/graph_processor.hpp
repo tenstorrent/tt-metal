@@ -164,7 +164,17 @@ private:
     template <typename T>
     void end_function_process(const std::vector<T>& tensor_vec);
 
-    void track_function_end_impl();
+    // Appends the function_end vertex for the innermost open scope and returns its node id, so
+    // callers can decorate it. Does not pop `current_op_id`.
+    node_id track_function_end_impl();
+
+    // Closes the innermost open scope, marking its function_end aborted with `reason`.
+    // Callers must hold `mutex` and must have checked has_open_function().
+    void abort_open_function_impl(std::string_view reason);
+
+    // Whether a function_start is open, i.e. whether `current_op_id` holds more than the
+    // capture_start sentinel it is seeded with. Callers must hold `mutex`.
+    bool has_open_function() const { return current_op_id.size() > 1; }
 
     void clean_hook();
 

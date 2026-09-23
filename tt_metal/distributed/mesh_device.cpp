@@ -50,7 +50,8 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
-#include "distributed/trace_allocation_tracker.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -136,9 +137,9 @@ decltype(auto) validate_and_get_reference_value(
 }
 
 // Returns offset of the mesh device view in the system mesh.
-MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
+MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view, const SystemMesh& system_mesh) {
     const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
-    const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
+    const auto& system_mesh_shape = system_mesh.shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
         if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
             return coord;
@@ -251,6 +252,11 @@ bool MeshDeviceImpl::is_remote_only() const {
 }
 
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
+    if (l1_size_per_core_.has_value()) {
+        return *l1_size_per_core_;
+    }
+    // Only reachable before initialization establishes the value, where the mesh is still
+    // single-threaded. Answer without caching so this accessor never writes.
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
 }
@@ -264,61 +270,70 @@ IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().a
 
 std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
     this->validate_sub_device_manager_tracker();
-    std::vector<AllocatorImpl*> result;
-    std::unordered_set<AllocatorImpl*> seen;
-    const auto append_manager = [&result, &seen](const SubDeviceManager* manager) {
-        if (manager == nullptr) {
-            return;
-        }
-        for (const auto& allocator : manager->allocators()) {
-            if (allocator != nullptr && seen.insert(allocator.get()).second) {
-                result.push_back(allocator.get());
-            }
-        }
-    };
+    return this->trace_allocators(sub_device_manager_tracker_->get_active_sub_device_manager_id());
+}
 
-    append_manager(sub_device_manager_tracker_->get_default_sub_device_manager());
-    append_manager(sub_device_manager_tracker_->get_active_sub_device_manager());
+std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators(SubDeviceManagerId manager_id) const {
+    this->validate_sub_device_manager_tracker();
+    const auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();
+    std::vector<AllocatorImpl*> result = {default_manager->allocator(SubDeviceId{0}).get()};
+    const auto* manager = sub_device_manager_tracker_->find_sub_device_manager(manager_id);
+    if (manager == nullptr || manager == default_manager) {
+        return result;
+    }
+
+    result.reserve(result.size() + manager->allocators().size());
+    for (const auto& allocator : manager->allocators()) {
+        if (allocator != nullptr) {
+            result.push_back(allocator.get());
+        }
+    }
     return result;
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
-        allocator->register_active_trace(*trace_id);
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        allocator->register_active_trace(manager_id, trace_id);
     }
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
-        allocator->unregister_active_trace(*trace_id);
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        allocator->unregister_active_trace(manager_id, trace_id);
     }
 }
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    validate_sub_device_manager_tracker();
+    return this->get_unsafe_tracked_ids(sub_device_manager_tracker_->get_active_sub_device_manager_id(), trace_id);
+}
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(
+    SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const {
     std::unordered_map<size_t, std::string> result;
-    for (auto* allocator : this->trace_allocators()) {
-        result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        result.merge(allocator->get_unsafe_tracked_ids(manager_id, trace_id));
     }
     return result;
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    // Manager-local allocations prevent switching managers while they are live,
+    // so the owning local allocator must belong to the active manager. Global
+    // allocations are covered by the default allocator included here.
     for (auto* allocator : this->trace_allocators()) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
-std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
-    return AllocatorImpl::drain_pending_traceback_ids();
-}
-std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
-    return AllocatorImpl::drain_retired_traceback_ids();
-}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
-    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+    tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }
-void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { tt::tt_metal::pop_corruptible_allocation_scope(); }
 
 namespace trace_allocation_tracker {
 
@@ -334,8 +349,8 @@ std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice*
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
 }
-std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
-std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+std::vector<size_t> drain_pending_traceback_ids() { return tt::tt_metal::drain_pending_traceback_ids(); }
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return tt::tt_metal::get_all_unsafe_tracked_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
 
@@ -345,8 +360,10 @@ MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh,
-    ContextId context_id) :
-    context_id_(context_id),
+    MetalContext& metal_context) :
+    context_id_(metal_context.get_context_id()),
+    metal_context_(&metal_context),
+    metal_env_(&MetalEnvAccessor(metal_context_->get_env()).impl()),
     scoped_devices_(std::move(mesh_handle)),
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
@@ -355,11 +372,14 @@ MeshDeviceImpl::MeshDeviceImpl(
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
-    const auto& mpi_context =
-        tt::tt_metal::MetalContext::instance(context_id_).get_control_plane().get_distributed_context(view_->mesh_id());
+    const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
 }
+
+MetalContext& MeshDeviceImpl::metal_context() const { return *metal_context_; }
+
+MetalEnvImpl& MeshDeviceImpl::metal_env() const { return *metal_env_; }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -479,7 +499,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>(),
-        context_id);
+        ctx);
 
     mesh_device->pimpl_->initialize_impl(
         mesh_device.get(),
@@ -501,6 +521,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
     mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+    mesh_device->pimpl_->init_streaming_profiler(mesh_device);
 
     return mesh_device;
 }
@@ -593,7 +614,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>(),
-        context_id);
+        ctx);
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -613,6 +634,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     for (auto& [device_id, submesh] : result) {
         submesh->pimpl_->init_realtime_profiler_socket(submesh);
+        submesh->pimpl_->init_streaming_profiler(submesh);
     }
 
     return result;
@@ -735,7 +757,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         scoped_devices_,
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         parent_mesh,
-        context_id_);
+        metal_context());
 
     TT_FATAL(
         submesh->impl().get_context_id() == context_id_,
@@ -825,6 +847,14 @@ std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
     return devices;
 }
 
+const std::vector<IDevice*>& MeshDeviceImpl::get_local_devices(const MeshCoordinateRange& range) const {
+    auto [entry, inserted] = local_devices_by_range_.try_emplace(range);
+    if (inserted) {
+        entry->second = view_->get_devices(range);
+    }
+    return entry->second;
+}
+
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{static_cast<uint32_t>(row_idx), static_cast<uint32_t>(col_idx)});
@@ -875,11 +905,34 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
+    if (compute_with_storage_grid_size_.has_value()) {
+        return *compute_with_storage_grid_size_;
+    }
+    // Only reachable before initialization establishes the value, where the mesh is still
+    // single-threaded. Answer without caching so this accessor never writes.
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
+// The cross-device agreement check behind these two properties rebuilds the device list and walks
+// the whole mesh, and circular buffer validation asks for both once per program on every enqueue.
+// They are fixed once the devices are open, so resolve them here: the accessors then answer from a
+// value nobody writes, which is what makes them safe to call without holding the api lock.
+void MeshDeviceImpl::establish_device_property_caches() {
+    const auto devices = this->get_devices();
+    if (devices.empty()) {
+        // Remote-only mesh: there is no local device to agree with. The accessors throw if called.
+        compute_with_storage_grid_size_.reset();
+        l1_size_per_core_.reset();
+        return;
+    }
+    compute_with_storage_grid_size_ = validate_and_get_reference_value(
+        devices, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    l1_size_per_core_ =
+        validate_and_get_reference_value(devices, [](const auto* device) { return device->l1_size_per_core(); });
+}
+
+tt::ARCH MeshDeviceImpl::arch() const { return metal_env().get_cluster().arch(); }
 
 size_t MeshDeviceImpl::num_rows() const { return view_->num_rows(); }
 
@@ -931,8 +984,9 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
         // device in the original mesh.
-        auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
-            new_shape, compute_system_mesh_offset(*view_));
+        auto& system_mesh = metal_env().get_system_mesh();
+        auto new_mapped_devices =
+            system_mesh.get_mapped_devices(new_shape, compute_system_mesh_offset(*view_, system_mesh));
         for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
@@ -949,6 +1003,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     }
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
+    local_devices_by_range_.clear();
+    establish_device_property_caches();
 }
 
 bool MeshDeviceImpl::close() {
@@ -964,8 +1020,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
-        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
-            tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
         }
 
@@ -1026,6 +1081,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_->shutdown();
         realtime_profiler_.reset();
     }
+    streaming_profiler_.reset();
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
@@ -1048,7 +1104,10 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
-        disable_and_clear_program_cache();
+        // Do not clear the program cache here. Destroying cached programs while the devices are
+        // still initialized runs mesh-buffer deallocation during teardown, which hangs on multihost
+        // meshes using the hybrid allocator. Cached programs outliving the persistent L1 arena is
+        // handled by PersistentL1Arena::Seal's liveness token instead.
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -1061,8 +1120,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // (needs the cluster to map chip -> MMIO IDs). Must run before
         // destroy_instance below, and only on the first close_impl call.
         // Skip for mock devices — they never create pinned DMA regions.
-        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
-            tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
@@ -1179,6 +1237,7 @@ void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_man
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
+    this->allocator_impl()->unregister_active_traces(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
@@ -1226,7 +1285,7 @@ const std::vector<int>& MeshDeviceImpl::coowner_ranks() const {
         return *coowner_ranks_;
     }
 
-    const auto& control_plane = MetalContext::instance(context_id_).get_control_plane();
+    const auto& control_plane = metal_env().get_control_plane();
 
     // (mesh id, host rank) -> MPI rank, inverted from the control plane's global bindings.
     std::map<std::pair<uint32_t, uint32_t>, int> rank_of_binding;
@@ -1336,6 +1395,11 @@ CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
 CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->worker_core_from_logical_core(logical_core);
+    });
+}
+CoreCoord MeshDeviceImpl::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return validate_and_get_reference_value(this->get_devices(), [virtual_coord](const auto* device) {
+        return device->logical_core_from_worker_core(virtual_coord);
     });
 }
 CoreCoord MeshDeviceImpl::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
@@ -1601,11 +1665,13 @@ bool MeshDeviceImpl::initialize_impl(
     active_distributed_context_ = distributed_context_->split(
         distributed::multihost::Color(0), distributed::multihost::Key(*distributed_context_->rank()));
 
+    establish_device_property_caches();
+
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto& env_impl = MetalEnvAccessor(MetalContext::instance(context_id_).get_env()).impl();
     auto sub_devices = {SubDevice(SubDeviceImpl(
-        &env_impl, std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
+        &metal_env(),
+        std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -1613,7 +1679,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     const auto& allocator = reference_device()->allocator_impl();
     const auto& alloc_config = allocator->get_config();
-    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto is_mock = metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     auto mesh_allocator =
         is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
@@ -1621,10 +1687,9 @@ bool MeshDeviceImpl::initialize_impl(
         std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ =
-        tt_metal::MetalContext::instance(context_id_).device_manager()->get_max_num_eth_cores_across_all_devices();
+    num_virtual_eth_cores_ = metal_context().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
+    if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
@@ -1650,7 +1715,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
     // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
-    if (MetalContext::instance(context_id_).hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }
 
@@ -1663,6 +1728,23 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (streaming_profiler_) {
+        return;
+    }
+    // TT_METAL_STREAMING_PROFILER=1 boots the DRISC relays and the host receiver. Exclusive with
+    // TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair); the real-time profiler stands down while it is on.
+    const auto& rtoptions = metal_env().get_rtoptions();
+    if (!rtoptions.get_streaming_profiler_enabled()) {
+        return;
+    }
+    TT_FATAL(
+        metal_env().get_hal().get_arch() != tt::ARCH::QUASAR,
+        "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC drainer, "
+        "which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+    streaming_profiler_ = streaming_profiler::Receiver::create(mesh_device);
 }
 
 void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
@@ -1691,7 +1773,7 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
+    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     TT_FATAL(
         bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
@@ -1723,7 +1805,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
+    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
     const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
@@ -1952,6 +2034,9 @@ CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_co
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->worker_core_from_logical_core(logical_core);
+}
+CoreCoord MeshDevice::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return pimpl_->logical_core_from_worker_core(virtual_coord);
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->ethernet_core_from_logical_core(logical_core);

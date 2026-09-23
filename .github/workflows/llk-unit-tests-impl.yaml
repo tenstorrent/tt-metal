@@ -6,6 +6,15 @@ on:
       docker-image:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       build-artifact-name:
         required: true
         type: string
@@ -17,20 +26,12 @@ on:
         required: false
         type: string
         default: unit
-        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. merge_gate for merge-gate, unit for L2 nightly)."
+        description: "Which tests yaml to load: merge_gate for merge-gate, unit for L2 nightly."
       enable-llk-asserts:
         required: false
         type: boolean
         default: true
         description: "Enable LLK asserts"
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
       sku-allowlist:
         required: false
         type: string
@@ -67,35 +68,15 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -euo pipefail
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}" \
-            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          set -euo pipefail
-          allowlist_args=()
-          allowlist='${{ inputs.sku-allowlist }}'
-          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
-          if [ "$allowlist" != '*' ]; then
-            allowlist_args+=(--sku-allowlist "$allowlist")
-          fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}" \
-            "${allowlist_args[@]}"
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+          sku-allowlist: ${{ inputs.sku-allowlist }}
 
   llk-unit-tests:
     needs: load-test-matrix
@@ -112,7 +93,7 @@ jobs:
       }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
@@ -123,7 +104,9 @@ jobs:
         GTEST_TOTAL_SHARDS: ${{ matrix.test-group.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.test-group.gtest_shard_index || 0 }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -135,13 +118,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: true
       - name: ${{ matrix.test-group.name }}
@@ -175,7 +162,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}"

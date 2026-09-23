@@ -9,6 +9,8 @@ recipe lives in exactly one place. The 4-chip variant (`test_ring_indexer_score_
 directly and keeps its own copy of `_open_ccl` (no (2,4)->(1,4) submesh carve).
 """
 
+import torch
+
 import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
@@ -44,10 +46,40 @@ _INPUT_DIMS = (None, 2)
 _BUF_DIMS = (1, None)
 
 
-def _open_ring4_ccl():
+def _to_tp_inner_reconstructed(k_natural, *, sp, tp, chunk_local):
+    """Pack natural K in the physical order produced by a TP-inner then SP-outer gather."""
+    capacity = k_natural.shape[2]
+    assert capacity % (sp * tp) == 0
+    assert chunk_local % tp == 0
+    physical_shard_capacity = capacity // sp
+    tp_stripe_capacity = physical_shard_capacity // tp
+    stripe_chunk = chunk_local // tp
+    assert tp_stripe_capacity % stripe_chunk == 0
+
+    physical_to_logical = []
+    for sp_rank in range(sp):
+        physical_offset = torch.arange(physical_shard_capacity)
+        tp_rank = physical_offset // tp_stripe_capacity
+        within_tp = physical_offset % tp_stripe_capacity
+        slab = within_tp // stripe_chunk
+        within_chunk = within_tp % stripe_chunk
+        logical = (slab * sp + sp_rank) * chunk_local + tp_rank * stripe_chunk + within_chunk
+        physical_to_logical.append(logical)
+    physical_to_logical = torch.cat(physical_to_logical)
+    assert torch.equal(torch.sort(physical_to_logical).values, torch.arange(capacity))
+
+    reconstructed = k_natural.clone()
+    reconstructed[0, 0] = k_natural[0, 0, physical_to_logical]
+    return reconstructed
+
+
+def _open_ring4_ccl(trace_region_size: int = 0):
     """Open the full system mesh with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL
     semaphores (the two ring directions, as ring_attention_all_gather_async needs). Returns
-    (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
+    (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group).
+
+    trace_region_size > 0 reserves the DRAM a ttnn trace capture needs (0 = no tracing, the default, so every
+    existing caller is unchanged)."""
     rows, cols = ring_parent_shape()
     assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
     ttnn.set_fabric_config(
@@ -60,7 +92,7 @@ def _open_ring4_ccl():
     )
     parent = None
     try:
-        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), trace_region_size=trace_region_size)
         submesh = parent.create_submesh(ttnn.MeshShape(1, RING))
 
         grid = submesh.compute_with_storage_grid_size()

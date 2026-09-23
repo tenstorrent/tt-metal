@@ -35,7 +35,10 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        // Normalize from the input alone: with a pre-allocated output, compute_output_specs just hands
+        // back the caller's own spec, so the checks below would end up testing that tensor against itself.
+        auto output_spec =
+            compute_output_specs(operation_attributes, tensor_args_t{input_tensor, /*output_tensor=*/std::nullopt});
         if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
             return {
                 false,
@@ -143,20 +146,19 @@ ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input_tensor;
     // keep_l1_aligned is deliberately absent: the factory hardcodes it to true and never reads the
     // attribute, so keying on it would split the cache between byte-identical programs.
-    return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.layout(),
-        // Both shapes are needed. The row-major branch of the factory takes the reader's row stride
-        // from logical_shape()[-1] and the last core's shard height from logical_volume(), and
-        // neither is patched on a cache hit. Padded shape alone does not pin those: an interleaved
-        // input's alignment is unconstrained (validate_alignment_rm only checks the width alignment
-        // of a sharded tensor), so a logical [1, 1, 32, 60] with Alignment{64} and a logical
-        // [1, 1, 32, 64] with the default alignment both pad to [1, 1, 32, 64].
-        input_tensor.logical_shape(),
-        input_tensor.padded_shape());
+    //
+    // Key on the whole TensorSpec instead of picking out fields: once this is ported to Metal 2.0, a
+    // cache hit is rejected outright if any spec field differs, and alignment is the one the old
+    // shape pair left free. The spec still covers the shapes that used to be hashed explicitly.
+    auto hash = tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
+        operation_attributes.output_mem_config, operation_attributes.output_dtype, input_tensor.tensor_spec());
+
+    // The factory reads its shard spec, core ranges and CB sizes off the output, so key that too --
+    // but only when the caller supplies one, since otherwise it's derived from what's already hashed.
+    if (tensor_args.output_tensor.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, tensor_args.output_tensor->tensor_spec());
+    }
+    return hash;
 }
 
 Tensor interleaved_to_sharded(

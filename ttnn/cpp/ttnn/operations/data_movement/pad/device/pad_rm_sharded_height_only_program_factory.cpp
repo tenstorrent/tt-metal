@@ -79,9 +79,7 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
     bool row_major,
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
-    const CoreCoord& unpadded_grid_start,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded) {
+    const std::vector<CoreCoord>& unpadded_cores) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -139,51 +137,52 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
             }
         }
 
-        // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(unpadded_grid_start);
-        std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
+        // Gather plan for this output core: the source cores in the order their sticks appear in the
+        // output shard, each with the stick ids to read from it. The reader copies the chunks
+        // sequentially in this order, so it has to be the traversal order of the sticks and not a
+        // sorted order of the source cores' coordinates: on a multi-range grid the shard-order
+        // successor of a core can sit at smaller physical coordinates than the core itself.
+        using NocXY = std::pair<uint32_t, uint32_t>;
+        const auto noc_xy_of = [&](const CoreCoord& logical_core) -> NocXY {
+            const auto physical = device->worker_core_from_logical_core(logical_core);
+            return row_major ? std::make_pair(physical.y, physical.x) : std::make_pair(physical.x, physical.y);
+        };
+        std::vector<std::pair<NocXY, std::vector<uint32_t>>> core_sticks_in_order;
+        const auto push_stick = [&](const NocXY& xy, uint32_t value) {
+            if (core_sticks_in_order.empty() || core_sticks_in_order.back().first != xy) {
+                core_sticks_in_order.emplace_back(xy, std::vector<uint32_t>{});
+            }
+            core_sticks_in_order.back().second.push_back(value);
+        };
+        NocXY prev_xy_pair = noc_xy_of(unpadded_cores.front());
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
 
             // if it is pad stick, we need to leave a gap between the previous non-pad stick and next non-pad stick.
             if (stick_id == -2 || stick_id == -1) {  // front or end padding
-                core_stick_map[prev_xy_pair].push_back(stick_id);
+                push_stick(prev_xy_pair, static_cast<uint32_t>(stick_id));
             } else {
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;
                 uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_unpadded);
 
-                uint32_t shard_grid_inner_dim = row_major ? num_cores_x_unpadded : num_cores_y_unpadded;
-                uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-                uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-                uint32_t worker_y_logical =
-                    unpadded_grid_start.y + (row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id);
-                uint32_t worker_x_logical =
-                    unpadded_grid_start.x + (row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id);
-
-                // worker_*_logical are absolute logical coordinates. Compare against absolute unpadded-grid bounds.
-                uint32_t unpadded_grid_end_x = unpadded_grid_start.x + num_cores_x_unpadded;
-                uint32_t unpadded_grid_end_y = unpadded_grid_start.y + num_cores_y_unpadded;
-                if (worker_x_logical < unpadded_grid_end_x and worker_y_logical < unpadded_grid_end_y) {
-                    auto core_physical =
-                        device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
-                    // save stick id in a shard, and core coord into a map
-                    std::pair<uint32_t, uint32_t> xy_pair = row_major
-                                                                ? std::make_pair(core_physical.y, core_physical.x)
-                                                                : std::make_pair(core_physical.x, core_physical.y);
-                    core_stick_map[xy_pair].push_back(stick_id_in_shard);
+                // shard_id indexes the input shard grid in its own traversal order. Index the
+                // grid's real core list rather than deriving coordinates from its bounding box:
+                // a sharded tensor may live on a non-contiguous grid (e.g. {[1-0 - 3-7],
+                // [5-0 - 6-7]}), whose bounding box also covers cores that hold no shard.
+                if (shard_id < unpadded_cores.size()) {
+                    const NocXY xy_pair = noc_xy_of(unpadded_cores[shard_id]);
+                    push_stick(xy_pair, stick_id_in_shard);
                     prev_xy_pair = xy_pair;
                 }
             }
         }
 
         // reader varargs: the whole gather plan except num_cores, which is a named arg.
-        core_args.num_cores_read = core_stick_map.size();
+        core_args.num_cores_read = core_sticks_in_order.size();
         std::vector<uint32_t>& reader_varargs = core_args.reader_varargs;
-        reader_varargs.reserve(3 * core_stick_map.size() + 2 * num_sticks_per_core_padded);
+        reader_varargs.reserve(3 * core_sticks_in_order.size() + 2 * num_sticks_per_core_padded);
 
-        for (const auto& core_stick_pair : core_stick_map) {
+        for (const auto& core_stick_pair : core_sticks_in_order) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
                 reader_varargs.push_back((std::uint32_t)xy_pair.second);  // noc x
@@ -196,8 +195,8 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
-        stick_chunks_per_core.reserve(core_stick_map.size());
-        for (auto core_stick_pair : core_stick_map) {
+        stick_chunks_per_core.reserve(core_sticks_in_order.size());
+        for (auto& core_stick_pair : core_sticks_in_order) {
             auto stick_chunks = group_contiguous_and_repeated_values(core_stick_pair.second);
             reader_varargs.push_back(stick_chunks.size());  // num_chunks for current core
             stick_chunks_per_core.push_back(std::move(stick_chunks));
@@ -263,14 +262,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
-    [[maybe_unused]] auto& all_cores_unpadded = shard_spec_unpadded.grid;
-    [[maybe_unused]] uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
-    auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
-    CoreCoord grid_size_unpadded = {
-        bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
-        bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
-    uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
-    uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
+    const auto& all_cores_unpadded = shard_spec_unpadded.grid;
+    uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -283,12 +276,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {
-        bbox_padded.end_coord.x - bbox_padded.start_coord.x + 1,
-        bbox_padded.end_coord.y - bbox_padded.start_coord.y + 1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -353,9 +340,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         row_major,
         shard_height_padded,
         shard_height_unpadded,
-        bbox_unpadded.start_coord,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded);
+        corerange_to_cores(all_cores_unpadded, num_cores_unpadded, row_major));
 
     // The reader's vararg block length is data-dependent (it grows with the number of source
     // cores and coalesced chunks a core gathers from), but a KernelSpec declares one vararg count
@@ -452,15 +437,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     KernelRunArgs reader_run_args{.kernel = SH_H_READER};
     KernelRunArgs writer_run_args{.kernel = SH_H_WRITER};
 
+    // Iterate the output shard grid's real cores. Deriving them from the bounding box emits
+    // runtime args for cores in the gaps of a non-contiguous grid, where the kernels do not run.
+    const auto padded_cores_in_order = corerange_to_cores(all_cores_padded, num_cores_padded, row_major);
     for (uint32_t i = 0; i < num_cores_padded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {
-                bbox_padded.start_coord.x + i % num_cores_x_padded, bbox_padded.start_coord.y + i / num_cores_x_padded};
-        } else {
-            core = {
-                bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
-        }
+        const CoreCoord& core = padded_cores_in_order[i];
         const auto& core_args = all_runtime_args[i];
 
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"num_cores_read", core_args.num_cores_read}});

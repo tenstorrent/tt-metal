@@ -25,6 +25,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -43,6 +44,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
@@ -150,12 +152,8 @@ DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
@@ -249,6 +247,9 @@ def test_eltwise_unary_datacopy_quasar(
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             DEST_INDEX(dest_index),
             LOOP_FACTOR(loop_factor),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,

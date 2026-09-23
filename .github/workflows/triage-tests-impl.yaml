@@ -6,6 +6,15 @@ on:
       docker-image:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       build-artifact-name:
         required: true
         type: string
@@ -19,7 +28,7 @@ on:
         required: false
         type: string
         default: unit
-        description: "merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
+        description: "Selects the tests yaml. merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly)."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -32,14 +41,6 @@ on:
         description: "Enable LLK asserts"
         default: false
         type: boolean
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
       summary-scope:
         required: false
         type: string
@@ -68,27 +69,14 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -euo pipefail
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}" \
-            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: prepare
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   triage-tests:
     needs: load-test-matrix
@@ -100,18 +88,26 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
-        PYTHONPATH: /work
+        # Only on the image path. There /work/ttnn is required because no wheel is
+        # installed: it is a namespace dir whose package is /work/ttnn/ttnn, and
+        # /work/tools carries the `tracy` module _ttnn imports during init on a
+        # tracy-enabled build, which the L2 nightly is. On the artifact path a wheel
+        # IS installed and prepending the source tree would shadow it, which matters
+        # because release-build-test-publish reaches this impl with a manylinux wheel.
+        PYTHONPATH: ${{ inputs.prebuilt-image != '' && '/work:/work/ttnn:/work/tools' || '/work' }}
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
         TT_METAL_RESET_DEVICE_AFTER_HANG: "1"
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -123,7 +119,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
@@ -131,6 +130,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
@@ -161,7 +161,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}",
