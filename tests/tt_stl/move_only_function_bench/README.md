@@ -82,7 +82,72 @@ done
 
 ## Results
 
-Pending — to be filled in and posted to #57444.
+Median ns over 5 repetitions; coefficient of variation was 0.2-2.5% throughout, so the gaps below
+are real. Full output in `results/`. Posted to #57444.
+
+**The motivating case — `BM_MoveOnlyCapture`.** `std::function` cannot hold a `unique_ptr` capture,
+so its baseline is the `shared_ptr` wrapper the codebase uses today:
+
+| config | std (shared_ptr) | zoo | fu2 |
+| --- | --- | --- | --- |
+| gcc-12 / libstdc++ | 42.69 (3 allocs) | **13.43** | 14.45 |
+| clang-20 / libstdc++ | 43.29 | **14.00** | 15.27 |
+| clang-20 / libc++ | 45.64 | **12.72** | 20.11 |
+
+About 3x faster, 3 allocations down to 1. This is the premise of the issue, confirmed.
+
+**Queue throughput, 1024 jobs** — the `ThreadPool::enqueue` shape. zoo wins every configuration:
+
+| config | std | zoo | fu2 |
+| --- | --- | --- | --- |
+| gcc-12 / libstdc++ | 5519 | **5074** | 6766 |
+| clang-20 / libstdc++ | 6633 | **5610** | 6363 |
+| clang-20 / libc++ | 7068 | **5697** | 14875 |
+
+**Construct/invoke/destroy, small inline capture** — 2.3-3.2 ns for all three, except fu2 under
+libc++ at 12.58 ns. See the fu2 note below.
+
+**Compile time**, 300 instantiations across 3 signatures, best of 3:
+
+| config | std | zoo | fu2 |
+| --- | --- | --- | --- |
+| gcc-12 / libstdc++ | 3.67s | 3.58s (0.98x) | **11.21s (3.05x)** |
+| clang-20 / libstdc++ | 2.79s | 2.53s (0.91x) | **6.23s (2.24x)** |
+| clang-20 / libc++ | 7.46s | **2.88s (0.39x)** | 7.85s (1.05x) |
+
+**Object size**, same TU per candidate, `.text` bytes: zoo smallest everywhere (3111 / 2114 / 2108),
+fu2 largest (8520 / 3823 / 7953), std in between (5229 / 3256 / 3633).
+
+### fu2 is ~5x slower under libc++, and it is structural
+
+fu2 calls `std::align` on every construction (`function2.hpp:493`):
+
+```cpp
+return type(std::align(alignof(T), sizeof(T), inplace, from_capacity));
+```
+
+libstdc++ defines `std::align` inline in `bits/align.h`, so the optimiser constant-folds it away —
+a minimal construct/invoke/destroy compiles to 2 instructions with no calls. libc++ declares it
+`_LIBCPP_EXPORTED_FROM_ABI` (`__memory/align.h:21`), an out-of-line symbol in the shared library.
+The compiler cannot see the body, so it emits a real call; the same function becomes 52 instructions
+with 8 calls, including `std::__1::align`, `_Unwind_Resume` and two `__clang_call_terminate`.
+
+Ruled out as explanations: capacity (fu2 is ~2.5 ns at capacity 16/24/32 under libstdc++ and ~12 ns
+at all three under libc++) and allocation (`allocs/iter=0` throughout).
+
+It is not tunable — no fu2 template parameter avoids that call — it hits every construction, which
+is the enqueue path, and libc++ is a supported tt-metal toolchain. zoo does its own alignment
+arithmetic and is unaffected.
+
+### Caveats
+
+- `std::move_only_function` is unavailable in both toolchains, so there is no direct measurement
+  against the eventual replacement.
+- `BoundaryCapture` (24 B) is inline for all three under libc++, so those rows show inline cost
+  rather than a heap path.
+- The 2-instruction libstdc++ figure above is from a minimal TU that permits more elision than the
+  benchmark, which holds the work live with `DoNotOptimize`. It explains the mechanism; the 2.3 vs
+  12.6 ns from the matrix is the number to quote.
 
 ## Non-performance findings
 

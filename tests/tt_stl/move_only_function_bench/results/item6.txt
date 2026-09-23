@@ -1,0 +1,10 @@
+=== Item 6: object size (codegen_tu.cpp, same TU per candidate) ===
+out-gcc      std  .o=  39096  text=  5229
+out-gcc      zoo  .o=  61760  text=  3111
+out-gcc      fu2  .o=  70728  text=  8520
+out-clang    std  .o=  36216  text=  3256
+out-clang    zoo  .o=  48512  text=  2114
+out-clang    fu2  .o=  48496  text=  3823
+out-libcxx   std  .o=  74232  text=  3633
+out-libcxx   zoo  .o=  48592  text=  2108
+out-libcxx   fu2  .o=  77144  text=  7953
