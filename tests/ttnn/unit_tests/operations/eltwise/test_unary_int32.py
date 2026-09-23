@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -166,6 +167,28 @@ def test_abs_int32(input_shapes, low_a, high_a, device):
     output_tensor = ttnn.to_torch(result)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="INT32_MIN abs clamp is implemented for Blackhole only")
+def test_abs_int32_int_min_clamp(device):
+    # On Blackhole, SFPABS overflows for INT32_MIN (0x80000000); the kernel clamps it
+    # to INT32_MAX instead of wrapping to a negative value. torch.abs cannot be used
+    # as golden here since abs(-2147483648) is not representable in int32.
+    torch_input_tensor_a = torch.tensor([-2147483648, -2147483647, -1, 0, 1, 2147483647], dtype=torch.int32)
+    expected_output = torch.tensor([2147483647, 2147483647, 1, 0, 1, 2147483647], dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    result = ttnn.abs(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(result)
+
+    assert torch.equal(expected_output, output_tensor)
 
 
 @pytest.mark.parametrize(
