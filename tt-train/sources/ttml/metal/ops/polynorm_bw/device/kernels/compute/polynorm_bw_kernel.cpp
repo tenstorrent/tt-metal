@@ -74,6 +74,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -192,10 +193,15 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
+    // PolyNorm only reduces on first column (32 elements).
+    // Instead of processing the whole tile, we use `sqrt_tile_first_column()` and `recip_tile` with `VectorMode::C`,
+    // which only processes the first columns of the tile.
+    // TODO(#42980): revisit in a separate change with lane-level accuracy tests, ideally by
+    // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
-    sqrt_tile(reg_acc);
+    sqrt_tile_first_column(reg_acc);
     recip_tile_init();
-    recip_tile(reg_acc);
+    recip_tile(reg_acc, VectorMode::C);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);

@@ -112,6 +112,7 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -132,6 +133,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])

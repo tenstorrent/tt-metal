@@ -1185,17 +1185,10 @@ class SAMPLING_OP(TemplateParameter):
 class MOE_GATE_TOPK(TemplateParameter):
     """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
 
-    Mirrors the first five template parameters of
-    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
-    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
-    dataclass defaults are the compute-API wrapper's
-    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
-    template parameter carrying a C++ default is the sixth, ``generate_indices``.
-
-    ``generate_indices`` is deliberately not modelled: the driver instantiates with
-    five arguments, so it is pinned to true and the kernel always numbers the experts
-    itself. The caller-supplied index-mapping path (generate_indices = false) is
-    therefore untested.
+    Defaults match the compute API. ``generate_indices=False`` preserves the
+    caller's expert IDs, while ``scores_include_bias=True`` returns biased
+    scores as well as using them to select experts. Extra scaling stays disabled
+    in this driver.
     """
 
     num_selected_experts: int = 8
@@ -1203,6 +1196,8 @@ class MOE_GATE_TOPK(TemplateParameter):
     normalize: bool = False
     zero_tail: bool = False
     full_sort: bool = False
+    generate_indices: bool = True
+    scores_include_bias: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1211,6 +1206,8 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
             f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
             f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool MOE_GATE_GENERATE_INDICES = {str(self.generate_indices).lower()};",
+            f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
 

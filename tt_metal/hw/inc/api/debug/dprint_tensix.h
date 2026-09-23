@@ -47,6 +47,7 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
     DPRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
+#ifndef ARCH_QUASAR  // references Bfp*/Lf8/UInt32 formats absent from the Quasar DataFormat enum
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
@@ -69,6 +70,14 @@ inline void dprint_data_format(uint8_t data_format) {
         default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
+#else
+// Declared and deleted rather than simply absent, so that a Quasar build which does reach this
+// function fails at the call site with "use of deleted function 'dprint_data_format'" instead of a
+// bare "not declared in this scope". An `#else #error` cannot be used here: this header is also
+// Quasar's DEST-print path, so it must keep compiling on Quasar, and an #error would fire on every
+// Quasar build rather than only on an actual reference.
+void dprint_data_format(uint8_t data_format) = delete;
+#endif  // !ARCH_QUASAR
 
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
 // destination register row identifiers are remmaped
@@ -139,6 +148,8 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
     return sign | exponent | mantissa;
 }
 
+#ifndef ARCH_QUASAR  // these DEST readers use the RISCV_DEBUG_REG_* debug-bus wrapper macros, which are not wired up on
+                     // Quasar
 // Helper function that prints one row from dest when dest is configured for storing float32 values.
 // This function should be used only from dprint_tensix_dest_reg.
 // Float32 in dest = [Float16, Mantissa16]
@@ -221,8 +232,83 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dbg_read_dest_acc_row(row, rd_data);
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
+#else
+// Deleted on Quasar for the same reason as dprint_data_format above: these read DEST through the
+// debug bus, so a reference from a Quasar build is a bug, and a deleted declaration names the
+// offending call site instead of failing as an undeclared identifier.
+void dprint_tensix_dest_reg_row_float32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) = delete;
+#endif  // !ARCH_QUASAR
 
 #if !defined(ENV_LLK_INFRA)
+#ifdef ARCH_QUASAR
+// The shared typed-array print path renders 16-bit datums with the host's make_float(), which expects
+// Tensix DEST field order -- [sign][mantissa][exponent] -- the raw layout the debug-bus read returns on
+// the other architectures. Quasar's memory-mapped DEST window hands back standard IEEE order instead,
+// so the two fields have to be swapped back for the rendered text to agree. Float32 needs no swap: the
+// host bit-casts those words straight to float.
+inline uint32_t dest_order_from_ieee_float16_b(uint32_t ieee) {
+    return (ieee & 0x8000u) | ((ieee & 0x7Fu) << 8) | ((ieee >> 7) & 0xFFu);
+}
+
+// Prints the contents of tile tile_id within the destination register, row by row, in the same typed
+// array form the other architectures emit -- the host print parser decodes it, so the rendered text is
+// identical everywhere. The DEST data format is passed in rather than recovered from config, because
+// the RISCV_DEBUG_REG_* config-read wrappers are not wired up on Quasar. PR1 supports Float32 and
+// Float16_b.
+//
+// Call this only between tile_regs_acquire() and tile_regs_commit(). The unpack<->math mailbox
+// rendezvous (dbg_thread_halt) quiesces unpack for the duration of the read, so an in-flight unpack
+// cannot desync the tile counter underneath it (TILE_COUNTERS fault). Pack is not a participant in
+// that rendezvous, so keeping pack off DEST is the caller's responsibility, and the acquire-to-commit
+// window is what provides it: math owns DEST there and pack is still waiting on it. Called outside
+// that window, this races an in-flight pack.
+inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
+    UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
+    MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
+    MATH({
+        // Reading DEST at the wrong element width yields plausible-looking garbage rather than an
+        // obvious failure, so refuse formats this path has not been validated against. Note the
+        // rendezvous is still entered and left symmetrically -- returning early here would strand
+        // unpack in dbg_thread_halt.
+        if (data_format != DataFormat::Float32 && data_format != DataFormat::Float16_b) {
+            DPRINT(
+                "dprint_tensix_dest_reg: unsupported data format {}, expected Float32 or Float16_b\n",
+                (uint32_t)data_format);
+        } else {
+            // Program Math's section for MMIO DEST reads. configure_dest_access issues RMWCIB config writes,
+            // so wait for the config unit before the first read.
+            ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+            ckernel::wait_cfg_idle();
+
+            DPRINT("Tile ID = {}\n", tile_id);
+            uint32_t row = tile_id * NUM_ROWS_PER_TILE;
+            for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
+                if (data_format == DataFormat::Float32) {
+                    constexpr int ARRAY_LEN = 16;
+                    uint32_t rd_data[ARRAY_LEN];
+                    ckernel::dbg_read_dest_row_32b(row, rd_data);
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
+                } else {
+                    constexpr int ARRAY_LEN = 8;
+                    uint32_t rd_data[ARRAY_LEN];
+                    ckernel::dbg_read_dest_row_16b(row, rd_data);
+                    for (int w = 0; w < ARRAY_LEN; ++w) {
+                        rd_data[w] = dest_order_from_ieee_float16_b(rd_data[w] & 0xFFFFu) |
+                                     (dest_order_from_ieee_float16_b(rd_data[w] >> 16) << 16);
+                    }
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
+                }
+            }
+        }
+    })
+    MATH(ckernel::dbg_thread_unhalt<ckernel::MathThreadId>());
+}
+#else
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -271,6 +357,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     })
     dbg_unhalt();
 }
+#endif  // ARCH_QUASAR
 #endif  // !defined(ENV_LLK_INFRA)
 
 // Print the contents of the specified configuration register field.
