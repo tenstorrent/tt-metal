@@ -51,14 +51,14 @@
   },
   "batch_capability_ms_best": {
     "bs1": 25.9,
-    "bs8": 160.9,
-    "bs16": 308.6,
-    "bs32": 558.2,
+    "bs8": 157.6,
+    "bs16": 290.9,
+    "bs32": 559.0,
     "tok_s": {
-      "bs1": 19749,
-      "bs8": 25454,
-      "bs16": 26543,
-      "bs32": 29349
+      "bs1": 19747,
+      "bs8": 25984,
+      "bs16": 28164,
+      "bs32": 29309
     },
     "h200_ms": {
       "bs1": 5.437,
@@ -68,15 +68,36 @@
     },
     "x_h200": {
       "bs1": 4.76,
-      "bs8": 4.86,
-      "bs16": 4.59,
-      "bs32": 4.01
+      "bs8": 4.77,
+      "bs16": 4.33,
+      "bs32": 4.02
     },
     "vs_bh_reference_ff13bfp4_pct": {
       "bs1": -41.2,
-      "bs8": -13.0,
-      "bs16": -15.7,
-      "bs32": -19.2
+      "bs8": -14.8,
+      "bs16": -20.6,
+      "bs32": -19.0
     }
+  },
+  "fused_swiglu": {
+    "mechanism": "minimal_matmul(fuse_swiglu=True) with gate/up packed as tile-pairs along N",
+    "weight_layout_validated": "tile-pair interleave PCC 0.9997 vs silu(x@gate)*(x@up); plain concat control PCC -0.0002",
+    "gated_on": "1 < batch <= 16",
+    "measured_ms_best": {
+      "bs8": {
+        "off": 160.8,
+        "on": 158.3
+      },
+      "bs16": {
+        "off": 308.4,
+        "on": 290.9
+      },
+      "bs32": {
+        "off": 558.4,
+        "on": 570.5,
+        "note": "regression, fusion disabled at bs32"
+      }
+    },
+    "why_bs32_regresses": "packed weight width doubles to 2*hidden_dim=19456; the block shape that costs is worth more than the removed BinaryNg"
   }
 }
