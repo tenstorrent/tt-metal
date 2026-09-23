@@ -354,4 +354,16 @@ void kernel_main() {
             pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
         }
     }
+    if (num_recv_rounds > 0 || sends_survivor) {
+        // The landed survivor copies and the raw survivor pack leave the unpack to math handshake in a state
+        // that corrupts the first tile of the next program on this core. One datacopy through the source
+        // registers, with nothing packed, puts it back; the tile read is a stale input slot and is discarded.
+        reconfig_data_format_srca(input_cb);
+        copy_init(input_cb);
+        tile_regs_acquire();
+        copy_tile(input_cb, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        tile_regs_release();
+    }
 }
