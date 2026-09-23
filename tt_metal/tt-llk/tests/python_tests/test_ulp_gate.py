@@ -629,6 +629,70 @@ def test_the_report_raises_an_enrolled_pass_out_of_debug():
     )
 
 
+def test_a_non_finite_failure_names_itself_in_the_log(captured_logs):
+    """A NaN lane is unmeasurable and drops out of the statistics, so this verdict used to
+    log "max 0 ULP (budget 0)" -- accurate and useless. The disagreement now leads."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    golden[7] = float("nan")
+    result = golden.clone()
+    result[7] = 1.0
+
+    assert not passed_test(golden, result, fmt, max_ulp=0, print_errors=False)
+    logged = "\n".join(captured_logs)
+    assert "non-finite disagreement @ [7]" in logged and "1 such lane(s)" in logged
+
+
+def test_a_failure_logs_the_worst_lane_ahead_of_the_tile_dump(captured_logs):
+    """In that order: the headline names the point, then the tile dump shows context."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = golden.clone()
+    result[42] = _step(golden, 9)[42]
+
+    assert not passed_test(golden, result, fmt, max_ulp=1, print_errors=True)
+    logged = "\n".join(captured_logs)
+    assert "max 9 ULP @ [42]" in logged
+    assert logged.index("ULP budget exceeded") < logged.index("Result tile")
+
+
+@pytest.mark.parametrize("print_errors", [True, False], ids=["reported", "silenced"])
+def test_print_errors_controls_the_level_not_the_message(print_errors):
+    """``print_errors=False`` asks for silence, but the ULP headline sat outside that
+    guard -- and its sink appends to the ``test_errors.log`` CI uploads. The line is
+    still emitted either way so it stays assertable; only its level drops. An ERROR sink
+    is what pins that: a TRACE sink cannot tell ``logger.error`` from ``logger.debug``.
+    """
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 9)
+
+    def verdict():
+        passed_test(golden, result, fmt, max_ulp=1, print_errors=print_errors)
+
+    assert bool(_logs_for(verdict, "ERROR")) is print_errors
+    assert "ULP budget exceeded" in "\n".join(_logs_for(verdict))
+
+
+def test_a_silenced_failure_is_reported_at_info_under_the_report_flag():
+    """The branch ``--ulp-report`` inserts into that ladder. A reporting sweep that
+    dropped the failures would derive its budget from the lanes that passed, so the line
+    is raised from DEBUG to INFO -- but not to ERROR, which is the level the caller
+    asked to be spared."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 9)
+
+    def verdict():
+        passed_test(golden, result, fmt, max_ulp=1, print_errors=False)
+
+    with _ulp_report_enabled():
+        assert not _logs_for(verdict, "ERROR")
+        assert "ULP budget exceeded" in "\n".join(_logs_for(verdict, "INFO"))
+    # And without the flag it stays below INFO, so the flag is what moved it.
+    assert not _logs_for(verdict, "INFO")
+
+
 @pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)
 def test_the_report_cannot_change_a_verdict(fmt):
     """Reporting only. It runs after the verdict and is never read back into one, so

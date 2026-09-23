@@ -519,9 +519,10 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
                 assert contract.max_ulp is not None and contract.max_ulp >= 0
                 saw_ulp.add(op)
     # The regression itself: the sweep has to reach the ULP branch for every enrolled op
-    # except the two whose entire contract set is _COARSE_LUT_TOLERANCE, not silently
-    # resolve all of them to tolerance. Named rather than written as a bare "- 2", so a
-    # third op quietly slipping off the ULP branch fails instead of fitting the slack.
+    # except the four in ONLY_EVER_TOLERANCE -- the coarse-LUT pair and the two binary
+    # ops carrying their own per-format rtol/atol -- not silently resolve all of them to
+    # tolerance. Named rather than written as a bare "- 4", so a fifth op quietly
+    # slipping off the ULP branch fails instead of fitting the slack.
     assert set(enrolled_ops()) - saw_ulp == ONLY_EVER_TOLERANCE, sorted(
         op.name for op in set(enrolled_ops()) - saw_ulp
     )
