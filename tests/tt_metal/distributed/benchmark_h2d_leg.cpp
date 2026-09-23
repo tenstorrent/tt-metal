@@ -23,7 +23,6 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "hd_socket_test_utils.hpp"
-#include "leg_benchmark_common.hpp"
 
 #include "tt_metal/distributed/host_h2d_leg.hpp"
 #include "tt_metal/distributed/host_l1_map.hpp"
@@ -35,7 +34,6 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 namespace dist = tt::tt_metal::distributed;
 namespace mh = tt::tt_metal::distributed::multihost;
-using namespace leg_bench;
 
 namespace {
 
@@ -48,6 +46,66 @@ const std::vector<int64_t> kRingPages = {8};
 const std::vector<int64_t> kIterations = {20000};
 const std::vector<int64_t> kWarmupPct = {10};
 const std::vector<int64_t> kVerify = {0};
+
+// Fail rather than spin: the receiver kernel exits only after `iters` frames.
+constexpr auto kStall = std::chrono::seconds(30);
+
+// SkipWithError does not set the exit status; main() returns this instead.
+bool g_run_failed = false;
+
+void fail(benchmark::State& state, const std::string& why) {
+    g_run_failed = true;
+    state.SkipWithError(why);
+}
+
+// Copied from benchmark_hd_sockets.cpp:159-168, :194-215 and :518-528; file-local there.
+struct LatencySummary {
+    double avg_us = 0.0;
+    double min_us = 0.0;
+    double max_us = 0.0;
+    double p50_us = 0.0;
+    double p99_us = 0.0;
+    double avg_cycles = 0.0;
+    uint64_t min_cycles = 0;
+    uint64_t max_cycles = 0;
+};
+
+// The us variant: this leg's round trip is stamped on the host clock.
+LatencySummary summarize_latency_us(const std::vector<double>& us_values, double cycles_per_us) {
+    if (us_values.empty()) {
+        return {};
+    }
+    auto sorted = us_values;
+    std::sort(sorted.begin(), sorted.end());
+    double avg_us = 0.0;
+    for (const double v : us_values) {
+        avg_us += v;
+    }
+    avg_us /= static_cast<double>(us_values.size());
+
+    return {
+        .avg_us = avg_us,
+        .min_us = sorted.front(),
+        .max_us = sorted.back(),
+        .p50_us = sorted[sorted.size() / 2],
+        .p99_us = sorted[(sorted.size() * 99) / 100],
+        .avg_cycles = avg_us * cycles_per_us,
+        .min_cycles = static_cast<uint64_t>(sorted.front() * cycles_per_us),
+        .max_cycles = static_cast<uint64_t>(sorted.back() * cycles_per_us),
+    };
+}
+
+void set_latency_counters(benchmark::State& state, const LatencySummary& s, uint64_t num_iterations) {
+    state.counters["num_iterations"] = static_cast<double>(num_iterations);
+    state.counters["avg_us"] = s.avg_us;
+    state.counters["min_us"] = s.min_us;
+    state.counters["max_us"] = s.max_us;
+    state.counters["p50_us"] = s.p50_us;
+    state.counters["p99_us"] = s.p99_us;
+    state.counters["avg_cycles"] = s.avg_cycles;
+    state.counters["min_cycles"] = static_cast<double>(s.min_cycles);
+    state.counters["max_cycles"] = static_cast<double>(s.max_cycles);
+}
 
 // Pre-registered so a skipped case keeps the CSV shape.
 void init_counters(benchmark::State& state) {
@@ -62,6 +120,29 @@ struct CoreState {
     uint64_t drained = 0;
     std::vector<std::chrono::steady_clock::time_point> at;
 };
+
+double us_since(std::chrono::steady_clock::time_point t) {
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t).count();
+    return static_cast<double>(ns) / 1e3;
+}
+
+// One bringup per process: Fixture::SetUp runs once per arg case.
+struct DeviceFixture {
+    std::shared_ptr<dist::MeshDevice> mesh_device;
+
+    DeviceFixture() : mesh_device(dist::MeshDevice::create_unit_mesh(kDeviceId)) {}
+};
+
+DeviceFixture& get_device_fixture() {
+    static DeviceFixture fixture;
+    return fixture;
+}
+
+// What test_kernel_signal.cpp:67-68 expects in every payload word but word 0.
+uint32_t pattern_word(uint32_t core) {
+    const uint32_t b = 0x40u + (core & 0x1Fu);
+    return b | (b << 8) | (b << 16) | (b << 24);
+}
 
 class H2DLegFixture : public benchmark::Fixture {
 public:
@@ -81,7 +162,7 @@ public:
             return;
         }
 
-        mesh_ = unit_mesh(kDeviceId);
+        mesh_ = get_device_fixture().mesh_device;
         if (!dist::is_device_coord_mmio_mapped(mesh_, dist::MeshCoordinate(0, 0))) {
             fail(state, "device " + std::to_string(kDeviceId) + " is not MMIO-mapped");
             return;
