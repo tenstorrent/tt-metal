@@ -39,8 +39,11 @@ namespace {
 constexpr int kDeviceId = 0;
 
 // Both ranks build this identically, which is what keeps them on the same case list.
-const std::vector<int64_t> kPageSizes = {16384};
+const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
 const std::vector<int64_t> kCores = {4};
+// Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
+// full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
+const std::vector<int64_t> kRingPages = {1, 4};
 const std::vector<int64_t> kVolumeMiB = {1024};
 const std::vector<int64_t> kPctSteady = {10};
 const std::vector<int64_t> kVerify = {1};
@@ -79,10 +82,20 @@ public:
     void SetUp(benchmark::State& state) override {
         payload_bytes_ = static_cast<uint32_t>(state.range(0));
         cores_ = static_cast<uint32_t>(state.range(1));
-        const uint64_t volume = static_cast<uint64_t>(state.range(2)) << 20;
-        const uint32_t pct_steady = static_cast<uint32_t>(state.range(3));
-        verify_ = state.range(4) != 0;
-        timing_ = state.range(5) != 0;
+        ring_pages_ = static_cast<uint32_t>(state.range(2));
+        const uint64_t volume = static_cast<uint64_t>(state.range(3)) << 20;
+        const uint32_t pct_steady = static_cast<uint32_t>(state.range(4));
+        verify_ = state.range(5) != 0;
+        timing_ = state.range(6) != 0;
+
+        // Both ranks compute this identically, so a refusal here is collective by construction.
+        const uint64_t ring_bytes = static_cast<uint64_t>(ring_pages_) * tt_uva_frame_page_size(payload_bytes_);
+        if (ring_bytes > kArenaBytes) {
+            fail(state,
+                 "ring_pages x page (" + std::to_string(ring_bytes) + " B) exceeds the " +
+                     std::to_string(kArenaBytes >> 10) + " KiB arena");
+            return;
+        }
 
         const mh::ContextPtr world = mh::DistributedContext::get_current_world();
         rank_ = static_cast<uint32_t>(*world->rank());
@@ -108,6 +121,7 @@ public:
         cfg.grid_width = grid_width_;
         cfg.grid_height = static_cast<uint32_t>(grid.y);
         cfg.payload_bytes = payload_bytes_;
+        cfg.ring_pages = ring_pages_;
         cfg.collect_timing = timing_;
 
         std::string err;
@@ -205,6 +219,7 @@ protected:
     std::vector<CoreCoord> core_list_;
     uint32_t payload_bytes_ = 0;
     uint32_t cores_ = 0;
+    uint32_t ring_pages_ = 0;
     uint32_t iters_ = 0;
     uint32_t warmup_iters_ = 0;
     uint32_t grid_width_ = 0;
@@ -356,12 +371,13 @@ BENCHMARK_REGISTER_F(D2H2H2DFixture, Volume)
     ->ArgsProduct({
         kPageSizes,  // page_size
         kCores,      // cores
+        kRingPages,  // ring_pages
         kVolumeMiB,  // volume_mib
         kPctSteady,  // pct_steady
         kVerify,     // verify
         kTiming,     // timing
     })
-    ->ArgNames({"page_size", "cores", "volume_mib", "pct_steady", "verify", "timing"})
+    ->ArgNames({"page_size", "cores", "ring_pages", "volume_mib", "pct_steady", "verify", "timing"})
     ->UseRealTime()
     ->Iterations(1)
     ->Unit(benchmark::kSecond);
