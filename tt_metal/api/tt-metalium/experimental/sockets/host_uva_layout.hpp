@@ -55,8 +55,10 @@ constexpr uint64_t tx_arena_offset(uint32_t core) {
 }
 constexpr uint64_t rx_arena_offset(uint32_t core) { return tx_arena_offset(core) + kArenaBytes; }
 
-constexpr uint64_t rx_slot_offset(uint32_t core, uint32_t slot, uint64_t page_bytes) {
-    return rx_arena_offset(core) + static_cast<uint64_t>(slot) * page_bytes;
+// data_offset is where the aliased socket's ring starts inside the arena, and it is NOT
+// defaulted: omitting it silently addressed the wrong bytes, so every caller must say.
+constexpr uint64_t rx_slot_offset(uint32_t core, uint32_t slot, uint64_t page_bytes, uint64_t data_offset) {
+    return rx_arena_offset(core) + data_offset + static_cast<uint64_t>(slot) * page_bytes;
 }
 
 // Ring depth in frames. The D2H leg, the H2H window and the peer's ring must all use this
