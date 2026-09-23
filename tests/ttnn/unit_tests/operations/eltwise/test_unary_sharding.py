@@ -644,3 +644,32 @@ def test_unary_specless_sharded_output_grid_shrinks_block(device):
     expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
     assert torch.equal(ttnn.to_torch(result), torch.abs(x))
+
+
+# The in-place sharded path pairs the input and output shard resident on each core with no data
+# movement, and used to be taken whenever the core grids matched. A different layout, orientation or
+# shard shape on the same grid puts different tensor regions on each core, and the output came back
+# permuted (#57356); those now take the interleaved accessor path.
+def _unary_sharded_mc(layout, shard_shape, orientation):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 1))})
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation))
+
+
+@pytest.mark.parametrize(
+    "out_layout, out_shard, out_orientation",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [448, 32], ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.COL_MAJOR),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+    ids=["height_to_width", "row_to_col_major", "same_spec"],
+)
+def test_unary_sharded_same_grid_different_spec(device, out_layout, out_shard, out_orientation):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 448, 448, dtype=torch.bfloat16)
+    in_mc = _unary_sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mc = _unary_sharded_mc(out_layout, out_shard, out_orientation)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.relu(tx, memory_config=out_mc)
+    assert out.memory_config() == out_mc
+    assert torch.equal(ttnn.to_torch(out), torch.relu(x))

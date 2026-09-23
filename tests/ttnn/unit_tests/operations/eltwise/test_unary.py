@@ -2810,3 +2810,29 @@ def test_unary_preallocated_output_shape_mismatch_program_cache_disabled(device,
             ttnn.exp(input_tensor, output_tensor=output_tensor)
     finally:
         device.enable_program_cache()
+
+
+# The compute kernel is chosen from the first op of a chain alone. A dedicated-kernel op elsewhere in
+# a chain emitted an empty init/func and was silently dropped; one in first position dropped every
+# op after it (#57356). Such chains are now rejected.
+@pytest.mark.parametrize(
+    "chain",
+    [
+        [ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.LOGSIGMOID],
+        [ttnn.UnaryOpType.LOGSIGMOID, ttnn.UnaryOpType.RELU],
+        [ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.HARDSWISH],
+        [ttnn.UnaryOpType.HARDSWISH, ttnn.UnaryOpType.EXP],
+    ],
+    ids=lambda chain: "-".join(op.name for op in chain),
+)
+def test_unary_chain_rejects_dedicated_kernel_op(device, chain, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "uses a dedicated compute kernel and must be the only op in the chain"):
+        ttnn.unary_chain(x, [ttnn.UnaryWithParam(op) for op in chain])
+
+
+def test_unary_chain_of_generic_ops_still_runs(device):
+    x = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]
+    assert torch.equal(ttnn.to_torch(ttnn.unary_chain(tx, chain)), -torch.relu(x))
