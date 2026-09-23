@@ -6191,8 +6191,8 @@ def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size)
     """Exercise shared-K rotation, accumulator handoffs, and cached replay against a CPU reference.
 
     q64/k448 pins the PACK-to-UNPACK race: QK uses one tile row per subblock while
-    the V matmul reads two. On Galaxy, eight active ring iterations reuse all three
-    handoff semaphore slots; QuietBox covers the same path with four iterations.
+    the V matmul reads two. Galaxy covers eight active ordinals in the completion
+    bitmap; QuietBox covers four. Replays check that teardown clears the bitmap.
     """
     chunk_size = 640 * MESH_CONFIG.sp_size
     model = RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"]

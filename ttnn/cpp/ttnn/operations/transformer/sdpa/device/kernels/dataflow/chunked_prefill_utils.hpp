@@ -60,10 +60,9 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // each kernel's LAST compile-time arg, and each kernel reads it back from that position.
 // ---------------------------------------------------------------------------
 
-// Handoff semaphore ring depth. A slot is live only within one ring iteration, so slots are reused
-// instead of allocated per iteration: program semaphores cap at 16 and are shared with the chain
-// and all-gather. 3 tolerates a full iteration of inter-core skew.
-constexpr uint32_t kRotatedHandoffSemDepth = 3;
+// One semaphore holds distinct completion bits for all receiving active ordinals.
+// Bits stay set until kernel completion, so arbitrary inter-core skew is safe.
+constexpr uint32_t kRotatedHandoffSemCount = 1;
 
 // Per active ordinal, only the moving unit is sent. Its ID is its first flat chunk
 // index (a balanced unit has two consecutive chunks); ~0u means no remainder.
@@ -105,14 +104,6 @@ constexpr uint32_t rotated_active_ordinal(uint32_t active_ring_iter_mask, uint32
         ++count;
     }
     return count;
-}
-
-// Handoff semaphores for a given ring size. Clamped to >= 1: a degenerate ring_size <= 1 never
-// receives a float, but the kernel still declares the array and takes a modulo by this.
-constexpr uint32_t rotated_handoff_sem_count(uint32_t ring_size) {
-    const uint32_t receiving_iters = ring_size > 0 ? ring_size - 1 : 0;
-    const uint32_t depth = receiving_iters < kRotatedHandoffSemDepth ? receiving_iters : kRotatedHandoffSemDepth;
-    return depth > 0 ? depth : 1;
 }
 
 // float_dest: the float's next owner as one packed word, or kRotatedNoDest when it stays put.

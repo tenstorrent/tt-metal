@@ -2517,9 +2517,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
 
-        // Reuse a bounded ring of handoff semaphores; receivers reset their slots
-        // after waiting, including across cached program replays.
-        for (uint32_t sem_slot = 0; sem_slot < rotated_handoff_sem_count(ring_size); ++sem_slot) {
+        // Completion bits are never cleared during a run; reset follows the last incoming
+        // handoff so early future signals survive arbitrary multicast-group skew.
+        for (uint32_t sem_slot = 0; sem_slot < kRotatedHandoffSemCount; ++sem_slot) {
             const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
             // The descriptor path has no budget check of its own: an id >= NUM_SEMAPHORES surfaces
             // later as a bare "bitset::set: __position (17) >= _Nb (16)" IndexError from whichever
@@ -2531,7 +2531,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 sem_id < kSemaphoresPerCore,
                 "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
                 "allocated {} and a core supports {}.",
-                rotated_handoff_sem_count(ring_size),
+                kRotatedHandoffSemCount,
                 desc.semaphores.size(),
                 kSemaphoresPerCore);
             desc.semaphores.push_back(SemaphoreDescriptor{
@@ -3044,10 +3044,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
-        // Rotated Q split: the handoff semaphore ids, then per active ordinal
+        // Rotated Q split: the completion-bit semaphore id, then per ring iteration
         // [remainder_start, float_dest].
         if (use_rotated_q_split) {
-            for (uint32_t sem_slot = 0; sem_slot < rotated_handoff_sem_count(ring_size); ++sem_slot) {
+            for (uint32_t sem_slot = 0; sem_slot < kRotatedHandoffSemCount; ++sem_slot) {
                 writer_args.push_back(rotated_handoff_sem_ids[sem_slot]);
             }
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {

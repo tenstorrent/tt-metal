@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -344,6 +345,39 @@ void write_output_and_lse(
     cb_lse.pop_front(Sq_chunk_t);
 }
 
+// One completion bit per receiving ACTIVE ordinal. A receiver has at most one donor
+// per ordinal (including balanced pairs), so atomic addition of distinct powers of
+// two is equivalent to OR: no carries, no lost signals, and no ordering assumption
+// between different donors. The host already limits the ring to 32 iterations.
+class RotatedQHandoff {
+public:
+    explicit RotatedQHandoff(uint32_t semaphore_id) : semaphore_(semaphore_id) {}
+
+    bool ready(uint32_t ordinal) const { return (semaphore_.value() & bit(ordinal)) != 0; }
+
+    void wait(uint32_t ordinal) const {
+        WAYPOINT("RQHW");
+        while (!ready(ordinal)) {
+        }
+        WAYPOINT("RQHD");
+    }
+
+    // Caller must complete the entire remainder unit's DRAM saves before signaling.
+    void signal(const Noc& noc, uint32_t x, uint32_t y, uint32_t ordinal) { semaphore_.up(noc, x, y, bit(ordinal)); }
+
+    // Only after every expected incoming handoff has been observed. There are then
+    // no outstanding signals to this core; program completion separates cached runs.
+    void reset_after_run() { semaphore_.set(0); }
+
+private:
+    static uint32_t bit(uint32_t ordinal) {
+        ASSERT(ordinal >= 1 && ordinal < 32);
+        return 1u << (ordinal - 1);
+    }
+
+    Semaphore<> semaphore_;
+};
+
 // Maps a Q slot index to the flat chunk id this core processes there. Under the rotated split the
 // base IDs are contiguous and only the remainder ID is passed; otherwise the slot index is the
 // offset into the static flat range. `ordinal` is an ACTIVE ordinal, so ordinal + 1 is the next
@@ -384,15 +418,6 @@ struct QSlotMap {
         return !is_last_ring_iter && next_iter_first() == flat_q;
     }
 };
-
-// Handoff semaphore slot for active ordinal `ordinal`. Ordinal >= 1 at every call site: the first
-// active iteration neither receives a float nor has a deferred save to flush. The modulo keeps an
-// underflow in range rather than faulting, so donor and receiver would silently disagree and hang;
-// ASSERT is watcher-only, so this documents the host-schedule invariant rather than enforcing it.
-inline uint32_t rotated_sem_slot(uint32_t ordinal, uint32_t sem_count) {
-    ASSERT(ordinal >= 1);
-    return (ordinal - 1) % sem_count;
-}
 
 struct QChunkInfo {
     bool is_joint_q;
@@ -558,18 +583,15 @@ void kernel_main() {
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t rotated_iter_stride = kRotatedWriterIterWords;
-    constexpr uint32_t rotated_sem_count = rotated_handoff_sem_count(ring_size);
 
     // The factory appends the handoff semaphore ids, then per ring iteration
     // [remainder_start, float_dest]. The donor signals
     // the receiver's semaphore once its accumulator save lands in DRAM; the receiver waits before
     // issuing that float's restore reads.
-    uint32_t rotated_sem_ids[rotated_sem_count] = {};
+    uint32_t rotated_sem_id = 0;
     uint32_t rotated_args_base = 0;
     if constexpr (rotated_q_split_enabled) {
-        for (uint32_t sem_slot = 0; sem_slot < rotated_sem_count; ++sem_slot) {
-            rotated_sem_ids[sem_slot] = get_arg_val<uint32_t>(argidx++);
-        }
+        rotated_sem_id = get_arg_val<uint32_t>(argidx++);
         rotated_args_base = argidx;
     }
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
@@ -923,18 +945,15 @@ void kernel_main() {
                     return;
                 }
                 // The migrated-in unit sits last. Wait once before its first restore; the
-                // donor signal covers every member. Reset for the next (possibly cached) run.
+                // donor signal covers every member. Keep all completion bits until teardown.
                 if constexpr (rotated_q_split_enabled) {
                     constexpr uint32_t rotation_unit_chunks = use_zigzag_balancing ? 2 : 1;
                     const uint32_t first_float_index = q_per_core - rotation_unit_chunks;
                     if (rotated_has_mig_in_float != 0 && next_q_index >= first_float_index) {
                         if (next_q_index == first_float_index) {
                             // One signal covers the entire pair, including an unchanged low
-                            // member on a causally skipped iteration. Reset only once per unit.
-                            Semaphore<> handoff_sem(
-                                rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)]);
-                            handoff_sem.wait_min(rotated_has_mig_in_float);
-                            handoff_sem.set(0);
+                            // member on a causally skipped iteration. Future bits stay intact.
+                            RotatedQHandoff(rotated_sem_id).wait(rotated_ordinal);
                         }
                         // The donor completed the unit's saves before signaling; no local TRID owns them.
                         prefetch_for(q_slots.at(next_q_index), TRID_LAST, /*barrier_first=*/false);
@@ -982,7 +1001,7 @@ void kernel_main() {
                     out_subblock_h,
                     deferred.trid);
                 // Donor half of the float handoff. Floats sit last, so this flush runs during the
-                // receiver's use iteration and both index rotated_sem_slot() with the same ordinal.
+                // receiver's use iteration; donor and receiver use the same ordinal's bit.
                 // In a balanced schedule, a core can be both donor and receiver without a cycle:
                 // it retains at least two base chunks, so the slot-0 flush precedes the incoming
                 // pair's prefetch at base_chunks-1 >= 1.
@@ -996,8 +1015,12 @@ void kernel_main() {
                         } else {
                             noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
                         }
-                        Semaphore<>(rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)])
-                            .up(noc, rotated_dest_x(deferred.mig_dest), rotated_dest_y(deferred.mig_dest), 1);
+                        RotatedQHandoff(rotated_sem_id)
+                            .signal(
+                                noc,
+                                rotated_dest_x(deferred.mig_dest),
+                                rotated_dest_y(deferred.mig_dest),
+                                rotated_ordinal);
                         deferred.mig_dest = kRotatedNoDest;
                     }
                 }
@@ -1215,5 +1238,10 @@ void kernel_main() {
             }
             noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
+    }
+    if constexpr (rotated_q_split_enabled) {
+        // Every scheduled incoming unit has now been restored, so no donor can still
+        // signal this core. Clear only here, never while future handoffs can arrive.
+        RotatedQHandoff(rotated_sem_id).reset_after_run();
     }
 }
