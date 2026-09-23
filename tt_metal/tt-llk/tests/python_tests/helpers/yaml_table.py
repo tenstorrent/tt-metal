@@ -31,9 +31,19 @@ class StrictLoader(yaml.SafeLoader):
     """A loader that refuses a duplicate mapping key instead of keeping the last one."""
 
 
+#: A ``<<`` merge key. ``SafeConstructor`` flattens it inside ``construct_mapping``, so
+#: constructing it here -- ahead of that -- would fail with "could not determine a
+#: constructor for the tag", naming YAML rather than the table. Calling ``flatten_mapping``
+#: up front is not the fix: it prepends the merged pairs without deduplicating, and a
+#: legitimate override would then trip the duplicate check below.
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
 def _no_duplicate_keys(loader: StrictLoader, node: yaml.MappingNode) -> Dict[Any, Any]:
     seen = set()
     for key_node, _ in node.value:
+        if key_node.tag == _MERGE_TAG:
+            continue
         key = loader.construct_object(key_node, deep=True)
         if key in seen:
             raise ValueError(

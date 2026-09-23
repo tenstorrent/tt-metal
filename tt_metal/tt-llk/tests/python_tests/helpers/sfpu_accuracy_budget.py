@@ -40,6 +40,7 @@ carry through an unrestricted ``DEFAULT`` has no edge measurement behind it.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields
 from enum import Enum
 from pathlib import Path
@@ -91,7 +92,19 @@ class AccuracyContract:
             )
         for name in ("atol", "rtol", "near_zero_atol"):
             value = getattr(self, name)
-            if value is not None and value < 0:
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                # YAML 1.1 reads `yes` as a bool -- and bool is an int, so `atol: yes`
+                # would clear the sign check and apply as 1.0, a ~20x widening of the
+                # 0.13 rows. Mirrors the max_ulp guard below.
+                raise ValueError(f"{name} must be a number, got {value!r}")
+            if not math.isfinite(value):
+                # `.nan` is silently ignored by passed_test (`custom_* >= 0` is false),
+                # and `.inf` makes the tolerance gate unconditional -- an infinite
+                # near_zero_atol rescues every finite lane.
+                raise ValueError(f"{name} must be finite, got {value}")
+            if value < 0:
                 # passed_test applies an override only when it is `>= 0`, so a negative
                 # atol/rtol reads here as a declared tolerance and then runs against the
                 # per-format default. A negative near_zero_atol is an inert floor.
@@ -219,6 +232,17 @@ class BudgetKey:
             "arch": arch,
         }
         for name, asked in query.items():
+            if asked is not None and not isinstance(asked, _BUDGET_KEY_TYPES[name]):
+                # Symmetric with __post_init__: the key side already refuses a non-member
+                # because it matches nothing. The query side would fail the same way but
+                # silently, falling through to a broader row or to TOLERANCE_CONTRACT --
+                # and `sfpu_domains` types dest_acc and arch as `Union[bool, Enum, None]`,
+                # so a driver hands the same value to a module that accepts bools and
+                # then to this one.
+                raise ValueError(
+                    f"BudgetKey.matches: {name} must be a "
+                    f"{_BUDGET_KEY_TYPES[name].__name__} member or None, got {asked!r}"
+                )
             wanted = getattr(self, name)
             if wanted is not None and wanted != asked:
                 return False
@@ -364,13 +388,35 @@ def accuracy_contract(
     )
     # Resolve first, then downgrade only a *ULP* contract: both gates below ask whether a
     # step count is trustworthy here, and neither says anything about a declared
-    # tolerance. Gating before the lookup dropped SigmoidAppx's and GeluAppx's atol=0.13
-    # on every arch but Wormhole, back to the default those numbers exist to widen.
+    # tolerance -- so a downgrade lands on the op's own tolerance row where it has one.
+    # Gating before the lookup dropped SigmoidAppx's and GeluAppx's atol=0.13 on every
+    # arch but Wormhole, back to the default those numbers exist to widen.
     if contract.metric != Metric.ULP:
         return contract
+
+    def downgraded() -> AccuracyContract:
+        # Not the global default: a ULP row that wins on specificity would otherwise
+        # shadow a *broader* tolerance row the same op declares, so off Wormhole an op
+        # carrying both shapes -- Abs, Neg and Square already do -- fell back past its
+        # own atol to the per-format default. Re-resolve against the tolerance rows only.
+        tolerance_rows = {
+            key: entry for key, entry in table.items() if entry.metric != Metric.ULP
+        }
+        if not tolerance_rows:
+            return TOLERANCE_CONTRACT
+        return resolve_contract(
+            tolerance_rows,
+            label=op.name,
+            approx_mode=approx_mode,
+            input_format=input_format,
+            output_format=output_format,
+            dest_acc=dest_acc,
+            arch=arch,
+        )
+
     if not has_ulp_gate(output_format):
         # Their block-aware lattice compares are already the stronger criterion.
-        return TOLERANCE_CONTRACT
+        return downgraded()
     if arch != MEASURED_ARCH and not _key_names_arch(
         op, arch, input_format, output_format, approx_mode, dest_acc
     ):
@@ -380,8 +426,39 @@ def accuracy_contract(
         # taken there. Adding arch=WORMHOLE to the shared keys instead would tie
         # specificity with the per-format ones and make validate_registry() raise, which
         # is why this is a gate here rather than a key there.
-        return TOLERANCE_CONTRACT
+        return downgraded()
     return contract
+
+
+def _winners(
+    table: _BudgetTable,
+    *,
+    output_format: DataFormat,
+    input_format: Optional[DataFormat],
+    approx_mode: Optional[ApproximationMode],
+    dest_acc: Optional[DestAccumulation],
+    arch: Optional[ChipArchitecture],
+) -> list:
+    """The equally-most-specific entries of *table* covering one variant, or ``[]``.
+
+    One scan, shared: :func:`resolve_contract` picks the single winner out of it and
+    :func:`_key_names_arch` only asks what that winner pins.
+    """
+    matched = [
+        (key, contract)
+        for key, contract in table.items()
+        if key.matches(
+            approx_mode=approx_mode,
+            input_format=input_format,
+            output_format=output_format,
+            dest_acc=dest_acc,
+            arch=arch,
+        )
+    ]
+    if not matched:
+        return []
+    best = max(key.specificity for key, _ in matched)
+    return [(key, contract) for key, contract in matched if key.specificity == best]
 
 
 def _key_names_arch(
@@ -401,21 +478,17 @@ def _key_names_arch(
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if not table:
         return False
-    matched = [
-        key
-        for key in table
-        if key.matches(
-            approx_mode=approx_mode,
+    return any(
+        key.arch is not None
+        for key, _ in _winners(
+            table,
             input_format=input_format,
             output_format=output_format,
+            approx_mode=approx_mode,
             dest_acc=dest_acc,
             arch=arch,
         )
-    ]
-    if not matched:
-        return False
-    best = max(key.specificity for key in matched)
-    return any(key.arch is not None and key.specificity == best for key in matched)
+    )
 
 
 def resolve_contract(
@@ -431,22 +504,17 @@ def resolve_contract(
     """Pick the most specific contract in *table* covering one variant. Split out so the
     resolution rules can be tested against small purpose-built tables rather than the
     live registry, which would fail every time a budget is enrolled."""
-    matched = [
-        (key, contract)
-        for key, contract in table.items()
-        if key.matches(
-            approx_mode=approx_mode,
-            input_format=input_format,
-            output_format=output_format,
-            dest_acc=dest_acc,
-            arch=arch,
-        )
-    ]
-    if not matched:
+    winners = _winners(
+        table,
+        input_format=input_format,
+        output_format=output_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=arch,
+    )
+    if not winners:
         return TOLERANCE_CONTRACT
 
-    best = max(key.specificity for key, _ in matched)
-    winners = [(key, contract) for key, contract in matched if key.specificity == best]
     if len(winners) > 1:
         raise ValueError(
             f"{label} has {len(winners)} equally specific budget keys matching "
