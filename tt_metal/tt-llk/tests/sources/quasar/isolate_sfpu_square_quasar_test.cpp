@@ -35,6 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
 #include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
 
@@ -56,15 +57,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
-    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
-    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
-
-    llk_sfpu_srcs_unary(
-        params.TILE_CNT,
-        static_cast<DataFormat>(formats.unpack_S_dst),
-        [load_sfpmem, store_sfpmem](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
-        { calculate_square(load_base_addr, store_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem); });
+    // Resolve the two register formats independently, outside the tile/slice loops.
+    // The pipeline still owns unpack/pack and SrcS completion; square only computes.
+    const DataFormat input_format  = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat output_format = static_cast<DataFormat>(formats.pack_S_src);
+    dispatch_sfpu_srcs_format(
+        input_format,
+        [&](auto input)
+        {
+            using Input = decltype(input);
+            dispatch_sfpu_srcs_format(
+                output_format,
+                [&](auto output)
+                {
+                    using Output = decltype(output);
+                    llk_sfpu_srcs_unary(
+                        params.TILE_CNT, input_format, [](int, int, int) { calculate_square_srcs<Input::rows, Input::layout, Output::layout>(); });
+                });
+        });
 
     wait_sfpu_idle();
     wait_unpack_idle();

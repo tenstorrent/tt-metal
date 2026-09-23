@@ -9,10 +9,12 @@ TRISC3: UNP_S x2 -> SrcS -> add -> PACK1 -> buffer_Res.
 Both outputs verified after a single configuration.run().
 """
 
+from collections import defaultdict
+
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     BinarySFPUGolden,
     MatmulGolden,
@@ -25,6 +27,7 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
+    PerfRunType,
     Transpose,
     format_dict,
 )
@@ -34,7 +37,9 @@ from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -50,6 +55,7 @@ from helpers.test_variant_parameters import (
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -78,6 +84,28 @@ SFPU_ADD_FORMATS = input_output_formats(
 )
 
 
+# The full functional sweep is 45 configurations, and each one runs six perf run types on the
+# simulator. One configuration per input format is enough to characterise the SrcS add.
+PERF_COMBINATIONS_PER_FORMAT = 1
+
+
+def _sample_perf_combinations(combinations: list[tuple]) -> list[tuple]:
+    """Keeps PERF_COMBINATIONS_PER_FORMAT configurations per input format.
+
+    The same-format configuration is preferred so each data type is measured without a reformat
+    on the way out through PACK1.
+    """
+    by_input_format = defaultdict(list)
+    for combination in combinations:
+        by_input_format[combination[0].input_format].append(combination)
+
+    sampled = []
+    for input_format, group in by_input_format.items():
+        group.sort(key=lambda c: c[0].output_format != input_format)
+        sampled.extend(group[:PERF_COMBINATIONS_PER_FORMAT])
+    return sampled
+
+
 def _matmul_output_fits_dest(
     MATMUL_A_DIMENSIONS: list[int],
     MATMUL_B_DIMENSIONS: list[int],
@@ -90,21 +118,27 @@ def _matmul_output_fits_dest(
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
-def generate_parallel_matmul_add_combinations(formats_list):
+def generate_parallel_matmul_add_combinations(
+    formats_list: list[FormatConfig], *, is_perf: bool = False
+):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
-        for dest_sync in (DestSync.Half, DestSync.Full):
-            for implied_math_format in (
-                ImpliedMathFormat.No,
-                ImpliedMathFormat.Yes,
-            ):
+        dest_sync_modes = (DestSync.Half, DestSync.Full)
+        implied_math_modes = (
+            (ImpliedMathFormat.Yes,)
+            if is_perf
+            else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+        )
+        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        for dest_sync in dest_sync_modes:
+            for implied_math_format in implied_math_modes:
                 for (
                     ADD_INPUT_DIMENSIONS,
                     MATMUL_A_DIMENSIONS,
                     MATMUL_B_DIMENSIONS,
-                ) in DIMENSION_PROFILES:
+                ) in dimension_profiles:
                     if not _matmul_output_fits_dest(
                         MATMUL_A_DIMENSIONS,
                         MATMUL_B_DIMENSIONS,
@@ -118,12 +152,12 @@ def generate_parallel_matmul_add_combinations(formats_list):
                             dest_acc,
                             dest_sync,
                             implied_math_format,
-                            ADD_INPUT_DIMENSIONS,
-                            MATMUL_A_DIMENSIONS,
-                            MATMUL_B_DIMENSIONS,
+                            runtime(ADD_INPUT_DIMENSIONS),
+                            runtime(MATMUL_A_DIMENSIONS),
+                            runtime(MATMUL_B_DIMENSIONS),
                         )
                     )
-    return combinations
+    return _sample_perf_combinations(combinations) if is_perf else combinations
 
 
 PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
@@ -135,7 +169,13 @@ PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
 @parametrize(
     format_dest_acc_sync_implied_math=PARALLEL_MATMUL_ADD_COMBINATIONS,
 )
-def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
+def test_sfpu_add_parallel_matmul_quasar(
+    format_dest_acc_sync_implied_math,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     (
         formats,
         dest_acc,
@@ -199,70 +239,72 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
 
     torch_format = format_dict[formats.output_format]
 
-    formats_config = data_formats(
-        input_format=formats.input_format,
-        input_format_B=formats.input_format,
-        output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
-        num_iterations=1,
-        unpacking_to_dest=False,
-        unpacking_to_srcs=True,
-    )[0]
-    pack_src_format = formats_config.pack_src
+    if not is_perf:
+        formats_config = data_formats(
+            input_format=formats.input_format,
+            input_format_B=formats.input_format,
+            output_format=formats.output_format,
+            is_fp32_dest_acc_en=dest_acc,
+            num_iterations=1,
+            unpacking_to_dest=False,
+            unpacking_to_srcs=True,
+        )[0]
+        pack_src_format = formats_config.pack_src
 
-    src_A_golden = src_A
-    src_B_golden = src_B
-    if formats.input_format.is_mx_format():
-        tilized_A_golden = quantize_mx_tensor_chunked(
-            tilized_A.flatten().to(torch.bfloat16), formats.input_format
-        ).reshape(tilized_A.shape)
-        tilized_B_golden = quantize_mx_tensor_chunked(
-            tilized_B.flatten().to(torch.bfloat16), formats.input_format
-        ).reshape(tilized_B.shape)
-        src_A_golden = untilize_block(
-            tilized_A_golden,
-            stimuli_format=formats.input_format,
-            dimensions=MATMUL_A_DIMENSIONS,
-        )
-        src_B_golden = untilize_block(
-            tilized_B_golden,
-            stimuli_format=formats.input_format,
-            dimensions=MATMUL_B_DIMENSIONS,
-        )
+        src_A_golden = src_A
+        src_B_golden = src_B
+        if formats.input_format.is_mx_format():
+            tilized_A_golden = quantize_mx_tensor_chunked(
+                tilized_A.flatten().to(torch.bfloat16), formats.input_format
+            ).reshape(tilized_A.shape)
+            tilized_B_golden = quantize_mx_tensor_chunked(
+                tilized_B.flatten().to(torch.bfloat16), formats.input_format
+            ).reshape(tilized_B.shape)
+            src_A_golden = untilize_block(
+                tilized_A_golden,
+                stimuli_format=formats.input_format,
+                dimensions=MATMUL_A_DIMENSIONS,
+            )
+            src_B_golden = untilize_block(
+                tilized_B_golden,
+                stimuli_format=formats.input_format,
+                dimensions=MATMUL_B_DIMENSIONS,
+            )
 
-    generate_matmul_golden = get_golden_generator(MatmulGolden)
-    golden_matmul = generate_matmul_golden(
-        src_A_golden,
-        src_B_golden,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=MATMUL_A_DIMENSIONS,
-        input_B_dimensions=MATMUL_B_DIMENSIONS,
-        tilize=True,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-        math_format=pack_src_format,
-        dest_acc=dest_acc,
-    )
-    if formats.output_format.is_mx_format():
-        golden_matmul = quantize_mx_tensor_chunked(
-            golden_matmul.to(format_dict[pack_src_format]), formats.output_format
-        ).to(torch_format)
-    generate_add_golden = get_golden_generator(BinarySFPUGolden)
-    golden_add = generate_add_golden(
-        MathOperation.SfpuElwadd,
-        torch.cat([src_add_in0, src_add_in1]),
-        0,  # src1_idx: first tile of A
-        tile_cnt_add,  # src2_idx: first tile of B
-        0,  # dst_idx: write result starting at tile 0
-        tile_cnt_add * 32,  # num_iterations: 32 rows per tile
-        [ADD_INPUT_DIMENSIONS[0] * 2, ADD_INPUT_DIMENSIONS[1]],
-        formats.output_format,
-        skip_tilize=True,
-        input_format=formats.input_format,
-    )[
-        : src_add_in0.numel()
-    ]  # Extract only the result region (A's tiles)
+        generate_matmul_golden = get_golden_generator(MatmulGolden)
+        golden_matmul = generate_matmul_golden(
+            src_A_golden,
+            src_B_golden,
+            formats.output_format,
+            MathFidelity.LoFi,
+            input_A_dimensions=MATMUL_A_DIMENSIONS,
+            input_B_dimensions=MATMUL_B_DIMENSIONS,
+            tilize=True,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
+            math_format=pack_src_format,
+            dest_acc=dest_acc,
+        )
+        if formats.output_format.is_mx_format():
+            golden_matmul = quantize_mx_tensor_chunked(
+                golden_matmul.to(format_dict[pack_src_format]),
+                formats.output_format,
+            ).to(torch_format)
+        generate_add_golden = get_golden_generator(BinarySFPUGolden)
+        golden_add = generate_add_golden(
+            MathOperation.SfpuElwadd,
+            torch.cat([src_add_in0, src_add_in1]),
+            0,  # src1_idx: first tile of A
+            tile_cnt_add,  # src2_idx: first tile of B
+            0,  # dst_idx: write result starting at tile 0
+            tile_cnt_add * 32,  # num_iterations: 32 rows per tile
+            [ADD_INPUT_DIMENSIONS[0] * 2, ADD_INPUT_DIMENSIONS[1]],
+            formats.output_format,
+            skip_tilize=True,
+            input_format=formats.input_format,
+        )[
+            : src_add_in0.numel()
+        ]  # Extract only the result region (A's tiles)
 
     num_faces = 4
 
@@ -288,10 +330,13 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         srcs_layout_operands=frozenset({"S", "T", "Res"}),
     )
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_add_parallel_matmul_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/sfpu_add_parallel_matmul_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
             IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(False),
@@ -299,16 +344,26 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
         ],
-        runtimes=[
+        "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             NUM_FACES(num_faces, num_faces, num_faces),
             TILE_COUNT(tile_cnt_add),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=stimuli,
-        unpack_to_srcs=True,
-        dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
+        "variant_stimuli": stimuli,
+        "unpack_to_srcs": True,
+        "dest_acc": dest_acc,
+        "disable_format_inference": formats.input_format.is_mx_format(),
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     outcome = configuration.run()
 

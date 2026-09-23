@@ -1,46 +1,45 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_assert.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
 
-// Calculates ADD for one pair of rows (Quasar SFPU ops cover 2 rows)
-inline void calculate_add_rows(
-    const int in0_addr,
-    const int in1_addr,
-    const int store_addr,
-    const std::uint32_t load_sfpmem,
-    const std::uint32_t store_sfpmem) {
-    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_addr);
-    TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_addr);
-    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-    TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, store_addr);
-}
-
-// Addresses select Dest (bit 10 = 0) or SrcS (bit 10 = 1). Float16 needs an explicit FP16A.
-inline void calculate_add(
-    const int in0_base_addr,
-    const int in1_base_addr,
-    const int store_base_addr,
-    const int num_sfpu_iterations,
-    const std::uint32_t load_sfpmem,
-    const std::uint32_t store_sfpmem) {
+/**
+ * @brief ADD with independently located floating-point inputs and output.
+ *
+ * The output operand's store policy controls any optional rounding.
+ * Default operands advance explicit indices only; the caller owns setup and synchronization.
+ * Each input range must coincide with the output or be disjoint from it.
+ */
+template <int ITERATIONS, class Input0, class Input1, class Output>
+sfpi_inline void calculate_add_operands(const Input0& input0, const Input1& input1, const Output& output) {
+    static_assert(ITERATIONS > 0, "ADD requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<typename Input0::value_type, sfpi::vFloat> &&
+            std::is_same_v<typename Input1::value_type, sfpi::vFloat> &&
+            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
+        "ADD requires floating-point operands");
 #pragma GCC unroll 8
-    for (int d = 0; d < num_sfpu_iterations; d++) {
-        calculate_add_rows(
-            in0_base_addr + (d << 1), in1_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = input0.load(d);
+        sfpi::vFloat in1 = input1.load(d);
+        sfpi::vFloat result = in0 + in1;
+        output.store(d, result);
     }
 }
 

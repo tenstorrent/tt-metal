@@ -5,14 +5,37 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
+
+/**
+ * @brief Square floating-point operands with independently selected locations and formats.
+ *
+ * Operands supply load/store in SFPI index units. With the default SfpiFormat policy,
+ * this loop advances only explicit indices; the caller owns setup and synchronization.
+ * Input/output ranges must coincide or be disjoint. Keep offsets constant for immediate addresses.
+ */
+template <int ITERATIONS, class Input, class Output>
+sfpi_inline void calculate_square_operands(const Input& input, const Output& output) {
+    static_assert(ITERATIONS > 0, "Square requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<typename Input::value_type, sfpi::vFloat> &&
+            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
+        "Square requires floating-point operands");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat value = input.load(d);
+        output.store(d, value * value);
+    }
+}
 
 /**
  * @brief Configure the SFPU address mode used by the square op.
@@ -31,51 +54,73 @@ inline void init_square() {
 }
 
 /**
- * @brief Square one SFPU pass worth of rows (Quasar = 2 rows): dest = x * x.
+ * @brief Square a Dest span in place: dest = x * x (one face with default ITERATIONS).
  *
- * Loads x from dest, multiplies it by itself, and stores the result back to dest using
- * ADDR_MOD_6 to advance to the next pair of rows.
- *
- * @note ADDR_MOD_6 must already be programmed by @ref init_square.
- */
-inline void calculate_square_sfp_rows() {
-    sfpi::vFloat v = sfpi::dst_reg[0];                     // load x from dest (SFPLOAD)
-    sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = v * v;  // x * x via SFPMUL, store back to dest (SFPSTORE)
-}
-
-/**
- * @brief Square a full Dest tile in place: dest = x * x.
- *
- * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows) needed to span the tile.
+ * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows).
  * @note Call @ref init_square before this to program the address mode it depends on.
  */
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_square() {
+    using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
+    using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_square_sfp_rows();
+        // The store advances Dest; keep explicit operand indices fixed at zero.
+        calculate_square_operands<1>(Input{}, Output{});
     }
 }
 
-// Squares one pair of rows (Quasar SFPU ops cover 2 rows)
-inline void calculate_square_rows(
-    const int load_addr, const int store_addr, const std::uint32_t load_sfpmem, const std::uint32_t store_sfpmem) {
-    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, load_addr);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TT_SFPSTORE(p_sfpu::LREG0, store_sfpmem, ADDR_MOD_7, 0, store_addr);
+// SrcS layout follows llk_sfpu_srcs_api.h: input at the slice base, output at
+// + 2 * YDIM. UnpackSrcS selects the register file; indices are in SFPI steps.
+static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
+
+/**
+ * @brief Calculates floating-point square over one SrcS slice.
+ *
+ * @tparam YDIM: rows per SrcS slice (trisc::srcs_dims::ydim).
+ * @tparam IN_LAYOUT: Input sfpmem layout, also selecting the slice geometry.
+ * @tparam OUT_LAYOUT: Output sfpmem layout, defaulting to IN_LAYOUT. The caller must
+ *         configure PACK1 to read this format and ensure the output fits its SrcS range.
+ * @note The caller configures unpack/pack and clears the SrcS valids after this call,
+ *       as llk_sfpu_srcs_unary does. This kernel does not signal completion itself.
+ */
+template <int YDIM, sfpi::DataLayout IN_LAYOUT, sfpi::DataLayout OUT_LAYOUT = IN_LAYOUT>
+sfpi_inline void calculate_square_srcs() {
+    static_assert(YDIM > 0 && YDIM % ckernel::math::SFP_ROWS == 0, "SrcS slice must contain whole SFPU passes");
+    constexpr int ops = YDIM / static_cast<int>(ckernel::math::SFP_ROWS);
+    using Input = SfpuOperand<SfpuReg::SrcS, SfpiFormat<IN_LAYOUT, sfpi::vFloat>>;
+    using Output = SfpuOperand<SfpuReg::SrcS, SfpiFormat<OUT_LAYOUT, sfpi::vFloat>>;
+    calculate_square_operands<ops>(Input{0}, Output{2 * ops});
 }
 
-// Addresses select Dest (bit 10 = 0) or SrcS (bit 10 = 1). Float16 needs an explicit FP16A.
-inline void calculate_square(
-    const int load_base_addr,
-    const int store_base_addr,
-    const int num_sfpu_iterations,
-    const std::uint32_t load_sfpmem,
-    const std::uint32_t store_sfpmem) {
-#pragma GCC unroll 8
-    for (int d = 0; d < num_sfpu_iterations; d++) {
-        calculate_square_rows(load_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
-    }
+/**
+ * @brief Square values with independently selected input and output register spaces.
+ *
+ * @tparam ITERATIONS: Number of SFPI accesses; for a full SrcS slice use YDIM / SFP_ROWS.
+ * @tparam IN_LAYOUT: Input load layout.
+ * @tparam OUT_LAYOUT: Output store layout, defaulting to IN_LAYOUT.
+ * @param input_offset: Input base in SFPI index units (one index step is two address rows).
+ * @param output_offset: Output base in SFPI index units, independently of input_offset.
+ *
+ * Dest indices are relative to the caller's current Dest cursor. SrcS indices are
+ * relative to UnpackSrcS's base; do not include SFPU_SRCS_BASE_ADDR. For the current
+ * SrcS pipeline, input slot 0 starts at index 0 and output slot 2 at YDIM.
+ * The caller configures ADDR_MOD_7 with zero increments, sets up the register files,
+ * and handles Dest synchronization and SrcS completion. This function advances
+ * only its explicit indices; it does not increment the Dest cursor or clear valids.
+ * Supply constant offsets where possible to allow immediate load/store addresses.
+ * Input and output ranges may coincide or be disjoint; partial overlap is unsupported.
+ */
+template <
+    SfpuReg IN_REG,
+    SfpuReg OUT_REG,
+    int ITERATIONS,
+    sfpi::DataLayout IN_LAYOUT = sfpi::DataLayout::Default,
+    sfpi::DataLayout OUT_LAYOUT = IN_LAYOUT>
+sfpi_inline void calculate_square_regs(const int input_offset, const int output_offset) {
+    using Input = SfpuOperand<IN_REG, SfpiFormat<IN_LAYOUT, sfpi::vFloat>>;
+    using Output = SfpuOperand<OUT_REG, SfpiFormat<OUT_LAYOUT, sfpi::vFloat>>;
+    calculate_square_operands<ITERATIONS>(Input{input_offset}, Output{output_offset});
 }
 
 }  // namespace sfpu
