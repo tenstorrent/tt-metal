@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -197,6 +198,35 @@ void RunCase(const FfnCase& c) {
 
 TEST_F(MoeFfnSwigluForwardTest, Small_E2_H64_I128) {
     RunCase({/*E*/ 2U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {48U, 16U}});
+}
+
+TEST_F(MoeFfnSwigluForwardTest, RejectsMismatchedLaterExpertContractionDimensions) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    auto grouped =
+        autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 64U, 64U}), device), /*requires_grad=*/true);
+    auto offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        std::vector<uint32_t>{0U, 32U, 64U}, ttnn::Shape({3U}), device, ttnn::Layout::ROW_MAJOR);
+
+    const auto w_gate = make_expert_weight_list(xt::zeros<float>(std::array<std::size_t, 3>{2U, 128U, 64U}), device);
+    const auto w_up = make_expert_weight_list(xt::zeros<float>(std::array<std::size_t, 3>{2U, 128U, 64U}), device);
+    const auto w_down = make_expert_weight_list(xt::zeros<float>(std::array<std::size_t, 3>{2U, 64U, 128U}), device);
+    auto make_weight = [device](const ttnn::Shape& shape) {
+        return autograd::create_tensor(core::zeros(shape, device), /*requires_grad=*/true);
+    };
+
+    auto invalid_gate = w_gate;
+    invalid_gate[1] = make_weight(ttnn::Shape({1U, 1U, 128U, 32U}));
+    EXPECT_THROW(ops::moe_ffn_swiglu_fw(grouped, offsets, invalid_gate, w_up, w_down), std::runtime_error);
+
+    auto invalid_up = w_up;
+    invalid_up[1] = make_weight(ttnn::Shape({1U, 1U, 128U, 32U}));
+    EXPECT_THROW(ops::moe_ffn_swiglu_fw(grouped, offsets, w_gate, invalid_up, w_down), std::runtime_error);
+
+    auto invalid_down = w_down;
+    invalid_down[1] = make_weight(ttnn::Shape({1U, 1U, 64U, 64U}));
+    EXPECT_THROW(ops::moe_ffn_swiglu_fw(grouped, offsets, w_gate, w_up, invalid_down), std::runtime_error);
 }
 
 TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_EmptyExpert) {
