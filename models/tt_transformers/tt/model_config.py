@@ -654,7 +654,16 @@ class ModelArgs:
         self.fuse_qkv = False
         self.fuse_mlp = False
         self.trust_remote_code_hf = False
+        # MLP prefill reshapes activations into cutoff-row chunks, so this is
+        # literally M for the FF1/FF3/FF2 matmuls. The 512 here is a blanket
+        # Blackhole default, not a per-model choice, and for a prefill-only
+        # embedding workload it is far too small: at M=512 FF13/FF2 run at ~34%
+        # of LoFi peak, vs 53%/74% at M=2048 (QKV, which skips this reshape,
+        # already gets 58% at M=2048). Overridable so it can be tuned per model.
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
+        _cutoff_ov = os.getenv("QWEN_PREFILL_LEN_CUTOFF")
+        if _cutoff_ov:
+            self.prefill_len_cutoff = int(_cutoff_ov)
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods

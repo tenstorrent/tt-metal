@@ -412,6 +412,51 @@ device grid) so the grid can be re-swept if the fidelity or shapes change.
 model's dtype, memory config *and* compute-kernel config, or its baseline can be
 slower than production and manufacture a win that does not exist.
 
+**Custom prefill matmul op (matmul_decode analogue).** Suggested after
+`smanoj/ds_v4_flash`, whose `matmul_decode` removes in0 movement and streams
+weights through the DRAM prefetcher. Neither half transfers to this workload:
+
+- *Weight prefetch.* Only pays when weight DRAM bandwidth is the limit, which
+  `tech_reports/LLMs/llms.md` scopes explicitly to **decode**. Measured here by
+  holding fidelity at LoFi and varying only weight dtype: bfp4 -> bfp8 doubles
+  weight bytes but costs just **+12-15%** time (and **0%** for QKV). Measured
+  DRAM is ~416 GB/s; the hottest matmul needs 177 GB/s. Weights are already
+  overlapped.
+- *in0 movement.* The op constrains in0 tile heights to `{1,2,4,8}` rows, so a
+  512-row prefill activation needs a rewrite, not a port.
+
+More decisively, the matmuls have little left to give. Measured in the **4-D
+Z-batched form the model actually uses** (`[1, nchunks, cutoff, dim]`, one
+launch for all chunks), at the bs32 row count of 16384:
+
+| shape | ns/row | % of LoFi peak (580.9 TFLOPS) |
+|---|---|---|
+| FF13 `Z=32,M=512` / `Z=8,M=2048` / `Z=4,M=4096` | 106.8 / 106.5 / 106.6 | **80.3 / 80.5 / 80.5%** |
+| FF2 `Z=32,M=512` / `Z=8,M=2048` / `Z=4,M=4096` | 97.2 / 96.9 / 96.6 | **88.2 / 88.5 / 88.8%** |
+
+Only the **total row count** matters; the Z/M split does not. Matmul is ~33% of
+bs32 device time at ~84% efficiency, so even a *perfect* custom matmul op is
+worth **<6% e2e**. The remaining ~67% is non-matmul (LayerNorm, BinaryNg,
+rotary, SDPA, layout conversions, dispatch) -- that is where the headroom is.
+
+**`prefill_len_cutoff`.** Follows directly: the MLP reshape chunk size is
+literally M for FF1/FF3/FF2, and since only total rows matter, changing it is a
+no-op. Swept e2e and confirmed flat, so the default stays at 512:
+
+| cutoff | bs1 | bs8 | bs16 | bs32 |
+|---|---|---|---|---|
+| **512 (shipping)** | **25.9** | **157.1** | **290.9** | **557.8** |
+| 1024 | 25.9 | 156.2 | 290.9 | 557.3 |
+| 2048 | 25.9 | 158.0 | 290.9 | 559.7 |
+| 4096 | 25.9 | 157.9 | 290.9 | 558.2 |
+
+`QWEN_PREFILL_LEN_CUTOFF` is retained as a default-off probe knob.
+
+**Second lesson:** benchmark the op in the *rank and batching* the model uses.
+A `[1,1,M,K]` sweep of the MLP matmul showed 34% -> 57% "efficiency scaling"
+with M that vanished entirely in the real `[1,Z,M,K]` form, because the 2-D form
+starves the 120-core grid while the 4-D form does not.
+
 All env vars use `os.environ.setdefault`, so any single knob can be overridden
 from the shell for A/B comparisons, e.g.:
 
