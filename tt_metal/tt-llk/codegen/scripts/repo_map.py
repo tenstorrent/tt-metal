@@ -254,6 +254,7 @@ def build_map(worktree: Path) -> dict[str, Any]:
     llk = worktree / "tt_metal/tt-llk"
     if not llk.is_dir():
         raise ValueError("worktree does not contain tt_metal/tt-llk")
+    dirty = bool(_git(worktree, "status", "--porcelain"))
     tests_root = llk / "tests/python_tests"
 
     modules = []
@@ -283,7 +284,13 @@ def build_map(worktree: Path) -> dict[str, Any]:
         "version": 1,
         "generator": GENERATOR_VERSION,
         "base_commit": _git(worktree, "rev-parse", "HEAD") or "unknown",
-        "worktree_dirty": bool(_git(worktree, "status", "--porcelain")),
+        "worktree_dirty": dirty,
+        # A reader has to know whether this reflects the pristine base or the
+        # base plus the candidate's edits. The writer is required to add tests,
+        # including llk_host markers, so a map built at setup goes stale the
+        # moment it does -- and a stale host-marked list is exactly the kind of
+        # wrong answer that routes a leaf to the wrong executor.
+        "describes": "base+candidate" if dirty else "base",
         "counts": {
             "test_modules": len(modules),
             "test_functions": sum(m["test_count"] for m in modules),
@@ -314,6 +321,13 @@ def render_summary(document: dict[str, Any]) -> str:
     c = document["counts"]
     lines = [
         f"# Repository map ({document['generator']}, base {document['base_commit'][:12]})",
+        "",
+        f"Describes: **{document.get('describes', 'base')}**."
+        + (
+            "  This includes the candidate's current edits."
+            if document.get("describes") == "base+candidate"
+            else "  The candidate's own edits are not in it yet."
+        ),
         "",
         f"{c['test_modules']} test modules / {c['test_functions']} test functions; "
         f"{c['kernel_sources']} kernel sources; "

@@ -994,6 +994,18 @@ execute_step_record_changed_files() {
     ss CHANGED_FILES "$cf"
     test_changes="$(printf '%s\n' "$cf" | grep -E '(^|/)tests?/|(^|/)test_[^/]+$' || true)"
     [ -z "$test_changes" ] || rj metric --patch-json '{"tests_generated":true}'
+    if [ -n "$test_changes" ]; then
+        # The writer is required to add tests, markers included, so the map
+        # built at setup is now stale for every role after it -- and a stale
+        # host-marked list routes a leaf to the wrong executor. Rebuilding is
+        # deterministic, takes under a second and spends no model budget, so
+        # refresh rather than reason about staleness. No --cache-dir: the tree
+        # is dirty now and a candidate's edits must never enter a base-keyed
+        # cache.
+        python "$_ORCH_SCRIPTS/repo_map.py" --worktree "$wt" \
+            --out "$_L/repo_map.json" --summary-out "$_L/repo_map.md" \
+            >/dev/null 2>&1 || true
+    fi
     printf '%s\n' "$cf"
 }
 

@@ -339,3 +339,26 @@ def test_explicit_axes_win_over_the_signature_fallback(tmp_path):
     )
     test = repo_map.build_map(wt)["test_modules"][0]["tests"][0]
     assert test["param_axes"] == ["fmt"]
+
+
+def test_map_says_whether_it_describes_base_or_base_plus_candidate(tmp_path):
+    """A reader must be able to tell; a stale host list routes to the wrong executor."""
+    wt = _tree(tmp_path / "wt", {"test_a.py": "def test_a(): pass\n"})
+    clean = repo_map.build_map(wt)
+    assert clean["describes"] == "base"
+    assert clean["worktree_dirty"] is False
+    assert "not in it yet" in repo_map.render_summary(clean)
+
+    # the writer adds a host-marked test, which is what it is told to do
+    (wt / "tt_metal/tt-llk/tests/python_tests/test_added.py").write_text(
+        "import pytest\npytestmark = pytest.mark.llk_host\n" "def test_added(): pass\n"
+    )
+    after = repo_map.build_map(wt)
+    assert after["describes"] == "base+candidate"
+    assert after["counts"]["host_marked_nodes"] == 1
+    assert after["host_marked_nodes"] == [
+        "tests/python_tests/test_added.py::test_added"
+    ]
+    assert "includes the candidate's current edits" in repo_map.render_summary(after)
+    # and the refreshed map is a different document
+    assert after["map_id"] != clean["map_id"]
