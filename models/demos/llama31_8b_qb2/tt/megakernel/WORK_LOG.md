@@ -207,3 +207,7 @@ Applied chunk-wide-projections.py: FullDST14/16 math/copy/pack operations nowiss
 
 ## 13:36 UTC — head own-prefix candidate
 RepairedfullDST completeTiny16loopWatcher exact; full1288.082513097ms exact, slowerthan7.939419; keepdisabled. Implemented --head-early-blocks2/3: lastlayerQKVwriter publishesonce to16terminalheadworkers afterRoPE notification; eachheadreader locallyclearsitsdedicatedglobalflag thenfillsitsownexistingweightBring beforewaitingforfinalnorm. Boundedflag0/1 withserialinvocationcontract, noextraweights/copies/L1CBstorage;2blocks8,912,896B/chip prefix,3blocks13,369,344B/chip. Entire refillinsidecurrenttokenlatency. Triggerguardusesabsolutelayerindex, includesinactivewarmup. FullmodelWorkerWatcher exactgate next.
+
+## 13:43 UTC — head results and specialized QKV candidate
+Headownprefix fullWorkerWatcher exactpassed. Five-trial unprofiled128 control7.937778647;prefix2=7.931728517;prefix3=7.933573452, allstrict exact. Nominal~6us gainneedspairedconfirmation; no nativewin.
+Prepared qkv_custom_mm opt-in usesexistingBlackholecustom_mm LoFi MVMUL, sameKblock16/sixcolumns/no splitaccumulation/BF16 L1partials andsameweights.8-row CBformats retainoriginal2048-byte ring/page extents; readercompactsunpublishedAblock into contiguous512-byte8-rowtiles (customunpacker walksfacescontiguously), writerrestoresexternalnative32-rowlayout beforeRoPE/cachepublication. Non-row-zero activationlanes areknownzero underbatch1normcontract. Explicitnumericqualificationrequired, notassumedexact. FocusedWorkerWatcher next.

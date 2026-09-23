@@ -186,7 +186,7 @@ class FusedPreparation:
                         formats = list(item.format_descriptors)
                         for fmt in formats:
                             if fmt.buffer_index in (0, 16, 24):
-                                fmt.tile = ttnn.TileDescriptor(16, 32)
+                                fmt.tile = ttnn.TileDescriptor(8 if self.body.tuning.qkv_custom_mm else 16, 32)
                         item.format_descriptors = formats
         for role, core, head_tensor in zip(("QUERY", "KEY"), self.rope_cores, self.heads):
             rt = ttnn.RuntimeArgs()

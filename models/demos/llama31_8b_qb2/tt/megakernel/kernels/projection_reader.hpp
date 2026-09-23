@@ -6,6 +6,22 @@
 #include "compact_rows.hpp"
 #endif
 
+#if QKV_CUSTOM_MM
+// Custom unpack walks K faces contiguously, independent of CB page stride.
+// Compact each unpublished block to512-byte8-row tiles; ring blocks retain
+// original2048-byte page spacing. All non-row-zero lanes were zero upstream.
+template <uint32_t Tiles>
+void compact_qkv_input(uint32_t base) {
+    for (uint32_t tile = 0; tile < Tiles; ++tile) {
+        auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + tile * 2048);
+        auto* target = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + tile * 512);
+        for (uint32_t i = 0; i < 8; ++i) {
+            target[i] = source[i]; target[64 + i] = source[128 + i];
+        }
+    }
+}
+#endif
+
 // One worker per bank owns consecutive K rows. Two workers per bank own
 // alternating half rows and must retain strided source reads. All selected
 // tile sizes are multiples of Blackhole's 64-byte DRAM read alignment.
@@ -131,6 +147,11 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                     a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
+#if QKV_CUSTOM_MM
+            if constexpr (N == 6 && Workers == 8) {
+                compact_qkv_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
+            }
+#endif
             cb_push_back(A, KBlock);
             cb_push_back(B, KBlock * N);
             if (block + 1 < blocks) {
@@ -151,6 +172,11 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         if constexpr (compact) {
             expand_bf16_rows<KBlock>(compact_base + (block % PROJECTION_BUFFERS) * KBlock * 64,
                 a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
+        }
+#endif
+#if QKV_CUSTOM_MM
+        if constexpr (N == 6 && Workers == 8) {
+            compact_qkv_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
         cb_push_back(A, KBlock);
