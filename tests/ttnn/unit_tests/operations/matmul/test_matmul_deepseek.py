@@ -1542,7 +1542,7 @@ def test_matmul_dram_sharded_single_kblock(device, num_iters):
 
 def run_batched_dram_sharded_matmul(
     device,
-    batch,
+    batches_per_core,
     m,
     k,
     n,
@@ -1560,6 +1560,12 @@ def run_batched_dram_sharded_matmul(
 ):
     """Run one batch-sharded DRAM matmul and check it against a torch reference.
 
+    The batch is derived from the device's DRAM bank count so that `batches_per_core` - the shard
+    depth the factory's buffer sizing keys off - is the same on every arch. A hardcoded batch is
+    not: Wormhole has 12 DRAM banks and Blackhole 8, so batch=12 is one batch per core on the one
+    and two on the other, and only `batches_per_core > 1` gives an output shard bigger than a
+    single block of output tiles.
+
     `num_k_blocks` splits the contracted dimension into that many inner-dim blocks
     (in0_block_w = K / num_k_blocks), which is what drives the factory's accumulation loop.
     `torch_activation` is the host-side equivalent of `fused_activation`, or None.
@@ -1569,20 +1575,18 @@ def run_batched_dram_sharded_matmul(
     optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_dram_banks = len(optimal_worker_cores)
 
-    batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
+    batch = num_dram_banks * batches_per_core
     m_padded = pad_to_tile(m, tile_h)
     k_padded = pad_to_tile(k, tile_w)
     n_padded = pad_to_tile(n, tile_w)
 
-    batches_per_core = batch_padded // num_dram_banks
-
     in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
     in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
 
-    in0 = torch.zeros([1, batch_padded, m_padded, k_padded], dtype=torch.bfloat16)
-    in0[:, :batch, :m, :k] = in0_orig
-    in1 = torch.zeros([1, batch_padded, k_padded, n_padded], dtype=torch.bfloat16)
-    in1[:, :batch, :k, :n] = in1_orig
+    in0 = torch.zeros([1, batch, m_padded, k_padded], dtype=torch.bfloat16)
+    in0[:, :, :m, :k] = in0_orig
+    in1 = torch.zeros([1, batch, k_padded, n_padded], dtype=torch.bfloat16)
+    in1[:, :, :k, :n] = in1_orig
 
     # The L1 shard grid must follow the factory's worker ordering, or the data routing is wrong.
     worker_grid = ttnn.CoreRangeSet(
@@ -1643,7 +1647,7 @@ def run_batched_dram_sharded_matmul(
         output_tile=ttnn.Tile((tile_h, tile_w)),
     )
 
-    output_tensor = ttnn.to_torch(output_t)[:, :batch, :m, :n]
+    output_tensor = ttnn.to_torch(output_t)[:, :, :m, :n]
 
     pt_out = torch.matmul(in0_orig, in1_orig)
     if torch_activation is not None:
@@ -1676,13 +1680,19 @@ BATCHED_DRAM_SHARDED_ACTIVATION_IDS = ["no_activation", "relu_packer", "silu_sfp
     ids=BATCHED_DRAM_SHARDED_ACTIVATION_IDS,
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
-@pytest.mark.parametrize("num_k_blocks", [1, 2], ids=["one_k_block", "two_k_blocks"])
+@pytest.mark.parametrize("num_k_blocks", [1, 4], ids=["one_k_block", "four_k_blocks"])
 def test_matmul_batched_dram_sharded_compute_variants(
     device, fused_activation, torch_activation, fp32_dest_acc_en, num_k_blocks
 ):
     """Cover the factory's fused-activation, dest-accumulation and inner-dim-blocking branches.
 
     (num_k_blocks, fp32_dest_acc_en) picks aliased vs. separate intermed0; >1 block enables packer L1 accumulation.
+
+    Two batches per core and four inner-dim blocks are what make this a regression test for the
+    dropped-block bug. Both are needed: the output shard has to be larger than one block of output
+    tiles for the aliasing to be unsafe, and a buffer aliased over two batches still accumulates
+    blocks / 2 + 1 of the blocks - which is the right answer at one and two blocks, and wrong only
+    from four on.
     """
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -1694,7 +1704,7 @@ def test_matmul_batched_dram_sharded_compute_variants(
 
     run_batched_dram_sharded_matmul(
         device,
-        batch=12,
+        batches_per_core=2,
         m=32,
         k=128,
         n=64,
