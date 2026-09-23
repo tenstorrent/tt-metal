@@ -17,14 +17,10 @@
 //                            function, two pointers wide under the Itanium ABI
 //   libc++     3 pointers  - __buf_ is declared as char[3 * sizeof(void*)]
 //
-// So the byte figures are target dependent: 16 and 24 on LP64, 8 and 12 on a 32-bit target.
-// Tenstorrent only ships 64-bit hosts, so that is all this harness is built and validated on; the
-// pointer-relative form simply avoids baking in an assumption we never stated.
-//
-// Note the capacity cannot be recovered from sizeof(std::function): the overhead differs between
-// the two implementations (2 pointers vs 3), so any `sizeof - N * sizeof(void*)` rule is correct
-// for one and wrong for the other. These values are measured instead, and sbo_probe verifies them
-// at runtime and fails if a standard library, or a target, moves the boundary.
+// It cannot be recovered from sizeof(std::function) either: the overhead differs between the two
+// implementations (2 pointers vs 3), so any `sizeof - N * sizeof(void*)` rule is correct for one
+// and wrong for the other. These values are measured instead, and sbo_probe verifies them at
+// runtime and fails if a standard library moves the boundary.
 namespace bench_config {
 
 #if defined(_LIBCPP_VERSION)

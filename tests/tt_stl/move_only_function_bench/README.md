@@ -20,15 +20,10 @@ exactly like gcc. Measured by `sbo_probe`:
 | libstdc++ (g++-12, clang++-20 default) | 2 pointers | 32 B | **16 B** |
 | libc++ (clang++-20 `-stdlib=libc++`) | 3 pointers | 48 B | **24 B** |
 
-Both libraries size the buffer in **pointers**, so the byte figures are target dependent — 16 and 24
-on LP64, 8 and 12 on a 32-bit target. Tenstorrent ships only 64-bit hosts, so that is all this
-harness is built and validated on; `inline_capacity.hpp` just keeps the pointer-relative form rather
-than baking in an unstated assumption.
-
-It cannot be computed from `sizeof` either: libstdc++ has 2 pointers of overhead and libc++ has 3,
-so `sizeof - 2 * sizeof(void*)` is right for the first and overstates the second by 8 bytes. The
-constants are therefore measured, and `sbo_probe` **exits non-zero** if a standard library, or a
-target, ever moves the boundary — a silent mismatch would skew every number in the table.
+It cannot be computed from `sizeof`: libstdc++ has 2 pointers of overhead and libc++ has 3, so
+`sizeof - 2 * sizeof(void*)` is right for the first and overstates the second by 8 bytes. The
+constants are therefore measured, and `sbo_probe` **exits non-zero** if a standard library ever
+moves the boundary — a silent mismatch would skew every number in the table.
 
 | Name | Type |
 | --- | --- |
