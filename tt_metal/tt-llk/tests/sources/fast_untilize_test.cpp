@@ -64,16 +64,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
-            PROFILER_SYNC();
-            return;
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -158,16 +154,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
-            PROFILER_SYNC();
-            return;
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -266,10 +258,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return;
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             std::uint32_t prev_pack_unit_dim = 0;
@@ -327,13 +317,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
-        {
-            if (NUM_GUARD == 0)
-            {
-                return;
-            }
-        }
     }
     {
         ZONE_SCOPED("UNINIT")
