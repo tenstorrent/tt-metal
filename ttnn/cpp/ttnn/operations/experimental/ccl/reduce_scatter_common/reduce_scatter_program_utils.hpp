@@ -26,7 +26,11 @@ uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link);
 
-// Selects the default number of workers per direction based on data size heuristics.
+// Selects the default number of workers per direction based on data size heuristics. The candidate
+// counts are capped by the worker cores that stay on the worker grid once every selected core is
+// shifted by core_grid_offset, which is how choose_worker_cores places them: the fused
+// matmul + reduce-scatter ops put the reduce-scatter below the matmul grid this way, so only the rows
+// past the offset are available to it.
 uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
@@ -35,7 +39,8 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link);
+    uint32_t num_mux_cores_per_direction_per_link,
+    const CoreCoord& core_grid_offset = CoreCoord{0, 0});
 
 // Returns the default chunks_per_sync value for the given topology and chunking geometry.
 //
