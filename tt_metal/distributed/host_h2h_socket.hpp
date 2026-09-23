@@ -23,6 +23,9 @@ public:
         uint32_t cores = 0;
         uint32_t page_bytes = 0;
         uint32_t ring_pages = 1;
+        // Where the aliased H2D ring starts inside each RX arena -- H2DLeg::data_offset().
+        // One value for every core AND for the peer: both hosts run an identical layout.
+        uint32_t rx_data_offset = 0;
         uint8_t* region_base = nullptr;
         uint64_t region_bytes = 0;
         // 0 => cores * ring_pages. Caps frames in flight across the whole socket.
