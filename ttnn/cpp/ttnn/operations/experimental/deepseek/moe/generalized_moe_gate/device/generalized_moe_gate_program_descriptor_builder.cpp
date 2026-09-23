@@ -4,10 +4,9 @@
 
 #include "generalized_moe_gate_program_descriptor_builder.hpp"
 
-#include <cstring>
+#include <bit>
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -22,11 +21,7 @@ constexpr const char* kGeneralizedMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/"
     "generalized_moe_gate_kernel.cpp";
 
-uint32_t float_bits_u32(float value) {
-    uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
+uint32_t float_bits_u32(float value) { return std::bit_cast<uint32_t>(value); }
 
 void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();

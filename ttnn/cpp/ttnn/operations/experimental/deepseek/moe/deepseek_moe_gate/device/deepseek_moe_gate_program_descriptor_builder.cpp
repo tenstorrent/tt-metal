@@ -4,10 +4,9 @@
 
 #include "deepseek_moe_gate_program_descriptor_builder.hpp"
 
-#include <cstring>
+#include <bit>
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -21,11 +20,7 @@ namespace {
 constexpr const char* kDeepseekMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/kernels/deepseek_moe_gate_kernel.cpp";
 
-uint32_t float_bits_u32(float value) {
-    uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
+uint32_t float_bits_u32(float value) { return std::bit_cast<uint32_t>(value); }
 
 void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
@@ -184,69 +179,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     program_desc.cbs.push_back(std::move(out_indices_cb_desc));
 
     return program_desc;
-}
-
-std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    if (program_descriptor.custom_program_hash.has_value()) {
-        return static_cast<std::uint64_t>(program_descriptor.custom_program_hash.value());
-    }
-
-    auto hash_kernel = [&](const tt::tt_metal::KernelDescriptor& kernel) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            kernel.kernel_source,
-            kernel.source_type,
-            kernel.core_ranges,
-            kernel.compile_time_args,
-            kernel.named_compile_time_args,
-            kernel.defines,
-            kernel.common_runtime_args.size(),
-            kernel.runtime_args.size(),
-            kernel.config.index(),
-            kernel.config);
-    };
-
-    auto hash_cb_format_descriptor = [&](const tt::tt_metal::CBFormatDescriptor& format_descriptor) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            format_descriptor.buffer_index,
-            format_descriptor.data_format,
-            format_descriptor.page_size,
-            format_descriptor.tile);
-    };
-
-    auto hash_circular_buffer = [&](const tt::tt_metal::CBDescriptor& cb) -> size_t {
-        size_t hash = cb.total_size;
-        for (const auto& core_range : cb.core_ranges.ranges()) {
-            ttsl::hash::hash_combine(hash, core_range);
-        }
-        ttsl::hash::hash_combine(hash, cb.format_descriptors.size());
-        for (const auto& format_descriptor : cb.format_descriptors) {
-            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
-        }
-        ttsl::hash::hash_combine(hash, cb.remote_format_descriptors.size());
-        for (const auto& format_descriptor : cb.remote_format_descriptors) {
-            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
-        }
-        ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
-        ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
-        return hash;
-    };
-
-    auto hash_semaphore = [&](const tt::tt_metal::SemaphoreDescriptor& semaphore) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
-    };
-
-    size_t hash = 0;
-    for (const auto& kernel : program_descriptor.kernels) {
-        ttsl::hash::hash_combine(hash, hash_kernel(kernel));
-    }
-    for (const auto& cb : program_descriptor.cbs) {
-        ttsl::hash::hash_combine(hash, hash_circular_buffer(cb));
-    }
-    for (const auto& semaphore : program_descriptor.semaphores) {
-        ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
-    }
-    return static_cast<std::uint64_t>(hash);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

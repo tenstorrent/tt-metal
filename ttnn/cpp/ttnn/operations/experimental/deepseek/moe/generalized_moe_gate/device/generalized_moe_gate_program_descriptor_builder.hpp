@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate {
 
-// Build the executable program descriptor from the current tensors / scalars. Called by create_program
+// Build the executable program descriptor from the current tensors / scalars. Called by create_descriptor
 // (cache miss) only; the program-cache key is the framework's default hash over the op attributes +
 // tensor_args, so building the descriptor is not on the cache-hit path.
 tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
