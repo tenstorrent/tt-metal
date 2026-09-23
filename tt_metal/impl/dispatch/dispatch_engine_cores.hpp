@@ -32,6 +32,10 @@ namespace tt::tt_metal::detail {
 // Returns synthetic logical dispatch-engine cores CoreCoord(index, 0) from the ordered soc `dispatch:` list.
 std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_SocDescriptor& soc_desc);
 
+// Returns the dispatch core each CQ lands on from the Quasar [prefetch, dispatch] per-CQ pool; empty otherwise.
+std::vector<CoreCoord> get_quasar_dispatch_core_per_cq(
+    tt::ARCH arch, const std::vector<CoreCoord>& dispatch_core_pool, uint8_t num_hw_cqs);
+
 // Fail fast dispatch init when Quasar has no usable dispatch cores for the active path.
 void validate_quasar_dispatch_cores_for_fd(
     tt::tt_metal::MetalEnvImpl& env,

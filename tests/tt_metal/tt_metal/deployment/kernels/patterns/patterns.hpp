@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _PATTERNS_H
-#define _PATTERNS_H
+#ifndef PATTERNS_H
+#define PATTERNS_H
 
 #include <stdint.h>
 
@@ -265,4 +265,4 @@ static inline uint32_t dram_pattern_generate(
     }
 }
 
-#endif /* _PATTERNS_H */
+#endif /* PATTERNS_H */

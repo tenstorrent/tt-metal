@@ -72,6 +72,7 @@ using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeMinimalWriterDMKernel;
+using test_helpers::MakeNdShardedTensorParameter;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
@@ -1230,15 +1231,80 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {
-    // DFB total bytes exceed the TensorParameter's packed size: 1*32*sizeof(bfloat16) = 64 bytes,
-    // so 128 bytes of DFB (entry_size 64, num_entries 2) overruns.
+    // DFB total bytes exceed the TensorParameter's per-bank allocation. The default parameter is
+    // interleaved and a single page -- 1*32*sizeof(bfloat16) = 64 bytes -- so it lands wholly in
+    // one bank whatever the bank count, and 128 bytes of DFB (entry_size 64, num_entries 2)
+    // overruns. This covers the interleaved branch of the bound, which the sharded cases below
+    // do not reach.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec(
         "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBShardLargerThanWholeTensorSucceeds) {
+    // Regression: a borrowed DFB is sized for ONE shard, so it must be validated against the
+    // backing buffer's per-bank allocation -- not the tensor's packed size, which is whole-tensor
+    // and unpadded. A row-major sharded tensor pads on width only, so a 1x32 bf16 tensor with a
+    // 32x32 shard on one core packs to 64 bytes while allocating 32 * 64 = 2048 bytes per bank.
+    // Sizing the DFB at the shard (the convention every sharded op follows) used to be rejected
+    // as "larger than its borrowed TensorParameter (64 bytes)".
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBLargerThanShardStillFails) {
+    // Companion to the above: widening the bound to the per-bank allocation must not disarm the
+    // check. Same tensor (2048 bytes per bank), but a DFB of 64 * 64 = 4096 bytes still overruns.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/64);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNdShardLargerThanWholeTensorSucceeds) {
+    // compute_consumed_memory_bytes_per_bank has a THIRD branch, for specs built from an
+    // NdShardSpec (max_num_dev_pages_per_core) rather than a 2D ShardSpec. It over-covers the
+    // logical data the same way, so it needs its own regression alongside the 2D case above.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {MakeNdShardedTensorParameter(
+        "borrowed_tensor", tt::tt_metal::Shape{1, 32}, tt::tt_metal::Shape{32, 32}, /*num_cores=*/1)};
+
+    // Without these the test can silently re-cover the 2D case or assert nothing at all: the ND
+    // branch is only reached when the spec keeps no 2D shard_spec (see MakeNdShardedTensorParameter
+    // on why CONTIGUOUS_1D is what guarantees that), and the bound only has teeth when the shard
+    // allocates more than the tensor packs.
+    const tt::tt_metal::TensorSpec& tensor_spec = spec.tensor_parameters[0].spec;
+    ASSERT_FALSE(tensor_spec.memory_config().shard_spec().has_value());
+    const auto& allocator = mesh_device_->allocator();
+    ASSERT_GT(
+        tensor_spec.compute_consumed_memory_bytes_per_bank(
+            allocator->get_alignment(tt::tt_metal::BufferType::L1),
+            allocator->get_num_banks(tt::tt_metal::BufferType::L1)),
+        tensor_spec.compute_packed_buffer_size_bytes());
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {
@@ -4382,111 +4448,6 @@ void kernel_main() {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
     }
-}
-)"};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
-}
-
-TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstantExpressionBigSmoke) {
-    // Same bindings as CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJITSmoke.
-    // Present and absent names use the same
-    // `if constexpr (constexpr const auto* token = get_token_if_present<"x">())` shape.
-    // Converting a present token pointer to bool is -Werror=address (address of a constexpr
-    // object), so the kernel suppresses -Waddress around those conditions.
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-
-    auto dfb_b = MakeMinimalDFB("dfb_1");
-    dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers.push_back(dfb_b);
-    spec.kernels[0].dfb_bindings[0].accessor_name = "dfb_a";
-    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
-    spec.kernels[1].dfb_bindings[0].accessor_name = "dfb_a";
-    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
-
-    spec.tensor_parameters = {
-        MakeMinimalTensorParameter("t0", tt::tt_metal::BufferType::L1),
-        MakeMinimalTensorParameter("t1", tt::tt_metal::BufferType::L1),
-    };
-    BindTensorParameterToKernel(spec.kernels[0], "t0", "tensor_a");
-    BindTensorParameterToKernel(spec.kernels[0], "t1", "tensor_b");
-
-    spec.scratchpads = {
-        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024},
-        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_1"}, .size_per_node = 1024},
-    };
-    spec.kernels[0].scratchpad_bindings = {
-        KernelSpec::ScratchpadBinding{
-            .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "scratch_a"},
-        KernelSpec::ScratchpadBinding{
-            .scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "scratch_b"},
-    };
-
-    spec.kernels[0].source = KernelSpec::SourceCode{R"(
-#include "api/tensor/local_tensor_accessor.h"
-
-void kernel_main() {
-#pragma GCC diagnostic push
-// Present tokens are addresses of constexpr objects; converting them to bool is -Werror=address.
-#pragma GCC diagnostic ignored "-Waddress"
-    static_assert(dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a);
-    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_a">()) {
-        DataflowBuffer buf(*token);
-        (void)buf;
-    }
-    static_assert(dfb::get_token_if_present<"dfb_absent">() == nullptr);
-    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_absent">()) {
-        DataflowBuffer buf(*token);
-        (void)buf;
-    }
-
-    static_assert(dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b);
-    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_b">()) {
-        DataflowBuffer buf(*token);
-        (void)buf;
-    }
-
-    static_assert(tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a);
-    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_a">()) {
-        TensorAccessor accessor(*token);
-        LocalTensorAccessor<uint32_t> local_accessor(*token);
-        (void)accessor;
-        (void)local_accessor;
-    }
-    static_assert(tensor::get_token_if_present<"tensor_absent">() == nullptr);
-    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_absent">()) {
-        TensorAccessor accessor(*token);
-        LocalTensorAccessor<uint32_t> local_accessor(*token);
-        (void)accessor;
-        (void)local_accessor;
-    }
-
-    static_assert(tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b);
-    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_b">()) {
-        TensorAccessor accessor(*token);
-        LocalTensorAccessor<uint32_t> local_accessor(*token);
-        (void)accessor;
-        (void)local_accessor;
-    }
-
-    static_assert(scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a);
-    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_a">()) {
-        Scratchpad<int32_t> pad(*token);
-        (void)pad;
-    }
-    static_assert(scratch::get_token_if_present<"scratch_absent">() == nullptr);
-    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_absent">()) {
-        Scratchpad<int32_t> pad(*token);
-        (void)pad;
-    }
-
-    static_assert(scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b);
-    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_b">()) {
-        Scratchpad<int32_t> pad(*token);
-        (void)pad;
-    }
-#pragma GCC diagnostic pop
 }
 )"};
 

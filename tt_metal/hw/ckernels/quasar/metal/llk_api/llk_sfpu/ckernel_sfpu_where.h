@@ -84,7 +84,7 @@ inline void calculate_where(
 // ---------------------------------------------------------------------------------------------------
 template <
     bool APPROXIMATION_MODE,
-    [[maybe_unused]] DataFormat FORMAT,
+    DataFormat FORMAT /*maybe_unused*/,
     DstSync DST_SYNC,
     bool DST_ACCUM,
     int ITERATIONS = SFPU_ITERATIONS>

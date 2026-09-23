@@ -61,4 +61,4 @@ def test_hardtanh_args(device, shapes, min, max):
     output_tensor = ttnn.hardtanh(input_tensor_a, min_val=min, max_val=max)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)

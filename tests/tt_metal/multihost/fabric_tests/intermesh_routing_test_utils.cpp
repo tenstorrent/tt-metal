@@ -92,7 +92,6 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
     auto src_physical_device_id = devices[random_dev]->get_devices()[0]->id();
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto& sender_device = devices[random_dev];
     // Randomly select a tx core
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
@@ -148,8 +147,6 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
@@ -158,7 +155,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Run sender program
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;
@@ -247,7 +244,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     auto recv_program = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
 
     // Run receiver program
-    tt_metal::LaunchProgram(*receiver_device, std::move(*recv_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*receiver_device, std::move(*recv_program));
 
     // Validate status of the receiver
     std::vector<uint32_t> receiver_status;
@@ -364,7 +361,7 @@ void run_mcast_sender_step(
     tt_metal::SetRuntimeArgs(mcast_send_program, mcast_send_kernel, sender_logical_core, sender_runtime_args);
 
     log_debug(tt::LogTest, "Run Sender on: {}", sender_device->id());
-    tt_metal::LaunchProgram(*sender_device, std::move(mcast_send_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(mcast_send_program));
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;

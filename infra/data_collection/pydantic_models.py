@@ -472,8 +472,7 @@ class PerfMetric(BaseModel):
     metric_name: str = Field(description="Metric name.")
     metric_value: float = Field(description="Metric value.")
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpParam(BaseModel):
@@ -492,8 +491,7 @@ class OpParam(BaseModel):
         default=None, description="Test parameter value as JSON (object or array)."
     )
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpTest(BaseModel):

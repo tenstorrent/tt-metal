@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -237,16 +238,27 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
+    // Trace-safe logical_n: args.logical_n is the worst-case placeholder (padded_N) and the kernels read
+    // the live value. The placeholder already worst-cases every size derivation below EXCEPT three, which
+    // a chunk-aligned placeholder resolves the wrong way — the two mask derivations (resolve to "no mask")
+    // and the state-FIFO spare (resolves to "no one-chunk iter", the ANTI-worst case). CB geometry is
+    // fixed at program creation, so all three are forced whenever the tensor is present.
+    const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
+
     // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
-    const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    const bool global_n_has_padding =
+        has_logical_n_tensor || (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
 
-    // Partial tile support when padding boundary falls inside a tile.
+    // Partial tile support when padding boundary falls inside a tile. The kernels stamp the live column
+    // into the forced tile and gate the stamp off when that column is 0 (see partial_tile_present).
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
-    const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
+    const bool has_global_n_partial_tile = ttnn::operations::transformer::sdpa::ring_joint::partial_tile_present(
+        global_n_partial_col, has_logical_n_tensor);
+    const uint32_t partial_mask_tiles = (has_global_n_partial_tile ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
     // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
     const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
 
@@ -401,7 +413,28 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // reserves the new entry up front), which would deadlock at full depth — so give that case one
     // spare entry. The last active ring iteration is the only one that can be partial, and it
     // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
-    const uint32_t state_fifo_entries = num_passes + (num_local_k_chunks <= 1 ? 1 : 0);
+    // A pass that processes exactly ONE K/V chunk runs the state-FIFO entry (read + POST-step pop
+    // of this pass's previous state) and the FIFO exit (PRE-step reserve + push of its new state)
+    // around the SAME sdpa_inner_loop_step call — so the exit's reserve precedes the pop it needs.
+    // Rows whose pass count fills the FIFO deadlock on that reserve. Give the FIFO one spare entry
+    // whenever any ring iteration can process a single chunk: a one-chunk shard, or the
+    // beyond-logical_n whole-chunk skip shaving a shard down to one chunk (a pad tail that
+    // covers at least one full K chunk — first hit by the fl2va 1024x768 canvas at 4x32).
+    bool some_iter_processes_one_chunk = has_logical_n_tensor || (num_local_k_chunks <= 1);
+    for (uint32_t rid = 0; rid < args.ring_size && !some_iter_processes_one_chunk; ++rid) {
+        uint32_t iter_chunks = 0;
+        for (uint32_t kc = 0; kc < num_local_k_chunks; ++kc) {
+            // Mirrors the kernels' kv_chunk_is_beyond_logical_n skip (joint chunks never skip).
+            if (local_padded_Nt * rid + kc * Sk_chunk_t < logical_nt) {
+                iter_chunks++;
+            }
+        }
+        if (rid == args.ring_size - 1) {
+            iter_chunks += num_joint_k_chunks;
+        }
+        some_iter_processes_one_chunk = (iter_chunks == 1);
+    }
+    const uint32_t state_fifo_entries = num_passes + (some_iter_processes_one_chunk ? 1 : 0);
     log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -616,6 +649,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args.push_back(receiver_semaphore_b_id);
     reader_compile_time_args.push_back(sender_semaphore_v_id);
     reader_compile_time_args.push_back(buddy_gate_semaphore_id);
+    // Trace-safe logical_n: presence flag, then the accessor args for the 1-element tensor. The accessor
+    // block is emitted unconditionally (nullptr when absent) so the CT-arg layout after it never shifts.
+    reader_compile_time_args.push_back(static_cast<uint32_t>(has_logical_n_tensor));
+    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -641,8 +679,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         joint_l_partial_col,
         static_cast<std::uint32_t>(use_streaming_compute),
         static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(has_logical_n_tensor),
     };
 
+    // Trace-safe logical_n accessor block sits ahead of the output accessors so every downstream offset
+    // (out / joint_out / stats, and the MUX + AG block that chains off stats) keeps deriving normally.
+    // Emitted unconditionally (nullptr when absent) to keep the layout stable across both modes.
+    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -676,6 +720,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // max write) when several head-passes share a core. The 1-pass shapes are gated by
         // utilization-band perf tests calibrated on the scratch path.
         (num_passes > 1) ? 1u : 0u,  // use_l1_state_fifo
+        // Trace-safe logical_n: compute reads the live values from the reader's derived CB.
+        static_cast<uint32_t>(has_logical_n_tensor),
     };
 
     std::map<std::string, std::string> defines;
@@ -966,6 +1012,25 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
                 .data_format = im_df,
                 .page_size = im_tile_size,
+            }}},
+        });
+    }
+
+    // Compute RISCs cannot NoC-read DRAM, so the reader publishes derived values here (slots per
+    // ring_joint_derived_slots.hpp) and compute reads them with read_tile_value. Must be UInt32:
+    // read_tile_value's indexing follows the CB format, and a float format misreads these raw words.
+    if (has_logical_n_tensor) {
+        constexpr uint32_t kDerivedPageBytes = 64;
+        static_assert(
+            ttnn::operations::transformer::sdpa::ring_joint::kDerivedSlotCount * sizeof(uint32_t) <= kDerivedPageBytes,
+            "derived slots must fit the page");
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = kDerivedPageBytes,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = kDerivedPageBytes,
             }}},
         });
     }
@@ -1564,6 +1629,20 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+
+    // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
+    // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
+    if (has_logical_n_tensor) {
+        auto* logical_n_buffer = tensor_args.logical_n_tensor->buffer();
+        const auto logical_n_common_args = [&]() {
+            KernelDescriptor::RTArgList args_list;
+            args_list.push_back(logical_n_buffer);
+            return args_list;
+        };
+        reader_kernel.emplace_common_runtime_args(logical_n_common_args());
+        writer_kernel.emplace_common_runtime_args(logical_n_common_args());
+        writer_fabric_kernel.emplace_common_runtime_args(logical_n_common_args());
+    }
 
     // Build backward and forward termination master core sets (1 per link per direction)
     // Backward masters: row 0 of both MUX client columns (top half = backward direction).

@@ -180,6 +180,13 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
            fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
 }
 
+// Float16_b <-> Float32 does not need an SFPU op. Dest already holds the value as Float32 (widen by
+// setting Dest to 32-bit; narrow by letting the packer emit Float16_b from that Float32 Dest).
+inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
+    return (src == DataFormat::Float16_b && dst == DataFormat::Float32) ||
+           (src == DataFormat::Float32 && dst == DataFormat::Float16_b);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Typecast<IN_FORMAT, OUT_FORMAT, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
 //   calculate(dst_index, vector_mode) -> calculate_typecast<effective in, effective out, ITERATIONS>
@@ -188,8 +195,9 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
 // and unused by Quasar's single unified kernel.
 // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX format
 // behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX) collapse to a
-// pure format no-op (calculate() and init() issue nothing), while MX <-> {Float32, Int32, ...} run the
-// Float16_b <-> X SFPU conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
+// pure format no-op (calculate() and init() issue nothing), and so does MX <-> Float32, which reaches the
+// Float16_b <-> Float32 no-op pair. The rest (MX <-> {Int32, ...}) run the Float16_b <-> X SFPU conversion
+// on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
 // ---------------------------------------------------------------------------------------------------
 template <
     DataFormat IN_FORMAT,
@@ -204,11 +212,17 @@ struct Typecast : SfpuUnaryOp<
                       DST_ACCUM> {
     using Base = SfpuUnaryOp<Typecast, DST_SYNC, DST_ACCUM>;
 
+    // The shared Quasar kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs
+    // as UInt8. The byte would be decoded wrong with no error. Reject it here.
+    static_assert(
+        IN_FORMAT != DataFormat::Int8 && OUT_FORMAT != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
+
     static constexpr DataFormat effective_in_format =
         _typecast_is_mx_format_(IN_FORMAT) ? DataFormat::Float16_b : IN_FORMAT;
     static constexpr DataFormat effective_out_format =
         _typecast_is_mx_format_(OUT_FORMAT) ? DataFormat::Float16_b : OUT_FORMAT;
-    static constexpr bool has_sfpu_kernel = effective_in_format != effective_out_format;
+    static constexpr bool has_sfpu_kernel = effective_in_format != effective_out_format &&
+                                            !_typecast_is_sfpu_no_op_(effective_in_format, effective_out_format);
 
     inline __attribute__((always_inline)) static void calculate(uint32_t dst_index, VectorMode vector_mode) {
         if constexpr (has_sfpu_kernel) {

@@ -135,9 +135,38 @@ inline void calculate_logical_right_shift(
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
+inline void calculate_clamped_logical_right_shift(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+
+    constexpr InstrModLoadStore sfpload_instr_mod =
+        SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
+    constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
+    using vType = shift_vtype<layout>;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType s = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
+        sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
+
+        v_if(shift < 0 || shift >= 32) { shift = 31; }
+        v_endif;
+
+        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
+        sfpi::dst_reg++;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // BinaryShift<APPROXIMATION_MODE, SHIFT_OP, INSTRUCTION_MODE, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>
-//   SHIFT_OP selects calculate_binary_left_shift / calculate_binary_right_shift / calculate_logical_right_shift.
+//   SHIFT_OP selects calculate_binary_left_shift / calculate_binary_right_shift / calculate_logical_right_shift /
+//   calculate_clamped_logical_right_shift.
 //   init() is the shared SFPU init only.
 //   Backs binary_left_shift_tile, binary_right_shift_tile, binary_logical_right_shift_tile,
 //   binary_shift_tile_init (api/compute/binary_shift.h).
@@ -146,6 +175,7 @@ enum class BinaryShiftOp : std::uint8_t {
     LEFT = 0,
     RIGHT = 1,
     LOGICAL_RIGHT = 2,
+    CLAMPED_LOGICAL_RIGHT = 3,
 };
 
 template <
@@ -174,11 +204,18 @@ struct BinaryShift : SfpuBinaryOp<
         } else if constexpr (SHIFT_OP == BinaryShiftOp::RIGHT) {
             calculate_binary_right_shift<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
                 dst_index_in0, dst_index_in1, dst_index_out);
-        } else {
+        } else if constexpr (SHIFT_OP == BinaryShiftOp::LOGICAL_RIGHT) {
             calculate_logical_right_shift<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
                 dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_clamped_logical_right_shift<
+                APPROXIMATION_MODE,
+                ITERATIONS,
+                INSTRUCTION_MODE,
+                SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
         }
     }
 };
+
 }  // namespace sfpu
 }  // namespace ckernel

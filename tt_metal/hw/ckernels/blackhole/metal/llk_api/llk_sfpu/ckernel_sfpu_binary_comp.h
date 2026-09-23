@@ -335,7 +335,7 @@ template <
     DataFormat FORMAT,
     DstSync DST_SYNC,
     bool DST_ACCUM,
-    [[maybe_unused]] bool SIGN_MAGNITUDE_FORMAT = false,
+    bool SIGN_MAGNITUDE_FORMAT /*maybe_unused*/ = false,
     int ITERATIONS = 8>
 struct BinaryComp
     : SfpuBinaryOp<

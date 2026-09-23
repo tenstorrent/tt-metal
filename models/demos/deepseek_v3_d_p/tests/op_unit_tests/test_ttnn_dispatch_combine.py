@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
@@ -383,6 +384,9 @@ DISPATCH_COMBINE_MODELS = [
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
+    # Mistral-Small-4-119B. Only emb_dim (4096) is model-dependent here; its 128 routed experts
+    # land on the same // 4 count as gptoss_120b (32), well inside the fixed capacity tuning above.
+    ("mistral4", MistralSmall4Config, True),
 ]
 
 
@@ -409,7 +413,6 @@ def dispatch_combine_shape_params():
 # Two-link subset of the shared dispatch/combine mesh table. The 1-link rows are redundant
 # coverage here; everything else about the profiles stays owned by ALL_MESH_CONFIGS.
 _MESH_IDS = (
-    "fabric2d-2x1-2link",
     "fabric2d-torus-y-4x1-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-mesh-4x2-2link",

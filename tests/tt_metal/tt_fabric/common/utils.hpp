@@ -87,4 +87,7 @@ void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 // Rank binding order is not checked here (verify visually vs MGD when adding tests).
 void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
 
+// Writes an inline descriptor to a PID-qualified temporary file and returns its path.
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
+
 }  // namespace tt::tt_fabric::fabric_router_tests

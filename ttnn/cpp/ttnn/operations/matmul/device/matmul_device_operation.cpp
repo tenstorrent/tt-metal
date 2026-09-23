@@ -779,6 +779,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Nt,
                             per_core_N,
                             num_blocks_x);
+                        TT_FATAL(
+                            per_core_M <= Mt,
+                            "{}: per_core_M ({}) exceeds Mt ({}). Each core would compute more output row tiles "
+                            "than the tensor has. Reduce per_core_M to at most Mt.",
+                            config_name,
+                            per_core_M,
+                            Mt);
                         const uint32_t logical_blocks_w = ((Nt - 1) / program_config.out_block_w) + 1;
                         const uint32_t physical_blocks_w = per_core_N / program_config.out_block_w;
                         TT_FATAL(
@@ -833,6 +840,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     config_name,
                     Mt,
                     Nt);
+                TT_FATAL(
+                    program_config.per_core_M <= Mt,
+                    "{}: per_core_M ({}) exceeds Mt ({}). Each core would compute more output row tiles "
+                    "than the tensor has. Reduce per_core_M to at most Mt.",
+                    config_name,
+                    program_config.per_core_M,
+                    Mt);
                 uint32_t num_blocks_y = ((Mt - 1) / program_config.per_core_M) + 1;
                 uint32_t num_blocks_x = ((Nt - 1) / program_config.per_core_N) + 1;
                 if (program_config.transpose_mcast) {
@@ -1357,11 +1371,14 @@ void validate_matmul_dram_sharded_config(
         config_name,
         K,
         program_config.in0_block_w);
+    // A block is either a fraction of one storage shard or a whole number of consecutive shards.
+    const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
     TT_FATAL(
-        (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-        "{}: shard_shape[1] / in0_tile.get_width() ({}) must be divisible by in0_block_w ({})",
+        in0_shard_width_tiles % program_config.in0_block_w == 0 ||
+            program_config.in0_block_w % in0_shard_width_tiles == 0,
+        "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
         config_name,
-        (shard_shape[1] / in0_tile.get_width()),
+        in0_shard_width_tiles,
         program_config.in0_block_w);
 
     // tensor in1

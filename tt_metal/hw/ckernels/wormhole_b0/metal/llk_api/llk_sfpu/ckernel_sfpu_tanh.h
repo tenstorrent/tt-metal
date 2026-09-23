@@ -154,23 +154,30 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode
-        sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
+        // Slopes in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6 -- where WH and BH keep a
+        // 6-entry SFPLUTFP32 table. gelu_appx uses the same six registers the same way.
+        sfpi::vLut16ss s01 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vLut16ss s23 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vLut16ss s45 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vLut16ii i01 = l_reg[sfpi::LRegs::LReg4];
+        sfpi::vLut16ii i23 = l_reg[sfpi::LRegs::LReg5];
+        sfpi::vLut16ii i45 = l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, si0, si1, si2);
+            val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
             sfpi::dst_reg[0] = val;
 
             sfpi::dst_reg++;
         }
 
-        l_reg[sfpi::LRegs::LReg0] = si0;
-        l_reg[sfpi::LRegs::LReg1] = si1;
-        l_reg[sfpi::LRegs::LReg2] = si2;
+        l_reg[sfpi::LRegs::LReg0] = s01;
+        l_reg[sfpi::LRegs::LReg1] = s23;
+        l_reg[sfpi::LRegs::LReg2] = s45;
+        l_reg[sfpi::LRegs::LReg4] = i01;
+        l_reg[sfpi::LRegs::LReg5] = i23;
+        l_reg[sfpi::LRegs::LReg6] = i45;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -210,9 +217,39 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
+        // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
+        // SGN_RETAIN, so the result is sign(x) * (A*|x| + B) and the kernel stays odd.
+        // Reached only by callers passing fast_and_approx; gelu, softcap and situ_glu call
+        // tanh_init with APPROXIMATION_MODE=false and never load these registers.
+        //
+        // Fitted to minimise max bfloat16 ULP error, not max absolute error. To retune, keep:
+        //  - segment 0's intercept at 0, else SGN_RETAIN puts a jump across the origin;
+        //  - the last segment at exactly (0, 1.0), so *finite* inputs saturate to 1.0. It says
+        //    nothing about the infinities: the hardware evaluates A*|x| + B, so 0 * inf + 1 is
+        //    NaN rather than 1.0. That predates this table; test_tanh_specials records it;
+        //  - every segment <= 1.0 over its own range -- unlike the polynomial path below, this
+        //    one has no min(result, 1.0f) to fall back on;
+        //  - no step down where two segments meet. A bfloat16 sweep tolerates a step under the
+        //    ~2e-3 ulp there, but this kernel has no convert<vFloat16b> and also serves the
+        //    fp32-dest path, where a 1.2e-4 dip is ~2048 fp32 ulp of non-monotonicity. So the
+        //    intercept of segment 1 and the slope of segment 3 are held one fp16 ulp below
+        //    their minimax values, which lands the joins at |x| = 0.5, 1.0 and 2.0 exactly and
+        //    leaves a single upward step of +1.2e-4 at |x| = 1.5. It is free: the bfloat16
+        //    sweep is identical either way -- 10.00 max ULP, 0.018352 max absolute error, same
+        //    percentiles -- while fp32 max absolute error improves 0.018962 -> 0.018840.
+        //
+        // test_tanh_lut_consistency.py checks all four against the header, and holds the two
+        // arch copies of this table together.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);
+
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f, 0.0964355469f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f, 0.76806641f);
+
+        // 0.0390625 == 1.25 * 2^-5, fp16-exact, and chosen so A*3 + B is exactly 1.0: the
+        // minimax slope 0.039123535 crosses 1.0 at |x| = 2.99532 and peaks at 1.000183.
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.0390625f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.8828125f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)

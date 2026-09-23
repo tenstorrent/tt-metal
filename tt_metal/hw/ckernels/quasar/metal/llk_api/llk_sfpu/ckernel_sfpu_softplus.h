@@ -46,15 +46,12 @@ constexpr float SOFTPLUS_BF16_POLY_C6 = -3.1273466851e-05f;
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_reciprocal, const float threshold) {
-    sfpi::vFloat val = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
+    sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat t = beta * val;
-
-    // Linear region (t > threshold): softplus(x) = x; default for every lane so the single store covers it.
-    sfpi::vFloat result = val;
 
     // `t <= threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
     v_if(t <= threshold) {
-        sfpi::vFloat a = sfpi::abs(t);
+        sfpi::vFloat a = sfpi::setsgn(t, 0);
         sfpi::vFloat residual;
 
         if constexpr (is_fp32_dest_acc_en) {
@@ -72,7 +69,7 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
 
             // Tail for a > 5: f(a) ~ exp(-a) via 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3)).
             v_if(a > SOFTPLUS_POLY_BOUNDARY) {
-                sfpi::vFloat e = _sfpu_exp_fp32_accurate_(-a);
+                sfpi::vFloat e = _sfpu_exp_fp32_accurate_(sfpi::setsgn(a, 1));
                 residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
             }
             v_endif;
@@ -93,18 +90,17 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
             v_endif;
         }
 
-        // Reconstruct: t >= 0 -> max(0,t) + residual; t < 0 -> residual.
-        sfpi::vFloat tp = sfpi::max(t, 0.0f);
-        result = beta_reciprocal * (tp + residual);
+        t = sfpi::max(t, 0.0f);
+        sfpi::vFloat result = beta_reciprocal * (t + residual);
 
         // Round-to-nearest for a 16-bit Dest (SFPSTORE defaults to truncation).
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
+        sfpi::dst_reg[0] = result;
     }
     v_endif;
 
-    sfpi::dst_reg[0] = result;
     sfpi::dst_reg++;
 }
 

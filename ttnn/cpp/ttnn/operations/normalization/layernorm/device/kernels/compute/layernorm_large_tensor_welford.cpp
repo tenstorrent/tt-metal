@@ -93,29 +93,29 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Fused pre-add
         reconfig_data_format(dfb_in, dfb_inb);
         add_init(dfb_in, dfb_inb);
-        dfb_in_obj.wait_front(block.full_block_size());
-        dfb_inb_obj.wait_front(block.full_block_size());
+        dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+        dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         tile_regs_acquire();
         for (auto i : block.local()) {
             add_tiles(dfb_in, dfb_inb, i, i, i);
         }
         tile_regs_commit();
-        dfb_in_obj.pop_front(block.full_block_size());
-        dfb_inb_obj.pop_front(block.full_block_size());
+        dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+        dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
         // Pack to an intermediate buffer (needed
         // to workaround transpose_dest bug)
         pack_reconfig_data_format(dfb_interm_pre_add);
-        dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        dfb_interm_pre_add_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
         tile_regs_wait();
         for (auto i : block.local()) {
             pack_tile(i, dfb_interm_pre_add);
         }
         tile_regs_release();
-        dfb_interm_pre_add_obj.push_back(block.full_block_size());
+        dfb_interm_pre_add_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
-        dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+        dfb_interm_pre_add_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         dfb_ex_obj.wait_front(1);
         dfb_ex2_obj.wait_front(1);
 #ifdef WELFORD_STATE_FP32_ALIAS
@@ -156,7 +156,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
         welford_save_state(mean_dst);
         tile_regs_commit();
-        dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+        dfb_interm_pre_add_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         dfb_ex_obj.pop_front(1);
         dfb_ex2_obj.pop_front(1);
 #ifdef WELFORD_STATE_FP32_ALIAS
@@ -326,7 +326,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 void kernel_main() {
     namespace kutil = norm::kernel_util;
 
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
@@ -429,7 +429,7 @@ void kernel_main() {
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
+    auto* p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Depending on whether we need to fuse pre-add, the approach for welford is different.
@@ -554,7 +554,7 @@ void kernel_main() {
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
-            dfb_in_obj.wait_front(block.full_block_size());
+            dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
             // dfb_x_welford was pushed by the reader in pass 2; wait for the push and pop in
             // lockstep with dfb_in. We do not actually read dfb_x_welford in the eltwise pass
@@ -568,7 +568,7 @@ void kernel_main() {
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in, dfb_ex, i, 0, i);
             }
-            dfb_in_obj.pop_front(block.full_block_size());
+            dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
             dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
 #endif
@@ -577,11 +577,11 @@ void kernel_main() {
             // Fuse in = in + b
             reconfig_data_format_srca(dfb_in, dfb_inb);
             add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb);
-            dfb_inb_obj.wait_front(block.full_block_size());
+            dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             for (auto i : block.local()) {
                 add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb, i, i);
             }
-            dfb_inb_obj.pop_front(block.full_block_size());
+            dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 #endif
 
             // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds dfb_inb (fused) or dfb_in
@@ -603,12 +603,12 @@ void kernel_main() {
 
             pack_reconfig_data_format(dfb_xmm);
             // Sync with writer on full blocks
-            DataflowBuffer(dfb_xmm).reserve_back(block.full_block_size());
+            DataflowBuffer(static_cast<uint16_t>(dfb_xmm)).reserve_back(static_cast<uint16_t>(block.full_block_size()));
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, dfb_xmm);
             }
-            DataflowBuffer(dfb_xmm).push_back(block.full_block_size());
+            DataflowBuffer(static_cast<uint16_t>(dfb_xmm)).push_back(static_cast<uint16_t>(block.full_block_size()));
             tile_regs_release();
 
 #ifdef FUSE_GAMMA
@@ -616,15 +616,17 @@ void kernel_main() {
                 // Multiply by gamma
                 reconfig_data_format(dfb_xmm, dfb_gamma);
                 tile_regs_acquire();
-                dfb_gamma_obj.wait_front(block.full_block_size());
-                DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
+                dfb_gamma_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
                 mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                dfb_gamma_obj.pop_front(block.full_block_size());
-                DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                dfb_gamma_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
 #ifndef FUSE_BETA
                 pack_reconfig_data_format(dfb_out);
@@ -637,11 +639,13 @@ void kernel_main() {
                 }
                 dfb_out_obj.push_back(block.full_block_size());
 #else
-                DataflowBuffer(dfb_xmm).reserve_back(block.full_block_size());
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_xmm);
                 }
-                DataflowBuffer(dfb_xmm).push_back(block.full_block_size());
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
                 tile_regs_release();
             }
@@ -653,23 +657,25 @@ void kernel_main() {
                 tile_regs_acquire();
                 reconfig_data_format(dfb_xmm, dfb_beta);
                 add_bcast_rows_init(dfb_xmm, dfb_beta);
-                DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
-                dfb_beta_obj.wait_front(block.full_block_size());
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
+                dfb_beta_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(dfb_xmm, dfb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                dfb_beta_obj.pop_front(block.full_block_size());
-                DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                dfb_beta_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                 pack_reconfig_data_format(dfb_out);
-                dfb_out_obj.reserve_back(block.full_block_size());
+                dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_out);
                 }
                 tile_regs_release();
-                dfb_out_obj.push_back(block.full_block_size());
+                dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
             }
 #endif
         }

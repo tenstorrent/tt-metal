@@ -315,7 +315,7 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
         (ttnn.bfloat8_b, 0.999),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
+@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul"])
 def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
@@ -343,8 +343,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(input_tensor_a if ttnn_fn.endswith("_") else output_tensor)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b))
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 

@@ -596,6 +596,7 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
@@ -660,6 +661,17 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Post-norm decoder (EXAONE-4.x): no input_layernorm; norms are applied to the
+        # attention/MLP outputs before the residual adds. Set in _set_model_specific_params().
+        self.use_post_norm = False
+        # Hybrid-rope inversion (EXAONE-4.x): sliding layers use the (llama3-scaled)
+        # rope while full-attention layers are NoPE. rope_scaling_local feeds the local
+        # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
+        self.rope_scaling_local = None
+        self.use_global_nope = False
+        # Text-only port of a multimodal checkpoint: keeps is_multimodal False so the
+        # text pipeline (AutoModel class choice aside) is used end-to-end.
+        self.force_text_only = False
         # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
         # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
         # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
@@ -1165,7 +1177,9 @@ class ModelArgs:
             )
 
             def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
+                # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
+                # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
+                M = max(1, self.n_kv_heads // self.num_devices) * seq_len
                 cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
                 return ttnn.create_sharded_memory_config(
                     (
@@ -1366,7 +1380,7 @@ class ModelArgs:
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
-                return self.get_mlp_act_mem_config("decode")
+                return self.get_mlp_act_mem_config(Mode.DECODE)
             elif prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // prefetcher.ring_size),
@@ -1486,7 +1500,7 @@ class ModelArgs:
                         num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1836,8 +1850,13 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    def use_minimal_prefill_matmul(self, seq_len: int) -> bool:
+        # Qwen's 128-token prompts can run singly or be flattened into a larger
+        # batched prefill.
+        return seq_len > 128 or (seq_len == 128 and self.base_model_name == "Qwen3-32B" and self.device_name == "T3K")
+
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
-        if seq_len > 128:
+        if self.use_minimal_prefill_matmul(seq_len):
             return True
 
         # The regular 128-token QKV prefill matmul over-allocates L1 on Llama 8B
@@ -2263,8 +2282,10 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_kv_prefill_mem_config(self, seq_len: int = 1):
         """Get the memory config for KV cache fill during prefill."""
+        # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer divide 0,
+        # which would build a 0-row shard config; clamp to one KV head per device.
         return ttnn.create_sharded_memory_config(
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ((max(1, self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -2548,6 +2569,9 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                # Large single-chunk prefill matters for EXAONE: chunked prefill is
+                # unsupported on sliding-window layers (48 of its 64 layers).
+                "EXAONE-4.5-33B": {"P150x8": 128},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2832,6 +2856,25 @@ class ModelArgs:
             self.sdpa_decode_k_chunk_size = 64
             self.sdpa_decode_use_default_compute_config = True
 
+        # EXAONE-4.x (incl. the EXAONE-4.5 text decoder, whose text model_type is
+        # exaone4): post-norm residual order with no input_layernorm —
+        #   h = x + post_attention_layernorm(attn(x)); out = h + post_feedforward_layernorm(mlp(h))
+        # — and hybrid rope inverted vs Gemma-3: RoPE (llama3-scaled, theta 1e6) is
+        # applied ONLY on sliding_attention layers while full_attention layers are
+        # NoPE (no positional encoding). See HF modeling_exaone4.py.
+        if self.model_type is not None and str(self.model_type).lower() in ("exaone4", "exaone4_5", "exaone4_5_text"):
+            self.use_post_norm = True
+            # Sliding (local) layers take the checkpoint's rope scaling; global
+            # (full-attention) layers take identity cos/sin via use_global_nope.
+            self.rope_scaling_local = self.rope_scaling
+            self.rope_scaling = None
+            self.use_global_nope = True
+            # EXAONE-4.5 checkpoints ship a vision tower (model.visual.*) and an MTP
+            # module (mtp.*); this port runs the text decoder only. transformers
+            # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
+            self.force_text_only = True
+            self.is_multimodal = False
+
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
         self.image_token_index = config.get("image_token_index", None)
@@ -2932,6 +2975,10 @@ class ModelArgs:
                 "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                # 27392/8 = 3424 = 107 tiles (prime) -> find_grid_k_n degenerates to a
+                # single core (1x1 norm grid overflows L1; 1-core MLP matmuls). Pad to
+                # 28672 (112 tiles/device, gcd(160,112)=16 -> 16-core grids).
+                "EXAONE-4.5-33B": 16,
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -2997,7 +3044,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         self.vision_chunk_size = config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         if "vision_num_cross_attention_layers" in config:
@@ -3132,7 +3179,7 @@ class ModelArgs:
                     merged_vision_config = merge_vision_config(config)
                     self._set_vision_params({"vision_config": merged_vision_config})
 
-            self.is_multimodal = "vision_config" in config or self.is_vision()
+            self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         else:
             self._set_params_from_dict(config)
 
@@ -3403,6 +3450,14 @@ class ModelArgs:
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
+            # Text-only ports of multimodal checkpoints (e.g. EXAONE-4.5): the
+            # composite config class only maps to an image-text-to-text model —
+            # load that; text-only inputs bypass its vision tower entirely.
+            if (
+                type(self.hf_config) not in AutoModelForCausalLM._model_mapping
+                and type(self.hf_config) in AutoModelForImageTextToText._model_mapping
+            ):
+                return AutoModelForImageTextToText
             return AutoModelForCausalLM
 
         # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
@@ -3491,6 +3546,14 @@ class ModelArgs:
                     # Standard: convert to Meta format
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
+            if self.force_text_only:
+                # Text-only port of a multimodal checkpoint (e.g. EXAONE-4.5): drop
+                # the vision tower and auxiliary heads (MTP) before key sniffing —
+                # vision `attn.qkv` keys would otherwise trip fuse_qkv, and mtp.layers.*
+                # keys would collide with the layer-trim loop below.
+                state_dict = {
+                    k: v for k, v in state_dict.items() if not (k.startswith(("model.visual.", "visual.", "mtp.")))
+                }
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
@@ -3567,6 +3630,51 @@ class ModelArgs:
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
         )
+
+    def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
+        """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.
+
+        The activation multicast is one semaphore-gated block per sender, chained across senders,
+        so the chain costs the block count K / in0_block_w. The factory lets a block span several
+        consecutive activation shards, which takes the block count off the shard grid.
+
+        Widening is not free. A block wider than a shard is gathered over the NoC into the sender
+        before the multicast, so those shards cross the NoC twice. The multicast overlaps the
+        block's weight read, so the chain is exposed only while a hop costs more than the weight
+        a worker reads for that block: once bw x per_worker_N covers it, a wider block buys
+        nothing and still pays the gather. Sweeping every legal in0_block_w over 21 decode shapes
+        on P300 (Llama-3.2-1B, Llama-3.1-8B, Qwen3-8B and Qwen3-32B at one, four and eight
+        devices) puts a hop at about HOP_IN_WEIGHT_TILES weight tiles: the rule then picks the
+        measured optimum on 20 of the 21, one step short on the last, and no width slower than
+        stock on any. 100 and 112 give the same result, so it sits in a plateau rather than on a
+        cliff.
+
+        The constant is a hardware ratio, one hop's fixed cost over the time a worker takes to
+        stream one weight tile, so it moves with the bank count, the DRAM bandwidth and the NoC,
+        not with the model. Anything that changes the fixed cost of a hop moves it down and this
+        has to be refitted.
+        """
+        HOP_IN_WEIGHT_TILES = 100
+        k_tiles = k // ttnn.TILE_SIZE
+        per_core_k = k_tiles // num_cores
+        per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        l1_budget_tiles = 800 * 1024 // (3 * 1088)
+        base = self.find_largest_divisor(per_core_k)
+        # Only ever widen, and only while a block's own weight read is shorter than one hop.
+        # Widening halves the hops and doubles the weight a hop has to hide behind, so past the
+        # crossover it buys nothing and still pays the gather. The L1 budget is the looser of the
+        # two bounds and stays as a cap. A wide-N projection such as the LM head is already past
+        # the crossover at the stock width, which is why the stock width is also the floor.
+        for bw in range(min(16, k_tiles), base, -1):
+            if k_tiles % bw:
+                continue
+            if per_core_k % bw and bw % per_core_k:
+                continue
+            if bw * per_worker_n > HOP_IN_WEIGHT_TILES:
+                continue
+            if bw * per_worker_n <= l1_budget_tiles:
+                return bw
+        return base
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
@@ -3711,8 +3819,12 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
+        if not self.is_galaxy and self.prefetcher is None:
+            in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
+        else:
+            in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
@@ -3923,6 +4035,7 @@ class ModelArgs:
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
+            "EXAONE-4.5-33B": "LGAI-EXAONE/EXAONE-4.5-33B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")

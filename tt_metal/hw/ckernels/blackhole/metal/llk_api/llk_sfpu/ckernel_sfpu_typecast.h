@@ -12,6 +12,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_quant.h"  // for INT8_SIGN_MASK
 #include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
@@ -27,6 +28,12 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
+
+// -128.0f as the upper 16 bits
+constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
+
+// -128 as SFPIADD's 12-bit signed immediate
+constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
@@ -208,9 +215,20 @@ inline void calculate_typecast_fp32_to_int32() {
         // result = -result (two's complement)
         TTI_SFPIADD(
             0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        // A positive input cannot legitimately produce a negative int32, so the only lanes this
+        // matches are the positive overflows that the INT_MIN constant above saturated the wrong
+        // way: the same constant serves both signs and the negate only fires for in < 0.
+        // Decrementing wraps INT_MIN to INT_MAX.
+        // LaneEnabled = in >= 0, the complement of the negate's in < 0. SFPSETCC compares the
+        // register as a signed int32, so LT0 and GTE0 partition every bit pattern and one
+        // SFPCOMPC is exactly equivalent to re-enabling all lanes and re-testing the sign.
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        // LaneEnabled &= result < 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // result -= 1
+        TTI_SFPIADD(-1 & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
@@ -984,6 +1002,92 @@ inline void calculate_typecast_uint_to_uint8() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool CLAMP_TO_UINT16 = false>
+inline void calculate_typecast_int8_to_int32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
+        if constexpr (CLAMP_TO_UINT16) {
+            TTI_SFPIADD(
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
+            TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
+        } else {
+            TTI_SFPIADD(
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        }
+    }
+}
+
+// Also serves the Float16_b/Bfp8_b/Bfp4_b outputs. Those need no FP32_TO_FP16B round before the
+// store the way the uint path does, because every value here is in [-128, 127] and so is exact in
+// bfloat16's 8-bit significand.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_fp32() {
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 in [0, 255]
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+    }
+#else
+    // This uses SFPLOADMACRO to achieve a throughput of 3 issue slots per input row. The XOR -> CAST
+    // order is forced (SFPCAST reads sign-magnitude), so only the scheduling changes: the macros
+    // below hold the same XOR, CAST and subtract, spread across the Simple, MAD and Store sub-units
+    // so consecutive rows overlap.
+    //
+    // Three macros is not a requirement: macro 2 carries only the Store, and its load is dead,
+    // unlike in init_typecast_uint32_to_fp32 where the MAD reads the loaded value back through an
+    // indirect VA. Folding the Store onto macro 1 would cut this to 2 slots per row, at the cost of
+    // leaning on the minimum MAD-to-Store delay. Left alone because the gain would not show up:
+    // even moving from the plain loop to macros only helped at 32x32, with larger shapes
+    // bandwidth-bound.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+    //
+    // Note: L0=-128.0, added by MAD to undo the excess 128 bias the XOR applied to a.
+    //
+    // t | Load | Simple         | MAD              | Round | Store    |
+    // - | ---- | -------------- | ---------------- | ----- | -------- |
+    // 0 | [a]  |                |                  |       |          |
+    // 1 | [b]  | [a] = a ^ 0x80 |                  |       |          |
+    // 2 | [L7] | [b] = cast(a)  |                  |       |          |
+    // 0 | ...  |                |                  |       |          |
+    // 1 | ...  |                | [b] L16 = L0 + b |       |          |
+    // 2 | ...  |                |                  |       |          |
+    // 0 | ...  |                |                  |       | [L7] L16 |
+
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, TYPECAST_INT8_MINUS_128_IMM16);
+
+    constexpr int a = p_sfpu::LREG2;
+    constexpr int b = p_sfpu::LREG3;
+    constexpr int L7 = p_sfpu::LREG7;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_7, a >> 2);
+        TTI_SFPLOADMACRO((1 << 2) | (b & 3), InstrModLoadStore::INT32, ADDR_MOD_7, b >> 2);
+        TTI_SFPLOADMACRO((2 << 2) | (L7 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, L7 >> 2);
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+#endif
+}
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
@@ -997,6 +1101,65 @@ inline void init_typecast_uint_to_uint8() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_input() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_to_fp32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
+#ifndef DISABLE_SFPLOADMACRO
+    constexpr int a = p_sfpu::LREG2;
+
+    // InstructionTemplate[0]
+    TTI_SFPXOR(0, p_sfpu::LREG12, 12, 0);
+
+    // InstructionTemplate[1]
+    TTI_SFPCAST(a, 13, 0);
+
+    // InstructionTemplate[2]
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, 0, 14, 0);
+
+    // Macro 0: [a]
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits = 0;
+
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 0, 1);
+    }
+    // Macro 1: [b]
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 1);
+        constexpr std::uint32_t mad_bits = 0x00 | 0x40 | (2 << 3) | (4 + 2);
+
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);
+    }
+    // Macro 2: [L7]
+    {
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 2, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: FP32,
+    //   UsesLoadMod0ForStore: {0,0,0},
+    //   UnitDelayKind: {1,1,1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0x700 | InstrModLoadStore::FP32, 8, 1);
+#endif
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1027,6 +1190,8 @@ enum class Kernel {
     Int32ToUint16,
     Fp32ToUint8,
     UintToUint8,
+    Int8ToInt32,
+    Int8ToFp32,
 };
 
 // Float formats that sit in Dest as fp32 / fp16b and share the fp32_to_* kernels.
@@ -1050,7 +1215,7 @@ constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
         if (out == DataFormat::UInt32) {
             return Kernel::Fp32ToUint32;
         }
-        if (out == DataFormat::UInt8) {
+        if (out == DataFormat::UInt8 || out == DataFormat::Int8) {
             return Kernel::Fp32ToUint8;
         }
         if (in == DataFormat::Float32 && out == DataFormat::Float16_b) {
@@ -1068,7 +1233,7 @@ constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
         if (out == DataFormat::UInt32 || out == DataFormat::Int32) {
             return Kernel::Uint16ToUint32;
         }
-        if (out == DataFormat::UInt8) {
+        if (out == DataFormat::UInt8 || out == DataFormat::Int8) {
             return Kernel::UintToUint8;
         }
         return Kernel::None;
@@ -1083,7 +1248,7 @@ constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
         if (out == DataFormat::UInt16) {
             return Kernel::Int32ToUint16;
         }
-        if (out == DataFormat::UInt8) {
+        if (out == DataFormat::UInt8 || out == DataFormat::Int8) {
             return Kernel::UintToUint8;
         }
         return Kernel::None;
@@ -1098,13 +1263,13 @@ constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
         if (out == DataFormat::UInt16) {
             return Kernel::Uint32ToUint16;
         }
-        if (out == DataFormat::UInt8) {
+        if (out == DataFormat::UInt8 || out == DataFormat::Int8) {
             return Kernel::UintToUint8;
         }
         return Kernel::None;
     }
     if (in == DataFormat::UInt8) {
-        // UInt8 is zero-extended in Dest, so it reuses the uint32 kernels; UInt8 -> Int32 / UInt32 needs none.
+        // UInt8 is zero-extended in Dest, so it reuses the uint32 kernels; UInt8 -> Int32 / UInt32 / Int8 needs none.
         if (is_fp16b_like(out)) {
             return Kernel::Uint32ToFp16b;
         }
@@ -1113,6 +1278,17 @@ constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
         }
         if (out == DataFormat::UInt16) {
             return Kernel::Uint32ToUint16;
+        }
+        return Kernel::None;
+    }
+    if (in == DataFormat::Int8) {
+        // Int8 CBs are declared UInt8, so Dest holds the raw 2's complement byte zero-extended; the kernels
+        // sign-extend it themselves. Int8 -> UInt8 needs none.
+        if (out == DataFormat::Int32 || out == DataFormat::UInt32 || out == DataFormat::UInt16) {
+            return Kernel::Int8ToInt32;
+        }
+        if (is_float(out)) {
+            return Kernel::Int8ToFp32;
         }
         return Kernel::None;
     }
@@ -1157,6 +1333,10 @@ struct Init {
             init_typecast_int32_to_uint16<APPROXIMATION_MODE>();
         } else if constexpr (K == Kernel::Fp32ToUint8) {
             init_typecast_fp32_to_uint8<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Int8ToInt32) {
+            init_typecast_int8_input<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Int8ToFp32) {
+            init_typecast_int8_to_fp32<APPROXIMATION_MODE>();
         } else {
             static_assert(K == Kernel::UintToUint8, "kernel without a dedicated init");
             init_typecast_uint_to_uint8<APPROXIMATION_MODE>();
@@ -1181,6 +1361,10 @@ struct Typecast : SfpuUnaryOp<
     using typecast_detail::Init<typecast_detail::select_kernel(IN_FORMAT, OUT_FORMAT), APPROXIMATION_MODE>::init_kernel;
     using Base = SfpuUnaryOp<Typecast, DST_SYNC, DST_ACCUM>;
     using Kernel = typecast_detail::Kernel;
+
+    static_assert(
+        DST_ACCUM || (IN_FORMAT != DataFormat::Int8 && OUT_FORMAT != DataFormat::Int8),
+        "Int8 typecast requires Dest in 32 bit mode");
 
     static constexpr Kernel kernel_id = typecast_detail::select_kernel(IN_FORMAT, OUT_FORMAT);
 
@@ -1222,6 +1406,10 @@ struct Typecast : SfpuUnaryOp<
             calculate_typecast_fp32_to_uint8<APPROXIMATION_MODE, ITERATIONS>();
         } else if constexpr (kernel_id == Kernel::UintToUint8) {
             calculate_typecast_uint_to_uint8<APPROXIMATION_MODE, ITERATIONS, (IN_FORMAT == DataFormat::UInt16)>();
+        } else if constexpr (kernel_id == Kernel::Int8ToInt32) {
+            calculate_typecast_int8_to_int32<APPROXIMATION_MODE, ITERATIONS, (OUT_FORMAT == DataFormat::UInt16)>();
+        } else if constexpr (kernel_id == Kernel::Int8ToFp32) {
+            calculate_typecast_int8_to_fp32<APPROXIMATION_MODE, ITERATIONS>();
         }
     }
 };

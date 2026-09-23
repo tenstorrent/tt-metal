@@ -22,6 +22,8 @@
  *   tile 2  in: ignored     out: cur_max = max(prev_max, worker_max)
  *   tile 3  in: prev_sum    out: exp_worker*worker_sum + exp_prev*prev_sum
  *   tile 4  in: worker_sum  out: exp_worker * worker_sum
+ *
+ * FP32 half-sync instead loads worker_sum into tile 2 and uses only tiles 0..3.
  */
 
 #include <cstdint>
@@ -49,14 +51,15 @@ constexpr bool SDPA_OP_IS_EXP = (SDPA_OP == OP_EXP_ACCURATE || SDPA_OP == OP_EXP
 
 // Derived from the op rather than passed in, so the tile count cannot disagree with the body.
 // Only the correction body works on more than one tile.
-constexpr std::uint32_t NUM_DST_TILES = (SDPA_OP == OP_CORRECTION) ? 5 : 1;
+constexpr bool REUSE_CUR_MAX_TILE     = is_fp32_dest_acc_en && dest_sync == ckernel::DstSync::SyncHalf;
+constexpr std::uint32_t NUM_DST_TILES = (SDPA_OP == OP_CORRECTION) ? (REUSE_CUR_MAX_TILE ? 4 : 5) : 1;
 
 static_assert(
     NUM_DST_TILES <= ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>(),
     "this configuration needs more Dest tiles than the dest_sync / dest_acc pair can hold");
 
-// The dispatch always targets the base tile. The correction body reaches its other four regions
-// by fixed dst_reg offsets from there.
+// The dispatch always targets the base tile. The correction body reaches its remaining regions
+// by fixed dst_reg offsets from there (three in the reuse layout, four otherwise).
 constexpr std::uint32_t SDPA_DST_INDEX = 0;
 
 #ifdef LLK_TRISC_UNPACK
@@ -157,7 +160,7 @@ inline void sdpa_op(const std::uint32_t dst_index)
     else
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en>, dst_index, VectorMode::C, static_cast<int>(EXP_SCALE_BF16));
+            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en, REUSE_CUR_MAX_TILE>, dst_index, VectorMode::C, static_cast<int>(EXP_SCALE_BF16));
     }
 }
 
@@ -204,7 +207,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_packer_wait_for_math_done_();
 
-    // Every tile is packed out, since the correction body modifies four of its five regions in place.
+    // Pack every tile to check both the correction outputs and the untouched values in either layout.
     for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
     {
         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));

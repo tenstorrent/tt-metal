@@ -32,8 +32,6 @@ global_env:
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 
   PREFILL_ENABLE_MIGRATION: "1"
-  # The driver drains num_layers x pushes acks before it migrates; without them it copies a half-written cache.
-  PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_USE_TRACE: "1"
   PREFILL_MIGRATION_WAIT_READY_MS: "120000"
   # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.

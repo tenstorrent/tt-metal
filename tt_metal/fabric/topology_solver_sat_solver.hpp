@@ -70,6 +70,8 @@ bool topology_sat_add_blocking_clause_for_mapping(
     TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes);
 
 // Template overload: converts GraphIndexData/ConstraintIndexData to views and delegates.
+// TODO: drop the views (see TopologySatGraphView in topology_solver.hpp) once SAT can take a
+// non-template index base instead.
 template <typename TargetNode, typename GlobalNode>
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,

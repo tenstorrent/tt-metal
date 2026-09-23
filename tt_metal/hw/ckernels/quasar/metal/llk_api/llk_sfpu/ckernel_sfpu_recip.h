@@ -81,7 +81,7 @@ template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
     int ITERATIONS = SFPU_ITERATIONS,
-    [[maybe_unused]] bool legacy_compat = true>
+    bool legacy_compat /*maybe_unused*/ = true>
 inline void calculate_reciprocal() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;
@@ -93,7 +93,7 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, [[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool legacy_compat = true>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST /*maybe_unused*/, bool legacy_compat /*maybe_unused*/ = true>
 void recip_init() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     _llk_math_eltwise_sfpu_init_();

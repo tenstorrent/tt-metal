@@ -317,11 +317,25 @@ bool MetalEnvImpl::set_fabric_config(
     this->fabric_router_config_ = router_config;
 
     if (control_plane_ != nullptr) {
-        log_info(
-            tt::LogMetal,
-            "Fabric config changed from {} to {}, reinitializing control plane",
-            this->get_control_plane().get_fabric_config(),
-            this->fabric_config_);
+        const auto prev_fabric_config = this->get_control_plane().get_fabric_config();
+        // Reinitialization is still required unconditionally here (other fields such as
+        // fabric_tensix_config_/fabric_udm_mode_/fabric_router_config_ may have changed even when
+        // fabric_config_ itself has not), but the log message should only claim a "change"
+        // occurred when the fabric config value actually differs; otherwise this fires on every
+        // call (e.g. repeated no-op calls from callers that always pass the same config) and
+        // floods logs with a misleading message.
+        if (prev_fabric_config != this->fabric_config_) {
+            log_info(
+                tt::LogMetal,
+                "Fabric config changed from {} to {}, reinitializing control plane",
+                prev_fabric_config,
+                this->fabric_config_);
+        } else {
+            log_debug(
+                tt::LogMetal,
+                "Fabric config unchanged ({}), reinitializing control plane",
+                this->fabric_config_);
+        }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
@@ -637,10 +651,6 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
-    impl_->ensure_context_registered(*this);
-    return impl_->get_control_plane();
-}
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();

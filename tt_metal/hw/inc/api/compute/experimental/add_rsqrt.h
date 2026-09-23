@@ -28,6 +28,8 @@ ALWI void add_rsqrt_tile_init() {
 /**
  * Perform add + rsqrt operation: result = rsqrt(x + addend)
  *
+ * typed_bf16_store=true selects the direct BF16 store used by fused normalization.
+ *
  * @param idst The index of the tile in DST register buffer
  * @param addend The bit representation of a float to add before computing rsqrt
  */
@@ -35,10 +37,11 @@ template <
     bool fast_and_approx = false,
     VectorMode vec_mode = VectorMode::RC,
     int ITERATIONS = 8,
+    bool typed_bf16_store = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
-    MATH((sfpu::AddRsqrt<APPROX, fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en, ITERATIONS>::calculate(
-        idst, vec_mode, addend)));
+    MATH((sfpu::AddRsqrt<APPROX, fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en, ITERATIONS, typed_bf16_store>::
+              calculate(idst, vec_mode, addend)));
 }
 
 #endif  // ARCH_BLACKHOLE

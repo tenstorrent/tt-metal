@@ -12,6 +12,7 @@
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "llk_math_eltwise_ternary_sfpu_params.h"
+#include "sanitizer/api.h"
 
 /*
  * SFPU dispatch layer: static-only CRTP classes that bracket an SFPU kernel with the dest-index /
@@ -100,6 +101,7 @@ struct SfpuUnaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
     template <class... A>
     inline __attribute__((always_inline)) static void calculate(
         std::uint32_t dst_index, VectorMode vector_mode, A&&... args) {
+        SAN_HOOK(unsupported());
         Base::check_dst_index(dst_index, "dst_index exceeds max dest tiles");
         Base::check_vector_mode(vector_mode);
         _llk_math_eltwise_unary_sfpu_params_(
@@ -111,6 +113,7 @@ struct SfpuUnaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
 
     template <class... A>
     inline __attribute__((always_inline)) static void init(A&&... args) {
+        SAN_HOOK(unsupported());
         _llk_math_eltwise_sfpu_init_();
         Derived::init_kernel(std::forward<A>(args)...);
     }
@@ -130,6 +133,7 @@ struct SfpuBinaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
         std::uint32_t dst_index_out,
         VectorMode vector_mode,
         A&&... args) {
+        SAN_HOOK(unsupported());
         Base::check_dst_index(dst_index_in0, "dst_index_in0 exceeds max dest tiles");
         Base::check_dst_index(dst_index_in1, "dst_index_in1 exceeds max dest tiles");
         Base::check_dst_index(dst_index_out, "dst_index_out exceeds max dest tiles");
@@ -145,6 +149,7 @@ struct SfpuBinaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
 
     template <class... A>
     inline __attribute__((always_inline)) static void init(A&&... args) {
+        SAN_HOOK(unsupported());
         _llk_math_eltwise_sfpu_init_();
         Derived::init_kernel(std::forward<A>(args)...);
     }
@@ -165,6 +170,7 @@ struct SfpuTernaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
         std::uint32_t dst_index_out,
         VectorMode vector_mode,
         A&&... args) {
+        SAN_HOOK(unsupported());
         Base::check_dst_index(dst_index_in0, "dst_index_in0 exceeds max dest tiles");
         Base::check_dst_index(dst_index_in1, "dst_index_in1 exceeds max dest tiles");
         Base::check_dst_index(dst_index_in2, "dst_index_in2 exceeds max dest tiles");
@@ -182,6 +188,7 @@ struct SfpuTernaryOp : SfpuOpBase<DST_SYNC, DST_ACCUM, TILE_SHAPE> {
 
     template <class... A>
     inline __attribute__((always_inline)) static void init(A&&... args) {
+        SAN_HOOK(unsupported());
         _llk_math_eltwise_sfpu_init_();
         Derived::init_kernel(std::forward<A>(args)...);
     }

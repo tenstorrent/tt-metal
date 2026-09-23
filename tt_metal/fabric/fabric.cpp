@@ -106,12 +106,12 @@ std::vector<FabricType> get_all_mgd_fabric_types() {
     }
     return fabric_types;
 }
-
 #if defined(TT_METAL_USE_EMULE)
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
 // See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
+extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
 template <typename ProgramOrDescriptor>
@@ -229,12 +229,23 @@ void append_fabric_connection_rt_args(
 #if defined(TT_METAL_USE_EMULE)
         // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
         // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+        // Resolved through emule's registry, not the control plane: under multi-rank the DESTINATION
+        // is routinely a node on a peer rank's mesh, which has no local physical chip id.
+        const int emule_src = __emule_gchip_for_node(*src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+        const int emule_dst = __emule_gchip_for_node(*dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+        TT_FATAL(
+            emule_src >= 0 && emule_dst >= 0,
+            "emule could not name a fabric connection's endpoints globally. Src: {} -> {}, Dst: {} -> {}",
+            src_fabric_node_id,
+            emule_src,
+            dst_fabric_node_id,
+            emule_dst);
         __emule_fabric_record_conn(
-            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id)),
+            static_cast<uint32_t>(emule_src),
             static_cast<uint32_t>(worker_core.x),
             static_cast<uint32_t>(worker_core.y),
             static_cast<uint32_t>(forwarding_direction.value()),
-            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id)));
+            static_cast<uint32_t>(emule_dst));
 #endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
@@ -453,8 +464,6 @@ void append_routing_plane_connection_manager_rt_args_impl(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
@@ -504,6 +513,32 @@ std::vector<uint32_t> get_forwarding_link_indices(
 
     return get_forwarding_link_indices_in_direction(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "Could not determine forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < eth_chans.size(),
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
+        link_idx,
+        eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    return cluster.get_logical_ethernet_core_from_virtual(
+        physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {
@@ -688,6 +723,10 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
         default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
     }
     if (fabric_context.is_2D_routing_enabled()) {
+        // `api_type` selects the API *surface* -- Linear (1D) versus Mesh (2D). It is not an ABI
+        // choice: there is one 2D codec, so express is a flavour of mesh routing rather than a third
+        // api_type. Exact mesh shape is read from routing_l1_info_t by route-producing workers, while
+        // configuration-wide header sizing and express capacity are injected by CreateKernel.
         defines.push_back({"FABRIC_2D", "1"});
     }
     return defines;
@@ -721,7 +760,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 2 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -759,8 +798,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
     // 2D metadata
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 

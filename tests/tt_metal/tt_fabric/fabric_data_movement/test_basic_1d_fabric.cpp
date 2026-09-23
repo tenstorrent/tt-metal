@@ -474,8 +474,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
         dst_fabric_node_id.chip_id,
@@ -505,7 +503,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     // Launch sender and receiver programs and wait for them to finish
     fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate the status and packets processed by sender and receiver
@@ -607,8 +605,6 @@ void run_unicast_test_bw_chips(
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
         dst_fabric_node_id.chip_id,
@@ -667,7 +663,7 @@ void run_unicast_test_bw_chips(
 
     // Launch sender and receiver programs and wait for them to finish
     fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate the status and packets processed by sender and receiver
@@ -983,8 +979,6 @@ void RunTestMCastConnAPI(
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         1 /* fwd_start_distance */,
         fwd_hops /* fwd_range */,
         left_fabric_node_id.chip_id,
@@ -1056,7 +1050,7 @@ void RunTestMCastConnAPI(
     }
 
     // Launch sender program and wait for sender to finish
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     // Wait for receivers to finish
     for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -1441,9 +1435,6 @@ void RunTest2DMCastConnAPI(
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        ew_dim,
-        src_fabric_node_id.chip_id,
-        *mesh_id.value(),
         north_hops,
         (north_branch_west_hops << 16) | north_branch_east_hops,
     };
@@ -1595,7 +1586,7 @@ void RunTest2DMCastConnAPI(
         log_debug(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
     }
     // Launch sender program and wait for sender to finish
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     // Wait for receivers to finish
     for (auto rx_physical_device_id : rx_physical_device_ids) {
@@ -1766,8 +1757,6 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         start_distance,
         range,
         last_recv_fabric_node_id.chip_id,
@@ -1807,7 +1796,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     }
 
     // Launch sender program and wait for sender to finish
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     log_info(tt::LogTest, "Sender Launched on physical device {}", src_phys_chip_id);
     log_info(tt::LogTest, "Sender Finished");
 
@@ -2057,7 +2046,7 @@ void RunEDMConnectionStressTest(
             // Launch program and wait for completion
             auto start_time = std::chrono::high_resolution_clock::now();
             log_debug(tt::LogTest, "Launching program");
-            tt_metal::LaunchProgram(*sender_device, std::move(program), /*wait_until_cores_done=*/true);
+            tt_metal::LaunchProgram(*sender_device, std::move(program));
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
@@ -2239,7 +2228,7 @@ void FabricUnicastCommon(
     for (auto& [recv_dev, receiver_program] : receiver_programs) {
         fixture->RunProgramNonblocking(recv_dev, std::move(receiver_program));
     }
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     for (auto& [recv_dev, receiver_program] : receiver_programs) {
         fixture->WaitForSingleProgramDone(recv_dev);
     }
@@ -2571,7 +2560,7 @@ void UDMFabricUnicastCommon(
 
     // Run programs
     fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     fixture->WaitForSingleProgramDone(receiver_device);
 
     // Helper lambda to check test results for a given RISC
@@ -3329,7 +3318,7 @@ void Fabric2DMulticastCommon(
         receiver_devices.emplace_back(receiver_device);
     }
 
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     for (auto& dev : receiver_devices) {
         fixture->WaitForSingleProgramDone(dev);
@@ -3510,7 +3499,7 @@ void FabricMulticastCommon(
         }
     }
 
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     for (auto& dev : receiver_devices) {
         fixture->WaitForSingleProgramDone(dev);
@@ -3796,7 +3785,7 @@ void FabricSparseMulticastCommon(
         }
     }
 
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
 
     for (auto& dev : receiver_devices) {
         fixture->WaitForSingleProgramDone(dev);

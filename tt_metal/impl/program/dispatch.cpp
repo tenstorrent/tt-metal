@@ -21,6 +21,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -36,6 +37,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
@@ -477,7 +479,10 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
 }
 
 uint32_t finalize_prefetcher_pipes(
-    uint32_t programmable_core_type_index, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
     uint8_t max_num_prefetcher_pipes = 0;
     for (ProgramImpl* program : programs) {
         max_num_prefetcher_pipes = std::max(max_num_prefetcher_pipes, program->num_prefetcher_pipe_slots());
@@ -507,6 +512,7 @@ uint32_t finalize_prefetcher_pipes(
     for (ProgramImpl* program : programs) {
         const auto& per_core_participants = program->get_per_core_prefetcher_pipes();
         for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            program->validate_prefetcher_pipe_consumer_threads(*kg);
             bool has_participants = false;
             for (const CoreRange& cr : kg->core_ranges.ranges()) {
                 for (const auto& core : cr) {
@@ -527,12 +533,12 @@ uint32_t finalize_prefetcher_pipes(
         }
     }
 
-    return tt::align(
-        base_offset + prefetcher_pipe_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+    return tt::align(base_offset + prefetcher_pipe_region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
 }
 
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
-    uint8_t num_program_slots, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
+    const ProgramImpl& program, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
+    const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
     std::vector<uint32_t> payload(remote_dfb_config_region_words(num_program_slots), 0u);
     payload[0] = num_program_slots;
     for (const auto& participant : sparse_participants) {
@@ -543,17 +549,21 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             num_program_slots);
         const uint32_t base =
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        // P is a pipe-lifetime property read at build time, not a participant field: a relay or
+        // later Attach may arm lanes after this record was added. Packing it here (rather than
+        // poking the persistent page) keeps it ordered with this program in the command queue.
+        const uint32_t num_credit_lanes =
+            program.get_prefetcher_pipe_attachment(participant.prefetcher_pipe_id).num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
-        payload[base + 2] = participant.relay_dfb_id;
+        payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
     }
     return payload;
 }
 
 std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
-    const CoreRangeSet& kernel_group_cores,
-    const std::unordered_map<CoreCoord, std::vector<ProgramImpl::PrefetcherPipeParticipant>>& per_core_prefetcher_pipes,
-    uint8_t num_program_slots) {
+    const ProgramImpl& program, const CoreRangeSet& kernel_group_cores) {
+    const auto& per_core_prefetcher_pipes = program.get_per_core_prefetcher_pipes();
     std::map<std::vector<uint32_t>, std::pair<CoreCoord, std::vector<CoreCoord>>> cores_by_payload;
 
     for (const CoreRange& core_range : kernel_group_cores.ranges()) {
@@ -563,7 +573,7 @@ std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
                 continue;
             }
 
-            std::vector<uint32_t> payload = build_prefetcher_pipe_config_payload(num_program_slots, it->second);
+            std::vector<uint32_t> payload = build_prefetcher_pipe_config_payload(program, it->second);
             auto& entry = cores_by_payload[payload];
             if (entry.second.empty()) {
                 entry.first = core;
@@ -591,8 +601,9 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Mock/emulated devices don't have real binaries, skip finalization
-    if (metal_ctx.get_cluster().is_mock_or_emulated()) {
+    // Emule and Quasar mock don't have real binaries, skip finalization.
+    const auto target = metal_ctx.get_cluster().get_target_device_type();
+    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
@@ -761,29 +772,26 @@ void generate_runtime_args_cmds(
         std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
-    thread_local static auto get_runtime_payload_sizeB =
-        [](uint32_t num_packed_cmds,
-           uint32_t runtime_args_len,
-           bool is_unicast,
-           bool no_stride,
-           uint32_t l1_alignment) {
+    thread_local static auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds,
+                                                            uint32_t runtime_args_len,
+                                                            bool is_unicast,
+                                                            bool no_stride,
+                                                            uint32_t l1_alignment) {
+        uint32_t sub_cmd_sizeB =
+            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
+        uint32_t aligned_runtime_data_sizeB =
+            (no_stride ? 1 : num_packed_cmds) * tt::align(runtime_args_len * sizeof(uint32_t), l1_alignment);
+        return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+    };
+    thread_local static auto get_runtime_args_data_offset =
+        [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast, uint32_t l1_alignment) {
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
             uint32_t dispatch_cmd_sizeB =
                 sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
-            uint32_t aligned_runtime_data_sizeB =
-                (no_stride ? 1 : num_packed_cmds) * tt::align(runtime_args_len * sizeof(uint32_t), l1_alignment);
-            return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+            return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
         };
-    thread_local static auto get_runtime_args_data_offset = [](uint32_t num_packed_cmds,
-                                                               uint32_t /*runtime_args_len*/,
-                                                               bool is_unicast,
-                                                               uint32_t l1_alignment) {
-        uint32_t sub_cmd_sizeB =
-            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
-        return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
-    };
 
     constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
@@ -1358,6 +1366,11 @@ BatchedTransfers assemble_runtime_args_commands(
         "incorrect.",
         command_count,
         program_command_sequence.runtime_args_command_sequences.size());
+    program_command_sequence.runtime_args_sizeB = std::accumulate(
+        program_command_sequence.runtime_args_command_sequences.begin(),
+        program_command_sequence.runtime_args_command_sequences.end(),
+        uint32_t{0},
+        [](uint32_t size, const HostMemDeviceCommand& command) { return size + command.size_bytes(); });
 
     return transfers;
 }
@@ -1783,13 +1796,17 @@ private:
 class PrefetcherPipeCommandGenerator {
 public:
     void construct_commands(
-        IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
+        const MetalContext& metal_ctx,
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers) {
         const auto& per_core_prefetcher_pipes = program.get_per_core_prefetcher_pipes();
         if (per_core_prefetcher_pipes.empty()) {
             return;
         }
 
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = metal_ctx.hal();
         const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const auto& kernel_groups = program.get_kernel_groups(index);
         const auto& program_config = program.get_program_config(index);
@@ -1798,10 +1815,8 @@ public:
             prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
             "PrefetcherPipeCommandGenerator: unexpected REMOTE_DFB_OFFSET_NONE with participants present");
         const uint32_t start_addr = prefetcher_pipe_offset;
-        const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
         for (const auto& kg : kernel_groups) {
-            for (auto& group : partition_cores_by_prefetcher_pipe_payload(
-                     kg->core_ranges, per_core_prefetcher_pipes, num_program_slots)) {
+            for (auto& group : partition_cores_by_prefetcher_pipe_payload(program, kg->core_ranges)) {
                 payloads_.push_back(std::move(group.payload));
                 const auto& payload = payloads_.back();
                 const uint32_t payload_bytes = static_cast<uint32_t>(payload.size() * sizeof(uint32_t));
@@ -2679,7 +2694,8 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(
+        metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
@@ -2696,6 +2712,37 @@ void assemble_device_commands(
         program_command_sequence,
         program_command_sequence.program_config_buffer_command_sequence,
         DISPATCH_WRITE_OFFSET_ZERO);
+
+    // Cache direct destinations for launch-time CB updates. Core-range membership and buffer
+    // indices are fixed after program finalization, so re-enqueue only needs to refresh values.
+    auto& local_cb_updates = program_command_sequence.local_cb_config_updates;
+    auto& remote_cb_updates = program_command_sequence.remote_cb_config_updates;
+    local_cb_updates.clear();
+    remote_cb_updates.clear();
+    const auto& hal = metal_ctx.hal();
+    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t remote_offset_index = program.get_program_config(tensix_index).local_cb_size / sizeof(uint32_t);
+    for (size_t range_index = 0; range_index < program_command_sequence.circular_buffers_on_core_ranges.size();
+         ++range_index) {
+        uint32_t* const payload = program_command_sequence.cb_configs_payloads[range_index];
+        for (const auto& circular_buffer : program_command_sequence.circular_buffers_on_core_ranges[range_index]) {
+            for (const uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
+                local_cb_updates.push_back(
+                    {circular_buffer.get(),
+                     payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
+                     buffer_index});
+            }
+            for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
+                remote_cb_updates.push_back(
+                    {circular_buffer.get(),
+                     payload + remote_offset_index +
+                         (max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
+                     buffer_index});
+            }
+        }
+    }
+
     semaphore_command_generator.assemble_unicast_commands(
         metal_ctx, program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence
@@ -2943,7 +2990,6 @@ void update_program_dispatch_commands(
     uint8_t cq_id) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
-    uint32_t i = 0;
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
@@ -3005,33 +3051,20 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB Configs
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
-    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-    for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
-        uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
-        for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address();
-            const uint32_t cb_size = cb->size();
-            for (const auto& buffer_index : cb->local_buffer_indices()) {
-                // 1 cmd for all 32 buffer indices, populate with real data for specified indices
-
-                // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-                cb_config_payload[base_index] = cb_address;
-                cb_config_payload[base_index + 1] = cb_size;
-                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
-            }
-            for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
-                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
-                cb_config_payload[base_index] = cb->config_address();
-                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
-            }
-        }
-        i++;
+    // Update CB configs through destinations cached when the command sequence was assembled. The values
+    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
+    // and 16-bit page-count checks.
+    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = circular_buffer.size();
+        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
+        update.dst[3] = circular_buffer.page_size(update.buffer_index);
+    }
+    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = circular_buffer.page_size(update.buffer_index);
     }
 
     {
@@ -3621,17 +3654,20 @@ uint32_t program_base_addr_on_core(
     distributed::MeshWorkloadImpl& mesh_workload,
     distributed::MeshDevice* mesh_device,
     HalProgrammableCoreType programmable_core_type) {
+    auto* cq = mesh_workload.get_last_used_command_queue();
+    if (cq == nullptr) {
+        return MetalContext::instance(extract_context_id(mesh_device))
+            .hal()
+            .get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    }
+
     const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
-    auto* cq = mesh_workload.get_last_used_command_queue();
-    return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
-              : MetalContext::instance(extract_context_id(mesh_device))
-                    .hal()
-                    .get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    return cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type);
 }
 
 void reset_config_buf_mgrs_and_expected_workers(

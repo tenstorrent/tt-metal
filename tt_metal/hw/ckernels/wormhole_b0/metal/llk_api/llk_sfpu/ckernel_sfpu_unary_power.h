@@ -236,6 +236,8 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
 
 template <bool IS_POSITIVE_EXPONENT>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
+    sfpi::lreg_pressure _;  // Declare high register pressure
+
     // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))
@@ -264,9 +266,15 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
     // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
     recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
-    // z = (m-1)*recip written as a single fused multiply-add (m*recip - recip), one
-    // instruction instead of a separate (m-1) subtract plus a multiply.
-    sfpi::vFloat z = m * recip - recip;
+    // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
+    // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
+    // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
+    // the multiply. Written as m*recip - recip it is instead a subtraction of two nearly equal
+    // quantities whenever the base is near 1.0, where m*recip and recip agree to ~24 bits. SFPMAD
+    // is only partially fused -- the product keeps four bits beyond fp32, not the exact product a
+    // true FMA would give -- so those four bits are all that survives the cancellation. The error
+    // is then scaled by pow in pow*log2(base): 250 ULP at pow = 1000, 4.4% relative at 3e6.
+    sfpi::vFloat z = (m - 1.0f) * recip;
 
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;

@@ -54,6 +54,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -1550,7 +1551,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self) || !self.is_allocated()) {
+                if (!is_device_tensor(self) || !self.is_allocated() ||
+                    !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
                 }
                 auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();

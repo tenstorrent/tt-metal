@@ -146,8 +146,7 @@ ProgramDescriptor TanhBwProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core, {src0_buffer, src1_buffer, num_tiles_per_core, num_tiles_written, 0u, 0u, num_cores_y});
 
-        compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core, 1});
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core});
 
         writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 

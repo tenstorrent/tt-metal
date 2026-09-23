@@ -16,7 +16,13 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "compute_common.hpp"
+#ifndef ARCH_QUASAR
+// The streaming compute path uses LLK primitives not available on Quasar (matmul_block_no_mop,
+// exp_packthread_tile, *_custom, mm_no_mop_*), so it is neither compiled nor selected there — Quasar
+// forces the non-streaming path (factory: use_streaming_compute=false on Quasar). See the guarded
+// streaming branch in kernel_main() below.
 #include "compute_streaming.hpp"
+#endif
 
 void kernel_main() {
     [[maybe_unused]] constexpr auto B = get_arg(args::B);
@@ -90,7 +96,15 @@ void kernel_main() {
     constexpr auto dfb_max_A = dfb::max_A;
     constexpr auto dfb_max_B = dfb::max_B;
     constexpr auto dfb_sum_A = dfb::sum_A;
+#if defined(USE_STREAMING_COMPUTE) || defined(USE_ATTENTION_SINK)
+    // Streaming and the attention-sink path keep two separate sum DFBs (prev/cur ping-pong halves).
     constexpr auto dfb_sum_B = dfb::sum_B;
+#else
+    // The non-streaming STANDARD path (no sink) merges the running-sum ping-pong into a single 3-deep
+    // DFB bound to sum_A; the factory drops the sum_B binding, so alias it to sum_A. sdpa_inner_loop
+    // ignores this arg on the merged path (merged_sum).
+    constexpr auto dfb_sum_B = dfb::sum_A;
+#endif
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
 #ifdef HAS_MASK
     constexpr auto dfb_mask_in = dfb::mask_in;
@@ -124,11 +138,17 @@ void kernel_main() {
     DataflowBuffer dfb_mask_in_obj(dfb_mask_in);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_out);
     matmul_init(dfb_q_in, dfb_k_in);
+    // Reset the Quasar pack-operand tracker so the first pack_reconfig_out re-points via pack_init
+    // regardless of the post-startup packer state. No-op on WH/BH.
+    reset_pack_operand_tracking();
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
             dfb_chunk_start_idx_obj.wait_front(1);
             uint32_t chunk_start_idx = ckernel::read_tile_value(dfb_chunk_start_idx, 0, 0);
+            // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_chunk_start_idx);
             dfb_chunk_start_idx_obj.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
             chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;
@@ -139,6 +159,8 @@ void kernel_main() {
     }
 
     if constexpr (use_streaming_compute) {
+#ifndef ARCH_QUASAR  // streaming path is not built on Quasar (see guarded include); use_streaming_compute
+                     // is forced false there, so this branch is also discarded at compile time.
         // Streaming SDPA v2: direct dfb_qkt_im writes via dfb_push_back_hold_wr_ptr.
         // No row buffers needed; a dedicated 1-tile DFB is used as recip scratch.
 
@@ -223,6 +245,7 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+#endif  // !ARCH_QUASAR
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);

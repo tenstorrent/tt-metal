@@ -30,6 +30,12 @@ inline void generalized_moe_gate_top8(uint32_t eps, uint32_t scale) {
     _generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
 }
 
+// Separate functor so the two-argument generalized_moe_gate_top8 above keeps its signature.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void generalized_moe_gate_top8_scaled(uint32_t eps, uint32_t scale, uint32_t extra_scale) {
+    _generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en, true>(eps, scale, extra_scale);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
 inline void generalized_moe_gate_merge4_top8() {
     _gmg_merge4_top8<is_fp32_dest_acc_en, read_base, store_lo, store_hi>();
@@ -114,6 +120,19 @@ struct GeneralizedMoeGateTop8
     using GeneralizedMoeGateTopkInit<APPROXIMATION_MODE, DST_ACCUM>::init_kernel;
     static void kernel(uint32_t eps, uint32_t scale) {
         generalized_moe_gate_top8<APPROXIMATION_MODE, DST_ACCUM>(eps, scale);
+    }
+};
+
+// GeneralizedMoeGateTop8Scaled<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>::calculate(0, RC_custom, eps, scale,
+// extra_scale)
+//   generalized_moe_gate (grouped path, do_extra_scale): top-8 merge + normalize, with extra_scale folded into scale.
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct GeneralizedMoeGateTop8Scaled
+    : SfpuUnaryOp<GeneralizedMoeGateTop8Scaled<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM>,
+      GeneralizedMoeGateTopkInit<APPROXIMATION_MODE, DST_ACCUM> {
+    using GeneralizedMoeGateTopkInit<APPROXIMATION_MODE, DST_ACCUM>::init_kernel;
+    static void kernel(uint32_t eps, uint32_t scale, uint32_t extra_scale) {
+        generalized_moe_gate_top8_scaled<APPROXIMATION_MODE, DST_ACCUM>(eps, scale, extra_scale);
     }
 };
 

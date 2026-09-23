@@ -1265,6 +1265,13 @@ struct is_std_hashable<T, std::void_t<decltype(std::declval<std::hash<T>>()(std:
 template <typename T>
 constexpr bool is_std_hashable_v = is_std_hashable<T>::value;
 
+template <typename Range>
+inline hash_t hash_sized_range(const Range& range) noexcept {
+    hash_t hash = hash_objects(hash_t{0}, range.size());
+    std::for_each(std::begin(range), std::end(range), [&](const auto& element) { hash = hash_objects(hash, element); });
+    return hash;
+}
+
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -1357,37 +1364,24 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_span_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::span of type {}\n", get_type_name<T>());
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_specialization_v<T, std::map>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::map of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& [key, value] : object) {
-            hash = hash_objects(hash, key, value);
-        }
+        hash_t hash = hash_objects(hash_t{0}, object.size());
+        std::for_each(
+            object.begin(), object.end(), [&](const auto& kv) { hash = hash_objects(hash, kv.first, kv.second); });
         return hash;
     } else if constexpr (is_specialization_v<T, std::unordered_map>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -1401,10 +1395,10 @@ inline hash_t hash_object(const T& object) noexcept {
         }
         std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
 
-        hash_t hash = 0;
-        for (const auto& it : iterators) {
+        hash_t hash = hash_objects(hash_t{0}, object.size());
+        std::for_each(iterators.begin(), iterators.end(), [&](const auto& it) {
             hash = hash_objects(hash, it->first, it->second);
-        }
+        });
         return hash;
     } else if constexpr (is_specialization_v<T, std::optional>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -1602,11 +1596,7 @@ void hash_combine(std::size_t& seed, const T& value) {
 template <typename T, size_t PREALLOCATED_SIZE>
 struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
-        size_t hash = 0;
-        for (const auto& element : vec) {
-            hash = ttsl::hash::detail::hash_objects(hash, element);
-        }
-        return hash;
+        return static_cast<size_t>(ttsl::hash::detail::hash_sized_range(vec));
     }
 };
 

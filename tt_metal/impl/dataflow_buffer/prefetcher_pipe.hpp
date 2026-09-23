@@ -24,41 +24,45 @@ class MeshDevice;
 
 namespace experimental {
 
-class PrefetcherPipe {
+// Implementation of the PrefetcherPipe host object declared in
+// tt-metalium/experimental/prefetcher_pipe.hpp: it owns the persistent L1 allocations, composes
+// each core's config page and stamps those pages onto the device. A PrefetcherPipe holds one of
+// these and forwards to it, and the host runtime records an Attach by pointing at one. That
+// pointer is only as good as the handle: destroying the PrefetcherPipe destroys this object and
+// frees the ring, which is why the handle must outlive every Program attached to it. Moving a
+// handle hands this object to the new owner without relocating it, so destruction is the only
+// way to get there.
+class PrefetcherPipeImpl {
 public:
-    /**
-     * Host object for a durable cross-program remote DFB.
-     *
-     * Lifetime: Create allocates the data ring + config page from persistent L1
-     * pages once. Keep this object alive for the entire time any program Attaches / uses
-     * it, destroying it frees the ring and config. The runtime does not fence peers;
-     * only destroy (or let it go out of scope) after every peer program has Finished.
-     *
-     * Host programming model:
-     *   auto pipe = CreatePrefetcherPipe(device, sender_core, receiver_cores, ring_size);
-     *   AttachPrefetcherPipe(program, pipe, sender_cores, entry_size);  // or all receivers
-     *   // optional: CreatePrefetcherPipeRelayDataflowBuffer(program, receivers, cfg, id);
-     *
-     * Device kernel flows (sender / receiver / relay) are documented on the device API:
-     *   tt_metal/hw/inc/api/dataflow/prefetcher_pipe.h
-     *
-     */
-    PrefetcherPipe(
+    PrefetcherPipeImpl(
         distributed::MeshDevice* device,
         CoreCoord sender_core,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
         BufferType buffer_type = BufferType::L1);
 
-    PrefetcherPipe(const PrefetcherPipe&) = delete;
-    PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
-    PrefetcherPipe(PrefetcherPipe&&) = delete;
-    PrefetcherPipe& operator=(PrefetcherPipe&&) = delete;
-    ~PrefetcherPipe();
+    PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
+    PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
+    PrefetcherPipeImpl(PrefetcherPipeImpl&&) = delete;
+    PrefetcherPipeImpl& operator=(PrefetcherPipeImpl&&) = delete;
+    ~PrefetcherPipeImpl();
 
     uint32_t buffer_address() const;
     uint32_t config_address() const;
     uint32_t ring_size() const { return ring_size_; }
+    // Active pipe-consumer lanes (matches relay num_producers when multi-producer).
+    uint32_t num_credit_lanes() const { return active_credit_lanes_; }
+    // Slots allocated in the config page (Quasar may reserve headroom above active).
+    uint32_t credit_lane_capacity() const { return credit_lane_capacity_; }
+    // Set active lanes from consumer geometry. Host state only: dispatch packs the value into
+    // every attached program's kernel-config slot (ordered with that program), nothing in
+    // persistent L1 is written. May upgrade from the Create-time default of 1, or no-op if
+    // already equal. Reprogramming to a different value after arming is rejected.
+    void set_active_credit_lanes(uint32_t num_lanes);
+    // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
+    // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected Attach
+    // does not leave the persistent pipe re-armed.
+    void validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const;
 
     uint32_t config_page_size() const { return config_page_size_; }
     uint32_t credit_reset_offset() const { return credit_reset_offset_; }
@@ -87,6 +91,11 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     uint32_t ring_size_ = 0;
+    // Physical lane slots in the config page (Create-time allocation).
+    uint32_t credit_lane_capacity_ = 1;
+    // Active lanes for striping / wait_front (per-program kernel-config slot); set from Attach
+    // num_pipe_consumer_threads / relay num_producers.
+    uint32_t active_credit_lanes_ = 1;
     uint32_t config_page_size_ = 0;
     uint32_t credit_reset_offset_ = 0;
     uint32_t credit_reset_size_ = 0;
@@ -94,44 +103,28 @@ private:
 };
 
 /**
- * @brief Create a PrefetcherPipe host object with an arena-backed data ring and config page.
- *
- * Config pages are written to device L1 at Create (safe-point initial write).
- * Caller keeps the object alive for cross-program persistence; Attach wires programs
- * to the same ring/config addresses.
- */
-PrefetcherPipe CreatePrefetcherPipe(
-    distributed::MeshDevice* device,
-    CoreCoord sender_core,
-    const CoreRangeSet& receiver_cores,
-    uint32_t ring_size,
-    BufferType buffer_type = BufferType::L1);
-
-/**
- * @brief Attach a PrefetcherPipe to `program` on the given cores (non-owning).
- *
- * `cores` must be a non-empty role-complete subset of the PrefetcherPipe's mapping
- * cores: the sender role is this pipe's one sender, while the receiver role contains
- * every receiver. This prevents one PrefetcherPipe role from being split across Programs.
- * Returns an independent prefetcher_pipe_id in [0, 255).
- *
- * WH/BH: on each sender core, only one DM (BRISC or NCRISC) may own PrefetcherPipe
- * credit / resize / push for that Attach. Both DMs can run on the same physical
- * core, but dual-DM ownership races on local sent counters and the checkpoint
- * cursor. Host binding / kernel placement should pin a single sender DM owner
- * until Attach can enforce this.
- *
- * @param entry_size Dense entry size for this Program execution epoch.
- */
-uint8_t AttachPrefetcherPipe(
-    Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
-
-/**
  * @brief Create and register the local DFB used to relay a PrefetcherPipe to TRISC.
  *
  * The local DFB borrows the PrefetcherPipe data ring. `prefetcher_pipe_id` must already be
  * Attached on `receiver_core_spec`. Relay entry_size / depth must match this Attach's
  * dense entry_size and `ring_size / entry_size`.
+ *
+ * Declared here rather than alongside the rest of the host API because it takes a DFB config,
+ * which has no public header yet.
+ *
+ * Multi-thread relay (Quasar): set `config.num_producers` / `config.num_consumers` and
+ * `pap` / `cap` (STRIDED or ALL) to match the bound kernels' `num_threads_per_cluster`.
+ * Contiguous prefetch pages: `cap=ALL` → every consumer Neo sees every entry;
+ * `cap=STRIDED` → Neo i owns entries i, i+C, …. For `num_producers>1`, registering
+ * the relay programs PrefetcherPipe lane credits from `num_producers` (must match
+ * `AttachPrefetcherPipe(..., num_pipe_consumer_threads)` if that already armed lanes).
+ * With `num_producers>1` the relay DFB is serialized lane-interleaved (producer h at entries
+ * h, h+P, …) for both `cap` values, so an ALL consumer sees entries in ring order rather than
+ * the contiguous per-producer blocks a standalone ALL DFB would use.
+ * Programming model: create the pipe first, bind sender and consumer programs, then
+ * enqueue in either order. Multi-DM *pipe sender* parallelism is separate: partition
+ * receivers (Flow C). Mid-kernel entry-size resize with `num_tcs_to_rr > 1` is
+ * unsupported (align snaps cursors only; TC geometry is fixed at DFB init).
  *
  * @return Program-unique host DFB id (distinct from `prefetcher_pipe_id`).
  */

@@ -9,8 +9,10 @@ Architecture: standard Llama 1D transformer, same topology as Llama 3.1-8B / 3.2
   hidden=8192, layers=80, n_heads=64, n_kv_heads=8, head_dim=128,
   intermediate=28672, vocab=128256, rope_theta=500000, RoPE llama3-scaled (factor=8).
 
-Mesh compatibility: T3K (1×8) only. 64 attn heads / 8 = 8 per device, 8 KV heads / 8 = 1
-per device; both tile-aligned. The port raises on any other mesh.
+Mesh compatibility: Wormhole T3K (1×8) and Blackhole P150x4 (1×4), backed by
+either physical P150_X4 or P300_X2 hardware. The architecture/SKU profile validates
+the exact product, device count, logical mesh shape, Ring topology, and P150 DRAM
+width before composing modules.
 
 TTTv1 source for precision recipes:
   ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``.
@@ -30,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -43,16 +44,48 @@ from models.common.modules.attention.attention_1d import (
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _nearest_32
-from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n
+from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n, _find_prefill_grid
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+LLAMA33_70B_BH_TP4_CLUSTER_TYPES = (
+    ttnn.cluster.ClusterType.P150_X4,
+    ttnn.cluster.ClusterType.P300_X2,
+)
+
+
+def _llama33_70b_ccl_topology(mesh_device) -> ttnn.Topology:
+    """Return Ring only for an exact admitted physical/logical product pairing."""
+
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    if (
+        arch == ttnn.device.Arch.WORMHOLE_B0
+        and cluster_type == ttnn.cluster.ClusterType.T3K
+        and num_devices == 8
+        and mesh_shape == (1, 8)
+    ) or (
+        arch == ttnn.device.Arch.BLACKHOLE
+        and cluster_type in LLAMA33_70B_BH_TP4_CLUSTER_TYPES
+        and num_devices == 4
+        and mesh_shape == (1, 4)
+    ):
+        return ttnn.Topology.Ring
+    raise ValueError(
+        "Llama-3.3-70B CCL requires physical Wormhole T3K/8-device/(1, 8) or "
+        "BlackHole P150_X4/P300_X2/4-device/(1, 4) Ring geometry; "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
+    )
 
 
 def _lazy(
@@ -237,7 +270,7 @@ def _all_gather_rmsnorm_tensor(
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
         num_links=1,
-        topology=default_topology(cfg.mesh_device),
+        topology=_llama33_70b_ccl_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         chunks_per_sync=24,
@@ -257,6 +290,13 @@ _LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+_HIFI2_FP16_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 @dataclass(frozen=True)
 class Llama33_70BPrecisionConfig:
@@ -265,8 +305,8 @@ class Llama33_70BPrecisionConfig:
     Two module-level recipes: :data:`LLAMA33_70B_ACCURACY` and :data:`LLAMA33_70B_PERFORMANCE`.
     The Hugging Face adaptor selects one while building this provider-neutral graph.
 
-    Attention compute-kernel configs are absent: TTTv1 uses HIFI2 QKV/O decode,
-    HIFI4 SDPA prefill, HIFI2 SDPA decode — matching ``Attention1D``'s TTTv2 defaults.
+    Attention's six operation slots are materialized by the resolved model profile:
+    WH preserves the accepted TTTv2 baseline while BH uses the TTTv1 candidate recipe.
     """
 
     wqkv_dtype: ttnn.DataType = ttnn.bfloat8_b
@@ -275,9 +315,8 @@ class Llama33_70BPrecisionConfig:
 
     mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
     mlp_w2_dtype: ttnn.DataType = ttnn.bfloat8_b
-    # None → MLP1D default HIFI2_FP16 (matches TTTv1 LI_FF1_FF3 / LI_FF2 accuracy)
-    mlp_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    mlp_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    mlp_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig = _HIFI2_FP16_COMPUTE_KERNEL_CFG
+    mlp_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig = _HIFI2_FP16_COMPUTE_KERNEL_CFG
 
     lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
 
@@ -292,6 +331,7 @@ LLAMA33_70B_ACCURACY = Llama33_70BPrecisionConfig()
 LLAMA33_70B_PERFORMANCE = Llama33_70BPrecisionConfig(
     mlp_w1_w3_dtype=ttnn.bfloat4_b,
     mlp_ff1_3_compute_kernel_cfg=_LOFI_COMPUTE_KERNEL_CFG,
+    mlp_ff2_compute_kernel_cfg=_HIFI2_FP16_COMPUTE_KERNEL_CFG,
 )
 
 
@@ -330,6 +370,7 @@ class Llama33_70BTransformer1DConfig:
     activation_dtypes: list[ttnn.DataType | None] = field(default_factory=list)
     tt_ccl: Any = None
     cache_path: str | None = None
+    batched_prefill_selector_compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -367,47 +408,122 @@ class Llama33_70BWeights:
 
 
 # =============================================================================
-# Wormhole tuning
+# Model precision profile + architecture/SKU overlay
 # =============================================================================
 
 
-@dataclass
-class _Llama33_70BWHTuning:
-    mlp_prefill_len_cutoff: int | None = None
-    mlp_decode_spill_w1_to_dram: bool = False
-    # Use ttnn.experimental.minimal_matmul for QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
-    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. Kept on
-    # for consistency with the 1B/3B/family ports + long-prompt prefill; inert on the 128-bucket
-    # short-context workload (only fires for seq_len > 128, e.g. long prompts).
-    prefill_minimal_matmul: bool = True
+@dataclass(frozen=True, slots=True)
+class _Llama33_70BModelProfile:
+    li_qkv_decode: ttnn.DeviceComputeKernelConfig
+    sdpa_decode: ttnn.DeviceComputeKernelConfig
+    li_o_decode: ttnn.DeviceComputeKernelConfig
+    li_qkv_prefill: ttnn.DeviceComputeKernelConfig
+    sdpa_prefill: ttnn.DeviceComputeKernelConfig
+    li_o_prefill: ttnn.DeviceComputeKernelConfig
+    prefill_ff1_ff3: ttnn.DeviceComputeKernelConfig
+    prefill_ff2: ttnn.DeviceComputeKernelConfig
+    decode_ff1_ff3: ttnn.DeviceComputeKernelConfig
+    decode_ff2: ttnn.DeviceComputeKernelConfig
+    rmsnorm: ttnn.DeviceComputeKernelConfig
+    lm_head: ttnn.DeviceComputeKernelConfig
 
 
-def _resolve_llama33_70b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llama33_70BWHTuning:
-    """Pick WH L1 tuning knobs for Llama-3.3-70B on T3K.
+@dataclass(frozen=True, slots=True)
+class _Llama33_70BSKUOverlay:
+    mlp_prefill_len_cutoff: int
+    dram_shard_grid_width: int
+    prefill_qkv_grid: tuple[int, int]
+    decode_create_qkv_head_grid: ttnn.CoreGrid | None
+    decode_transformation_core_grid: ttnn.CoreCoord
+    lm_head_max_columns_per_device: int
+    prefill_minimal_matmul: bool
 
-    The 70B FF is wide (intermediate=28672 → 3584 per device on T3K); the prefill FF1/FF3 matmul is
-    chunked at ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``)
-    and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci FF prefill (``[1,1,B*S,dim]``,
-    B*S=4096 at the 128 bucket) this runs 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of
-    256 (``per_core_M=1``) — matching TTTv1's blocking on the ~80%-FLOP block (this is the worst model,
-    so the biggest absolute win). 1024 divides every folded prefill length ≥1024 (all power-of-2
-    products of pb∈{1,2,4,8,16,32} × bucket∈{128,512,1024,2048}); shorter folds skip the reshape. The
-    earlier 256 was a 7B-on-N300 inheritance (per-device FF shard 9472 ≫ the T3K 70B shard 3584), so
-    its tighter-L1 motive does not apply here; 1024 fits — TTTv1 runs it for this exact model on this
-    box. Output is unchanged: ``in0_block_w`` / the K-contraction are independent of the M-tiling, so
-    only ``per_core_M`` changes. ``decode_spill_w1_to_dram`` stays off; re-evaluate if decode batch-32
-    trips L1 circular-buffer validation.
-    """
-    t = _Llama33_70BWHTuning()
-    t.mlp_prefill_len_cutoff = 1024
-    t.mlp_decode_spill_w1_to_dram = False
-    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
-    logger.info(
-        f"MLP tuning for Llama-3.3-70B on {num_dev} device(s): "
-        f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+
+@dataclass(frozen=True, slots=True)
+class _Llama33_70BComposition:
+    model: _Llama33_70BModelProfile
+    sku: _Llama33_70BSKUOverlay
+
+
+def _kernel_config(
+    arch,
+    fidelity,
+    *,
+    approx: bool,
+    fp32: bool,
+    packer: bool,
+) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=fidelity,
+        math_approx_mode=approx,
+        fp32_dest_acc_en=fp32,
+        packer_l1_acc=packer,
     )
-    return t
+
+
+def _copy_profile_kernel(arch, candidate) -> ttnn.DeviceComputeKernelConfig:
+    if candidate is None:
+        return _kernel_config(arch, ttnn.MathFidelity.HiFi2, approx=False, fp32=False, packer=True)
+    return _kernel_config(
+        arch,
+        candidate.math_fidelity,
+        approx=candidate.math_approx_mode,
+        fp32=candidate.fp32_dest_acc_en,
+        packer=candidate.packer_l1_acc,
+    )
+
+
+def _resolve_llama33_70b_profile(
+    *, arch, cluster_type, num_devices: int, dram_width: int, precision: Llama33_70BPrecisionConfig
+) -> _Llama33_70BComposition:
+    """Compose the model recipe with the WH baseline or P150x4 SKU overlay."""
+    is_wh = arch == ttnn.device.Arch.WORMHOLE_B0
+    if not is_wh and arch != ttnn.device.Arch.BLACKHOLE:
+        raise ValueError(f"Unsupported Llama-3.3-70B architecture: {arch}")
+    expected_devices = 8 if is_wh else 4
+    expected_clusters = (ttnn.cluster.ClusterType.T3K,) if is_wh else LLAMA33_70B_BH_TP4_CLUSTER_TYPES
+    if cluster_type not in expected_clusters:
+        raise ValueError(
+            f"Llama-3.3-70B requires physical cluster in {expected_clusters}, got {cluster_type}; "
+            "a logical submesh is not SKU-equivalent"
+        )
+    if num_devices != expected_devices:
+        sku = "T3K" if is_wh else "P150x4"
+        raise ValueError(f"Llama-3.3-70B {sku} profile requires {expected_devices} devices, got {num_devices}")
+    if not is_wh and dram_width != 8:
+        raise ValueError(f"Llama-3.3-70B Blackhole profile requires P150 DRAM width 8, got {dram_width}")
+
+    # WH locks the pre-change TTTv2 baseline. BH adopts the TTTv1 candidate
+    # recipe: five HiFi2/FP32/approx slots and exact HiFi4 SDPA prefill.
+    ordinary_attention = _kernel_config(arch, ttnn.MathFidelity.HiFi2, approx=not is_wh, fp32=not is_wh, packer=True)
+    sdpa_prefill = _kernel_config(arch, ttnn.MathFidelity.HiFi4, approx=False, fp32=True, packer=True)
+    ff1_ff3 = _copy_profile_kernel(arch, precision.mlp_ff1_3_compute_kernel_cfg)
+    ff2 = _copy_profile_kernel(arch, precision.mlp_ff2_compute_kernel_cfg)
+    model = _Llama33_70BModelProfile(
+        li_qkv_decode=_copy_profile_kernel(arch, ordinary_attention),
+        sdpa_decode=_copy_profile_kernel(arch, ordinary_attention),
+        li_o_decode=_copy_profile_kernel(arch, ordinary_attention),
+        li_qkv_prefill=_copy_profile_kernel(arch, ordinary_attention),
+        sdpa_prefill=_copy_profile_kernel(arch, sdpa_prefill),
+        li_o_prefill=_copy_profile_kernel(arch, ordinary_attention),
+        prefill_ff1_ff3=_copy_profile_kernel(arch, ff1_ff3),
+        prefill_ff2=_copy_profile_kernel(arch, ff2),
+        decode_ff1_ff3=_copy_profile_kernel(arch, ff1_ff3),
+        decode_ff2=_copy_profile_kernel(arch, ff2),
+        rmsnorm=_kernel_config(arch, ttnn.MathFidelity.HiFi2, approx=False, fp32=True, packer=True),
+        lm_head=_kernel_config(arch, ttnn.MathFidelity.HiFi2, approx=False, fp32=False, packer=True),
+    )
+    sku = _Llama33_70BSKUOverlay(
+        mlp_prefill_len_cutoff=1024 if is_wh else 512,
+        dram_shard_grid_width=8,
+        prefill_qkv_grid=(8, 8) if is_wh else (8, 10),
+        decode_create_qkv_head_grid=None if is_wh else ttnn.CoreGrid(y=4, x=8),
+        decode_transformation_core_grid=ttnn.CoreCoord(8, 8),
+        lm_head_max_columns_per_device=8192 if is_wh else 128256 // 4 // 8,
+        prefill_minimal_matmul=not os.environ.get("DISABLE_MINIMAL_MATMUL"),
+    )
+    return _Llama33_70BComposition(model=model, sku=sku)
 
 
 # =============================================================================
@@ -449,7 +565,7 @@ def _build_decoder_layer(
     precision: Llama33_70BPrecisionConfig,
     paged_attention_config: Llama33_70BPagedAttentionConfig,
     cache_path: Path | None,
-    wh: _Llama33_70BWHTuning,
+    profile: _Llama33_70BComposition,
     decode_residual_memcfg: ttnn.MemoryConfig,
 ) -> TransformerBlock1DConfig:
     prefix = f"layer{idx}"
@@ -490,9 +606,20 @@ def _build_decoder_layer(
             q_chunk_size=0,
             k_chunk_size=0,
         ),
-        prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+        li_qkv_decode_compute_kernel_cfg=profile.model.li_qkv_decode,
+        sdpa_decode_compute_kernel_cfg=profile.model.sdpa_decode,
+        li_o_decode_compute_kernel_cfg=profile.model.li_o_decode,
+        li_qkv_prefill_compute_kernel_cfg=profile.model.li_qkv_prefill,
+        sdpa_prefill_compute_kernel_cfg=profile.model.sdpa_prefill,
+        li_o_prefill_compute_kernel_cfg=profile.model.li_o_prefill,
+        prefill_qkv_grid=profile.sku.prefill_qkv_grid,
+        dram_shard_grid_width=profile.sku.dram_shard_grid_width,
+        decode_create_qkv_head_grid=profile.sku.decode_create_qkv_head_grid,
+        decode_transformation_core_grid=profile.sku.decode_transformation_core_grid,
+        prefill_qkv_minimal_matmul=profile.sku.prefill_minimal_matmul,
     )
 
+    padded_hidden_dim = get_padded_hidden_dim(mcfg.hidden_dim, num_dev, TILE_SIZE)
     mlp_config = MLP1DConfig(
         w1=_lazy(
             weights.w1,
@@ -513,15 +640,18 @@ def _build_decoder_layer(
         tt_ccl=tt_ccl,
         topology=topology,
         max_batch_size=mcfg.max_batch_size,
-        prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
-        decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+        decode_spill_w1_to_dram_before_w3=False,
         w1_w3_dtype=precision.mlp_w1_w3_dtype,
         w2_dtype=precision.mlp_w2_dtype,
-        ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-        decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-        ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
-        decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
-        prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
+        ff1_3_compute_kernel_cfg=profile.model.prefill_ff1_ff3,
+        ff2_compute_kernel_cfg=profile.model.prefill_ff2,
+        decode_ff1_3_compute_kernel_cfg=profile.model.decode_ff1_ff3,
+        decode_ff2_compute_kernel_cfg=profile.model.decode_ff2,
+        prefill_len_cutoff=profile.sku.mlp_prefill_len_cutoff,
+        prefill_dram_shard_grid_width=profile.sku.dram_shard_grid_width,
+        prefill_ff1_ff3_grid=_find_prefill_grid(8, mcfg.dim // TILE_SIZE),
+        prefill_ff2_grid=_find_prefill_grid(8, padded_hidden_dim // TILE_SIZE),
+        prefill_w2_minimal_matmul=profile.sku.prefill_minimal_matmul,
     )
 
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
@@ -543,6 +673,8 @@ def _build_decoder_layer(
             eps=mcfg.rms_norm_eps,
             max_batch_size=mcfg.max_batch_size,
             tt_ccl=tt_ccl,
+            prefill_distributed=num_dev > 1 and mcfg.dim > 4096,
+            compute_kernel_config=profile.model.rmsnorm,
             **extra,
         )
 
@@ -578,8 +710,12 @@ def _build_lm_head_lazy_weights(
     """Build provider-neutral column-split LM-head weights."""
 
     num_devices = mesh_device.get_num_devices()
+    if tuple(lm_head_weight.shape) != (vocab_size, dim):
+        raise ValueError(
+            f"Llama 70B LM-head weight must have shape {(vocab_size, dim)}, got {tuple(lm_head_weight.shape)}"
+        )
     torch_w = lm_head_weight.T.contiguous().to(torch.bfloat16)
-    padded_vocab_size = math.ceil(vocab_size / 32) * 32
+    padded_vocab_size = math.ceil(vocab_size / (TILE_SIZE * num_devices)) * (TILE_SIZE * num_devices)
     if vocab_size < padded_vocab_size:
         torch_w = torch.cat(
             [torch_w, torch.zeros(torch_w.shape[0], padded_vocab_size - vocab_size, dtype=torch_w.dtype)], dim=-1
@@ -598,9 +734,16 @@ def _build_lm_head_lazy_weights(
     weights_memcfgs = []
     for split_index, split_size in enumerate(split_sizes):
         device_splits = []
+        physical_split_size = math.ceil(split_size / TILE_SIZE) * TILE_SIZE
         for device_index in range(num_devices):
             start = device_index * size_per_device + sum(split_sizes[:split_index])
-            device_splits.append(torch_w[:, start : start + split_size])
+            device_split = torch_w[:, start : start + split_size]
+            if split_size < physical_split_size:
+                device_split = torch.cat(
+                    [device_split, torch.zeros(dim, physical_split_size - split_size, dtype=device_split.dtype)],
+                    dim=-1,
+                )
+            device_splits.append(device_split)
         combined = torch.cat(device_splits, dim=-1)
         padded_n = math.ceil((combined.shape[-1] // num_devices) / (TILE_SIZE * dram_size.x)) * (
             TILE_SIZE * dram_size.x
@@ -624,7 +767,12 @@ def _build_lm_head_lazy_weights(
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=memory_config,
                 cache_dir_weight_name=(
-                    (cache_dir, f"lm_head_split_{split_index}_{combined.shape[-1]}") if cache_dir else None
+                    (
+                        cache_dir,
+                        f"lm_head_split_{split_index}_logical_{split_size}_physical_{combined.shape[-1]}",
+                    )
+                    if cache_dir
+                    else None
                 ),
             )
         )
@@ -638,12 +786,14 @@ def _build_lm_head(
     mcfg: Llama33_70BModelParameters,
     lm_head_dtype: ttnn.DataType,
     cache_path: Path | None,
+    profile: _Llama33_70BComposition,
 ) -> LMHead1DConfig:
     lm_splits, lm_split_sizes, lm_weights_memcfgs = _build_lm_head_lazy_weights(
         mesh_device,
         lm_head_weight,
         dim=mcfg.dim,
         vocab_size=mcfg.vocab_size,
+        max_columns_per_device=profile.sku.lm_head_max_columns_per_device,
         dtype=lm_head_dtype,
         cache_dir=cache_path / "lm_head" if cache_path else None,
     )
@@ -667,9 +817,10 @@ def _build_lm_head(
         max_batch_size=mcfg.max_batch_size,
         lm_head_dtype=lm_head_dtype,
         program_configs=lm_prog_configs,
-        compute_kernel_config=None,
+        output_split_sizes=lm_split_sizes,
         input_memcfg=lm_input_memcfg,
         weights_memcfgs=lm_weights_memcfgs,
+        compute_kernel_config=profile.model.lm_head,
     )
 
 
@@ -691,8 +842,14 @@ def build_llama33_70b_transformer_1d_config(
     """Build the TT tensor graph from provider-neutral dimensions and tensors."""
 
     num_devices = mesh_device.get_num_devices()
-    if num_devices != 8:
-        raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
+    arch = mesh_device.arch()
+    profile = _resolve_llama33_70b_profile(
+        arch=arch,
+        cluster_type=ttnn.cluster.get_cluster_type(),
+        num_devices=num_devices,
+        dram_width=mesh_device.dram_grid_size().x,
+        precision=precision,
+    )
     if params.n_heads % num_devices or params.n_kv_heads % num_devices:
         raise ValueError(
             f"Checkpoint heads ({params.n_heads}/{params.n_kv_heads}) must be divisible by device count ({num_devices})"
@@ -701,7 +858,7 @@ def build_llama33_70b_transformer_1d_config(
         raise ValueError(f"Expected {n_layers} decoder layer weight sets, got {len(weights.layers)}")
 
     tt_ccl = get_tt_ccl(mesh_device)
-    topology = default_topology(mesh_device)
+    topology = _llama33_70b_ccl_topology(mesh_device)
     embedding_config = Embedding1DConfig(
         weights=_lazy(
             weights.embedding,
@@ -718,8 +875,12 @@ def build_llama33_70b_transformer_1d_config(
         head_dim=params.head_dim,
         device=mesh_device,
         use_qk_fused=False,
+        # Keep decode cos/sin rows on the same 8-wide batch-core mapping as
+        # create_qkv_heads and Attention's rotary transformation matrix.  A
+        # physical P150 grid is 12-wide; allowing Rope1D to infer that grid
+        # remaps slot 24 to a different core row than Attention.
+        core_grid=profile.sku.decode_transformation_core_grid,
     )
-    wh = _resolve_llama33_70b_wh_tuning(num_dev=num_devices, max_batch_size=params.max_batch_size)
     block_configs = [
         _build_decoder_layer(
             idx=index,
@@ -732,7 +893,7 @@ def build_llama33_70b_transformer_1d_config(
             precision=precision,
             paged_attention_config=paged_attention_config,
             cache_path=cache_path,
-            wh=wh,
+            profile=profile,
             decode_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         )
         for index in range(n_layers)
@@ -743,6 +904,8 @@ def build_llama33_70b_transformer_1d_config(
         eps=params.rms_norm_eps,
         max_batch_size=params.max_batch_size,
         tt_ccl=tt_ccl,
+        prefill_distributed=num_devices > 1 and params.dim > 4096,
+        compute_kernel_config=profile.model.rmsnorm,
     )
     lm_head_config = _build_lm_head(
         mesh_device=mesh_device,
@@ -750,6 +913,7 @@ def build_llama33_70b_transformer_1d_config(
         mcfg=params,
         lm_head_dtype=precision.lm_head_dtype,
         cache_path=cache_path,
+        profile=profile,
     )
     sampling_config = Sampling1DConfig(
         vocab_size=params.vocab_size,
@@ -779,6 +943,13 @@ def build_llama33_70b_transformer_1d_config(
         activation_dtypes=[None] * n_layers,
         tt_ccl=tt_ccl,
         cache_path=str(cache_path),
+        batched_prefill_selector_compute_kernel_config=_kernel_config(
+            arch,
+            ttnn.MathFidelity.HiFi4,
+            approx=False,
+            fp32=True,
+            packer=False,
+        ),
     )
 
 
@@ -811,6 +982,7 @@ class Llama33_70BTransformer1D(LightweightModule):
         self.prefill_residual_memcfg = config.prefill_residual_memcfg or ttnn.DRAM_MEMORY_CONFIG
         self.activation_dtypes = config.activation_dtypes or [None] * config.n_layers
         self.model_args = None
+        self.batched_prefill_selector_compute_kernel_config = config.batched_prefill_selector_compute_kernel_config
 
     # =========================================================================
     # KV cache binding
@@ -1028,13 +1200,7 @@ class Llama33_70BTransformer1D(LightweightModule):
             hidden_states,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
-            ),
+            compute_kernel_config=self.batched_prefill_selector_compute_kernel_config,
         )
         ttnn.deallocate(selector)
         x = self.norm.prefill_forward(x)
@@ -1112,7 +1278,7 @@ class Llama33_70BTransformer1D(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 memory_config=logits.memory_config(),
-                topology=default_topology(self.mesh_device),
+                topology=_llama33_70b_ccl_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,

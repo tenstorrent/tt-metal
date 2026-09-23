@@ -48,10 +48,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using namespace tt;
 using namespace tt::test_utils;

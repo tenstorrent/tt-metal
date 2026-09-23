@@ -152,9 +152,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
-    const uint32_t l1_alignment = this->device().allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned_result_size = (result_size_bytes + l1_alignment - 1) / l1_alignment * l1_alignment;
-    const uint32_t result_l1_addr = static_cast<uint32_t>(this->device().l1_size_per_core()) - aligned_result_size;
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -182,7 +180,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     tt_driver_atomics::mfence();
     std::vector<DataT> scalar_results;
@@ -329,12 +327,6 @@ inline void expect_wh_bh_aliases(const ExtentRecord& rec) {
     EXPECT_EQ(rec[StrideSize], rec[EntrySize]);
 }
 
-inline uint32_t allocate_l1_result_region(distributed::MeshDevice& mesh_device, uint32_t bytes) {
-    const uint32_t alignment = mesh_device.allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + alignment - 1u) / alignment * alignment;
-    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
-}
-
 inline ExtentRecord read_extent_record(distributed::MeshDevice& mesh_device, CoreCoord core, uint32_t l1_addr) {
     constexpr uint32_t num_fields = 8;
     constexpr uint32_t record_bytes = num_fields * sizeof(uint32_t);
@@ -456,7 +448,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
     const uint32_t producer_result_l1 =
-        allocate_l1_result_region(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
+        top_of_l1_scratch_addr(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
     const uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
 
     m2::ProgramRunArgs run_args;
@@ -472,7 +464,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     };
     m2::SetProgramRunArgs(program, run_args);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
     tt_driver_atomics::mfence();
 
     const CoreCoord core{0, 0};

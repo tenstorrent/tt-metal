@@ -55,7 +55,11 @@
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
+// Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
+// so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
+// both a multiple of 2 KB or DMs land on different sets.
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
+#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 10)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)
@@ -147,19 +151,20 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
+#define MEM_ROUTING_TABLE_SIZE 2704  // struct layout: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)
 #define MEM_OFFSET_OF_ROUTING_PATHS 516
-#define MEM_ROUTING_TABLE_PADDING 12
+// Tail of routing_l1_info_t after exit_node_table: my_mesh_coord_y/x (2 B) + mesh_y/x_size (2 B).
+// Must match the struct tail in hostdevcommon/fabric_common.h.
+#define MEM_ROUTING_TABLE_PADDING 4
 
-#define ROUTING_PATH_SIZE_1D 1024  // Was 256 (64 chips × 16 bytes)
-// 2D uncompressed size is too large to fit in L1 memory
-#define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0  // sizeof(intra_mesh_routing_path_t<1, true>)
+#define ROUTE_TABLE_SIZE_2D 1160           // sizeof(route_table_2d_t)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
-#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
+#define MEM_TENSIX_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
@@ -250,7 +255,7 @@
 #define MEM_DISPATCH_DM_GLOBAL_BASE (MEM_DISPATCH_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DISPATCH_DM_LOCAL_BASE (MEM_DISPATCH_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE * (NUM_DM_CORES + 1))
 
-#define MEM_DISPATCH_NOC_COUNTER_BASE (MEM_DISPATCH_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
+#define MEM_DISPATCH_NOC_COUNTER_BASE (MEM_DISPATCH_DM_LOCAL_BASE + MEM_DISPATCH_DM_LOCAL_SIZE * NUM_DM_CORES)
 #define MEM_DISPATCH_FABRIC_COUNTER_BASE (MEM_DISPATCH_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
 #define MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE (MEM_DISPATCH_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
 #define MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE \
@@ -261,12 +266,45 @@
     (MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE + MEM_ROUTING_TABLE_PADDING)
 #define MEM_DISPATCH_PACKET_HEADER_POOL_BASE \
     (MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
-#define MEM_DISPATCH_MAP_END (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+
+// Dispatch-engine bases for the three semaphore side-regions above, whose sizes they share.
+#define MEM_DISPATCH_SEM_REGIONS_BASE (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_DISPATCH_NOC_CAS_RET_BASE ((MEM_DISPATCH_SEM_REGIONS_BASE + 63) & ~63)
+#define MEM_DISPATCH_NOC_SEM_LOCK_BASE (MEM_DISPATCH_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
+#define MEM_DISPATCH_DM_CACHED_SEM_BASE (MEM_DISPATCH_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
+#define MEM_DISPATCH_SEM_REGIONS_END (MEM_DISPATCH_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
+#if (MEM_DISPATCH_DM_CACHED_SEM_BASE % 64 != 0)
+#error "Dispatch cached semaphore pool must start on a 64B cache line"
+#endif
+
+// Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
+// period: otherwise the kernel config ring and kernel text land on different sets.
+#define MEM_DISPATCH_MAP_END \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_SEM_REGIONS_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+
+// Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+#define MEM_SEM_CAS_RET_BASE MEM_DISPATCH_NOC_CAS_RET_BASE
+#define MEM_SEM_LOCK_BASE MEM_DISPATCH_NOC_SEM_LOCK_BASE
+#define MEM_SEM_CACHED_POOL_BASE MEM_DISPATCH_DM_CACHED_SEM_BASE
+#else
+#define MEM_SEM_CAS_RET_BASE MEM_NOC_CAS_RET_BASE
+#define MEM_SEM_LOCK_BASE MEM_NOC_SEM_LOCK_BASE
+#define MEM_SEM_CACHED_POOL_BASE MEM_DM_CACHED_SEM_BASE
+#endif
+#define MEM_SEM_CAS_RET_SIZE MEM_NOC_CAS_RET_SIZE
+#define MEM_SEM_LOCK_SIZE MEM_NOC_SEM_LOCK_SIZE
+#define MEM_SEM_CACHED_POOL_ROW MEM_DM_CACHED_SEM_ROW
+#define MEM_SEM_CACHED_POOL_SIZE MEM_DM_CACHED_SEM_SIZE
+
+// Span covering all three regions above, for the boot-time zeroing that treats them as one block.
+#define MEM_SEM_REGIONS_BASE MEM_SEM_CAS_RET_BASE
+#define MEM_SEM_REGIONS_SIZE (MEM_SEM_CACHED_POOL_BASE + MEM_SEM_CACHED_POOL_SIZE - MEM_SEM_CAS_RET_BASE)
 
 // Only DM0 needs an init-local staging area on a dispatch engine. RTA/semaphore kernel config overlays its start.
 #define MEM_DISPATCH_KERNEL_CONFIG_SIZE (2 * 1024)
 #define MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH MEM_DISPATCH_MAP_END
-#define MEM_DISPATCH_BANK_TO_NOC_SCRATCH (MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DM_LOCAL_SIZE)
+#define MEM_DISPATCH_BANK_TO_NOC_SCRATCH (MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DISPATCH_DM_LOCAL_SIZE)
 #define MEM_DISPATCH_LOGICAL_TO_VIRTUAL_SCRATCH (MEM_DISPATCH_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
 
 #define MEM_DISPATCH_DM0_KERNEL_BASE \
@@ -302,8 +340,7 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 128
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0

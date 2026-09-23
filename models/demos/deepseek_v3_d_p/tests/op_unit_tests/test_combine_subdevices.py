@@ -13,8 +13,8 @@ lines (plus the None default) and checks the output still matches the torch refe
 exercising both the row-oriented and the new column-oriented core layouts.
 
 This file MUST NOT run in CI.  It is collected by every "Disaggregated prefill op tests"
-job (some of which run the op_unit_tests/ folder unfiltered, e.g. [bh_p150b_civ2] /
-[bh_p300]), so a ``-k`` filter cannot exclude it.  Instead it skips itself in CI via
+job (some of which run the op_unit_tests/ folder unfiltered, e.g. [bh_p150b_civ2]),
+so a ``-k`` filter cannot exclude it.  Instead it skips itself in CI via
 the is_ci_env / is_ci_v2_env fixtures (same mechanism as
 test_sub_device_load_clear_timing.py): all CI jobs collect it but report it as skipped,
 while it still runs locally with no env var.
@@ -155,7 +155,7 @@ def test_combine_subdevice_placement(
     """
     topology = per_axis_topology(device_params["fabric_config"])[0]
     # Local-only: this file is collected by every "Disaggregated prefill op tests" job
-    # (some unfiltered, e.g. [bh_p150b_civ2]/[bh_p300]), so a -k filter cannot exclude
+    # (some unfiltered, e.g. [bh_p150b_civ2]), so a -k filter cannot exclude
     # it. Skip in CI the same way test_sub_device_load_clear_timing.py does; runs
     # locally with no env var.
     if is_ci_env or is_ci_v2_env:

@@ -21,7 +21,7 @@ void kernel_main() {
     // DRAM tensor accessor configuration for output writing
     constexpr auto interleaved_accessor0_args = TensorAccessorArgs<4>();
     constexpr auto interleaved_accessor1_args =
-        TensorAccessorArgs<interleaved_accessor0_args.next_compile_time_args_offset()>();
+        TensorAccessorArgs<decltype(interleaved_accessor0_args)::next_compile_time_args_offset()>();
 
     // Memory transfer configuration
     constexpr uint32_t onetile = 1;
@@ -30,7 +30,7 @@ void kernel_main() {
     const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);
     const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer values_dfb(values_dfb_index);
     DataflowBuffer indices_dfb(output_ind_dfb_index);
     const uint32_t tile_bytes_val = values_dfb.get_entry_size();
@@ -42,7 +42,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < Kt; ++i) {
             values_dfb.wait_front(onetile);
             noc.async_write(
-                values_dfb, interleaved_accessor0, tile_bytes_val, {.offset_bytes = 0}, {.page_id = j * Kt + i});
+                values_dfb, interleaved_accessor0, tile_bytes_val, {.offset_bytes = 0}, {.page_id = (j * Kt) + i});
             noc.async_write_barrier();
             values_dfb.pop_front(onetile);
         }  // i loop
@@ -51,7 +51,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < Kt; ++i) {
             indices_dfb.wait_front(onetile);
             noc.async_write(
-                indices_dfb, interleaved_accessor1, tile_bytes_idx, {.offset_bytes = 0}, {.page_id = j * Kt + i});
+                indices_dfb, interleaved_accessor1, tile_bytes_idx, {.offset_bytes = 0}, {.page_id = (j * Kt) + i});
             noc.async_write_barrier();
             indices_dfb.pop_front(onetile);
         }  // i loop

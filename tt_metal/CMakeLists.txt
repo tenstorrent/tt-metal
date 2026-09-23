@@ -66,6 +66,7 @@ file(
 file(
     GLOB_RECURSE TT_LLK_HEADERS
     tt-llk/common/*.h
+    tt-llk/tools/include/**/*.h
     tt-llk/tt_llk_wormhole_b0/**/*.h
     tt-llk/tt_llk_blackhole/**/*.h
     tt-llk/tt_llk_quasar/**/*.h

@@ -40,7 +40,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
 
@@ -117,10 +116,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .data_format_metadata = weights_data_format,
     });
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
+    // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
+    uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = FACE_HEIGHT * index_page_size,
+        .entry_size = index_tile_page_size,
         .num_entries = 1,
         .data_format_metadata = input_data_format,
     });

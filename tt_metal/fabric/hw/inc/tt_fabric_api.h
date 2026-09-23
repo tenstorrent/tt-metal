@@ -13,24 +13,15 @@
 #include "hostdevcommon/fabric_common.h"
 #include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include <array>
-#include <type_traits>
+#include "fabric_2d_route_interface.h"
 
 using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
-// Type alias for cleaner access to 2D mesh routing constants
-using MeshRoutingFields = RoutingFieldsConstants::Mesh;
-
-inline constexpr std::array<std::uint8_t, static_cast<std::size_t>(eth_chan_directions::COUNT)>
-    single_hop_route_cmd_by_direction = {
-        MeshRoutingFields::FORWARD_WEST,   // EAST
-        MeshRoutingFields::FORWARD_EAST,   // WEST
-        MeshRoutingFields::FORWARD_SOUTH,  // NORTH
-        MeshRoutingFields::FORWARD_NORTH,  // SOUTH
-        MeshRoutingFields::NOOP,           // Z
-};
+#if defined(FABRIC_2D)
+static_assert(ROUTING_TABLE_BASE % alignof(std::uint32_t) == 0, "2D routing-table base must be word aligned");
+#endif
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
@@ -43,105 +34,42 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     }
 }
 
-// Contract: the destination is the final destination and is exactly one EWNS physical fabric hop away.
-// Do not use this helper for Z / inter-mesh traffic, which still relies on router recompute metadata.
-void fabric_set_single_hop_unicast_route_from_direction(
+// Contract: the destination is the final destination, is in this mesh, and is exactly one physical
+// fabric hop away. Do not use this helper for inter-mesh traffic -- it has no valid coordinates for a
+// chip numbered in another mesh's id space.
+inline void fabric_set_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id) {
-    ASSERT(next_hop_direction != eth_chan_directions::Z);
+    uint16_t dst_mesh_id);
 
-    const auto dir_idx = static_cast<std::uint8_t>(next_hop_direction);
-    ASSERT(dir_idx < eth_chan_directions::COUNT);
-
-    // Edge-router recompute still inspects dst_start_node_id and mcast_params_64 on same-mesh worker traffic.
-    packet_header->mcast_params_64 = 0;
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->routing_fields.value = 0;
-    packet_header->route_buffer[0] = single_hop_route_cmd_by_direction[dir_idx];
-}
-
-void fabric_set_single_hop_unicast_route(
+inline void fabric_set_single_hop_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     fabric_set_single_hop_unicast_route_from_direction(
         packet_header, get_next_hop_router_direction(dst_mesh_id, dst_dev_id), dst_dev_id, dst_mesh_id);
 }
 
-template <bool mcast = false>
-void fabric_set_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    eth_chan_directions direction,
-    uint32_t branch_forward,
-    uint32_t start_hop,
-    uint32_t num_hops,
-    bool terminate = false) {
-    uint32_t local_packet = 0;
-    uint32_t forward_packet = 0;
-    uint32_t value = 0;
-    switch (direction) {
-        case eth_chan_directions::EAST:
-            local_packet = MeshRoutingFields::FORWARD_WEST;
-            forward_packet = MeshRoutingFields::FORWARD_EAST;
-            if constexpr (mcast) {
-                packet_header->routing_fields.branch_east_offset = start_hop;
-            } else {
-                packet_header->routing_fields.branch_east_offset = start_hop + 1;
-            }
-            break;
-        case eth_chan_directions::WEST:
-            local_packet = MeshRoutingFields::FORWARD_EAST;
-            forward_packet = MeshRoutingFields::FORWARD_WEST;
-            if constexpr (mcast) {
-                packet_header->routing_fields.branch_west_offset = start_hop;
-            } else {
-                packet_header->routing_fields.branch_west_offset = start_hop + 1;
-            }
-            break;
-        case eth_chan_directions::NORTH:
-            local_packet = MeshRoutingFields::FORWARD_SOUTH;
-            forward_packet = MeshRoutingFields::FORWARD_NORTH | branch_forward;
-            break;
-        case eth_chan_directions::SOUTH:
-            local_packet = MeshRoutingFields::FORWARD_NORTH;
-            forward_packet = MeshRoutingFields::FORWARD_SOUTH | branch_forward;
-            break;
-        default: ASSERT(false);
-    }
+inline bool fabric_set_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id);
 
-    volatile tt_l1_ptr uint8_t* route_vector = packet_header->route_buffer;
-    uint32_t local_val;
-    uint32_t forward_val;
-    uint32_t end_hop = start_hop + num_hops;
-    ASSERT(end_hop <= FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE);
-    for (uint32_t i = start_hop; i < end_hop; i++) {
-        if constexpr (mcast) {
-            // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
-            // addition to spine forwards on north/south. forward_packet bit 0 and 1 determine if mcast has to branch
-            // east/west from spine. If this is not a north/south mcast, then it cannot be a 2D mcast, and we dont need
-            // to branch.
-            uint32_t mcast_branch = forward_packet & MeshRoutingFields::WRITE_AND_FORWARD_NS
-                                        ? forward_packet & MeshRoutingFields::WRITE_AND_FORWARD_EW
-                                        : 0;
-            forward_val = i == end_hop - 1 ? mcast_branch : forward_packet;
-            local_val = local_packet;
-        } else {
-            forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
-            local_val = terminate ? (i == end_hop - 1 ? local_packet : 0) : 0;
-        }
-        route_vector[i] = local_val | forward_val;
-    }
-    packet_header->routing_fields.hop_index = 0;
-}
-
-template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
-bool fabric_set_unicast_route(
+inline std::uint8_t fabric_set_2d_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id = MAX_NUM_MESHES);
+    uint16_t dst_mesh_id,
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops);
 
-template <bool called_from_router = false>
-void fabric_set_mcast_route(
+// Multicast producer. Extents are measured from the anchor; a same-mesh send encodes through this
+// chip's reverse trees, a foreign final mesh takes a unicast-style carrier leg toward the exit.
+//
+// This API sends through one caller-chosen connection, so the root action must have at most one eth
+// output. Clients preserve the per-direction contract by issuing up to four branches: E-only, W-only,
+// N with optional E/W teeth, and S with optional E/W teeth. If one such branch has multiple root
+// outputs under express routing (for example N and Z), use a fabric_multicast_source_inject_* API to
+// submit the same encoded branch through each selected connection.
+inline void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
@@ -149,171 +77,226 @@ void fabric_set_mcast_route(
     uint16_t w_num_hops,
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
-    uint32_t spine_hops = 0;
-    uint32_t mcast_branch = 0;
-    packet_header->routing_fields.value = 0;
-    if constexpr (!called_from_router) {
-        tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                         ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-        packet_header->is_mcast_active = 0;
-        if (routing_table->my_mesh_id != dst_mesh_id) {
-            // TODO: refactoring
-            fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-            packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                             ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-            return;
-        }
-    }
-
-    // For 2D Mcast, mcast spine runs N/S and branches are E/W
-    // If api is called with east and/or west hops != 0, it may be a 2D mcast
-    // If so, set the forwarding flags for east and/or west branches.
-    if (e_num_hops) {
-        mcast_branch |= MeshRoutingFields::FORWARD_EAST;
-    }
-    if (w_num_hops) {
-        mcast_branch |= MeshRoutingFields::FORWARD_WEST;
-    }
-
-    if (n_num_hops) {
-        // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
-        spine_hops = n_num_hops;
-    } else if (s_num_hops) {
-        // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
-        spine_hops = s_num_hops;
-    }
-    if (e_num_hops) {
-        // Is a line mcast if spine_hops == 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, spine_hops, e_num_hops);
-        spine_hops += e_num_hops;
-    }
-    if (w_num_hops) {
-        // Is a line mcast if spine_hops == 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, spine_hops, w_num_hops);
-    }
+    const std::uint8_t root_action = fabric_set_2d_mcast_route(
+        packet_header, dst_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+    const std::uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
+    ASSERT((root_outputs & (root_outputs - 1)) == 0);
 }
 
-#if defined(COMPILE_FOR_ERISC)
-// Called only from fabric_erisc_router.cpp
-void fabric_set_mcast_route(volatile tt_l1_ptr HybridMeshPacketHeader* packet_header) {
-    auto e_num_hops = packet_header->mcast_params[eth_chan_directions::EAST];
-    auto w_num_hops = packet_header->mcast_params[eth_chan_directions::WEST];
-    auto n_num_hops = packet_header->mcast_params[eth_chan_directions::NORTH];
-    auto s_num_hops = packet_header->mcast_params[eth_chan_directions::SOUTH];
-    e_num_hops = e_num_hops > 0 ? e_num_hops + 1 : 0;
-    w_num_hops = w_num_hops > 0 ? w_num_hops + 1 : 0;
-    n_num_hops = n_num_hops > 0 ? n_num_hops + 1 : 0;
-    s_num_hops = s_num_hops > 0 ? s_num_hops + 1 : 0;
-    fabric_set_mcast_route<true>(
-        packet_header,
-        packet_header->dst_start_chip_id,
-        packet_header->dst_start_mesh_id,
-        e_num_hops,
-        w_num_hops,
-        n_num_hops,
-        s_num_hops);
-}
-#endif
-
-uint8_t get_router_direction(uint32_t eth_channel) {
+inline uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
         reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-// Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-template <bool called_from_router, eth_chan_directions my_direction>
-bool fabric_set_unicast_route(
+// ============================================================================
+// 2D action-map routing (destination-major ABI) — worker/edge producers
+// ============================================================================
+// The packet carries widened action-byte maps instead of a hop program plus branch offsets:
+// route_buffer[0..Y) holds the Y map, route_buffer[Y..Y+X) the X map.
+
+// Unicast setup retains the final destination in packet metadata, then expands one destination-major
+// table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
+// chip instead; the destination-mesh landing later rebuilds the final map.
+inline bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
-    if constexpr (!called_from_router) {
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->mcast_params_64 = 0;
-        packet_header->is_mcast_active = 0;
-    }
-    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-    auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
-        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table[dst_mesh_id];
-        dst_mesh_id = routing_table->my_mesh_id;
-    }
-    bool ok = false;
-    if constexpr (called_from_router) {
-        // This is to prepend additional one step, which is not needed for worker sender.
-        auto set_forward = [&](eth_chan_directions dir) {
-            switch (dir) {
-                case eth_chan_directions::EAST: packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_EAST; break;
-                case eth_chan_directions::WEST: packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_WEST; break;
-                case eth_chan_directions::NORTH:
-                    packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_NORTH;
-                    break;
-                case eth_chan_directions::SOUTH:
-                    packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_SOUTH;
-                    break;
-                case eth_chan_directions::Z:
-                    // Z exit port will use NOOP to indicate forward to Z
-                    packet_header->route_buffer[0] = MeshRoutingFields::NOOP;
-                    break;
-                default: ASSERT(false); break;
-            }
-        };
-        eth_chan_directions next_direction = get_next_hop_router_direction(dst_mesh_id, dst_dev_id);
-        if (next_direction < eth_chan_directions::COUNT) {
-            // when arrive at another mesh, but dst chip is not itself. -> go to next chip -> prepend FORWARD_<DIR> ->
-            // add route
-            ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
-        } else {
-            if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
-                // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
-                set_forward(my_direction);
-            } else {
-                // when arrive at non-destination mesh, but dst chip is itself (exit node). -> go to next mesh ->
-                // prepend FORWARD_<DIR> -> done
-                next_direction =
-                    get_next_hop_router_direction(packet_header->dst_start_mesh_id, packet_header->dst_start_chip_id);
-                set_forward(next_direction);
-            }
-            packet_header->route_buffer[1] = MeshRoutingFields::NOOP;
-            return true;  // early return, route_buffer[0] is enough
-        }
-    } else {
-        ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
-    }
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+    // Final destination is retained up front and never overwritten by the exit swap below.
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = 0;
     packet_header->routing_fields.value = 0;
 
-    const auto& compressed_route = routing_info->paths[dst_dev_id];
-    uint8_t ns_hops = compressed_route.get_ns_hops();
-    uint8_t ew_hops = compressed_route.get_ew_hops();
-    uint8_t ew_direction = compressed_route.get_ew_direction();
-    uint8_t turn_point = compressed_route.get_turn_point() + called_from_router;
-
-    if (ns_hops > 0 && ew_hops > 0) {
-        // 2D routing: turn from NS to EW at turn_point
-        if (ew_direction) {
-            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
-        } else {
-            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
-        }
-    } else if (ns_hops > 0) {
-        packet_header->routing_fields.branch_east_offset = turn_point;
-        packet_header->routing_fields.branch_west_offset = turn_point;
-    } else if (ns_hops == 0 && ew_hops > 0) {
-        // East/West only routing: branch offset is set at position 1 (start_hop + 1)
-        if (ew_direction) {
-            packet_header->routing_fields.branch_east_offset = 1;  // East only: branch at hop 1
-        } else {
-            packet_header->routing_fields.branch_west_offset = 1;  // West only: branch at hop 1
-        }
-    } else if (ns_hops == 0 && ew_hops == 0) {
-        // NOTE: this is not needed from functionality perspective, but just to follow original behavior
-        packet_header->routing_fields.branch_west_offset = 1;
+    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
+        // Remote final mesh: route to this mesh's exit chip, where the maps decode to LOCAL_DELIVER.
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table[dst_mesh_id];
     }
 
-    return ok;
+    widen_2d_route_to_chip(
+        packet_header, routing_table->route_table_2d.action_vectors, dst_dev_id, mesh_y_size, mesh_x_size);
+    return true;
+}
+
+// Multicast producer. Encodes the maps for a rectangle given as N/S/E/W extents around an anchor,
+// from the reverse trees in this chip's destination-major route table.
+//
+// A remote final mesh takes a unicast-style carrier leg toward this mesh's exit instead, retaining
+// the anchor and extents until the destination mesh's landing rebuilds the tree there.
+//
+// Returns this chip's own action byte. Multi-output roots are ordinary under 2D action-map routing, so a
+// caller holding one connection must check the output count rather than assume it is one.
+inline std::uint8_t fabric_set_2d_mcast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops) {
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+    packet_header->routing_fields.value = 0;
+
+    const uint32_t root_y = routing_table->my_mesh_coord_y;
+    const uint32_t root_x = routing_table->my_mesh_coord_x;
+
+    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
+        // Carrier leg. The widen never reads dst_start_node_id, so the retained anchor survives and
+        // the temporary exit lives only in the installed maps.
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        const uint16_t exit_dev_id = exit_node_table[dst_mesh_id];
+        ASSERT(exit_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        // A worker on the exit chip itself would get maps with no eth bits and inject nowhere.
+        // Leaving the mesh from here needs the INTERMESH egress connection, which this path does
+        // not model.
+        ASSERT(exit_dev_id != (uint16_t)((uint32_t)root_y * mesh_x_size + root_x));
+        widen_2d_route_to_chip(
+            packet_header, routing_table->route_table_2d.action_vectors, exit_dev_id, mesh_y_size, mesh_x_size);
+        // Same fall-through as the router's decode: the Y byte wins when nonzero, else the X byte
+        // carries it.
+        const std::uint8_t action_y = packet_header->route_buffer[root_y];
+        return action_y != 0 ? action_y : packet_header->route_buffer[mesh_y_size + root_x];
+    }
+
+    // Tree pruning repeatedly clears and ORs map bytes, so keep those read-modify-writes in local
+    // staging. Once complete, commit the contiguous [Y | X] map to volatile packet L1 in chunks.
+    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
+    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
+        maps.bytes(),
+        routing_table->route_table_2d.mcast_trees,
+        mesh_y_size,
+        mesh_x_size,
+        root_y,
+        root_x,
+        n_num_hops,
+        s_num_hops,
+        e_num_hops,
+        w_num_hops);
+
+    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
+
+    // Returned rather than acted on: how many outputs a caller can launch depends on the connections
+    // it holds. Zero outputs is legal and means deliver locally only.
+    return maps.bytes()[root_y];
+}
+
+// Intermesh landing encode. Runs on the boundary-facing router before ordinary decode, replacing the
+// incoming source-mesh maps with ones built from this mesh's destination-major route table:
+//
+//   intermediate mesh          maps toward this mesh's next exit
+//   destination mesh, unicast  widen to the retained final chip
+//   destination mesh, mcast    rebuild the multicast maps rooted here
+//
+// dst_start_node_id and mcast_params_64 are read but never written.
+inline void fabric_set_2d_intermesh_landing_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    const routing_l1_info_t& routing_table,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    const uint16_t final_mesh_id = packet_header->dst_start_mesh_id;
+    // Bounds before exit_node_table indexing.
+    ASSERT(final_mesh_id < MAX_NUM_MESHES);
+    if (final_mesh_id != routing_table.my_mesh_id) {
+        // Intermediate landing: route to this mesh's next exit toward the final mesh. Multicast-safe
+        // as-is, since the anchor and extents stay retained and fanout must not begin in a mesh that
+        // holds none of the targets.
+        const uint16_t exit_dev_id = routing_table.exit_node_table[final_mesh_id];
+        ASSERT(exit_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        widen_2d_route_to_chip(
+            packet_header, routing_table.route_table_2d.action_vectors, exit_dev_id, mesh_y_size, mesh_x_size);
+        return;
+    }
+
+    if (packet_header->mcast_params_64 == 0) {
+        // Destination landing, unicast: widen to the final chip.
+        widen_2d_route_to_chip(
+            packet_header,
+            routing_table.route_table_2d.action_vectors,
+            packet_header->dst_start_chip_id,
+            mesh_y_size,
+            mesh_x_size);
+        return;
+    }
+
+    // Destination landing, multicast: rebuild the tree rooted at this chip, with the rectangle still
+    // measured from the retained anchor in dst_start_node_id. A multi-output root needs no special
+    // handling here, since a landing is already an RX fanout point.
+    const uint16_t anchor_dev_id = packet_header->dst_start_chip_id;
+    ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+
+    // Reuse the worker encoder, but root its X tree at this landing column. Local staging avoids
+    // volatile updates while pruning; only the completed map is copied over the source-mesh map.
+    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
+    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
+        maps.bytes(),
+        routing_table.route_table_2d.mcast_trees,
+        mesh_y_size,
+        mesh_x_size,
+        anchor_dev_id / mesh_x_size,
+        anchor_dev_id % mesh_x_size,
+        routing_table.my_mesh_coord_x,
+        packet_header->mcast_params[eth_chan_directions::NORTH],
+        packet_header->mcast_params[eth_chan_directions::SOUTH],
+        packet_header->mcast_params[eth_chan_directions::EAST],
+        packet_header->mcast_params[eth_chan_directions::WEST]);
+
+    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
+}
+
+// Single-hop poke: the destination is exactly one fabric hop away, so this writes LOCAL_DELIVER at
+// the destination's map slot on the hop's axis. Z uses the Y-axis slot.
+inline void fabric_set_single_hop_unicast_route_from_direction(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    eth_chan_directions next_hop_direction,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id) {
+    const auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
+    ASSERT(next_hop_direction < eth_chan_directions::COUNT);
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
+    // Same-mesh only, per this helper's contract. An inter-mesh destination numbers its chip in the
+    // *other* mesh's space, so dst_y/dst_x below would index this mesh's maps with a foreign id.
+    // Asserted explicitly rather than left to the bounds check, because the bounds check passes
+    // whenever the foreign id happens to be in range and then pokes the wrong slot.
+    ASSERT(dst_mesh_id == routing_table->my_mesh_id);
+    ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+
+    const uint32_t dst_y = dst_dev_id / mesh_x_size;
+    const uint32_t dst_x = dst_dev_id % mesh_x_size;
+
+    // The receiving router's decode axis matches the hop axis: N/S/Z hops read the Y byte, E/W hops
+    // the X byte. Other map slots are intentionally left untouched under the one-hop contract.
+    switch (next_hop_direction) {
+        case eth_chan_directions::NORTH:
+        case eth_chan_directions::SOUTH:
+        case eth_chan_directions::Z: packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER; break;
+        case eth_chan_directions::EAST:
+        case eth_chan_directions::WEST:
+            packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            break;
+        default: ASSERT(false); break;
+    }
+
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = 0;
+    packet_header->routing_fields.value = 0;
 }
 
 // Overload: For 1D LowLatencyPacketHeader

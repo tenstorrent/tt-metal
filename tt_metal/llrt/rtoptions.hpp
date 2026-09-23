@@ -24,11 +24,11 @@
 #include <utility>
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
@@ -49,6 +49,8 @@ class SystemMesh;
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
+
+enum class BriscFirmwareVariant : uint8_t { Default, Blaze };
 
 inline std::string g_root_dir;
 inline std::once_flag g_root_once;
@@ -172,6 +174,13 @@ struct SanitizerSettings {
 // than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
 inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
+// Streaming profiler sizing defaults and bounds (TT_METAL_STREAMING_PROFILER_*). Sizes stay under 4 GiB
+// because the device addresses them with 32-bit offsets.
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 128;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -234,11 +243,20 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
+    bool profiler_sync_events_enabled = false;
+    // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
+    // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
+    bool streaming_profiler_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool streaming_profiler_tracy_enabled = false;
+    uint32_t streaming_profiler_spool_mb = STREAMING_PROFILER_SPOOL_MB_DEFAULT;
+    uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
+    std::string streaming_profiler_ops_csv_path;
+    std::string streaming_profiler_zone_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
     // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
     std::chrono::milliseconds noc_debug_poll_interval{500};
@@ -280,7 +298,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    std::optional<tt_metal::DispatchCoreType> dispatch_core_type_override;
 
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
@@ -389,6 +407,9 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
+    // NOC API version for Quasar
+    uint32_t quasar_noc_api_version = 2;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -409,6 +430,10 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
+    // BRISC firmware variant selected by TT_METAL_FW_SRC_BRISC.
+    BriscFirmwareVariant brisc_firmware_variant = BriscFirmwareVariant::Default;
+    std::string brisc_firmware_header;
+
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
     uint32_t device_print_dispatch_stall_us = 50;
@@ -422,12 +447,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Process-start trace allocation tracker settings. These are static because
-    // environment variables are process-wide and the hot-path accessors do not
-    // belong to a particular MetalContext.
-    inline static bool trace_allocation_tracking_enabled_ = false;
-    inline static bool trace_allocation_diagnostics_enabled_ = false;
-    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+    struct TraceAllocationOptions {
+        bool tracking_enabled = false;
+        bool diagnostics_enabled = false;
+        bool skip_program_cache = false;
+    };
+
+    static const TraceAllocationOptions& get_trace_allocation_options();
 
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
@@ -525,11 +551,9 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
-    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
-    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
-    static bool get_trace_allocation_skip_program_cache_enabled() {
-        return trace_allocation_skip_program_cache_enabled_;
-    }
+    static bool get_trace_allocation_tracking_enabled();
+    static bool get_trace_allocation_diagnostics_enabled();
+    static bool get_trace_allocation_skip_program_cache_enabled();
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -559,10 +583,12 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(
+        RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
+    void set_feature_cores(
+        RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -573,7 +599,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+    void set_feature_core_range(
+        RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
         feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
@@ -659,6 +686,10 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
+        if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
+            compile_hash_str += "_blaze_runtime_reload_";
+            compile_hash_str += get_brisc_firmware_header();
+        }
         return compile_hash_str;
     }
 
@@ -685,10 +716,17 @@ public:
     }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    bool get_profiler_sync_events_enabled() const { return profiler_sync_events_enabled; }
+    bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
+    uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
+    uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
+    const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
+    const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
     // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
@@ -757,7 +795,9 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
-    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
+    std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
+        return dispatch_core_type_override;
+    }
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     bool is_simulator_or_emulated() const {
@@ -934,6 +974,8 @@ public:
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
+    uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
+
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
@@ -947,6 +989,8 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
+    BriscFirmwareVariant get_brisc_firmware_variant() const { return brisc_firmware_variant; }
+    const std::string& get_brisc_firmware_header() const { return brisc_firmware_header; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

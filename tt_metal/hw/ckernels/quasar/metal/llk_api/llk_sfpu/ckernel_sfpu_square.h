@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -37,7 +39,7 @@ inline void init_square() {
  *
  * @note ADDR_MOD_6 must already be programmed by @ref init_square.
  */
-inline void _calculate_square_sfp_rows_() {
+inline void calculate_square_sfp_rows() {
     sfpi::vFloat v = sfpi::dst_reg[0];                     // load x from dest (SFPLOAD)
     sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = v * v;  // x * x via SFPMUL, store back to dest (SFPSTORE)
 }
@@ -52,14 +54,35 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_square() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        _calculate_square_sfp_rows_();
+        calculate_square_sfp_rows();
+    }
+}
+
+// Squares one pair of rows (Quasar SFPU ops cover 2 rows)
+inline void calculate_square_rows(
+    const int load_addr, const int store_addr, const std::uint32_t load_sfpmem, const std::uint32_t store_sfpmem) {
+    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, load_addr);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TT_SFPSTORE(p_sfpu::LREG0, store_sfpmem, ADDR_MOD_7, 0, store_addr);
+}
+
+// Addresses select Dest (bit 10 = 0) or SrcS (bit 10 = 1). Float16 needs an explicit FP16A.
+inline void calculate_square(
+    const int load_base_addr,
+    const int store_base_addr,
+    const int num_sfpu_iterations,
+    const std::uint32_t load_sfpmem,
+    const std::uint32_t store_sfpmem) {
+#pragma GCC unroll 8
+    for (int d = 0; d < num_sfpu_iterations; d++) {
+        calculate_square_rows(load_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
     }
 }
 
 // Square<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: square_tile / square_tile_init (compute_kernel_api.h).
 // The Quasar kernel takes only an iteration count, so APPROXIMATION_MODE and DST_ACCUM are accepted for
 // interface parity with WH/BH and ignored here; init runs init_square to program ADDR_MOD_6.
-template <[[maybe_unused]] bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE /*maybe_unused*/, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
 struct Square : SfpuUnaryOp<Square<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
     static void kernel() { calculate_square<ITERATIONS>(); }
 

@@ -36,8 +36,9 @@ inline void calculate_left_shift(const uint shift_amt) {
     }
 }
 
-// Arithmetic right shift by an immediate scalar amount.
-// A shift amount >= 32 saturates to the sign (non-negative -> 0, negative -> -1).
+// Right shift by an immediate scalar amount. Signed data uses an arithmetic
+// shift; unsigned data uses a logical shift.
+// A shift amount >= 32 saturates to 31.
 template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_right_shift(const uint shift_amt) {
     static_assert(
@@ -55,8 +56,10 @@ inline void calculate_right_shift(const uint shift_amt) {
         } else {
             sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
             sfpi::vUInt res = sfpi::as<sfpi::vUInt>(v) >> eff;
-            v_if(v < 0) { res = res | sign_mask; }
-            v_endif;
+            if constexpr (DATA_FORMAT == DataFormat::Int32) {
+                v_if(v < 0) { res = res | sign_mask; }
+                v_endif;
+            }
             sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<sfpi::vInt>(res);
         }
         sfpi::dst_reg++;

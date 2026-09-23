@@ -21,6 +21,10 @@ namespace sfpu {
 // Fast and accurate approximation algorithms for computing floating point square root. Numerical Algorithms (2024).
 // https://doi.org/10.1007/s11075-024-01932-7
 
+// x's bits with the sign shifted out: `_bits_without_sign_(x) != 0` is a magnitude test that
+// treats -0.0 and +0.0 alike, which a bare `as<vInt>(x) != 0` does not.
+sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(x) << 1; }
+
 // Computes the square root or reciprocal square root of a positive floating point value x.
 template <bool APPROXIMATE = false, bool RECIPROCAL = false, bool FAST_APPROX = false>
 sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
@@ -37,9 +41,18 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         if constexpr (RECIPROCAL) {
             sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
-            // If x != inf and x != 0.
-            v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = y * t; }
-            // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
+            // If x != inf and x has a non-zero magnitude.
+            v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
+                y = y * t;
+                if constexpr (!FAST_APPROX) {
+                    // This region already excludes +/-0 and +inf, so a bare sign test is enough.
+                    v_if(x < 0.0f) {
+                        y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
+                    }
+                    v_endif;
+                }
+            }
+            // Otherwise x = +/-0 gives +/-inf (the subtraction carries x's sign), x = inf gives 0.
             v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
         } else {
@@ -64,22 +77,47 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             sfpi::vFloat half_y = sfpi::addexp(y, -1);
             sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
-            // If x != inf and x != 0.
-            v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = one_minus_xyy * half_y + y; }
-            // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
+            // If x != inf and x has a non-zero magnitude.
+            v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
+                y = one_minus_xyy * half_y + y;
+                if constexpr (!FAST_APPROX) {
+                    // This region already excludes +/-0 and +inf, so a bare sign test is enough.
+                    v_if(x < 0.0f) {
+                        y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
+                    }
+                    v_endif;
+                }
+            }
+            // Otherwise x = +/-0 gives +/-inf (the subtraction carries x's sign), x = inf gives 0.
             v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
         } else {
             sfpi::vFloat half_xy = 0.5f * xy;
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
+            // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
+            // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
+            // does run the step -- the compare wraps -- but the clamp below rewrites it.
             v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
             v_endif;
         }
     }
 
+    // All edge handling is gated on !FAST_APPROX, as the negative clamp alone was before: the
+    // fast path trades every edge guard for speed, so there a negative is unclamped and
+    // sqrt(-0) is +0. Everything below is a FAST_APPROX=false claim.
     if constexpr (!FAST_APPROX) {
-        v_if(x < 0.0f) { y = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
+        // `x < 0.0f` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are kept
+        // out of it and answered separately.
+        if constexpr (!RECIPROCAL) {
+            // rsqrt's clamp is inside the refinement guard above, where the predicate already
+            // excludes +/-0 and +inf.
+            // sqrt(+/-0) = +/-0: return x, because the refinement cannot produce a signed zero.
+            v_if(_bits_without_sign_(x) == 0) { y = x; }
+            v_elseif(x < 0.0f) {
+                y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
+            }
+            v_endif;
+        }
     }
 
     return y;

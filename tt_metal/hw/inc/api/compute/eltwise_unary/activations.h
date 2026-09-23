@@ -6,15 +6,18 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
 #include "ckernel_sfpu_activations.h"
 #endif
+#endif
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
 * Performs element-wise hardsigmoid operation. The DST
@@ -163,5 +166,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hardshrink_tile_init() {
     MATH((sfpu::Hardshrink<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

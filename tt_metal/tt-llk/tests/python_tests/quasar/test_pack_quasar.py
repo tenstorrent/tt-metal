@@ -45,6 +45,7 @@ from helpers.test_variant_parameters import (
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import (
     MX_SUPPORTED_TILE_SIZES,
@@ -312,6 +313,9 @@ def test_pack_quasar(
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
