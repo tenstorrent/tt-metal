@@ -57,6 +57,10 @@ class FusedMLP:
         self.tuning = tuning or ProjectionTuning()
         if reuse_scratch and (self.tuning.reader != "original" or self.tuning.buffers != 2):
             raise ValueError("Tuned readers require independent projection buffers")
+        if (self.tuning.prefetch_gu_blocks or self.tuning.prefetch_down_blocks) and (
+            not fuse_prepare or gu_workers != 8 or self.tuning.reader == "original"
+        ):
+            raise ValueError("Weight staging requires a complete GU8 loop with a tuned reader")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch
@@ -241,6 +245,10 @@ class FusedMLP:
             for c in self.projection_cores + self.sfpu_cores + self.communication_cores
         ]
         coord_args = [v for c in physical for v in (c.x, c.y)]
+        prefetch_coordinates = []
+        if self.tuning.prefetch_gu_blocks or self.tuning.prefetch_down_blocks:
+            prefetch_coordinates = [v for core in self.norm_cores + self.preparation.norm_cores
+                for c in [self.mesh.worker_core_from_logical_core(core)] for v in (c.x, c.y)]
         rt_projection, rt_sfpu = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         common = [
             normalized.buffer_address(),
@@ -253,7 +261,7 @@ class FusedMLP:
         if self.fuse_output:
             common.append(attention.buffer_address())
         for bank, core in enumerate(self.projection_cores):
-            rt_projection[core.x][core.y] = [bank, *common, *coord_args]
+            rt_projection[core.x][core.y] = [bank, *common, *coord_args, *prefetch_coordinates]
         for rank, core in enumerate(self.sfpu_cores):
             rt_sfpu[core.x][core.y] = [rank, *common, *coord_args]
         source = str(Path(__file__).with_name("kernels") / "mlp.cpp")
@@ -287,7 +295,8 @@ class FusedMLP:
                         core_ranges=grid,
                         compile_time_args=ct,
                         runtime_args=rt,
-                        defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers)), *self.tuning.defines]
+                        defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers)), *self.tuning.defines,
+                                 ("PREFETCH_COORD_OFFSET", str(1 + len(common) + len(coord_args)))]
                         + ([("FUSE_REDUCE", "1")] if self.fuse_reduce else [])
                         + ([("FUSE_NORM", "1")] if self.fuse_norm else [])
                         + ([("FUSE_OUTPUT", "1")] if self.fuse_output else [])

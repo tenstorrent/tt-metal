@@ -98,13 +98,15 @@ void kernel_main() {
 #endif
     for (uint32_t layer = 0; layer < count; ++layer) {
 #if defined(COMPILE_FOR_NCRISC)
+        state[300] = 0;
+        state[301] = 0;
         if (layer > 0) {
             uint32_t mask = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 3);
             for (uint32_t semaphore = 0; mask; ++semaphore, mask >>= 1) {
                 if (mask & 1) { noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore)), 0); }
             }
         }
-#if LOOP_PATCH == 3 || LOOP_PATCH == 4
+#if LOOP_PATCH == 3 || LOOP_PATCH == 4 || defined(PREFETCH_ROLE)
         // Only KV update and attention readers need shared cache addresses.
         // Projections already fetch their own weight row in the native body;
         // norm, fabric and SFPU workers do not consume any table columns here.

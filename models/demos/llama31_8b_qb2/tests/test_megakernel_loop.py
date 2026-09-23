@@ -21,7 +21,7 @@ from .test_megakernel import compare, copy_to
 
 
 @pytest.mark.parametrize("count", [1, 2])
-def test_device_layer_loop_real_weights(qb2_mesh, count):
+def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
     torch.set_num_threads(8)
     mesh = qb2_mesh
     checkpoint = Checkpoint(checkpoint_path())
@@ -40,7 +40,7 @@ def test_device_layer_loop_real_weights(qb2_mesh, count):
         )
         workspace = layer.prepare_decode(1, workspace=workspace)
         layers.append(layer)
-    body = experimental_layers(layers, mode="decoder")[0].fused_body
+    body = experimental_layers(layers, mode="decoder", tuning=tuning)[0].fused_body
     baseline_cache = [layer.allocate_cache(num_physical_pages=9) for layer in layers]
     loop_cache = [layer.allocate_cache(num_physical_pages=9) for layer in layers]
     loop = DecoderLoop(body, loop_cache)

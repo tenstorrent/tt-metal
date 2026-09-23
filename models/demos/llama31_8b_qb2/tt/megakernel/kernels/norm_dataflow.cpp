@@ -8,6 +8,9 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "zero_l1.hpp"
+#ifdef PREFETCH_ROLE
+#include "prefetch_projection.hpp"
+#endif
 constexpr auto input_args=TensorAccessorArgs<0>();
 constexpr auto output_args=TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 uint64_t norm_address(uint32_t rank, uint32_t addr) {
@@ -16,6 +19,9 @@ uint64_t norm_address(uint32_t rank, uint32_t addr) {
 void QB2_ENTRY() {
     const uint32_t rank=get_arg_val<uint32_t>(0);
 #ifdef READER
+#if defined(PREFETCH_ROLE) && PREFETCH_ROLE == 0
+    prefetch_projection_weights();
+#endif
 #ifdef FUSE_GATHER
     {
         DeviceZoneScopedN("MLP-NORM-WAIT-GATHER");
@@ -58,6 +64,9 @@ void QB2_ENTRY() {
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(9)),1);
     cb_push_back(10,1);
     cb_pop_front(7,1);
+#if defined(PREFETCH_ROLE) && PREFETCH_ROLE == 1
+    prefetch_projection_weights();
+#endif
 #else
     dataflow_kernel_lib::prepare_reduce_scaler<2,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>(1.0f/512.0f);
     zero_l1<2048>(get_write_ptr(3));

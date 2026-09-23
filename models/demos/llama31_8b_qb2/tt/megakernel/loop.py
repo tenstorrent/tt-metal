@@ -84,6 +84,9 @@ class DecoderLoop:
         ttnn.synchronize_device(body.mesh)
 
     def append(self, program, tokens=None):
+        if self.body.tuning.prefetch_gu_blocks or self.body.tuning.prefetch_down_blocks:
+            from .prefetch import append_prefetch
+            program = append_prefetch(self.body, program)
         if self.embedding_weight is not None:
             from math import prod
 

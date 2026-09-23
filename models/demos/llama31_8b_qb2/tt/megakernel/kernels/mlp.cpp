@@ -58,7 +58,21 @@ void release_workers(uint32_t id, uint32_t begin, uint32_t end) {
 template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Workers, typename Input, typename Weight>
 void stream_projection(const Input& input, const Weight& weight, uint32_t bank) {
 #if PROJECTION_READER > 0
-    tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(input, weight, bank);
+    uint64_t prefetched_base = 0;
+    constexpr uint32_t prefetched_blocks = B == 1 ? GU_PREFETCH_BLOCKS : (B == 3 ? DOWN_PREFETCH_BLOCKS : 0);
+#if GU_PREFETCH_BLOCKS || DOWN_PREFETCH_BLOCKS
+    if constexpr (prefetched_blocks > 0) {
+        static_assert(Workers == 8);
+        constexpr uint32_t role = B == 1 ? 0 : 1;
+        auto* state = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET));
+        noc_semaphore_wait_min(state + 300 + role, 1);
+        prefetched_base = get_noc_addr(
+            get_arg_val<uint32_t>(PREFETCH_COORD_OFFSET + role * 16 + 2 * bank),
+            get_arg_val<uint32_t>(PREFETCH_COORD_OFFSET + role * 16 + 2 * bank + 1), state[300 + role]);
+    }
+#endif
+    tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(
+        input, weight, bank, prefetched_base, prefetched_blocks);
 #else
     for (uint32_t k = 0; k < K; k += KBlock) {
         cb_reserve_back(A, KBlock);

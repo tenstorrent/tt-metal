@@ -25,7 +25,8 @@ void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, 
 
 template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Workers,
           uint32_t WeightBytes, typename Input, typename Weight>
-void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker) {
+void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker,
+                             uint64_t prefetched_base = 0, uint32_t prefetched_blocks = 0) {
     constexpr uint32_t blocks = K / KBlock;
     static_assert(K % KBlock == 0 && blocks >= 2);
 #if PROJECTION_READER >= 2
@@ -57,7 +58,12 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         for (uint32_t row = 0; row < KBlock; ++row) {
             noc_async_read_page(block * KBlock + row, input, a + row * 2048);
         }
-        read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
+        if (block < prefetched_blocks) {
+            noc_async_read<KBlock * N * WeightBytes>(
+                prefetched_base + block * KBlock * N * WeightBytes, b, KBlock * N * WeightBytes);
+        } else {
+            read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
+        }
 #if PROJECTION_READER >= 2
         if (block > 0) {
             noc_async_read_barrier_with_trid((block - 1) % PROJECTION_BUFFERS + 1);
