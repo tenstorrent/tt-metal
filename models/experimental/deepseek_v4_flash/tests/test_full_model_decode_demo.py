@@ -51,7 +51,6 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
-from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
@@ -113,12 +112,6 @@ def _build_rope(config, max_seq: int) -> dict:
         win_pos = (torch.arange(max_seq // cr) * cr).unsqueeze(0)
         rope["win"][cr] = half("compress", win_pos)
     return rope
-
-
-def _first_mesh_copy(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> torch.Tensor:
-    """Read rank zero from a replicated mesh tensor."""
-    copies = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
-    return copies[: tensor.shape[0]]
 
 
 def _construct_model(
@@ -250,22 +243,15 @@ def _build_and_prefill(
 
     # Wrap the user input in the V4 chat template, tokenize, and build the RoPE
     # tables for the longest sequence we might decode (prompt + new tokens).
-    # ``DEEPSEEK_V4_TRACED_DECODE``: replay one captured ttnn trace per submesh per
-    # step (fixed-size in-place caches) instead of the host-bound eager decode.
-    traced = os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "", "false", "False")
 
     prompt_ids: list[int] = _tokenize_chat(tokenizer, text)
     real_len = len(prompt_ids)
     needed = start_pos + real_len + max_new_tokens
-    if traced:
-        max_seq = round_context(
-            _traced_max_seq(config, needed),
-            set(config.compress_rates.values()),
-            _PAGE_BLOCK_SIZE,
-        )
-    else:
-        max_seq = _pad_to_tile(needed)
-        max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
+    max_seq = round_context(
+        _traced_max_seq(config, needed),
+        set(config.compress_rates.values()),
+        _PAGE_BLOCK_SIZE,
+    )
     rope = _build_rope(config, max_seq)
 
     model, lm_head, loader, config = _construct_model(
@@ -279,42 +265,34 @@ def _build_and_prefill(
 
     # --- prefill the prompt by replaying decode one token at a time --------- #
     # There is no dedicated prefill: each prompt token is fed at its absolute
-    # position through the (eager or traced) decode path, filling the in-place
-    # caches exactly as a full-sequence prefill would. The logits after the final
-    # prompt token give the first generated token. Traced decode allocates a
-    # one-session paged KV pool here (lm_head folded into the last submesh's
-    # trace); the first prefill step captures the traces.
-    if traced:
-        model.prepare_static_decode(
-            rope,
-            max_seq,
-            lm_head=lm_head,
-            num_sessions=1,
-            total_tokens=max_seq,
-            block_size=_PAGE_BLOCK_SIZE,
-        )
-        model.activate_session(model.open_session())
-        logger.info(
-            f"traced decode: paged KV (1 session, {_PAGE_BLOCK_SIZE}-row blocks); "
-            "trace captured on first prefill step"
-        )
-    else:
-        model.reset_caches(max_seq)
+    # position through the traced decode path, filling the paged caches exactly as
+    # a full-sequence prefill would. The logits after the final prompt token give the
+    # first generated token. A one-session paged KV pool is allocated here (lm_head
+    # folded into the last submesh's trace); the first prefill step captures the traces.
+    model.prepare_static_decode(
+        rope,
+        max_seq,
+        lm_head=lm_head,
+        num_sessions=1,
+        total_tokens=max_seq,
+        block_size=_PAGE_BLOCK_SIZE,
+    )
+    if model.context_limit is not None and model.context_limit < max_seq:
+        logger.warning(f"context capped at {model.context_limit} tokens by the dense CSA KV")
+        max_seq = model.context_limit
+    model.activate_session(model.open_session())
+    logger.info(
+        f"traced decode: paged KV (1 session, {_PAGE_BLOCK_SIZE}-row blocks); trace captured on first prefill step"
+    )
 
     next_id = pad_id
     for prompt_idx in range(real_len):
         pos = start_pos + prompt_idx
-        if traced:
-            # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
-            logits = model.decode_traced(prompt_ids[prompt_idx], pos).reshape(1, -1).float()
-        else:
-            hidden = model.decode(prompt_ids[prompt_idx], pos, rope)  # [1, 1, D]
-            with _region("LM_HEAD"):
-                logits = _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
+        # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
+        logits = model.decode_traced(prompt_ids[prompt_idx], pos).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
     logger.info(f"prefill ({real_len} tokens at pos {start_pos}) -> token id {next_id} {tokenizer.decode([next_id])!r}")
-    if traced:
-        logger.info(f"pool usage after prefill: {model.session_usage()}")
+    logger.info(f"pool usage after prefill: {model.session_usage()}")
 
     return {
         "model": model,
@@ -329,7 +307,6 @@ def _build_and_prefill(
         "max_new_tokens": max_new_tokens,
         "eos_id": config.eos_token_id,
         "next_id": next_id,
-        "traced": traced,
         "tp_size": tp_size,
     }
 
@@ -398,15 +375,14 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
     # ``_build_and_prefill`` (once the model exists) against this stack.
     with contextlib.ExitStack() as prefetcher:
         state = _build_and_prefill(mesh_device, text, prefetcher, tp_size=tp_size)
-        model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
-        rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
+        model, tokenizer = state["model"], state["tokenizer"]
+        prompt_ids, real_len = state["prompt_ids"], state["real_len"]
         start_pos = state["start_pos"]
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
-        traced, next_id = state["traced"], state["next_id"]
+        next_id = state["next_id"]
         generated: list[int] = [next_id]
         _assert_decode_parallelism(model, tp_size)
-        if traced:
-            assert model.paged, "traced decode must use the paged KV layout"
+        assert model.paged, "traced decode must use the paged KV layout"
 
         # Each step feeds the previously generated token at its absolute position and
         # reads back the single-token logits (no recompute over the prior context).
@@ -415,7 +391,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         logger.info(f"max_new_tokens: {max_new_tokens}")
         n_ahead = min(max_new_tokens, max(0, max_seq - (start_pos + real_len)))
         gen_positions = [start_pos + real_len + step - 1 for step in range(1, n_ahead + 1)]
-        if traced and gen_positions:
+        if gen_positions:
             # Grow the paged pool for the whole generation before any replay: page
             # tables are device tensors the traces read, so rewriting them from the
             # replay thread while earlier steps are in flight would race.
@@ -435,8 +411,6 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         def refill_replay(step: int) -> None:
             """Keep one window of traces posted: the current step and the ones after."""
             nonlocal posted
-            if not traced:
-                return
             want = min(len(gen_positions), step - 1 + replay_ahead)
             if want > posted:
                 model.replay_traced_ahead(gen_positions[posted:want])
@@ -452,8 +426,6 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
             park the sender kernel and wedge the queue.
             """
             nonlocal fed, read
-            if not traced:
-                return
             dummy = next_id if next_id is not None else 0
             for i in range(read, posted):
                 if i >= fed:
@@ -482,17 +454,10 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 # in-trace recv for this step and the next ones.
                 refill_replay(step)
                 t0 = time.perf_counter()
-                if traced:
-                    model.write_step_packet(next_id, pos)
-                    fed += 1
-                    logits = model.read_decoded_output().reshape(1, -1).float()
-                    read += 1
-                else:
-                    hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
-                    with _region("LM_HEAD"):
-                        logits = (
-                            _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
-                        )  # forces device sync
+                model.write_step_packet(next_id, pos)
+                fed += 1
+                logits = model.read_decoded_output().reshape(1, -1).float()
+                read += 1
                 next_id = int(logits[0].argmax().item())
                 decode_time += time.perf_counter() - t0
                 decode_tokens += 1
@@ -526,5 +491,4 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
     assert generated, "no tokens were generated"
     logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
     logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
-    if traced:
-        logger.info(f"pool usage after generation: {model.session_usage()}")
+    logger.info(f"pool usage after generation: {model.session_usage()}")

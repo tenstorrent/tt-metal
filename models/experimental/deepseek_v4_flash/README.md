@@ -109,7 +109,6 @@ Commands: `/user N`, `/users`, `/reset [N|all]`, `/system TEXT`,
 
 Key flags (`--help` for all): `--num-layers`, `--num-users`, `--max-context`
 (per user), `--total-context` (shared pool), `--max-new-tokens`, `--think`
-(streams a `<think>` reasoning block inline), `--no-trace` (eager, single user
-only), `--cache-dir`, `--model-dir`. The sizing flags default to the active
+(streams a `<think>` reasoning block inline), `--cache-dir`, `--model-dir`. The sizing flags default to the active
 system profile, and `--system-profile` / `--system-config-file` pick a different
 one.

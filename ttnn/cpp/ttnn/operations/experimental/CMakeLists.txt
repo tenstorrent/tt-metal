@@ -61,6 +61,7 @@ add_subdirectory(deepseek/mla/matmul_wo)
 add_subdirectory(deepseek/hyperconnection)
 add_subdirectory(deepseek/mix_streams)
 add_subdirectory(deepseek/csa_pool)
+add_subdirectory(deepseek/fused_lightning_select_kv)
 add_subdirectory(deepseek/all_gather_for_matmul)
 add_subdirectory(deepseek/width_sharded_all_reduce)
 add_subdirectory(deepseek/moe/deepseek_moe_gate)
@@ -113,6 +114,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::HyperConnection
         TTNN::Ops::Experimental::DeepSeek::MixStreams
         TTNN::Ops::Experimental::DeepSeek::CsaPool
+        TTNN::Ops::Experimental::DeepSeek::FusedLightningSelectKv
         TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul
         TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
@@ -170,6 +172,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::HyperConnection>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MixStreams>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::CsaPool>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::FusedLightningSelectKv>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate>

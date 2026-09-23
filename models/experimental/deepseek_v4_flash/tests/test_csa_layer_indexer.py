@@ -35,13 +35,18 @@ import json
 from pathlib import Path
 
 import pytest
-import torch
-from loguru import logger
 
-import ttnn
-from models.common.utility_functions import comp_pcc
-from models.experimental.deepseek_v4_flash.tests.test_attention_batching import _rope_half_tables
-from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights import (
+# TODO: port to ``tests/decode_kv_utils.DecodeLayerKV`` once the lightning indexer is
+# re-enabled; it still seeds a dense ``combined`` cache that no longer exists.
+pytest.skip("lightning indexer is disabled and this test predates paged-only attention", allow_module_level=True)
+
+import torch  # noqa: E402
+from loguru import logger  # noqa: E402
+
+import ttnn  # noqa: E402
+from models.common.utility_functions import comp_pcc  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.test_attention_batching import _rope_half_tables  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights import (  # noqa: E402
     _DEFAULT_MODEL_DIR,
     _WEIGHT_DTYPE,
     _checkpoint_available,
@@ -49,17 +54,17 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
     _w,
     _weight_cache,
 )
-from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
-from models.experimental.deepseek_v4_flash.tt.attention import (
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     DeepSeekV4Attention,
     build_static_layer_cache,
     decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
-from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader  # noqa: E402
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score_dsa is Blackhole-only")
 

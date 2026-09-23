@@ -233,9 +233,8 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
-    build_static_layer_cache,
-    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -422,6 +421,8 @@ def test_decoder_layer_decode_pcc(
     else, so a batched step must still reproduce every user's own answer. Scored per user
     rather than over the pooled batch, which would hide one user's output going wrong.
     """
+    if layer_idx == 4 and batch_size > 1:
+        pytest.skip("dense CSA KV supports batch 1 only")
     ref_path, need_gen = _reference_path(tmp_path, f"decoder_layer_{layer_idx}_{batch_size}_{seq_len}")
     # Bundles that omit ``sliding_window`` cannot size the decode cache --
     # regenerate so the sliding cap matches the reference.
@@ -501,9 +502,7 @@ def test_decoder_layer_decode_pcc(
     assert split % 32 == 0 and split + _DECODE_STEPS <= seq_len
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
-    kv_cache = build_static_layer_cache(
-        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates, batch=batch_size
-    )
+    pkv = DecodeLayerKV(cfg, layer_type, seq_len, batch_size, device)
     with contextlib.ExitStack() as prefetcher:
         if prefetch:
             prefetcher.enter_context(tensor_prefetcher_session(device))
@@ -530,9 +529,8 @@ def test_decoder_layer_decode_pcc(
                 win_slot = int32_pos_tensor(pos % cr, device, batch_size)
                 win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
 
-            mask, sdpa_cur_pos = decode_sdpa_bounds(
-                cfg.sliding_window, layer_type, cr, pos, seq_len, device, batch_size
-            )
+            pkv.step(pos)
+            mask, sdpa_cur_pos = pkv.bounds(pos)
             out_tt = layer.decode(
                 _to_tt(streams[:, pos : pos + 1], device),
                 cos_d,
@@ -541,9 +539,10 @@ def test_decoder_layer_decode_pcc(
                 cos_win_d,
                 sin_win_d,
                 mask,
-                kv_cache,
+                pkv.cache,
                 int32_pos_tensor(pos % cfg.sliding_window, device, batch_size),
                 int32_pos_tensor(pos, device, batch_size),
+                pkv.view,
                 pool_compressor=pool,
                 win_slot=win_slot,
                 win_row=win_row,

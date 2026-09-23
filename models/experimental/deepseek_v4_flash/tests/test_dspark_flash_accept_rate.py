@@ -56,9 +56,6 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 def test_dspark_flash_accept_rate_real_prompt(mesh_device, reset_seeds, tp_size: int) -> None:
     n_check = int(os.environ.get("DEEPSEEK_V4_DSPARK_ACCEPT_TOKENS", "32"))
     os.environ["DEEPSEEK_V4_MAX_NEW_TOKENS"] = str(n_check)
-    # The reference drafter below owns the checkpoint MTP stack. Do not also
-    # construct the diagnostic causal S=1 ttnn MTP stack on the idle row.
-    os.environ["DEEPSEEK_V4_LOAD_MTP"] = "0"
 
     with contextlib.ExitStack() as prefetcher:
         state = _build_and_prefill(mesh_device, _DEFAULT_TEXT, prefetcher, tp_size=tp_size)
@@ -68,15 +65,12 @@ def test_dspark_flash_accept_rate_real_prompt(mesh_device, reset_seeds, tp_size:
         real_len = state["real_len"]
         start_pos = state["start_pos"]
         max_seq = state["max_seq"]
-        traced = state["traced"]
         next_id = state["next_id"]
         eos_id = state["eos_id"]
         rope = state["rope"]
 
         if model.mtp_submesh is None or model._mtp_hiddens is None:
             pytest.skip("MTP D2D tap needs idle chips and layers 40-42 (32-chip TP4)")
-        if not traced:
-            pytest.skip("accept-rate test uses traced decode")
 
         loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
         logger.info("Loading checkpoint-faithful PyTorch DSpark reference")

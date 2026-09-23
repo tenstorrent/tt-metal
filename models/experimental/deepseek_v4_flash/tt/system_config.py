@@ -174,7 +174,8 @@ class AttentionSettings:
     sdpa_exp_approx_mode: bool = False
     # CSA Lightning Indexer. ``True`` attaches it when the checkpoint has the
     # weights; ``False`` keeps dense causal CSA.
-    indexer: bool = True
+    # TODO: off until the indexer's sparse attend is validated against the dense CSA KV.
+    indexer: bool = False
     index_topk: int = 512
     # Sequence length below which CSA stays on dense causal SDPA. ``0`` means
     # ``compress_rate * index_topk``: fewer closed windows than ``index_topk``,
@@ -214,7 +215,6 @@ class DecodeSettings:
     max_new_tokens: int = 2048
     # 0 = every layer in the checkpoint.
     num_layers: int = 0
-    traced: bool = True
 
     @property
     def ttnn_weight_dtype(self) -> Any:
@@ -482,7 +482,6 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("decode", "total_context", "DEEPSEEK_V4_TOTAL_CONTEXT", int),
     ("decode", "max_new_tokens", "DEEPSEEK_V4_MAX_NEW_TOKENS", int),
     ("decode", "num_layers", "DEEPSEEK_V4_DECODE_LAYERS", int),
-    ("decode", "traced", "DEEPSEEK_V4_TRACED_DECODE", _env_bool),
 )
 
 
