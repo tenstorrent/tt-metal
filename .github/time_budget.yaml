@@ -194,8 +194,7 @@ shield:
     bh_p150: 60
   demo:
     bh_sc4: 360
-    bh_sc1: 120
-    bh_sc1_high_power: 210
+    bh_sc1: 330
 
 scaleout:
   merge_gate:
@@ -223,11 +222,11 @@ scaleout:
     wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_n300_perf: 5
-    bh_p150_perf: 5
+    wh_n300_perf: 45
+    bh_p150_perf: 45
   perf:
     wh_llmbox_perf: 185
-    bh_quietbox_2: 45
+    bh_quietbox_2: 90
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
