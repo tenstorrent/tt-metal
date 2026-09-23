@@ -78,6 +78,15 @@ void QB2_ENTRY() {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), 8);
         // Q RoPE, K RoPE and V-cache reader. K-cache starts after K RoPE.
         for (uint32_t i = 8; i < 11; ++i) { noc_semaphore_inc(peer(i, get_semaphore(0)), 1); }
+#ifdef HEAD_WEIGHT_TRIGGER_RT
+        if (get_arg_val<uint32_t>(3) == get_arg_val<uint32_t>(HEAD_WEIGHT_TRIGGER_RT + 1)) {
+            const uint32_t ready = get_arg_val<uint32_t>(HEAD_WEIGHT_TRIGGER_RT);
+            for (uint32_t i = 0; i < 16; ++i) {
+                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(HEAD_WEIGHT_TRIGGER_RT + 2 + 2*i),
+                    get_arg_val<uint32_t>(HEAD_WEIGHT_TRIGGER_RT + 3 + 2*i), ready), 1);
+            }
+        }
+#endif
         noc_async_atomic_barrier();
     }
 #endif

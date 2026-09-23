@@ -36,12 +36,17 @@ class ProjectionTuning:
     projection_tile_height: int = 32
     qkv_buffers: int = 0
     qkv_early_blocks: int = -1
+    head_early_blocks: int = 0
     head_placement: str = "row"
     profiler_phase: int = 0
     split_gu_bank_rows: bool = False
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.head_early_blocks not in (0, 2, 3) or self.head_early_blocks > min(3, self.buffer_count):
+            raise ValueError("Head prefix must be0/2/3 blocks and fit the head ring")
+        if self.head_early_blocks and (self.reader != "pipelined" or self.prefetch_head_workers or self.share_qkv_workers):
+            raise ValueError("Head own prefix requires separate QKV and pipelined readers without head helpers")
         if self.attention_workers not in (8, 16, 32) or self.attention_chunk not in (64, 128, 256):
             raise ValueError("Attention requires8/16/32 workers and64/128/256-token chunks")
         if self.norm_tile_height not in (16, 32):
@@ -108,6 +113,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("HEAD_EARLY_BLOCKS", str(self.head_early_blocks)),
             ("ATTENTION_WORKERS", str(self.attention_workers)),
             ("FULL_DST_MLP", str(int(self.projection_full_dst in ("mlp", "all")))),
             ("FULL_DST_HEAD", str(int(self.projection_full_dst in ("head", "all")))),

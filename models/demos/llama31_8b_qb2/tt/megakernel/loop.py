@@ -105,6 +105,10 @@ class DecoderLoop:
         )
         if head is not None and any(c in self.cores for c in (*head.cores, *head.norm.cores)):
             raise ValueError("Terminal head and norm workers must be disjoint from the layer loop")
+        if body.tuning.head_early_blocks:
+            if head is None:
+                raise ValueError("Head own prefix requires the terminal head")
+            head.weight_ready = ttnn.create_global_semaphore(body.mesh, head.grid, 0, ttnn.BufferType.L1_SMALL)
         self.head_prefetch = None
         if body.tuning.prefetch_head_workers:
             if head is None:
@@ -196,6 +200,9 @@ class DecoderLoop:
                     ("FUSED_SUFFIX_HEADER", '"models/demos/llama31_8b_qb2/tt/megakernel/kernels/all_gather_tail.hpp"'),
                 ]
             program.kernels = kernels
+        if self.body.tuning.head_early_blocks:
+            from .head_weight_prefix import append_trigger
+            program = append_trigger(self, program)
         masks = {(c.x, c.y): [0, 0, 0] for c in self.cores}
         for cb in program.cbs:
             for c in ttnn.corerange_to_cores(cb.core_ranges, row_wise=True):

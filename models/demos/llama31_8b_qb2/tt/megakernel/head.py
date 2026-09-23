@@ -61,6 +61,8 @@ class FusedHead:
         )
 
     def append(self, program, gathered, *, wait_for_gather=False):
+        if self.tuning.head_early_blocks and not hasattr(self, "weight_ready"):
+            raise ValueError("Head own prefix requires DecoderLoop to bind its trigger")
         rt = ttnn.RuntimeArgs()
         physical = [self.mesh.worker_core_from_logical_core(c) for c in self.cores]
         coords = [v for c in physical for v in (c.x, c.y)]
@@ -71,6 +73,7 @@ class FusedHead:
                 self.weight.buffer_address(),
                 self.output.buffer_address(),
                 *coords,
+                *([ttnn.get_global_semaphore_address(self.weight_ready)] if self.tuning.head_early_blocks else []),
             ]
         ct = [
             v
@@ -97,6 +100,7 @@ class FusedHead:
                     compile_time_args=ct,
                     runtime_args=rt,
                     defines=[(role, "1"), *[(name,
+                        str(self.tuning.head_early_blocks) if name == "EARLY_WEIGHT_BLOCKS" and self.tuning.head_early_blocks else
                         str(self.buffers) if name == "PROJECTION_BUFFERS" else
                         str(min(self.buffers, self.tuning.lookahead)) if name == "PROJECTION_LOOKAHEAD" else value)
                         for name, value in self.tuning.defines]],

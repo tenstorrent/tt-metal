@@ -25,6 +25,18 @@ void kernel_main() {
 #if TINY_PROJECTION_M
     zero_compact_input<64 * 2048>(get_write_ptr(16));
 #endif
+#if HEAD_EARLY_BLOCKS
+    {
+        // Exactly one trigger per serial resident invocation. Clear locally
+        // before refill; all refill bytes are charged to this token.
+        auto* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(36));
+        noc_semaphore_wait(ready, 1);
+        noc_semaphore_set(ready, 0);
+        DeviceZoneScopedN("HEAD-OWN-WEIGHT-PREFETCH");
+        const auto weight = TensorAccessor(weight_args, get_arg_val<uint32_t>(2), 1088);
+        prefetch_local_projection_weights<1, 4, 64, 16, 1088>(weight, worker);
+    }
+#endif
     if (worker == 0) {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 8);
         for (uint32_t i = 0; i < 16; ++i) {
@@ -39,7 +51,7 @@ void kernel_main() {
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(1), 2048);
     const auto weight = TensorAccessor(weight_args, get_arg_val<uint32_t>(2), 1088);
 #if PROJECTION_READER > 0
-    tuned_stream_projection<0, 1, 4, 64, 128, 16, 1088>(input, weight, worker);
+    tuned_stream_projection<0, 1, 4, 64, 128, 16, 1088>(input, weight, worker, 0, 0, HEAD_EARLY_BLOCKS);
 #else
     for (uint32_t block = 0; block < 128; block += 4) {
         cb_reserve_back(0, 4);

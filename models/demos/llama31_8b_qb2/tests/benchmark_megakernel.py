@@ -90,6 +90,7 @@ def parse_args():
     parser.add_argument("--compact-activations", choices=("off", "norm", "all"), default="off")
     parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6), default=0)
     parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
+    parser.add_argument("--head-early-blocks", type=int, choices=(0, 2, 3), default=0)
     parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
     parser.add_argument("--attention-workers", type=int, choices=(8, 16, 32), default=32)
     parser.add_argument("--attention-chunk", type=int, choices=(64, 128, 256), default=256)
@@ -144,7 +145,7 @@ def run(args):
     tuning = ProjectionTuning(
         profiler_phase={"main":0, "o":1, "gu":2, "down":3}[args.profiler_phase],
         compact_activations=args.compact_activations,
-        head_placement=args.head_placement,
+        head_placement=args.head_placement, head_early_blocks=args.head_early_blocks,
         qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
