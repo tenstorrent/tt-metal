@@ -630,42 +630,42 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
 // Helper function to log test configuration
 void log_test_configuration(const TestInfo& info) {
     if (info.use_trace) {
-        log_info(LogTest, "Running with trace enabled");
+        log_debug(LogTest, "Running with trace enabled");
     }
-    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
-    log_info(LogTest, "Iterations: {}", info.iterations);
-    log_info(
+    log_debug(LogTest, "Warmup iterations: {}", info.warmup_iterations);
+    log_debug(LogTest, "Iterations: {}", info.iterations);
+    log_debug(
         LogTest,
         "Grid: ({}-{}) ({} cores)",
         info.workers.start_coord.str(),
         info.workers.end_coord.str(),
         info.workers.size());
-    log_info(LogTest, "Kernel size: {}", info.kernel_size);
+    log_debug(LogTest, "Kernel size: {}", info.kernel_size);
 
     if (info.nfast_kernels != 0) {
-        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
-        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
-        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
+        log_debug(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
+        log_debug(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
+        log_debug(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
     } else {
-        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+        log_debug(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
     }
 
-    log_info(LogTest, "KGs: {}", info.n_kgs);
-    log_info(LogTest, "Subdevice core ranges: {}", info.n_subdevice_ranges);
-    log_info(LogTest, "CBs: {}", info.n_cbs);
-    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
-    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
-    log_info(LogTest, "Sems: {}", info.n_sems);
+    log_debug(LogTest, "KGs: {}", info.n_kgs);
+    log_debug(LogTest, "Subdevice core ranges: {}", info.n_subdevice_ranges);
+    log_debug(LogTest, "CBs: {}", info.n_cbs);
+    log_debug(LogTest, "UniqueRTArgs: {}", info.n_args);
+    log_debug(LogTest, "CommonRTArgs: {}", info.n_common_args);
+    log_debug(LogTest, "Sems: {}", info.n_sems);
 
     if (info.load_prefetcher) {
-        log_info(LogTest, "Prefetcher cache load test: ENABLED");
+        log_debug(LogTest, "Prefetcher cache load test: ENABLED");
     }
 }
 
 template <typename T>
 static int pgm_dispatch(T& state, TestInfo info) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
-        log_info(LogTest, "Running {}", state.name());
+        log_debug(LogTest, "Running {}", state.name());
     }
 
     if (info.use_trace && slow_dispatch_enabled()) {
@@ -775,7 +775,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        log_debug(LogTest, "Test Passed");
         return 0;
     }
     if constexpr (std::is_same_v<T, benchmark::State>) {
