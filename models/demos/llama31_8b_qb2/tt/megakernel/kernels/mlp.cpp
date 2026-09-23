@@ -164,6 +164,13 @@ void QB2_ENTRY() {
     }
 #endif
     cb_wait_front(16, gu_width);
+#if DRAM_NEAR_PROJECTION
+    const auto packed_output = TensorAccessor(packed_args, get_arg_val<uint32_t>(2), 2048);
+    for (uint32_t tile = 0; tile < gu_width; ++tile) {
+        noc_async_write_page(bank * gu_width + tile, packed_output, get_read_ptr(16) + tile * 2048);
+    }
+    noc_async_write_barrier();
+#endif
     notify_coordinator(0);
     if (bank == 0) {
         {

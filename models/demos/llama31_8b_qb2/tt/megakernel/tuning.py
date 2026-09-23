@@ -16,8 +16,11 @@ class ProjectionTuning:
     prefetch_gu_blocks: int = 0
     prefetch_down_blocks: int = 0
     alias_projection_cbs: bool = False
+    projection_placement: str = "row"
 
     def __post_init__(self):
+        if self.projection_placement not in ("row", "dram"):
+            raise ValueError("Projection placement must be row or dram")
         if any(n not in (0, 2, 4, 6) for n in (self.prefetch_gu_blocks, self.prefetch_down_blocks)):
             raise ValueError("Prefetch depth must be zero, two, four or six blocks")
         if self.buffer_count not in (2, 3):
@@ -32,6 +35,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("DRAM_NEAR_PROJECTION", str(int(self.projection_placement == "dram"))),
             ("ALIAS_PROJECTION_CBS", str(int(self.alias_projection_cbs))),
             ("PROJECTION_READER", str(("original", "coalesced", "pipelined", "pipelined_rows").index(self.reader))),
             ("PROJECTION_HOIST_PACK", str(int(self.hoist_pack_config))),

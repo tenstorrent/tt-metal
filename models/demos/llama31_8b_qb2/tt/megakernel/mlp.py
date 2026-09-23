@@ -87,8 +87,12 @@ class FusedMLP:
         grid = self.mesh.compute_with_storage_grid_size()
         if grid.x < 8 or grid.y < (6 if fuse_norm else 5 if fuse_reduce else 4):
             raise ValueError("Fused MLP needs eight columns and four worker rows (five with reduction)")
-        self.projection_cores = [ttnn.CoreCoord(x, y) for y in range(4 - gu_workers // 8, 4) for x in range(8)]
-        self.sfpu_cores = ttnn.corerange_to_cores(layers[0].decode_inputs["down"].shard_spec.grid, row_wise=True)
+        from .placement import ProjectionPlacement
+        self.placement = ProjectionPlacement(self.mesh, self.tuning.projection_placement, gu_workers)
+        self.projection_cores = self.placement.map(
+            [ttnn.CoreCoord(x, y) for y in range(4 - gu_workers // 8, 4) for x in range(8)])
+        self.sfpu_cores = self.placement.map(
+            ttnn.corerange_to_cores(layers[0].decode_inputs["down"].shard_spec.grid, row_wise=True), row_major=True)
         if len(self.sfpu_cores) != 16 or any(c in self.sfpu_cores for c in self.projection_cores):
             raise ValueError("Projection and sixteen-core down-input grids must be disjoint")
         down_shard = layers[0].decode_inputs["down"].shard_spec
@@ -145,8 +149,14 @@ class FusedMLP:
                 memory_config=memory,
             )
 
-        self.packed = empty(7168, _width_memory(self.projection_cores, 7168))
-        self.product = empty(3584, layers[0].decode_inputs["down"])
+        if self.tuning.projection_placement == "dram":
+            # Bank-ordered compute cores are not row-major tensor shards.
+            # Writers scatter logical GU columns onto the SFPU storage grid.
+            self.packed = empty(7168, _width_memory(self.sfpu_cores, 7168))
+            self.product = empty(3584, _width_memory(self.sfpu_cores, 3584))
+        else:
+            self.packed = empty(7168, _width_memory(self.projection_cores, 7168))
+            self.product = empty(3584, layers[0].decode_inputs["down"])
         # Complete decode replaces every native use of these workspace slots.
         # Reuse them so persistent decode storage leaves the native prefill
         # head's static CB region available at longer contexts.
@@ -161,7 +171,8 @@ class FusedMLP:
         if fuse_attention:
             from .attention import FusedAttention
 
-            self.attention_stage = FusedAttention(layers[0], output=workspace["o"] if fuse_prepare else None)
+            self.attention_stage = FusedAttention(layers[0], output=workspace["o"] if fuse_prepare else None,
+                cores=self.placement.map([ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)], row_major=True))
         self.preparation = None
         if fuse_prepare:
             from .prepare import FusedPreparation
@@ -352,6 +363,8 @@ class FusedMLP:
                 cbs.append(ttnn.CBDescriptor(total_size=((size + alignment - 1) // alignment) * alignment,
                     core_ranges=self.projection_grid,
                     format_descriptors=[item.format_descriptors[0] for item in shared]))
+        if self.tuning.projection_placement == "dram":
+            cb(16, 224 // self.gu_workers, ttnn.bfloat16, self.projection_grid)
         cb(31, 1, ttnn.uint32, self.projection_grid)
         for index in (0, 1, 2):
             cb(index, 4, ttnn.bfloat16, self.sfpu_grid)

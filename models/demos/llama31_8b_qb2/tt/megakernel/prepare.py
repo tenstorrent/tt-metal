@@ -15,7 +15,7 @@ class FusedPreparation:
         if body.gu_workers != 8 or self.mesh.compute_with_storage_grid_size().x < 11:
             raise ValueError("Complete layer composition requires GU8 and eleven worker columns")
         self.projection_cores = [ttnn.CoreCoord(x, 2) for x in range(8)]
-        self.norm_cores = [ttnn.CoreCoord(x, 4) for x in range(2, 10)]
+        self.norm_cores = body.placement.map([ttnn.CoreCoord(x, 4) for x in range(2, 10)])
         self.rope_cores = [ttnn.CoreCoord(8, 2), ttnn.CoreCoord(9, 2)]
         self.cache_cores = [ttnn.CoreCoord(9, 3), ttnn.CoreCoord(10, 3)]
         self.cores = self.projection_cores + self.norm_cores + self.rope_cores + self.cache_cores

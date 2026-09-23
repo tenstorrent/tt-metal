@@ -14,11 +14,13 @@ from .mlp import _grid
 
 
 class FusedAttention:
-    def __init__(self, layer, *, output=None):
+    def __init__(self, layer, *, output=None, cores=None):
         self.mesh = layer.mesh_device
         if self.mesh.compute_with_storage_grid_size().y < 10:
             raise ValueError("Attention composition requires ten worker rows")
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)]
+        self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)]
+        if len(self.cores) != 32 or self.cores != sorted(self.cores, key=lambda c: (c.y, c.x)):
+            raise ValueError("Attention requires32 workers in row-major native grouping order")
         self.grid = _grid(self.cores)
         self.compute = layer.decode_sdpa_compute
         self.config = ttnn.SDPAProgramConfig(
