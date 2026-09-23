@@ -13,7 +13,14 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import populate_kv_chunk_address_table_kda
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    KDA_VERSIONS,
+    kda_chunk_n_tokens,
+    kda_max_sequence_length,
+    kda_position,
+    kda_window,
+    populate_kv_chunk_address_table_kda,
+)
 
 SP, TP = 8, 4
 
@@ -75,13 +82,26 @@ def _config(geometry, kind, num_layers, num_users):
         geometry.recurrent_segments_per_layer if kind == "kda_recurrent" else geometry.convolution_segments_per_layer
     )
     bytes_ = geometry.recurrent_segment_bytes if kind == "kda_recurrent" else geometry.convolution_segment_bytes
+    del segments
     return SimpleNamespace(
         num_layers=num_layers,
-        max_sequence_length=segments,
+        max_sequence_length=kda_max_sequence_length(geometry),
         num_slots=num_users,
-        chunk_n_tokens=1,
+        chunk_n_tokens=kda_chunk_n_tokens(geometry, kind),
         chunk_size_bytes=bytes_,
     )
+
+
+def test_contract_axis_constants():
+    """The numbers k3_disagg_contract.md fixes at 96 heads: one 36864-position window, strides 96 / 64."""
+    geometry = KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(SP, TP), sp_axis=0, tp_axis=1)
+    assert kda_window(geometry) == 36_864
+    assert kda_chunk_n_tokens(geometry, "kda_recurrent") == 96
+    assert kda_chunk_n_tokens(geometry, "kda_convolution") == 64
+    assert kda_max_sequence_length(geometry) == 8 * 36_864
+    # Segment i of version v; the last segment of each state ends exactly at its window's end.
+    assert kda_position(geometry, "kda_recurrent", 383, 7) + 96 == 8 * 36_864
+    assert kda_position(geometry, "kda_convolution", 575, 0) + 64 == 36_864
 
 
 @pytest.mark.parametrize("kind", ["kda_recurrent", "kda_convolution"])
@@ -114,7 +134,7 @@ def test_walk_addresses_every_segment_of_every_stage(kind, num_users):
         geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
     )
 
-    assert len(table.entries) == segments * sum(counts) * num_users
+    assert len(table.entries) == segments * sum(counts) * num_users * KDA_VERSIONS
     assert all(key[0] == 7 for key in table.entries)
     # One replica group per (rank, TP column), each spanning all SP rows.
     assert len(table.groups) == len(layout) * TP
@@ -131,7 +151,13 @@ def test_walk_addresses_every_segment_of_every_stage(kind, num_users):
             for slot in range(num_users):
                 batch = slot * stage["count"] + local_layer
                 for segment in range(segments):
-                    noc_addr, size, group_idx = table.entries[(7, row, segment, slot)]
+                    # Every version window aliases the same location.
+                    aliases = {
+                        table.entries[(7, row, kda_position(geometry, kind, segment, v), slot)]
+                        for v in range(KDA_VERSIONS)
+                    }
+                    assert len(aliases) == 1, f"segment {segment}: version windows disagree"
+                    noc_addr, size, group_idx = aliases.pop()
                     assert size == seg_bytes
                     if kind == "kda_recurrent":
                         tp_col, h_local, band = geometry.decompose_recurrent(segment)
@@ -163,11 +189,11 @@ def test_walk_skips_null_stages_and_rejects_wrong_config(expect_error):
         layer_rows=layer_rows,
     )
     assert len(table.groups) == TP  # the count == 0 stage registers nothing
-    assert len(table.entries) == 3 * geometry.recurrent_segments_per_layer
+    assert len(table.entries) == 3 * geometry.recurrent_segments_per_layer * KDA_VERSIONS
 
     bad = _config(geometry, "kda_recurrent", 93, 1)
     bad.chunk_n_tokens = 32
-    with expect_error(AssertionError, "segment-addressed"):
+    with expect_error(AssertionError, "contract stride"):
         populate_kv_chunk_address_table_kda(
             _RecordingTable(),
             bad,
