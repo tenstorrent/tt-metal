@@ -168,8 +168,9 @@ struct SlidingQWorkPlan {
 };
 
 // Chunked prefill stores each global Q-sized group as one local slab per ring
-// device. A window can need only the local slab and the cyclic predecessor's
-// tail; device 0 consumes the final device's tail from the preceding group.
+// device. A window needs the local slab plus the tails of the cyclic predecessors that
+// fall inside it (several when the halo is wider than one slab); a predecessor that wraps
+// past device 0 comes from the preceding group.
 // circular_kv_slab_count (0/1 = unbounded): the local K/V cache is a circular buffer of that many
 // Q-sized slabs, so chunk group g lives in local slab (g % n_slabs) instead of slab g. Only the
 // local-row derivation wraps; every range_global_* / first_global_k_chunk value stays absolute.

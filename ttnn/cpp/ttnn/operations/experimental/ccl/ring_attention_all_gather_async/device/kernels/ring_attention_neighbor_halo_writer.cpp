@@ -144,7 +144,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        // Send the local halo tail directly to the next device's compact output buffer.
+        // Send this hop's slice of the local slab to the destination device's compact output buffer.
 
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             uint32_t tiles_read = input_tile_id_start[input_idx];
