@@ -334,14 +334,121 @@ and `tails-watcher` logs/XML. `qualify-geometry.sh` records the command sequence
 SPMD execution does not exchange KV between devices: **ring continuation and
 communication are not qualified by these results**. No model defaults change.
 
+## PR2 continuation, ring and pretrained Wan block (2026-09-23)
+
+Source: `c0ffe6098d0`, on the same two P150b devices described above.
+Continuation and ring integration change state lifetime, not arithmetic,
+preparation, blocking or input buffer depths.
+
+- Continuation: **162 release + 162 Watcher passed**, covering retained/reloaded
+  Q, odd/even splits and raw DRAM checkpoints. Another complete Q block
+  overwrites the live banks between save and restore.
+- Two-device ring: **168 release + 168 Watcher passed**, covering single/multi-Q,
+  uneven chains, GQA, batch 2, replicated/sharded joint KV, skipped shards and
+  a 777-key logical tail. Inputs are normal, uniform and increasing-max.
+- B/C/D/E match dense attention **bit-for-bit in the same KV order**, on both
+  chips (288 comparisons). This compares current implementations, not frozen
+  digests. Ring KV order can differ by rank.
+- A retains the legacy ring wrapper. All variants also gate independent FP64
+  L2 against the same-order dense result (at most 1.05×), and record PCC.
+  C/D retain absolute bounds. The frozen stress qualification is unchanged.
+- Trace replay and prepared-source immutability are checked. Unsupported
+  precision/feature combinations reject before launching compute.
+
+| Variant | Worst ring L2 % | Minimum PCC | Ring ms, 64 cores/chip | 32 cores/chip | 8 cores/chip |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 10.981 | 0.994095 | 0.857 | 1.134 | 4.420 |
+| B | 10.981 | 0.994095 | 1.038 | 1.989 | 7.624 |
+| C | 0.750 | 0.999972 | 1.140 | 2.227 | 8.580 |
+| D | 0.186 | 0.999998 | 1.469 | 2.886 | 11.222 |
+| E_bf16 | 8.500 | 0.996433 | 1.027 | 1.905 | 7.288 |
+| E_bfp8 | 8.520 | 0.996416 | 0.995 | 2.007 | 7.700 |
+| E_bfp4 | 21.063 | 0.978719 | 0.987 | 2.005 | 7.679 |
+
+Error extrema include increasing-max stress inputs, where HiFi2/LoFi error
+remains substantial. Ring does not fix that recipe limitation. Timing uses
+Q/K=4096 **per device**, B1/H4/D128, Q256/K512, nine trace-wall samples after
+warmup, excluding preparation. The 64-core case has one resident Q block/worker;
+the 32/8-core cases assign two/eight and stage state. These columns change compute
+parallelism and **do not isolate checkpoint overhead**. B/E ring code uses
+`-Os` to fit the kernel configuration buffer; C/D use `-O2`; Watcher uses `-Os`.
+Dense codegen is unchanged. After continuation extraction, dense/resident
+comparisons showed at most 0.26% median regression (0.21% resident).
+
+### Fresh pretrained attention module
+
+`test_sdpa_recipe_wan.py` loads Wan2.2-T2V-A14B's first self-attention module
+from pinned HF revision `5be7df9619b54f4e2667b2755bc6a756675b5cd7`, downloading
+only the checkpoint shard containing it. Converted TT weights are cached once
+and reused. All **16 cases passed**, including trace replay.
+
+This covers QKV projections, learned Q/K norm, SDPA and output projection,
+**not a full transformer block or generated-video evaluation**. Inputs are
+seeded BF16 synthetic hidden states; this smoke test does not apply RoPE. The
+reference runs the pretrained module in CPU FP32. Existing PCC ≥0.988 is
+supplemented with an L2 gate: 10% for A–D/legacy, 20% for E. These module gates
+are distinct from pure-SDPA qualification.
+
+| Variant | L2 %, 1024 / 2048 tokens | Minimum PCC | Module ms, 1024 / 2048 tokens |
+| --- | ---: | ---: | ---: |
+| Legacy Wan | 2.598 / 2.212 | 0.999715 | 1.869 / 2.988 |
+| A | 2.688 / 2.271 | 0.999704 | 1.897 / 3.004 |
+| B | 2.656 / 2.243 | 0.999702 | 1.915 / 3.254 |
+| C | 1.053 / 0.982 | 0.999971 | 1.933 / 3.205 |
+| D | 1.000 / 0.940 | 0.999973 | 1.955 / 3.288 |
+| E_bf16 | 2.760 / 2.351 | 0.999663 | 2.013 / 3.413 |
+| E_bfp8 | 2.771 / 2.343 | 0.999654 | 1.764 / 2.934 |
+| E_bfp4 | 11.007 / 9.748 | 0.993924 | 1.734 / 2.795 |
+
+Module timings include E preparation, projections, normalization and
+communication, excluding compilation/weight conversion. They are trace-wall
+medians, not pure SDPA timings. No model defaults change. Full-model image/video
+quality and longer contexts remain gates for default migration.
+
+Artifacts: `sdpa-pr2-validation-20260923/continuation-final-{release,watcher}`,
+`continuation-{frozen,perf}`, `ring-wide-{release,watcher}`, `ring-perf`,
+`wan-pretrained-v2` and final regression files. Watcher completed all ring
+tests but reported an Ethernet teardown timeout; a board reset recovered
+both devices before release timing and model testing.
+
+### Final regression sweep
+
+The combined sweep passed **910 functional/numerical cases**, with 51 expected
+skips (49 opt-in timings and two existing OOM exclusions). All **147 frozen
+outputs remain bit-identical**. It then exposed a new negative-test setup error:
+the test referenced a Python config class that is not exported. Switching the
+test to `init_device_compute_kernel_config` fixed it; **all 10 rejection cases
+passed** on rerun, without a production-code change.
+
+Four existing legacy ring regressions passed: BF16/FP32 causal GQA, causal
+chunked prefill and attention-sink accuracy/determinism/cache reuse. The final
+ring benchmark passed all **21 cases**, and the fresh Wan module repeated
+**16/16** successfully. Files: `final-release`, `final-rejection`,
+`legacy-ring-regression`, `final-ring-perf` and `final-wan` XML/logs.
+
+Final dense/resident throughput: **28/28 passed**. Relative to the matched
+pre-continuation geometry build, worst median increase is **0.34%** including
+preparation, **0.26%** excluding it, and **0.21%** for resident compute. These
+small trace-wall differences are not claimed as a speedup. Host policy/addressing:
+**14/14 passed** (`final-perf`, `final-host`). The repository-wide time-budget
+validator passes all 271 CI budget buckets after the job split.
+
 ## Continuous coverage
 
-The [SDPA sanity group](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) runs the
-entire `tests/ttnn/unit_tests/operations/sdpa` directory on Blackhole P100/P150.
+The [SDPA sanity matrix](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) separates
+legacy operations, recipe numerics and recipe adapters. The two recipe jobs
+run on Blackhole P100/P150 with 15/20-minute budgets, instead of adding this
+coverage to the legacy job's 15-minute limit. The combined timeouts remain
+within existing TTNN sanity budgets.
 [Sanity CI](../.github/workflows/sanity-tests.yaml) runs on pushes to main and
 scheduled Blackhole runs. Model-capture replay requires `SDPA_MODEL_CAPTURE_DIR`;
 throughput requires `TEST_SDPA_RECIPE_PERF=1`. Those two suites are opt-in, not
 automatic post-commit coverage.
+
+The Blackhole e2e matrix additionally selects SPMD mesh and ring suites on P300 (two
+chips); single-device sanity cannot qualify ring communication. This CI entry
+is wired but has not been run by hosted CI as part of the local qualification.
+Fresh pretrained Wan testing is opt-in with `TEST_SDPA_RECIPE_WAN=1`.
 
 ## Reproduction and evidence
 
@@ -379,8 +486,7 @@ Device timing comes from
 `ops_perf_results_2026_09_21_22_31_02.csv`, trace IDs 0–6 mapping to the table
 order, replay sessions 4–12.
 
-Remaining rollout work: feature/platform eligibility, masked tails (including
-Wan's valid-key tail), multi-device/model caller migration and fresh pretrained
-model qualification. These are not supported by silently selecting another
-recipe. The legacy non-streaming implementation remains until that coverage
-is replaced; this draft does not claim it can be deleted yet.
+Remaining rollout work: other dimensions/platforms, causal/masked/sink/windowed
+attention, paged/indexed/chunked caches, MLA, larger ring topologies and full-model
+default migration. Unsupported explicit recipes never silently fall back.
+The legacy non-streaming implementation remains until its coverage is replaced.
