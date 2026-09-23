@@ -68,7 +68,7 @@ def run_moreh_adam(
     cpu_grad = model.weight.grad.clone()
     dev_grad = create_tt_tensor(cpu_grad, device, dtype=dtype)
 
-    # Device does one update at this `step`. Match that on CPU; do not call step() `step` times.
+    # Device does one update at `step` from zero state; do the same on CPU.
     if step > 1:
         state = optimizer.state[model.weight]
         state["step"] = torch.tensor(float(step - 1))
@@ -172,10 +172,8 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
 @pytest.mark.parametrize("step", [2, 10])
 def test_moreh_adam_bias_correction_uses_step(step, device):
     torch.manual_seed(0)
-    # lr=1 so a kernel that ignores step (and computes step 1) misses by ~0.26 at step 2
-    # and ~0.52 at step 10. step 1 is already covered by test_moreh_adam.
-    # step 100 is not here: with fp32 dest acc off, beta2=0.999 is stored as bf16 0.99609375,
-    # and the update scale drifts by ~0.05.
+    # lr=1 so a kernel that ignores `step` misses by >=0.26, well past param_atol=0.05.
+    # No step=100: beta2=0.999 is stored as bf16 0.99609375 and the update drifts by ~0.05.
     run_moreh_adam(
         [32, 32],
         1.0,
@@ -186,8 +184,6 @@ def test_moreh_adam_bias_correction_uses_step(step, device):
         False,
         device,
         step=step,
-        # lr=1 amplifies bf16 rounding. Measured param delta is 0.018 at step 2.
-        # A stuck step-1 kernel still misses by ~0.26.
         param_atol=0.05,
     )
 
@@ -252,7 +248,7 @@ def test_moreh_adam_caching(params, device):
         # generate a random lr between (0, 1)
         lr = torch.rand(1).item()
 
-        # Large shape, random lr: one bf16 ulp at |w|~4 is 0.03125, past the default 0.01.
+        # bf16 error in the update grows with lr and can exceed the default 0.01.
         run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, param_atol=0.05)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)

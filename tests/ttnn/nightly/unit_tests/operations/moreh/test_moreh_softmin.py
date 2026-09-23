@@ -211,7 +211,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
     ],
 )
 def test_softmin_large_last_tile_subtracts_max(shape, dim, strategy, device):
-    # Force LARGE_*; these shapes would otherwise pick SMALL_*. Last tile must use (x - max).
+    # Force LARGE_*; these shapes would otherwise pick SMALL_*.
     torch_input = torch.empty(shape, dtype=torch.bfloat16)
     if shape[dim] == 32:
         torch_input.fill_(100)
@@ -226,7 +226,7 @@ def test_softmin_large_last_tile_subtracts_max(shape, dim, strategy, device):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_output = ttnn.to_torch(ttnn.operations.moreh.softmin(ttnn_input, dim, strategy=strategy)).to(torch.bfloat16)
 
-    # 1/32 is exact in bf16. atol=0.05 would accept an all-zero output on the constant case.
+    # atol=0.05 would accept an all-zero output on the constant (1/32) case.
     passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0.02, atol=1e-3)
     logger.debug(out)
     assert passing, out
