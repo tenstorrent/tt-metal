@@ -3,7 +3,33 @@ name: "LLK perf gate"
 on:
   pull_request:
     types: [labeled, synchronize]
-
+  workflow_dispatch:
+    inputs:
+      perf_run_id:
+        description: "Workflow run holding the CURRENT side's perf artifacts"
+        required: true
+        type: string
+      baseline_run_id:
+        description: "Workflow run holding the BASELINE side's perf artifacts"
+        required: true
+        type: string
+      arch:
+        description: "Architecture to gate on"
+        required: false
+        default: wormhole
+        type: choice
+        options:
+          - wormhole
+          - blackhole
+      run_types:
+        description: "Comma-separated run types to compare"
+        required: false
+        default: L1_TO_L1
+        type: string
+      pr_number:
+        description: "PR to name in the report (labelling only; nothing is posted to it)"
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
@@ -16,11 +42,14 @@ jobs:
     name: "Measure the PR (non speed-of-light)"
     if: >-
       github.event_name == 'pull_request' && (
-        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event_name == 'workflow_dispatch' ||
         (
-          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
-          (github.event.action == 'synchronize'
-           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (
+            (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+            (github.event.action == 'synchronize'
+             && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+          )
         )
       )
     uses: ./.github/workflows/llk-perf-impl.yaml
@@ -37,14 +66,22 @@ jobs:
     needs: measure
     if: >-
       always() && (
-        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event_name == 'workflow_dispatch' ||
         (
-          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
-          (github.event.action == 'synchronize'
-           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (
+            (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+            (github.event.action == 'synchronize'
+             && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+          )
         )
       )
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
+      arch: ${{ inputs.arch || 'wormhole' }}
+      run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
+      perf_run_id: ${{ inputs.perf_run_id || '' }}
+      baseline_run_id: ${{ inputs.baseline_run_id || '' }}
+      pr_number: ${{ inputs.pr_number || '' }}
       fail_on_regression: false
     secrets: inherit
