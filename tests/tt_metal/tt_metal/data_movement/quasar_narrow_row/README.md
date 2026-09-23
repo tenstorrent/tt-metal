@@ -106,6 +106,11 @@ destination auto-increment is correct**. What fails is `SCATTER_INDEX`: it does 
 for the first 16 entries, so the first 16 destinations all receive entry 0's offset, then the
 index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block.
 
+Within that stuck prefix the source address **alternates** between src row 0 col 0 and col 8
+— offset +0 and +16 B. So the list *index* is stuck at 0 while the address the engine forms
+still moves, between two values 16 B apart. That rules out the simplest reading ("it reuses
+entry 0 until the fetch lands") and is the level of detail the overlay owners will want.
+
 - One channel is correct; eight is always wrong — consistent with the engine consuming entries
   before the first block lands.
 - **Compaction is irrelevant**: `last_tile_w = 32` gives `out_row_bytes == pad_row_bytes` and
@@ -183,6 +188,15 @@ wrong. Each run therefore appends its verdict to
 the report joins the two — flagging `!! WRONG OUTPUT` and excluding those rows from the
 verdict table. If the verdict file is missing, the report says correctness is unknown rather
 than implying everything passed.
+
+The join is **by index**, so every run that emits a profiler zone must also write a verdict
+row, including the diagnostics. `ScatterListMapping` therefore records its runs as
+`VERDICT_DIAGNOSTIC`, and the report drops them. That is not tidiness: the mapping probes run
+the *shipping* engine at a shape the sweeps also cover, with `compact_iterations = 1`, so
+leaving them in both poisons that shape's average and marks the group "correctness unknown",
+which hands the verdict to whatever arm is left. It reported "workaround wins" at 504 B once
+for exactly that reason. The report also refuses to join at all if the two files disagree on
+length, rather than producing a plausible wrong answer from a stale pairing.
 
 ## Measured results (emu-quasar-1x3)
 
