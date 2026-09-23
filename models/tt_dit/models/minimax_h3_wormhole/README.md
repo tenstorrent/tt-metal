@@ -179,8 +179,10 @@ bracket's width; the refiner, input projections, `norm_out` and output heads fit
    layout conversion (+3.00, next item), a slightly larger fused AG+matmul (+0.64) and RMSNorm (+0.35).
 3. **Layout conversions grow 24x under FSDP** — tilize + untilize go 0.13 -> 3.12 ms, 22% of the
    FSDP cost spent on format round-trips rather than communication. Cheapest apparent win.
-4. **ff2 runs the intended Wormhole path**: `ReduceScatterMinimalAsyncDeviceOperation` is present
-   and there is no fused `Matmul_RS` row. See [ff2.md](ff2.md).
+4. **ff2 ran the unfused Wormhole path** in this baseline: `ReduceScatterMinimalAsyncDeviceOperation` is present
+   and there is no fused `Matmul_RS` row. Since 2026-09-23 the 15 s shape takes a swept fused
+   `minimal_matmul_strided_reduce_scatter_async` instead (matmul + reduce-scatter + addcmul in one op, -1.76 ms per
+   layer like-for-like). See [ff2.md](ff2.md).
 
 ### Roofline — speed of light on this part (derived 2026-09-17)
 
@@ -356,7 +358,7 @@ the tooling. Numbers are per call, per device, at 15 s / 768P / 16:9.
 | ff1 AGMM (fused SwiGLU) | 6.4% | 15.7 ms | 8.03 ms | 15.29 ms | bf16 silu landed (-3.6%); fp32 dest off + 2x4 (-8%) and a 6-segment LUT silu (-9.2%) measured, both precision decisions, not landed | [ff1.md](ff1.md) |
 | to_qkv AGMM (chunks=3) | 4.2% | 10.4 ms | 6.03 ms | 10.30 ms | behaves like ff1; fp32 dest off + 4x2 -8.7% measured, not landed | [to_qkv.md](to_qkv.md) |
 | to_out AGMM (fused addcmul) | 2.1% | 5.3 ms (4.33 in the plain sweep) | 2.01 ms | 5.29 ms | delivery co-limited (relay waits 1.1 ms) + two-pass epilogue 0.7 ms; compute-side levers do not transfer | [to_out.md](to_out.md) |
-| ff2 matmul + reduce-scatter | 2.7% + 1.1% | 6.77 ms (matmul) | 3.57 ms | 6.77 ms | blocking (8,7,10) landed (-3.5%); fused MM/RS stays disabled; no zone breakdown yet | [ff2.md](ff2.md) |
+| ff2 matmul + reduce-scatter + addcmul | 2.7% + 1.1% + ~0.3% | 10.70 ms host-timed (7.45 + 2.54 + 0.71) | 4.59 ms (56-core matmul) | **8.94 ms fused** | fused MM/RS re-evaluated like-for-like at M=13664 and landed 2026-09-23 (8x7 matmul, (6,7,8) 2x2, L1 window): -1.76 ms/layer, -1.88 ms/block in the Tracy profile, **-166 ms/fwd (-1.35%) in a 10-step same-host A/B**, CLIP 35.58 vs 35.71; unfused RS hyperparameters measured (-5%), not landed | [ff2.md](ff2.md) |
 
 ## Part 4 — Other findings
 
@@ -458,7 +460,8 @@ table, and how `get_matmul_config` falls back on equal `M_per_core` after an exa
 documented in `models/tt_dit/utils/matmul.py` -- the module docstring and the `grid_88_configs` /
 `grid_89_configs` entries.
 
-The fused MM/RS grid sweep (all worse than unfused; stays disabled) is in [ff2.md](ff2.md); the SDPA chunk-size
+The fused MM/RS study (the 2026-09-17 grid sweep was not like-for-like; re-done at M=13664 and landed 2026-09-23) is in
+[ff2.md](ff2.md); the SDPA chunk-size
 sweeps and the L1 envelope are in [sdpa.md](sdpa.md).
 
 ### Perf experiments — index
@@ -467,7 +470,7 @@ One row per experiment, in the order they were numbered (12 was never allocated)
 
 | # | experiment | status | result |
 | 1 | Matmul blockings, all 4 shapes x 3 durations, 8x8/8x9 grids | **done** | 3.5% of matmul time at 15 s; ff1 and ff2 landed, 0.5% of a forward. Table in Part 4 *Matmul blockings*; per op in [ff1.md](ff1.md), [ff2.md](ff2.md), [to_qkv.md](to_qkv.md), [to_out.md](to_out.md) |
-| 2 | Fused MM/RS at 8x5/8x6/8x7 matmul grids | **done** | All worse than unfused; stays disabled. [ff2.md](ff2.md) |
+| 2 | Fused MM/RS at 8x5/8x6/8x7 matmul grids | **superseded** | The 2026-09-17 verdict ("all worse") compared a 5 s fused total against the matmul alone. Re-done like-for-like at M=13664 (2026-09-22/23, experiment 2b): fused 8x7 with a swept blocking **8.94 ms vs 10.70 unfused** (MM + RS + addcmul), pcc 0.99993, 2000-call soak clean, 10-step A/B **-166 ms/fwd** at equal CLIP; **landed** as an 8x9 `fused_mmrs_configs` entry. Unfused RS hyperparameters (4 workers/dir, chunks 16-32) are worth -5% on the unfused path, not landed. [ff2.md](ff2.md) |
 | 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible. [sdpa.md](sdpa.md) |
 | 3b | `q_chunk=128` | **done** | Not a perf path: slower than q=192 at every feasible k. Hang history in [sdpa.md](sdpa.md), chunk-shape zone. |
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product. [sdpa.md](sdpa.md) |
