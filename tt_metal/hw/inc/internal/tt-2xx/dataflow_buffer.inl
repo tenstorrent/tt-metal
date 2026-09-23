@@ -441,11 +441,11 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tack, tiles;
         if constexpr (is_producer) {
-            tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_tr_ack_trid(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tack  = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_wr_sent_trid(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tack == 0 && tiles > 0) {
             break;
@@ -475,9 +475,9 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tiles;
         if constexpr (is_producer) {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tiles > 0 && tiles < global_threshold) {
             break;

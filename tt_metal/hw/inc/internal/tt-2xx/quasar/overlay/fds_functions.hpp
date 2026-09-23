@@ -19,17 +19,21 @@ namespace overlay {
 namespace FdsDispatch {
 // Configure filter length: how many cycles a done signal from a NEO must be stable (through the deglitcher)
 inline void fds_config_filter_length(uint32_t threshold) {
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR, threshold);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR, threshold);
 }
 
 // Configure groups: enable specific neos (mask) for each group ID, set count threshold for the groupID
 inline void fds_config_groupid(uint32_t group_id, uint32_t mask, uint32_t threshold) {
-    FDS_INTF_WRITE((TT_FDS_DISPATCH_GROUPID_ENABLE_0__REG_ADDR + (group_id * sizeof(uint32_t))), mask);
-    FDS_INTF_WRITE((TT_FDS_DISPATCH_GROUPID_COUNT_THRESHOLD_0__REG_ADDR + (group_id * sizeof(uint32_t))), threshold);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        (TT_FDS_DISPATCH_GROUPID_ENABLE_0__REG_ADDR + (group_id * sizeof(uint32_t))), mask);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        (TT_FDS_DISPATCH_GROUPID_COUNT_THRESHOLD_0__REG_ADDR + (group_id * sizeof(uint32_t))), threshold);
 }
 
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
-inline void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_DISPATCH_INTERRUPT_ENABLE_REG_ADDR, mask); }
+inline void fds_config_interrupt_en(uint32_t mask) {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_INTERRUPT_ENABLE_REG_ADDR, mask);
+}
 
 // Program the auto dispatch release pacing. The counter that paces releases returns to zero only
 // on equality with this register, and it runs whether or not auto dispatch is enabled -- the pop
@@ -38,7 +42,7 @@ inline void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_DISPA
 // the queue until a 32 bit wrap. The counter cannot be read, so only the caller can know it is at
 // rest.
 inline void fds_config_auto_dispatch_pacing(uint32_t cycle_count) {
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
 }
 
 // Program which write address auto dispatch intercepts. The outbox must be given the _REG_ADDR
@@ -47,20 +51,24 @@ inline void fds_config_auto_dispatch_pacing(uint32_t cycle_count) {
 // OFFSET-form outbox silently delivers nothing. The two forms alias only through ordinary register
 // decode, which the trigger does not use.
 inline void fds_config_auto_dispatch_outbox(uint32_t address) {
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
 }
 
 // Switch the output multiplexer onto the auto dispatch queue. Program the pacing and the outbox
 // before this, so the feature never runs against a half-written configuration.
-inline void fds_enable_auto_dispatch() { FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, 0x1); }
+inline void fds_enable_auto_dispatch() {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, 0x1);
+}
 
 // Switch the output multiplexer back to the output register. Only the wire is affected: the queue
 // keeps draining and the pacing counter keeps running, so this touches neither.
-inline void fds_disable_auto_dispatch() { FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, 0x0); }
+inline void fds_disable_auto_dispatch() {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, 0x0);
+}
 
 // Read the auto dispatch queue's full flag: nonzero while the queue cannot take another value
 inline uint32_t fds_read_auto_dispatch_fifo_full() {
-    return FDS_INTF_READ(TT_FDS_DISPATCH_AUTO_DISPATCH_FIFO_FULL_REG_ADDR);
+    return __builtin_riscv_ttrocc_fds_intf_read(TT_FDS_DISPATCH_AUTO_DISPATCH_FIFO_FULL_REG_ADDR);
 }
 
 // Send go signal to from Dispatch to NEO Tiles
@@ -68,27 +76,30 @@ inline void fds_go(bool ad_enable, uint16_t group_id) {
     if (ad_enable) {
         while (fds_read_auto_dispatch_fifo_full());
     }
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, group_id);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, group_id);
 }
 
 // Clear go signal (use between go signals of same group ID)
-inline void fds_clear_go() { FDS_INTF_WRITE(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, 0); }
+inline void fds_clear_go() { __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, 0); }
 
 // Clear interrupt on FDS interface side by writing a 0 to specified input bus register
 inline void fds_clear_neo_status(uint32_t neo_inst) {
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
 }
 
 // Read the done status for the specified group ID: a live per-lane mask, not a latch, and not gated
 // by the enable register. Group 0 is the idle value on the wire, so group 0's status is the map of
 // lanes currently carrying nothing.
 inline uint32_t fds_read_group_status(uint32_t group_id) {
-    return FDS_INTF_READ(TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
+    return __builtin_riscv_ttrocc_fds_intf_read(
+        TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
 }
 
 // Read how many enabled NEOs have signalled done for the specified group ID
 inline uint32_t fds_read_group_count(uint32_t group_id) {
-    return FDS_INTF_READ(TT_FDS_DISPATCH_GROUPID_COUNT_0__REG_ADDR + (group_id * sizeof(uint32_t)));
+    return __builtin_riscv_ttrocc_fds_intf_read(
+        TT_FDS_DISPATCH_GROUPID_COUNT_0__REG_ADDR + (group_id * sizeof(uint32_t)));
 }
 
 // Poll for count threshold reached for specified group ID
@@ -100,44 +111,52 @@ inline void fds_poll(uint32_t group_id, uint32_t count_threshold) {
 namespace FdsNeo {
 // Configure filter length: how many cycles a go signal from a Dispatch must be stable (through the deglitcher)
 inline void fds_config_filter_length(uint32_t threshold) {
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_ADDR, threshold);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_ADDR, threshold);
 }
 
 // Configure groups: enable specific dispatches (mask) for each group ID
 inline void fds_config_groupid(uint32_t group_id, uint32_t mask, uint32_t threshold) {
-    FDS_INTF_WRITE((TT_FDS_TENSIXNEO_GROUPID_ENABLE_0__REG_ADDR + (group_id * sizeof(uint32_t))), mask);
-    FDS_INTF_WRITE((TT_FDS_TENSIXNEO_GROUPID_COUNT_THRESHOLD_0__REG_ADDR + (group_id * sizeof(uint32_t))), threshold);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        (TT_FDS_TENSIXNEO_GROUPID_ENABLE_0__REG_ADDR + (group_id * sizeof(uint32_t))), mask);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        (TT_FDS_TENSIXNEO_GROUPID_COUNT_THRESHOLD_0__REG_ADDR + (group_id * sizeof(uint32_t))), threshold);
 }
 
 // Program the auto dispatch release pacing. Same rule as the dispatch-side function: call once,
 // before any value has been queued, and never while values may still be pacing out -- a cycle
 // count the (unreadable) counter has already passed strands the queue until a 32 bit wrap.
 inline void fds_config_auto_dispatch_pacing(uint32_t cycle_count) {
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
 }
 
 // Program which write address auto dispatch intercepts. Same address convention as the
 // dispatch-side function: the _REG_ADDR form of the target, never the _REG_OFFSET form.
 inline void fds_config_auto_dispatch_outbox(uint32_t address) {
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
 }
 
 // Switch the output multiplexer onto the auto dispatch queue. Program the pacing and the outbox
 // before this, so the feature never runs against a half-written configuration.
-inline void fds_enable_auto_dispatch() { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, 0x1); }
+inline void fds_enable_auto_dispatch() {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, 0x1);
+}
 
 // Switch the output multiplexer back to the output register. Only the wire is affected: the queue
 // keeps draining and the pacing counter keeps running, so this touches neither.
-inline void fds_disable_auto_dispatch() { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, 0x0); }
+inline void fds_disable_auto_dispatch() {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, 0x0);
+}
 
 // Read the go status for the specified group ID: a live per-lane mask, not a latch
 inline uint32_t fds_read_group_status(uint32_t group_id) {
-    return FDS_INTF_READ(TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
+    return __builtin_riscv_ttrocc_fds_intf_read(
+        TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
 }
 
 // Read the raw go value the specified dispatch instance is driving into this NEO
 inline uint32_t fds_read_de_status(uint32_t dispatch_inst) {
-    return FDS_INTF_READ(TT_FDS_TENSIXNEO_DISPATCH_TO_TENSIX_0__REG_ADDR + (dispatch_inst * sizeof(uint32_t)));
+    return __builtin_riscv_ttrocc_fds_intf_read(
+        TT_FDS_TENSIXNEO_DISPATCH_TO_TENSIX_0__REG_ADDR + (dispatch_inst * sizeof(uint32_t)));
 }
 
 // Poll for go signal from specified dispatch
@@ -148,7 +167,7 @@ inline void fds_poll(uint32_t group_id, uint32_t dispatch_inst) {
 
 // Read the auto dispatch queue's full flag: nonzero while the queue cannot take another value
 inline uint32_t fds_read_auto_dispatch_fifo_full() {
-    return FDS_INTF_READ(TT_FDS_TENSIXNEO_AUTO_DISPATCH_FIFO_FULL_REG_ADDR);
+    return __builtin_riscv_ttrocc_fds_intf_read(TT_FDS_TENSIXNEO_AUTO_DISPATCH_FIFO_FULL_REG_ADDR);
 }
 
 // Send done signal from NEO Tiles to Dispatch
@@ -156,24 +175,29 @@ inline void fds_done(bool ad_enable, uint32_t group_id) {
     if (ad_enable) {
         while (fds_read_auto_dispatch_fifo_full());
     }
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, group_id);
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, group_id);
 }
 
 // Clear done signal (use between done signals of same group ID)
-inline void fds_clear_done() { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, 0); }
+inline void fds_clear_done() { __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, 0); }
 
 // Read back the outgoing done register. Auto dispatch diverts matching writes to its queue and
 // never updates the register, so a stale readback after fds_done is the signature of the queued
 // path.
-inline uint32_t fds_read_done() { return FDS_INTF_READ(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR); }
+inline uint32_t fds_read_done() {
+    return __builtin_riscv_ttrocc_fds_intf_read(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+}
 
 // Clear interrupt on FDS interface side by writing a 0 to specified input bus register
 inline void fds_clear_de_status(uint32_t dispatch_inst) {
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_DISPATCH_TO_TENSIX_0__REG_ADDR + (dispatch_inst * sizeof(uint32_t)), 0x0);
+    __builtin_riscv_ttrocc_fds_intf_write(
+        TT_FDS_TENSIXNEO_DISPATCH_TO_TENSIX_0__REG_ADDR + (dispatch_inst * sizeof(uint32_t)), 0x0);
 }
 
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
-inline void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_INTERRUPT_ENABLE_REG_ADDR, mask); }
+inline void fds_config_interrupt_en(uint32_t mask) {
+    __builtin_riscv_ttrocc_fds_intf_write(TT_FDS_TENSIXNEO_INTERRUPT_ENABLE_REG_ADDR, mask);
+}
 }  // namespace FdsNeo
 
 }  // namespace overlay

@@ -421,8 +421,8 @@ At kernel launch DM0 runs `setup_dfb_implicit_sync`:
 1. If no implicit sync: `disable_dfb_tile_isr()`, set `dm0_isr_ready`, return.
 2. Else load the config into DTCM `g_txn_dfb_descriptor[txn_id]` (ISR indexes by trid, not dense slot).
 3. For each txn id in `producer ∪ consumer` masks:
-  - **Producer bit:** clear RD cmdbuf tiles-to-process for that trid, then `SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold)` — IRQ when that many **read TR_ACKs** accumulate on the overlay RD cmdbuf for that trid.
-  - **Consumer bit:** clear WR cmdbuf tiles-to-process, then `SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold)` — IRQ when that many **writes have been sent** on the WR cmdbuf for that trid.
+  - **Producer bit:** clear RD cmdbuf tiles-to-process for that trid, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_tr_ack(txn_id, threshold)` — IRQ when that many **read TR_ACKs** accumulate on the overlay RD cmdbuf for that trid.
+  - **Consumer bit:** clear WR cmdbuf tiles-to-process, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_wr_sent(txn_id, threshold)` — IRQ when that many **writes have been sent** on the WR cmdbuf for that trid.
 4. **Arm per-trid interrupt enables (IE):**
   - RD cmdbuf `PER_TR_ID_IE_1` upper 32 bits ← `producer_txn_id_mask` (TR_ACK path)
   - WR cmdbuf `PER_TR_ID_IE_2` lower 32 bits ← `consumer_txn_id_mask` (WR_SENT path)
