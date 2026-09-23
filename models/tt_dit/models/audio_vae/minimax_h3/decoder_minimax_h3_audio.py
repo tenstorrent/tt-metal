@@ -75,6 +75,10 @@ class MiniMaxH3AudioDecoder(Module):
         # is shared with LTX's Vocoder -- so this flag cannot silently change LTX's partitioning.
         tight_t_align: bool = os.environ.get("MINIMAX_H3_AUDIO_TIGHT_T_ALIGN", "0") == "1",
         local_tpad_tail: bool = os.environ.get("MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL", "0") == "1",
+        pack_bands: dict[int, int] | None = None,
+        act_mode: str = "chain",
+        polyphase_ups: bool = True,
+        batch_shard_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -97,6 +101,20 @@ class MiniMaxH3AudioDecoder(Module):
         # tensors exist, so they aren't part of the pipeline's `weights_variant` cache key.
         self.tight_t_align = tight_t_align
         self.local_tpad_tail = local_tpad_tail
+        self.pack_bands = dict(pack_bands or {})
+        self.act_mode = act_mode
+        self.polyphase_ups = polyphase_ups
+        # One stereo channel per row of the mesh along this axis (the T-shard runs along the other), so every
+        # vocoder op sees one batch item instead of the replicated pair. None: both items on every device.
+        self.batch_shard_axis = batch_shard_axis
+        if batch_shard_axis is not None:
+            mesh_shape = tuple(mesh_device.shape)
+            if parallel_config is None or parallel_config.mesh_axis == batch_shard_axis:
+                raise ValueError("batch_shard_axis needs a T-sharded decoder and must differ from the T-shard axis")
+            if mesh_shape[batch_shard_axis] < 2:
+                raise ValueError(
+                    f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard"
+                )
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
@@ -135,7 +153,11 @@ class MiniMaxH3AudioDecoder(Module):
             split_mode=split_mode,
             tight_t_align=tight_t_align,
             local_tpad_tail=local_tpad_tail,
+            pack_bands=pack_bands,
+            act_mode=act_mode,
+            polyphase_ups=polyphase_ups,
         )
+        self.decoder.batch_shard_axis = batch_shard_axis
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
         """``(B, 32, T)`` -> ``(B, 2048, T)`` through ``dec_in_proj`` on device.
@@ -169,8 +191,52 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        projected = self._project_latents_device(latents_BCT)
-        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
+        # dec_in_proj is a k=1 conv, so it runs on the vocoder's own T padding and hands its output to the
+        # vocoder on device: no readback + re-upload of the (B, T, 2048) projection between the two.
+        x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
+        t_pad = self.decoder.t_pad_for(x.shape[1])
+        if t_pad:
+            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
+        if self.batch_shard_axis is None:
+            x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        else:
+            x_dev = self._upload_batch_sharded(x)
+            self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
+        projected_dev = self.dec_in_proj(x_dev)
+        if t_pad:
+            # k=1 with a bias: the zero pad rows project to the bias, but the vocoder expects zero pad rows
+            # (conv_pre reads them). One multiply by a cached (1, T + t_pad, 1) validity mask restores that.
+            projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
+        return self.decoder.forward_device_BTC(
+            projected_dev,
+            t_pad=t_pad,
+            traced=traced,
+            trace_key=tuple(latents_BCT.shape),
+        )
+
+    def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
+        """Row r of the mesh along ``batch_shard_axis`` gets batch item ``r % B`` (rows past B hold replicas)."""
+        axis = self.batch_shard_axis
+        mesh_shape = tuple(self.mesh_device.shape)
+        batch = x_BTC.shape[0]
+        assert (
+            mesh_shape[axis] >= batch
+        ), f"mesh axis {axis} ({mesh_shape[axis]} devices) is shorter than the batch {batch}"
+        rows = torch.cat([x_BTC[i % batch : i % batch + 1] for i in range(mesh_shape[axis])], dim=0)
+        dims = [None, None]
+        dims[axis] = 0
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=dims)
+        return ttnn.from_torch(
+            rows, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
+        )
+
+    def _pad_row_mask(self, t_total: int, t_pad: int) -> ttnn.Tensor:
+        # Rebuilt per call, not cached: eager decode runs alongside the replayed denoise trace, which
+        # frees and re-stomps this mask's DRAM (same hazard as the vocoder's tpad-tail mask -- see
+        # ``vocoder_ltx.forward_BCT``). A stale handle would multiply the projection by garbage.
+        m = torch.ones(1, t_total, 1, dtype=torch.float32)
+        m[:, t_total - t_pad :, :] = 0.0
+        return ttnn.from_torch(m, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
     def _t_padding(self, num_frames: int) -> int:
         """T padding needed for tile-aligned per-chip shards; zero when unsharded."""

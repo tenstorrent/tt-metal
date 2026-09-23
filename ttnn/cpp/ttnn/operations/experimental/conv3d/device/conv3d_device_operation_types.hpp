@@ -24,7 +24,8 @@ struct Conv3dConfig {
         uint32_t C_in_block_ = 0,
         std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         uint32_t alignment_ = 32,
-        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1},
+        bool operand_split_ = false) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -34,7 +35,8 @@ struct Conv3dConfig {
         C_in_block(C_in_block_),
         dilation(dilation_),
         alignment(alignment_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
+        compute_with_storage_grid_size(compute_with_storage_grid_size_),
+        operand_split(operand_split_) {}
 
     tt::tt_metal::DataType weights_dtype;
     tt::tt_metal::Layout output_layout;
@@ -46,6 +48,9 @@ struct Conv3dConfig {
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
+    // In-kernel fp32 operand split: x -> hi = bf16(x), lo = x - hi on the SFPU, then x_hi*W_hi + x_hi*W_lo + x_lo*W_hi
+    // in one fp32 DST pass (W_lo = `weight_lo_tensor`), recovering the bits TF32 drops. Needs fp32 data and fp32 dest.
+    bool operand_split;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
@@ -57,7 +62,8 @@ struct Conv3dConfig {
         "C_in_block",
         "dilation",
         "alignment",
-        "compute_with_storage_grid_size");
+        "compute_with_storage_grid_size",
+        "operand_split");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -70,7 +76,8 @@ struct Conv3dConfig {
             this->C_in_block,
             this->dilation,
             this->alignment,
-            this->compute_with_storage_grid_size);
+            this->compute_with_storage_grid_size,
+            this->operand_split);
     }
 };
 
@@ -102,6 +109,8 @@ struct Conv3dInputs {
     std::optional<const Tensor> bias_tensor;
     std::optional<const Tensor> halo_buffer;
     std::optional<const Tensor> pad_offset_tensor;
+    // Prepared like `weight_tensor`; the residual W - bf16(W) for `Conv3dConfig::operand_split`.
+    std::optional<const Tensor> weight_lo_tensor;
 };
 
 namespace detail {

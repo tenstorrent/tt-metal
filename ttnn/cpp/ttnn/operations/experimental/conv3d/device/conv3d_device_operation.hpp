@@ -28,6 +28,7 @@ struct Conv3dDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
@@ -56,6 +57,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     uint32_t logical_w_mask = 0,
     const std::optional<Tensor>& pad_offset_tensor = std::nullopt,
     uint32_t output_pad_h = 0,
-    uint32_t output_pad_w = 0);
+    uint32_t output_pad_w = 0,
+    const std::optional<Tensor>& weight_lo_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

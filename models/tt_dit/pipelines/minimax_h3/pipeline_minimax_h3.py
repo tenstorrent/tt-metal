@@ -162,6 +162,9 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+# Time-packed late vocoder bands (band -> steps per row): the two narrowest bands on 32-wide rows, measured
+# 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
+_AUDIO_PACK_BANDS = {5: 2, 6: 4}
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -463,7 +466,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
@@ -474,6 +477,7 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
+        audio_trace: bool | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
         lora_path: str | os.PathLike | None = None,
         lora_strength: float | None = None,
@@ -553,13 +557,15 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
-        # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
-        # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
-        # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
-        # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
-        if audio_split_mode not in ("off", "weight", "full"):
-            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        # Audio conv split, same weights on disk: "kernel" (default) runs the fp32 hi/lo operand split inside conv3d
+        # (~67 dB vs CPU), "full" is the same split as three convs, "weight" and "off" trade fidelity for speed.
+        if audio_split_mode is None:
+            audio_split_mode = "kernel"
+        if audio_split_mode not in ("off", "weight", "full", "kernel"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
+        # The vocoder replays a captured device graph (0.5 -> 0.3 s); off for meshes opened without a trace region.
+        self.audio_trace = True if audio_trace is None else bool(audio_trace)
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > preset (32 on the
         # quad, else 8), then the 8->4->1 fallback; logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
@@ -752,7 +758,7 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
@@ -763,6 +769,7 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
+        audio_trace: bool | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
         lora_path: str | os.PathLike | None = None,
         lora_strength: float | None = None,
@@ -806,6 +813,7 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
             audio_split_mode=audio_split_mode,
+            audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
             precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
@@ -1908,6 +1916,14 @@ class MiniMaxH3Pipeline:
                 else None
             )
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+            # One stereo channel per row of the mesh axis the T-shard does not use, when that axis has two devices.
+            batch_shard_axis = None
+            if audio_parallel_config is not None:
+                other = 1 - self._audio_t_axis
+                if tuple(self.mesh_device.shape)[other] >= 2:
+                    batch_shard_axis = other
+                else:
+                    logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1920,6 +1936,14 @@ class MiniMaxH3Pipeline:
                 parallel_config=audio_parallel_config,
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
+                pack_bands=_AUDIO_PACK_BANDS,
+                act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
+                batch_shard_axis=batch_shard_axis,
+            )
+            logger.info(
+                f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
+                f"packing: {decoder.pack_bands or 'off'}; "
+                f"activations: {decoder.act_mode}; batch shard axis {decoder.batch_shard_axis}"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1939,7 +1963,14 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
+                subfolder="audio_decoder"
+                + weights_variant(
+                    decoder.split_mode,
+                    decoder.max_c_in_block,
+                    decoder.pack_bands,
+                    act_mode=decoder.act_mode,
+                    polyphase=decoder.polyphase_ups,
+                ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -2740,6 +2771,9 @@ class MiniMaxH3Pipeline:
         return tracer is not None and tracer.trace_captured
 
     def release_traces(self) -> None:
+        decoder = self._audio_decoder
+        if decoder is not None:
+            decoder.release_trace()
         transformer = self._transformer
         if transformer is None:
             return
@@ -3145,6 +3179,8 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        # The first call at a shape captures and every later one replays, so the warm-up generation
+        # pays the capture and the measured one does not. Each served length gets its own trace.
+        waveform = audio_decoder(latents, traced=self.audio_trace)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)

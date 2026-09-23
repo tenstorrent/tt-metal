@@ -61,7 +61,8 @@ ttnn::Tensor conv3d(
     uint32_t logical_w_mask,
     const std::optional<ttnn::Tensor>& pad_offset_tensor,
     uint32_t output_pad_h,
-    uint32_t output_pad_w) {
+    uint32_t output_pad_w,
+    const std::optional<ttnn::Tensor>& weight_lo_tensor) {
     // Shared with prepare_conv3d_weights so the prepared weight's K-row blocking always matches the
     // conv compute -- a mismatch is near-zero PCC (#47316) -- and the minimal block keeps large
     // kernels within L1 (#42146).
@@ -88,6 +89,10 @@ ttnn::Tensor conv3d(
     }
 
     Tensor prepared_weight_tensor = prepare_and_check_weight_tensor(weight_tensor, groups_, config, device);
+    std::optional<Tensor> prepared_weight_lo_tensor;
+    if (weight_lo_tensor.has_value()) {
+        prepared_weight_lo_tensor = prepare_and_check_weight_tensor(weight_lo_tensor.value(), groups_, config, device);
+    }
     return ttnn::prim::conv3d(
         input_tensor,
         prepared_weight_tensor,
@@ -108,7 +113,8 @@ ttnn::Tensor conv3d(
         logical_w_mask,
         pad_offset_tensor,
         output_pad_h,
-        output_pad_w);
+        output_pad_w,
+        prepared_weight_lo_tensor);
 }
 
 }  // namespace ttnn::experimental

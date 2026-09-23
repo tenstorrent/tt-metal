@@ -12,12 +12,14 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 
 from __future__ import annotations
 
+import time
 from typing import List, Sequence
 
 import torch
 
 import ttnn
 
+from ...layers.audio_aa_snake import FusedActivation1d
 from ...layers.audio_ops import (
     ConvTranspose1dViaConv3d,
     Snake,
@@ -29,14 +31,64 @@ from ...layers.audio_ops import (
     channel_factor,
     partition_channel,
 )
+from ...layers.audio_pack import PackedActivation1d, PackedConv1d
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils.tensor import local_device_to_torch
+from ...utils.tensor import _host_buffer_to_torch, local_device_to_torch
 from ...utils.tracing import traced_function
 
 TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHARDED convs
+
+
+def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
+    """Row-major reshape that changes the row width (a device copy); frees the source when it was copied."""
+    y = ttnn.reshape(x, shape)
+    try:
+        distinct = y.buffer_address() != x.buffer_address()
+    except Exception:  # noqa: BLE001 -- no address on this tensor kind: keep both alive rather than risk a free
+        distinct = False
+    if distinct:
+        ttnn.deallocate(x)
+    return y
+
+
+def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.Tensor:
+    """Batch item ``b`` lives on the devices whose coordinate along ``axis`` is ``b`` (T already gathered on each):
+    read one shard per item and stack.
+
+    The batch axis is intra-host on every supported mesh -- the quad's inter-host axis carries T, not batch -- so
+    every item is present on the local host; no cross-host gather is needed. Pairing is the only subtlety: on a
+    multi-host mesh ``mesh_coords()`` enumerates the whole (global) mesh while ``get_device_tensors`` yields only the
+    local shards, so a positional ``zip`` misaligns (the first ``len(local)`` global coords are all row 0, and
+    ``coord[axis] == b`` for ``b > 0`` never matches -- the failure this replaces). Key each local shard by its own
+    coordinate via the host buffer, exactly as ``utils.yuv_d2h`` does for its multi-host readback.
+    """
+    mesh_device = x_dev.device()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    picked: dict[int, torch.Tensor] = {}
+    if view is None:
+        # Single host: mesh_coords() and get_device_tensors() are 1:1 and all local.
+        for coord, shard in zip(x_dev.tensor_topology().mesh_coords(), ttnn.get_device_tensors(x_dev)):
+            picked.setdefault(int(coord[axis]), ttnn.to_torch(shard))
+    else:
+        # Multi host: pair each local shard with its true global coordinate (a positional zip would misalign).
+        host = x_dev.cpu(blocking=True)
+        buffer = host.host_buffer()
+        padded_shape = list(host.padded_shape)
+        trim = tuple(slice(0, d) for d in host.shape)
+        dtype = host.dtype
+        for coord in host.tensor_topology().mesh_coords():
+            b = int(coord[axis])
+            if b < batch and b not in picked and view.is_local(coord):
+                shard = buffer.get_shard(coord)
+                if shard is not None:
+                    picked[b] = _host_buffer_to_torch(shard, padded_shape, dtype)[trim]
+    missing = [b for b in range(batch) if b not in picked]
+    if missing:
+        raise RuntimeError(f"no local device holds batch item(s) {missing} along mesh axis {axis}")
+    return torch.cat([picked[b] for b in range(batch)], dim=0)
 
 
 class DilatedConv1d(_AlignedOutConv1d):
@@ -88,88 +140,68 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        pack: int | None = None,
+        act_mode: str = "chain",
     ) -> None:
         super().__init__()
         self.channels = channels
         self.kernel_size = kernel_size
         self.num_branches = len(dilation)
         self.mesh_device = mesh_device
+        # pack (layers/audio_pack.py): None = depthwise resamplers and dilated convs as they are; 1 = the anti-alias
+        # resamplers as dense convs on unpacked rows; > 1 = everything on time-packed rows (B, T/pack, pack*C).
+        self.pack = pack
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
+        common = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
 
-        self.convs1 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
+        def conv(dil):
+            if pack is not None and pack > 1:
+                return PackedConv1d(
+                    channels,
+                    channels,
                     kernel_size=kernel_size,
-                    dilation=dilation[i],
+                    dilation=dil,
+                    pack=pack,
                     bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    **common,
                 )
-                for i in range(self.num_branches)
-            ]
-        )
-        self.convs2 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
-                    kernel_size=kernel_size,
-                    dilation=1,
-                    bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                    split_mode=split_mode,
-                )
-                for i in range(self.num_branches)
-            ]
-        )
+            return DilatedConv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=kernel_size,
+                dilation=dil,
+                bias=True,
+                split_mode=split_mode,
+                **common,
+            )
+
         # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
-        self.acts1 = ModuleList(
-            [
-                Activation1d(
+        def act():
+            if act_mode == "fused":
+                assert activation == "snakebeta", "the fused activation implements SnakeBeta only"
+                return FusedActivation1d(channels=channels, **common)
+            if pack is not None:
+                assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
+                return PackedActivation1d(
                     channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
+                    pack=pack,
+                    split_mode=split_mode,
+                    **common,
                 )
-                for _ in range(self.num_branches)
-            ]
-        )
-        self.acts2 = ModuleList(
-            [
-                Activation1d(
-                    channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
-                for _ in range(self.num_branches)
-            ]
-        )
+            return Activation1d(
+                channels=channels,
+                activation=act_cls(
+                    channels, alpha_logscale=True, mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config
+                ),
+                **common,
+            )
+
+        self.convs1 = ModuleList([conv(dilation[i]) for i in range(self.num_branches)])
+        self.convs2 = ModuleList([conv(1) for _ in range(self.num_branches)])
+        self.acts1 = ModuleList([act() for _ in range(self.num_branches)])
+        self.acts2 = ModuleList([act() for _ in range(self.num_branches)])
 
     def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
         # set_tail(xd, mode): materialize the tile-align pad image to an op's boundary when
@@ -234,8 +266,22 @@ class Vocoder(Module):
         # H3 opt-ins; LTX leaves both False so its T-partition stays tile-aligned.
         tight_t_align: bool = False,
         local_tpad_tail: bool = False,
+        pack_bands: dict[int, int] | None = None,
+        act_mode: str = "chain",
+        polyphase_ups: bool = False,
     ) -> None:
         super().__init__()
+        # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
+        # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
+        self.pack_bands = dict(pack_bands or {})
+        # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
+        # (layers/audio_aa_snake.py), bit-identical to the chain.
+        self.act_mode = act_mode
+        # Transposed convs as polyphase convs over the unstuffed rows: a third of the multiplies, no stuff/pad/slice.
+        self.polyphase_ups = polyphase_ups
+        # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
+        self.batch_shard_axis = None
+        self.batch_shard = None
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -270,13 +316,8 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre stays UNSHARDED under T-sharding: at (2048 -> 1024, k=7), the widest conv in the
-        # decode, the sharded path returns uninitialized memory (absmax 2.6e+11 vs a reference 1.391,
-        # -204 dB), which made every T-sharded decode wrong. A shape sweep found it the only one
-        # affected; `_partition_t` and `_t_neighbor_pad` were exact here. Replicating is near-free --
-        # conv_pre sees the 207-latent input, ~1/800th of the waveform -- so `_forward_device` runs it
-        # first and partitions T after. Not under channel-TP, where conv_pre's own
-        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
+        # conv_pre runs replicated under T-sharding: its 8 KB fp32 sticks break the neighbor_pad halo exchange (4 KB
+        # sticks are exact). Channel-TP still shards it: `gather_channel_to_full` rebuilds C_in from the C-shard.
         self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
@@ -306,6 +347,7 @@ class Vocoder(Module):
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
                     tight_t_align=tight_t_align,
+                    polyphase=polyphase_ups,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -327,25 +369,36 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
+                        pack=self.pack_bands.get(i),
+                        act_mode=act_mode,
                     )
                 )
 
         final_channels = upsample_initial_channel // (2**self.num_upsamples)
 
-        self.act_post = Activation1d(
-            channels=final_channels,
-            activation=SnakeBeta(
-                final_channels,
-                alpha_logscale=True,
+        if act_mode == "fused":
+            self.act_post = FusedActivation1d(
+                channels=final_channels,
                 mesh_device=mesh_device,
                 dtype=dtype,
                 parallel_config=parallel_config,
-            ),
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.act_post = Activation1d(
+                channels=final_channels,
+                activation=SnakeBeta(
+                    final_channels,
+                    alpha_logscale=True,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    parallel_config=parallel_config,
+                ),
+                mesh_device=mesh_device,
+                dtype=dtype,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
 
         self.conv_post = _AlignedOutConv1d(
             in_channels=final_channels,
@@ -426,6 +479,39 @@ class Vocoder(Module):
             x_t = x_t.reshape(B, S * F, T)
         return self._upload_BCT(x_t)
 
+    def t_pad_for(self, t_rows: int) -> int:
+        """Rows to pad T by so each T-shard holds >= one tile (see ``_upload_BCT``); 0 when unsharded."""
+        if self.parallel_config is None or self.parallel_config.factor <= 1:
+            return 0
+        factor = self.parallel_config.factor
+        per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
+        return per_shard * factor - t_rows
+
+    def forward_device_BTC(
+        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None, timings: dict | None = None
+    ) -> torch.Tensor:
+        """``(B, T + t_pad, C_in)`` ROW_MAJOR already on device (padded per ``t_pad_for``) -> ``(B, C_out, T_out)``
+        torch. Lets a caller that produces the vocoder input on device (MiniMax-H3's ``dec_in_proj``) skip the
+        readback + re-upload that ``forward_BCT`` implies."""
+        # See ``forward_BCT``: H3 decodes eagerly alongside the replayed denoise trace, which frees and
+        # re-stomps the DRAM a cached tpad-tail mask lives in. Rebuild it per call so every decode
+        # restores correct tail values after the replay.
+        self._tpad_mask_cache = {}
+        self._t_pad = t_pad
+        mark = time.perf_counter()
+        if traced:
+            y_dev = self._forward_device(x_dev, traced=True, tracer_trace_key=trace_key)
+        else:
+            y_dev = self._forward_device(x_dev)
+        if timings is not None:
+            ttnn.synchronize_device(self.mesh_device)
+            timings["vocoder"] = time.perf_counter() - mark
+            mark = time.perf_counter()
+        waveform = self._device_to_host(y_dev)
+        if timings is not None:
+            timings["readback"] = time.perf_counter() - mark
+        return waveform
+
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
 
@@ -439,18 +525,12 @@ class Vocoder(Module):
 
         x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         # Pad T so each shard holds >= one tile: a short clip (T=207 at factor 8 -> 26 rows/shard,
         # under a tile) starves the HEIGHT_SHARDED depthwise conv1d's DRAM slicer. Long clips are
         # unchanged (already >> a tile/shard). Pad rows are masked and cropped from the waveform later.
-        t_pad = 0
-        if sharded:
-            factor = self.parallel_config.factor
-            t_rows = x_BTC_torch.shape[1]
-            per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
-            t_pad = per_shard * factor - t_rows
-            if t_pad:
-                x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
+        t_pad = self.t_pad_for(x_BTC_torch.shape[1])
+        if t_pad:
+            x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
@@ -472,15 +552,17 @@ class Vocoder(Module):
         # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
-        def _set_tail(xd, cumrate, mode):
+        def _set_tail(xd, cumrate, mode, pack=1):
             # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
             # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
-            # replicate-pad activations. No-op when unsharded (t_pad == 0).
+            # replicate-pad activations. No-op when unsharded (t_pad == 0). On packed rows the image
+            # is t_pad*cumrate/pack rows.
             if t_pad == 0:
                 return xd
+            assert (t_pad * cumrate) % pack == 0, f"pad image {t_pad * cumrate} rows not a multiple of pack {pack}"
             return _set_tpad_tail(
                 xd,
-                t_pad * cumrate,
+                t_pad * cumrate // pack,
                 mode=mode,
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
@@ -501,7 +583,12 @@ class Vocoder(Module):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
             x_dev = self.ups[i](x_dev)
             cumrate *= self.upsample_rates[i]
-            stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
+            pack = self.pack_bands.get(i, 1)
+            if pack > 1:
+                B_, T_, C_ = x_dev.shape
+                assert T_ % pack == 0, f"band {i}: local T {T_} not a multiple of pack {pack}"
+                x_dev = _reshape_rows(x_dev, (B_, T_ // pack, pack * C_))
+            stage_set_tail = (lambda c, p: (lambda xd, mode: _set_tail(xd, c, mode, p)))(cumrate, pack)
             start = i * self.num_kernels
             # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
@@ -520,11 +607,20 @@ class Vocoder(Module):
                 acc = new_acc
             x_dev = ttnn.multiply(acc, 1.0 / self.num_kernels)
             ttnn.deallocate(acc)
+            if pack > 1:
+                B_, Tp, Cp = x_dev.shape
+                x_dev = _reshape_rows(x_dev, (B_, Tp * pack, Cp // pack))
 
         x_dev = _set_tail(x_dev, cumrate, "replicate")  # act_post is a replicate-pad activation
         x_dev = self.act_post(x_dev)
         x_dev = _set_tail(x_dev, cumrate, "zeros")  # conv_post is zeros-pad
         x_dev = self.conv_post(x_dev)
+
+        # A mono waveform is (T, 1): 4-byte rows, one DRAM page per sample. Carry it as (T/32, 32) through the
+        # clamp, the T gather and the readback (32x fewer pages); _device_to_host flattens it back.
+        B_, T_, C_ = x_dev.shape
+        if C_ == 1 and T_ % TILE_HEIGHT == 0:
+            x_dev = _reshape_rows(x_dev, (B_, T_ // TILE_HEIGHT, TILE_HEIGHT))
 
         if self.apply_final_activation:
             if self.use_tanh_at_final:
@@ -542,7 +638,12 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = local_device_to_torch(x_dev)
+        if self.batch_shard is not None:
+            x_host = _batch_sharded_to_torch(x_dev, *self.batch_shard)
+        else:
+            x_host = local_device_to_torch(x_dev)
+        if self.out_channels == 1 and x_host.shape[-1] == TILE_HEIGHT:
+            x_host = x_host.reshape(x_host.shape[0], -1, 1)  # packed mono output (see _forward_device)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:
