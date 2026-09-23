@@ -188,14 +188,6 @@ struct RingTopology {
     bool is_linear;
 };
 
-struct TensorPartition {
-    TensorPartition(uint32_t partition_size, uint32_t partition_index) :
-        partition_size(partition_size), partition_index(partition_index) {}
-
-    uint32_t partition_size;
-    uint32_t partition_index;
-};
-
 class CclOpTensorConfig {
 public:
     static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(const Tensor& tensor);
@@ -670,16 +662,6 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
-
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index);
 
 class GenericWrappedTensorSlicer {
 public:
