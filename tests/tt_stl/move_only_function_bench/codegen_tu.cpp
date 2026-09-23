@@ -26,7 +26,7 @@ using bench_config::kInlinePointers;
 #if defined(CANDIDATE_STD)
 using Fn = std::function<void()>;
 #elif defined(CANDIDATE_FU2)
-using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, false, void()>;
+using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, true, void()>;
 #elif defined(CANDIDATE_ZOO)
 using Fn =
     zoo::Function<zoo::AnyContainer<zoo::Policy<void* [kInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>, void()>;

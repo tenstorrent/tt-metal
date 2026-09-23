@@ -109,6 +109,36 @@ Caveat: this comes from grepping for the usual spellings of the flag, so a compi
 externally supplied `CMAKE_CXX_FLAGS` could still introduce it, and it says nothing about how
 consumers outside this repo build.
 
+### `noexcept` move, and what it costs
+
+`std::move_only_function`'s move constructor is unconditionally `noexcept`, and `std::function`'s is
+too, so the alias must not regress that. fu2 controls it with `HasStrongExceptGuarantee`, and its
+own `unique_function` default is `false` — which would make our alias the only contender with a
+throwing move. It is set to **`true`** here.
+
+Measured:
+
+| Type | `noexcept` move | Accepts a throwing-move capture |
+| --- | --- | --- |
+| `std::function` (baseline) | yes | yes |
+| `std::move_only_function` (target) | yes, mandated | yes — heap-allocates them |
+| zoo `Function` + RTTI | yes | yes |
+| fu2, `HasStrongExceptGuarantee=false` | **no** | yes |
+| fu2, `HasStrongExceptGuarantee=true` | yes | **no**, `static_assert` |
+
+`true` costs a compile-time rejection of callables whose move can throw. That is rare in practice —
+`unique_ptr`, `shared_ptr`, `string` and `vector` all move `noexcept` — and it fails loudly at the
+call site rather than silently. The alternative loses a guarantee that call sites will bake in and
+that the eventual `std::move_only_function` provides, so `false` would leave behind defensive code
+that migration does not automatically unwind.
+
+**A caveat on how zoo gets both columns.** `Move::VTableEntry` is declared
+`void (*mp)(void*, void*) noexcept` while zoo still accepts throwing-move targets, so a target whose
+move actually throws terminates. `std::move_only_function` earns the same guarantee honestly by
+heap-allocating such callables. fu2 with `true` is the honest form of the promise — it refuses the
+target rather than accepting it under a `noexcept` it cannot keep. Worth weighing: zoo's behaviour
+here is a latent `std::terminate`, not a compile error.
+
 ### Empty-call behaviour
 
 All contenders are configured to **throw**, matching `std::function`. Note this is one place the

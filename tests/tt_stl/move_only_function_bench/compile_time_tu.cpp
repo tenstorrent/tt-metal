@@ -28,7 +28,7 @@ template <typename Sig>
 using Fn = std::function<Sig>;
 #elif defined(CANDIDATE_FU2)
 template <typename Sig>
-using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, false, Sig>;
+using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, true, Sig>;
 #elif defined(CANDIDATE_ZOO)
 template <typename Sig>
 using Fn =

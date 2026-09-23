@@ -36,12 +36,16 @@ using bench_config::kInlineBytes;
 using bench_config::kInlinePointers;
 
 using StdFn = std::function<void()>;
+// HasStrongExceptGuarantee=true makes the move constructor noexcept, matching std::function, zoo
+// and the std::move_only_function this will become. fu2's own unique_function default is false,
+// which would leave this the only contender with a throwing move. The cost is that fu2 then refuses
+// callables whose move can throw; see README.
 using Fu2Fn = fu2::function_base<
     /*IsOwning=*/true,
     /*IsCopyable=*/false,
     fu2::capacity_fixed<kInlineBytes>,
     /*IsThrowing=*/true,
-    /*HasStrongExceptGuarantee=*/false,
+    /*HasStrongExceptGuarantee=*/true,
     void()>;
 // zoo::VTableFunction is deliberately not used: AnyContainer provides no operator bool and no
 // has_value(), so it cannot stand in for std::move_only_function. operator bool lives on
