@@ -32,11 +32,12 @@ def round_block(values, bits, *, ties_even):
     "is_query,dtype", [(True, ttnn.bfloat16), (False, ttnn.bfloat16), (False, ttnn.bfloat8_b), (False, ttnn.bfloat4_b)]
 )
 @pytest.mark.parametrize("distribution", ["normal", "ties", "zeros"])
-def test_sdpa_input_preparation(device, is_query, dtype, distribution):
+@pytest.mark.parametrize("length", [256, 1, 17, 33, 255])
+def test_sdpa_input_preparation(device, is_query, dtype, distribution, length):
     if not is_blackhole():
         pytest.skip("SDPA preparation initially targets Blackhole")
     device.enable_program_cache()
-    shape = (1, 1, 256, 128)
+    shape = (1, 1, length, 128)
     if distribution == "normal":
         host = torch.randn(shape, generator=torch.Generator().manual_seed(12)).bfloat16()
     elif distribution == "zeros":
@@ -44,7 +45,7 @@ def test_sdpa_input_preparation(device, is_query, dtype, distribution):
     else:
         # Every BF16 mantissa, both signs, varying exponents and 16-value group
         # anchors. This covers ties and saturation without relying on a cast.
-        index = torch.arange(256 * 128).reshape(-1, 16)
+        index = torch.arange(length * 128).reshape(-1, 16)
         values = ((index * 17) % 256).float() / 128
         values[:, 0] = 1.75
         values = torch.ldexp(values, (index[:, :1] // 16 % 33 - 16).int())
@@ -58,11 +59,16 @@ def test_sdpa_input_preparation(device, is_query, dtype, distribution):
             # Native BFP8 packing rounds shared-exponent ties away from zero;
             # the preceding RNE5 values are exact at its E8M6 ingress.
             expected = round_block(expected, 7, ties_even=False)
-    source = ttnn.from_torch(host, device=device, layout=ttnn.TILE_LAYOUT)
+    source = ttnn.from_torch(host, device=device, layout=ttnn.TILE_LAYOUT, pad_value=float("nan"))
     output = ttnn.transformer.prepare_sdpa_input(source, is_query=is_query, dtype=dtype)
     assert output.dtype == dtype
     assert torch.equal(ttnn.to_torch(output).float(), expected)
     assert torch.equal(ttnn.to_torch(source), host)
+    if length % 32:
+        source_padding = ttnn.to_torch(ttnn.reshape(source, source.padded_shape))[..., length:, :]
+        output_padding = ttnn.to_torch(ttnn.reshape(output, output.padded_shape))[..., length:, :]
+        assert torch.isnan(source_padding).all()
+        assert torch.count_nonzero(output_padding) == 0
     cache_entries = device.num_program_cache_entries()
     # Keep source/output alive while exercising fresh addresses on a cache hit.
     second = ttnn.from_torch(-host, device=device, layout=ttnn.TILE_LAYOUT)
@@ -81,15 +87,13 @@ def test_sdpa_input_preparation(device, is_query, dtype, distribution):
         ttnn.release_trace(device, trace)
 
 
-@pytest.mark.parametrize("invalid", ["dtype", "placement", "rank", "padding", "query_storage", "dimension"])
+@pytest.mark.parametrize("invalid", ["dtype", "placement", "rank", "query_storage", "dimension"])
 def test_sdpa_input_preparation_rejects_unsupported(device, invalid):
     if not is_blackhole():
         pytest.skip("SDPA preparation initially targets Blackhole")
     shape = (1, 1, 256, 64 if invalid == "dimension" else 128)
     if invalid == "rank":
         shape = shape[1:]
-    elif invalid == "padding":
-        shape = (1, 1, 255, 128)
     source = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.bfloat16),
         device=device,

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <variant>
 
@@ -25,6 +26,8 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -554,7 +557,40 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if ((!args.is_causal && !is_chunked) || args.is_cross) {
+    if (args.precision) {
+        TT_FATAL(!tensor_args.has_latent_v(), "Named ring recipes require explicit K and V");
+        ttnn::operations::transformer::sdpa::detail::resolve_precision_policy(
+            ttnn::operations::transformer::sdpa::detail::select_recipe(*args.precision, tensor_args.input_k.dtype()));
+        TT_FATAL(input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE, "Named ring recipes require Blackhole");
+        TT_FATAL(dtype == DataType::BFLOAT16, "Named ring recipes require BF16 Q");
+        const auto kv_dtype = tensor_args.input_k.dtype();
+        TT_FATAL(
+            kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,
+            "Named ring recipes require BF16, BFP8 or BFP4 KV");
+        TT_FATAL(
+            tensor_args.input_v->dtype() == kv_dtype && gathered_input_tensor_k.dtype() == kv_dtype &&
+                tensor_args.gathered_v->dtype() == kv_dtype,
+            "Named ring recipe KV and persistent buffers must have matching types");
+        if (has_joint_tensors) {
+            TT_FATAL(
+                tensor_args.joint_q->dtype() == dtype && tensor_args.joint_k->dtype() == kv_dtype &&
+                    tensor_args.joint_v->dtype() == kv_dtype,
+                "Named ring recipe joint types must match their primary Q/K/V types");
+        }
+        TT_FATAL(
+            q_shape[3] == 128 && tensor_args.input_k.logical_shape()[3] == 128 &&
+                tensor_args.input_v->logical_shape()[3] == 128 && args.get_q_chunk_size() == 256 &&
+                args.get_k_chunk_size() == 512,
+            "Named ring recipes require Q256/K512/D128");
+        TT_FATAL(
+            !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
+                !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink &&
+                !tensor_args.has_logical_n_tensor() && !tensor_args.has_logical_l_tensor(),
+            "Unsupported feature for named ring recipes");
+        TT_FATAL(
+            !args.scale || *args.scale == 1.0f / std::sqrt(128.0f),
+            "Named ring recipes require the default D128 scale");
+    } else if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -1049,23 +1085,35 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = v_head_dim;
 
-    return {
+    RingJointSDPAResultSpec specs{
         tt::tt_metal::TensorSpec(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+        const bool fp32 = *args.precision == ttnn::transformer::SDPAPrecision::BALANCED ||
+                          *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE;
+        using State = sdpa::streaming::StateTransfer;
+        const uint32_t pages = (fp32 ? State::pages<true> : State::pages<false>)+1;
+        const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
+                                  ((input.padded_shape()[2] + 255) / 256 + (joint_padded_seq + 255) / 256);
+        specs.emplace_back(
+            ttnn::Shape{1, 1, q_blocks * pages * 32, 32},
+            TensorLayout(DataType::UINT32, PageConfig(Layout::TILE), args.output_memory_config));
+    }
+    return specs;
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
-    return {
-        create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
-    };
+    RingJointSDPAResult outputs;
+    for (const auto& spec : output_specs) {
+        outputs.push_back(create_device_tensor(spec, tensor_args.input_q.device()));
+    }
+    return outputs;
 }
 
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
@@ -1124,6 +1172,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
         tensor_args.has_metadata() ? args.kv_cache_layer_idx : 0u,
         args.circular_kv_cache,
+        args.precision,
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
@@ -1261,7 +1310,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1459,6 +1509,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_layer_idx,
         sliding_window_size,
         circular_kv_cache);
+    operation_attributes.precision = precision;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

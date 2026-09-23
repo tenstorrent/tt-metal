@@ -305,6 +305,11 @@ void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+    if constexpr (transpose) {
+        mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
+    }
+#endif
     if (!skip_pack_configure) {
         configure_row_pack_width(out_cb, subblock_w);
     }
@@ -2091,6 +2096,9 @@ void sdpa_standard_v2(
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+            recipe_k_tile_offset = k_chunk * Sk_chunk_t;
+#endif
             bool is_first = (k_chunk == k_loop_start);
             bool is_last = (k_chunk == k_loop_end - 1);
 

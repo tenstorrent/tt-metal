@@ -40,14 +40,16 @@ and absolute errors; PCC alone is not an acceptance criterion. See the
 
 ## Current support and rejection rules
 
-The initial implementation supports a single Blackhole device, dense noncausal
-unmasked attention, and:
+The current PR2 implementation supports Blackhole devices and uniform SPMD
+meshes, dense noncausal unmasked attention, and:
 
-- Q `[1, H, Q, 128]`, K/V `[1, H, K, 128]`, matching positive head counts;
-- Q divisible by 256, K divisible by 512; fixed Q256/K512 blocks;
-- standard 32x32 tiles, no logical padding, interleaved DRAM inputs/output;
+- Q `[B, Hq, Q, 128]`, K/V `[B, Hkv, K, 128]`, with positive dimensions
+  and `Hq` divisible by `Hkv` (including grouped-query attention);
+- arbitrary positive sequence lengths; fixed Q256/K512 blocks;
+- standard 32x32 tiles, minimal sequence tile padding, interleaved DRAM
+  inputs/output, and no padding in the other dimensions;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
-- a rectangular origin-based grid with at least one core per head;
+- a rectangular origin-based grid with at least one core per batch/query head;
 - `scale=None` or the default `1 / sqrt(128)` represented as FP32. A BF16-rounded
   scale is a different value and is rejected; the kernel always uses the default.
 
@@ -56,12 +58,70 @@ forwarding chain, capped by `max_cores_per_head_batch` (default 16) and availabl
 Q blocks. Unequal chain job counts are supported. Q is double buffered; KV
 has one slot for C/D and two slots for A/B/E, matching the frozen schedules.
 
-Explicit recipes reject causal/masked/windowed/sink attention, GQA, alternative
-scales, sub-core grids, other head dimensions, tails, sharded/L1 tensors,
-multi-device meshes and unsupported architectures. They also reject an explicit
+Explicit recipes reject causal/masked/windowed/sink attention, alternative
+scales, sub-core grids, other head dimensions, core-sharded/L1 tensors,
+and unsupported architectures. They also reject an explicit
 `compute_kernel_config` or `exp_approx_mode=False`: the recipe already owns
 those numerical decisions. They never silently fall back to legacy attention.
-Do not zero-pad K/V to bypass these checks; that changes the softmax denominator.
+Do not increase logical K/V lengths to bypass these checks; that changes the
+softmax denominator. Physical tile padding is masked by the implementation.
+
+Mesh execution applies the same local operation independently on each device.
+Replicated, head-sharded and query-sharded tensors are qualified; KV must be
+complete for each local query. This is not sequence-parallel ring attention.
+
+## Joint attention
+
+`joint_scaled_dot_product_attention` accepts the same `precision` and
+`inputs_prepared` arguments. Apply LOW_PRECISION preparation separately to both
+Q/K/V segments. Omitting `precision` preserves the existing joint implementation.
+
+The joint adapter supports `joint_strategy="rear"` and the same device,
+dtype, D128, batch/GQA and grid restrictions above. Each segment must have positive
+logical lengths. Segment boundaries and the end of the concatenated sequence
+may occur inside a Q or K chunk; Q and K lengths may differ.
+
+The reader maps virtual concatenated tile addresses to the two input segments,
+retaining each segment's minimal tile padding;
+the writer maps output tiles back to their respective tensors. There is no
+materialized concatenation or output slicing. The final partial chunk is zero-filled
+by the reader, nonexistent output tiles are discarded, and padded **key** score
+columns are replaced with negative infinity before the row maximum and exponential.
+Zero-filling K/V alone would incorrectly increase the denominator. This mask is
+compiled out for aligned K lengths; valid-score arithmetic, CB depths and the
+softmax-state lifetime remain unchanged. The same handling covers sub-tile tails
+in dense and joint attention. Preparation clears padding before quantization.
+
+## Ring attention
+
+`ring_joint_scaled_dot_product_attention` accepts the same recipe arguments.
+The existing ring reader, active-step scheduler and CCL transport are reused.
+Primary/joint KV may be replicated or sequence-sharded as supported by the
+existing ring API; prepare E inputs **before** caching or communication.
+
+B/C/D/E execute the shared streaming recipe with one recurrent state across all
+active ring contributions. Releasing Q no longer implies final normalization.
+Single-Q workers retain state in L1; multi-Q workers checkpoint raw tile bytes
+to an internal DRAM buffer. C/D retain FP32 numerator/denominator; B/E retain
+both BF16 components, unfinished local groups and global chunk parity. Only the
+last active contribution normalizes. A retains the existing ring streaming loop.
+
+Current ring scope is Blackhole, noncausal D128, Q256/K512, batch/GQA, scalar
+logical lengths, and the existing `rear` joint strategy. Physical local primary
+Q/KV sequence extents must be tile-aligned; `logical_n` masks a possibly
+sub-tile global KV tail. Q shorter than local KV requires `is_cross=True`.
+Two connected devices are qualified, including unequal worker chains, skipped
+shards and replicated/sharded joint inputs. Larger ring topologies are not yet
+qualified. Causal/balanced, indexed/paged/chunked-cache, sliding-window, sink,
+MLA and device-tensor logical lengths remain legacy-only and reject explicit recipes.
+The third returned tensor is internal scratch, **not a supported LSE result**.
+
+`WanAttention` has opt-in `sdpa_precision` and `sdpa_kv_dtype` constructor
+arguments for self-attention. E preparation happens after norm/RoPE and before
+ring communication; ping-pong KV buffers use the selected storage dtype.
+Omitting these arguments retains the original model behavior. Fresh pretrained
+attention-block tests qualify this integration, not generated-video quality or
+a change to model defaults.
 
 ## Examples
 
@@ -133,7 +193,7 @@ Watcher builds use size optimization to fit instrumentation in the instruction
 buffer. Release recipes retain their selected optimization settings. Do not use
 Watcher timings for performance claims.
 
-This is the first integration PR, not removal of legacy feature coverage.
-Follow-on work expands geometry/platform/model coverage before deleting the
-non-streaming path. Pretrained FLUX/Wan quality evidence from the research
-branch must not be relabeled as a run of this production branch.
+No legacy feature coverage is removed. Unqualified configurations remain on
+their existing dispatch until they have tested streaming replacements.
+Pretrained FLUX/Wan evidence from the research branch is historical, distinct
+from the fresh PR2 Wan attention-block qualification.

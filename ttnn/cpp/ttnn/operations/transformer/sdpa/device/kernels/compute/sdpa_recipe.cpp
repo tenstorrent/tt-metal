@@ -18,6 +18,7 @@
 #include "streaming/lofi_scaling.hpp"
 #endif
 #include "compute_common.hpp"
+#include "streaming/recipe_tail.hpp"
 
 #ifdef SDPA_RECIPE_BASELINE
 #include "compute_streaming.hpp"

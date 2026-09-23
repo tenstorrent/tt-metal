@@ -14,6 +14,25 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks);
 
+PrecisionPolicy resolve_recipe_policy(
+    const Tensor& q,
+    const Tensor& k,
+    ttnn::transformer::SDPAPrecision precision,
+    bool inputs_prepared,
+    std::optional<float> scale,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<SDPAProgramConfig>& program_config);
+
+std::tuple<Tensor, Tensor> run_joint_recipe(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& joint_q,
+    const Tensor& joint_k,
+    const Tensor& joint_v,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config);
+
 Tensor run_recipe(
     const Tensor& q,
     const Tensor& k,

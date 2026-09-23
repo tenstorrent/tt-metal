@@ -39,6 +39,26 @@ model evidence. Include masked tails, appropriate head dimensions, GQA, and
 joint/ring/paged/chunked/MLA coverage as applicable; qualify multiple devices and
 fresh pretrained-model quality/performance before changing model defaults.
 
+PR2 is developed on `cglagovich/sdpa-streaming-pr2`, stacked on PR1:
+
+- Dense/joint sub-tile tails, batch/GQA and uniform SPMD meshes reuse the shared
+  recipe implementation and accuracy infrastructure.
+- Ring separates Q release from final normalization, preserving raw state and
+  pending compensated groups through single-Q residency or multi-Q checkpoints.
+  Existing communication/scheduling, skipped iterations and replicated/sharded
+  joint KV are retained. Real two-device release and Watcher tests check against
+  dense attention in the same KV order.
+- Wan self-attention has an explicit opt-in recipe/storage selector, with fresh
+  pretrained attention-block accuracy and preparation-inclusive timing. No
+  model defaults are changed; full-video quality is still a rollout gate.
+
+The original coverage list is a rollout roadmap, not a claim that every prefill
+configuration can switch now. D128 noncausal dense/joint/two-device ring are
+qualified here. Other head dimensions, causal/masked/windowed/sink attention,
+paged/indexed/chunked caches, MLA, Wormhole and larger ring topologies still
+need separate coverage work. Explicit recipes reject them. They must be
+qualified before the corresponding legacy implementation can be removed.
+
 **PR 3:** delete non-streaming loops only after every in-scope supported
 configuration has a qualified replacement. Retain utilities needed by sparse,
 decode and CCL consumers. Decode and independent training attention are not part

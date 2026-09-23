@@ -1057,7 +1057,11 @@ void kernel_main() {
                 if constexpr ((k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
                     // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
                     // the next K chunk for mcast.
+#ifdef SDPA_RECIPE_FP32
+                    const uint32_t reserve_tiles = k_chunk_tiles;
+#else
                     const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+#endif
                     cb_k.reserve_back(reserve_tiles);
                 } else {
                     cb_k.reserve_back(k_chunk_tiles);
@@ -1116,7 +1120,11 @@ void kernel_main() {
                     if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
+#ifdef SDPA_RECIPE_FP32
+                        cb_v.reserve_back(v_cb_entry_tiles);
+#else
                         cb_v.reserve_back(2 * v_cb_entry_tiles);
+#endif
                         if (v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                         }
