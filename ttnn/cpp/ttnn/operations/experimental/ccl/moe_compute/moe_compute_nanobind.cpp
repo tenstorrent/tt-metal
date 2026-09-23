@@ -161,13 +161,29 @@ void bind_moe_compute(nb::module_& mod) {
 
         **Combine paths**
 
-        When ``compute_only=False``, the op also runs the fused selective_reduce_combine
-        stage and returns **6** tensors. There are two combine modes:
+        When ``compute_only=False``, the op returns **6** tensors, the sixth being the final
+        ``[k, tokens, hidden]`` row-major output. There are three ways it is produced:
 
-        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The combine runs
-          locally with no fabric, mux cores, links, topology, or cross-device semaphore.
-        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` on a multi-device
-          mesh. The combine reduces along that mesh axis using the fabric.
+        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The fused
+          selective_reduce_combine stage runs locally with no fabric, mux cores, links, topology,
+          or cross-device semaphore.
+        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` naming a mesh
+          axis of extent > 1. The fused combine reduces along that axis using the fabric.
+        - Local output mode: the named ``cluster_axis`` has extent 1 (for example axis 0 of a 1x4
+          expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
+          combine kernels run: the op's own writer puts each expert's token rows straight into the
+          final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
+          may be opened without a fabric config); ``topology``, ``num_links``,
+          ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
+          On a multi-device mesh every coordinate must receive the same replicated token set and
+          returns the partial of its own experts (the rows its experts own; other rows are left
+          untouched), which the caller reduces across the other axis. The output is written one
+          token row (2 x H bytes) per page, so its memory config (``output_memory_config``, or the
+          ``optional_output_tensor``'s) must be row-major INTERLEAVED or HEIGHT_SHARDED with whole
+          rows per shard, DRAM or L1; WIDTH_SHARDED, BLOCK_SHARDED and ND sharding are rejected
+          (a row would span several pages). Nothing is staged in the combine cores' L1, so the
+          matmul-output tensor (slot 4) is not written on this path. That form does not support
+          shared experts.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and
@@ -184,7 +200,8 @@ void bind_moe_compute(nb::module_& mod) {
           ``Linear`` or ``Ring`` explicitly (BH Loudbox callers must pass ``Linear``).
         - ``num_links`` (optional, default ``None``): Number of fabric links for the
           multi-device fused combine; auto-detected from the mesh and ``cluster_axis`` when
-          ``None``. Must be ``None`` for single-device fused mode and ``compute_only=True``.
+          ``None`` (1 in local output mode, where no link is opened). Must be ``None`` for
+          single-device fused mode and ``compute_only=True``.
         - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
           the fabric mux on the multi-device fused combine path; must be ``None`` for
           single-device fused mode and ``compute_only=True``. Mux cores may be placed anywhere
@@ -196,7 +213,10 @@ void bind_moe_compute(nb::module_& mod) {
           and route around it. The op raises a clear error only if the grid is too
           small/blocked to fit all groups disjointly.
         - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
-          Memory config for the combine output tensor.
+          Memory config for the combine output tensor. In local output mode it must be
+          row-major INTERLEAVED or HEIGHT_SHARDED (whole token rows per shard); left
+          ``None`` with an ``optional_output_tensor``, it takes that tensor's memory config,
+          and when both are given they must agree.
         - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
           combine output instead of allocating a new one. Must be ``None`` when
           ``compute_only=True`` (no combine output is produced).

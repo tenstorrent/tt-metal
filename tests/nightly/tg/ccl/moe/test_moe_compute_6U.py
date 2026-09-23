@@ -920,6 +920,13 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
     else:
         torch_combine_out = ttnn.to_torch(tt_combine_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
+    return validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold)
+
+
+def validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold):
+    """Compare an already-composed combine output [K, tokens, hidden] against the golden rows
+    flagged in output_data_map. Slots with no flagged row (a device that owns none of the
+    experts a token selected at that k) are skipped."""
     output_ref, output_data_map = combine_goldens
 
     assert torch_combine_out.shape == output_ref[0].shape
@@ -932,6 +939,8 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
                 vals.append(torch_combine_out[k, t, :])
                 refs.append(output_ref[layer_id, k, t, :])
 
+        if not vals:
+            continue
         vals = torch.stack(vals)
         refs = torch.stack(refs)
         _, pcc_val = comp_pcc(refs, vals)
