@@ -14,10 +14,6 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parent / "verify_changed_tests.py"
 
-# prepare_test_matrix.py stays in .github/scripts/utils -- every other test pipeline
-# invokes it directly by that path, so only this gate script moved into an action.
-PREPARE_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "utils" / "prepare_test_matrix.py"
-
 BASE_TESTS_YAML = """\
 - name: unit alpha
   cmd: ./build/test/alpha
@@ -1209,7 +1205,7 @@ def run_building_matrices(repo: Repo, unsupported: str, review_skus: str = DEFAU
         "urllib.request.Request = _patched\n"
         f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
         f"            '--review-skus', {review_skus!r}, '--unsupported-files', {unsupported!r},\n"
-        f"            '--prepare-script', {str(PREPARE_SCRIPT)!r},\n"
+        f"            '--prepare-script', {str(Path(SCRIPT).parent / 'prepare_test_matrix.py')!r},\n"
         "            '--repo', 'o/r', '--pr', '1',\n"
         "            '--output', 'result.json']\n"
         f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
