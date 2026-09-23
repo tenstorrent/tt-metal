@@ -1577,6 +1577,30 @@ class ModelArgs:
             return grid
         return (min(grid[0], int(dev.x)), min(grid[1], int(dev.y)))
 
+    def _legacy_grid(self, role: str, default):
+        """Per-role grid for the legacy 2D prefill matmul (bs=1 short-seq path).
+
+        find_prefill_grid() picks the N-split dimension from the divisors of the M
+        tile count (16 at ISL=512), so it can only ever return 8 there even though
+        MatmulMultiCoreReuseMultiCast just needs it to divide N. That caps the bs=1
+        matmuls at 8x8 = 64 cores. Measured traced on P150 at M=512 (chip 1):
+          QKV Nt=192  8x8 108.3 us -> 12x8  84.8 us (-21.7%)
+          FF2 Nt=80   8x8 137.4 us -> 10x8 119.1 us (-13.3%)
+          WO  Nt=80   8x8  69.4 us -> 10x8  62.7 us  (-9.7%)
+          FF13 Nt=304 has no wider divisor (stays 8x8).
+        QWEN_LEGACY_GRID_<ROLE>=x,y overrides (x = N-split, y = M-split); clamped
+        to the device grid. Default unchanged for other models.
+        """
+        override = os.getenv(f"QWEN_LEGACY_GRID_{role}")
+        if not override:
+            return default
+        parts = override.replace("x", ",").split(",")
+        if len(parts) != 2:
+            return default
+        grid = self._clamp_grid_to_device((int(parts[0]), int(parts[1])))
+        logger.debug(f"[legacy_grid] {role}: {default} -> {grid} (QWEN_LEGACY_GRID_{role})")
+        return grid
+
     def _resolve_mm_blocks(self, knob: str = None, default=(8, 8, 8)):
         """MinimalMatmul (M, K, N) block sizes, overridable for experiments.
 
@@ -1754,7 +1778,7 @@ class ModelArgs:
                     m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
-                    grid_size=self.mlp2_grid(seq_len),
+                    grid_size=self._legacy_grid("FF2", self.mlp2_grid(seq_len)),
                     per_core_N=(
                         math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
                         if not self.is_galaxy
@@ -2592,7 +2616,7 @@ class ModelArgs:
                 m=min(seq_len, 1024),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
+                grid_size=self._legacy_grid("WO", self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE)),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=(

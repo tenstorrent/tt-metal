@@ -53,8 +53,16 @@ if __name__ == "__main__":
     parser.add_argument("--iterations", type=int, default=NUM_ITERATIONS)
     parser.add_argument(
         "--full-pipeline",
+        dest="full_pipeline",
         action="store_true",
-        help="Measure full generator pipeline latency instead of direct trace replay",
+        default=True,
+        help="Time forward + pooling + I/O in one traced replay (default; the mode the README numbers use)",
+    )
+    parser.add_argument(
+        "--no-full-pipeline",
+        dest="full_pipeline",
+        action="store_false",
+        help="Time only the bare forward trace replay (device-only, no I/O or pooling)",
     )
     args = parser.parse_args()
     standalone_main(BATCH_SIZE, SEQ_LEN, args.iterations, args.device_id, full_pipeline=args.full_pipeline)
