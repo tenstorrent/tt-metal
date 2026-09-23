@@ -8,9 +8,9 @@
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/host_api.hpp>
+#include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -62,7 +62,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
     // Load channel trimming overrides from profile if specified
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = fabric_context.get_rtoptions();
     TT_FATAL(
         !(rtoptions.has_fabric_trimming_profile() && rtoptions.get_enable_channel_trimming_capture()),
         "TT_METAL_FABRIC_TRIMMING_PROFILE and TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE are mutually exclusive. "
@@ -107,8 +107,9 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     tensix_config_ = nullptr;
 
     // Initialize per-device build state
-    num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+    const auto& cluster = fabric_context.get_cluster();
+    num_devices_ = cluster.number_of_user_devices();
+    auto num_pcie_devices = cluster.number_of_pci_devices();
     if (num_devices_ != 4 && num_pcie_devices == 4) {
         num_devices_ += num_pcie_devices;
     }
@@ -228,8 +229,7 @@ FabricTensixDatamoverConfig& FabricBuilderContext::get_tensix_config() const {
 void FabricBuilderContext::initialize_tensix_config() {
     TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
 
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != FabricTensixConfig::DISABLED) {
+    if (fabric_context_.is_tensix_enabled()) {
         // Now it's safe to call get_active_fabric_eth_channels() because
         // configure_routing_tables_for_fabric_ethernet_channels() has already run
         tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>();
@@ -237,7 +237,7 @@ void FabricBuilderContext::initialize_tensix_config() {
 }
 
 IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = fabric_context_.get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     auto config = IntermeshVCConfig::disabled();
@@ -287,8 +287,7 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             // EXPERIMENTAL: pass-through (A->B->C inter-mesh routing) is currently opt-in via env var.
             // It reuses VC1 for both in-mesh delivery and cross-mesh pass-through and is NOT guaranteed
             // deadlock-free (a fully deadlock-free implementation requires a dedicated pass-through VC).
-            const bool needs_mesh_pass_through =
-                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_mesh_pass_through();
+            const bool needs_mesh_pass_through = fabric_context_.get_rtoptions().get_enable_fabric_mesh_pass_through();
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
@@ -300,10 +299,9 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // VC2 is independent of VC1 — only requires: RT option + Blackhole + no UDM/mux + 2D topology
     // (2D topology check happens in initialize_vc2_mappings, not here)
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_enable_fabric_vc2()) {
-        auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-        auto tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_context_.get_rtoptions().get_enable_fabric_vc2()) {
+        auto arch = fabric_context_.get_hal().get_arch();
+        auto tensix_config = fabric_context_.get_fabric_tensix_config();
         bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);

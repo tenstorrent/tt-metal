@@ -16,9 +16,18 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
-// Forward declaration
+// Forward declarations
+class ControlPlane;
 class FabricBuilderContext;
 
 
@@ -37,12 +46,14 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z};
 
-    // control_plane and hal references are not held
-    explicit FabricContext(
-        const ControlPlane& control_plane,
+    // The references are held for the lifetime of this object. They are owned by the same MetalEnv
+    // as control_plane, which owns this object. Constructed while control_plane is still being
+    // built, so the constructor must not look up MetalContext.
+    FabricContext(
+        ControlPlane& control_plane,
         const tt_metal::Hal& hal,
-        tt::ARCH arch,
-        bool is_ubb_galaxy,
+        const tt::Cluster& cluster,
+        const llrt::RunTimeOptions& rtoptions,
         tt::tt_fabric::FabricConfig fabric_config,
         const FabricRouterConfig& router_config = FabricRouterConfig{});
     ~FabricContext();
@@ -52,6 +63,13 @@ public:
     FabricContext& operator=(const FabricContext&) = delete;
     FabricContext(FabricContext&&) = delete;
     FabricContext& operator=(FabricContext&&) = delete;
+
+    // ============ Dependencies ============
+    ControlPlane& get_control_plane() { return control_plane_; }
+    const ControlPlane& get_control_plane() const { return control_plane_; }
+    const tt_metal::Hal& get_hal() const { return hal_; }
+    const tt::Cluster& get_cluster() const { return cluster_; }
+    const llrt::RunTimeOptions& get_rtoptions() const { return rtoptions_; }
 
     // ============ Topology Queries ============
     bool is_wrap_around_mesh(MeshId mesh_id) const;
@@ -72,9 +90,10 @@ public:
     bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
+    // Read from the ControlPlane at construction
+    tt::tt_fabric::FabricTensixConfig get_fabric_tensix_config() const { return fabric_tensix_config_; }
     // Returns true if tensix is enabled (MUX or UDM mode)
-    // Queried from MetalContext at init time
-    bool is_tensix_enabled() const { return tensix_enabled_; }
+    bool is_tensix_enabled() const { return fabric_tensix_config_ != tt::tt_fabric::FabricTensixConfig::DISABLED; }
 
     // ============ Packet Specs ============
     size_t get_fabric_packet_header_size_bytes() const { return packet_header_size_bytes_; }
@@ -162,13 +181,18 @@ private:
     size_t get_2d_header_size(uint32_t route_buffer_size) const;
     size_t get_udm_header_size(uint32_t route_buffer_size) const;
 
+    ControlPlane& control_plane_;
+    const tt_metal::Hal& hal_;
+    const tt::Cluster& cluster_;
+    const llrt::RunTimeOptions& rtoptions_;
+
     tt::tt_fabric::FabricConfig fabric_config_{};
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt::tt_fabric::FabricTensixConfig::DISABLED;
     tt::tt_fabric::Topology topology_{};
     FabricRouterConfig router_config_{};
 
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;
-    bool tensix_enabled_ = false;
     bool is_ubb_galaxy_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
