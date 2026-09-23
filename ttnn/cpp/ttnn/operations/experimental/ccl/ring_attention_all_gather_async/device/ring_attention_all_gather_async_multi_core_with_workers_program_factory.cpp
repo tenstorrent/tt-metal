@@ -460,6 +460,13 @@ void ring_attention_neighbor_halo_exchange_helper(
                 cache_local_tile_rows = std::min(
                     cache_local_tile_rows, static_cast<uint32_t>(input.padded_shape()[2] / tt::constants::TILE_HEIGHT));
             }
+            uint32_t halo_slot_count =
+                output_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows;
+            for (const auto& output : output_tensors) {
+                halo_slot_count = std::min(
+                    halo_slot_count,
+                    static_cast<uint32_t>(output.padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows));
+            }
             const auto append_halo_meta =
                 [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {
                     if (with_cache_batch) {
@@ -471,6 +478,7 @@ void ring_attention_neighbor_halo_exchange_helper(
                     args.push_back(halo.q_local_tile_rows);
                     args.push_back(halo.halo_tile_rows);
                     args.push_back(cache_local_tile_rows);
+                    args.push_back(halo_slot_count);
                     args.push_back(halo.source_device);
                     if (with_ring_size) {
                         args.push_back(ring_size);

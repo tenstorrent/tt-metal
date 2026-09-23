@@ -92,6 +92,7 @@ void kernel_main() {
         const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
@@ -106,7 +107,13 @@ void kernel_main() {
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const auto sources = ring_attention_all_gather::compute_halo_sources(
-            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device, cache_local_tile_rows);
+            kv_actual_isl,
+            q_local_tile_rows,
+            ring_size,
+            halo_tile_rows,
+            source_device,
+            cache_local_tile_rows,
+            halo_slot_count);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
             first_origin[input] = sources.first_start_tile * input_Wt;

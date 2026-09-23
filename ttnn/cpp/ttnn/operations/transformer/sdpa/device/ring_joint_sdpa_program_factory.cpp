@@ -1762,6 +1762,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines["SLIDING_HALO_SLOT_COUNT"] =
+        std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.

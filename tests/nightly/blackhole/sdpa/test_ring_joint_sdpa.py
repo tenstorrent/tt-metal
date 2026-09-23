@@ -4581,9 +4581,25 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
 RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
-@pytest.mark.parametrize("block_cyclic", [False, True], ids=["aligned-single-halo", "rotated-two-halos"])
-def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(block_cyclic):
-    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
+@pytest.mark.parametrize(
+    "block_cyclic,halo_slots",
+    [
+        pytest.param(False, 1, id="aligned-single-halo"),
+        pytest.param(True, 2, id="rotated-two-halos"),
+        pytest.param(
+            True,
+            1,
+            id="rotated-single-halo-guard",
+            marks=[
+                skip_with_watcher("Exercises the invalid-metadata fallback with device assertions disabled."),
+                skip_with_llk_assert("Exercises the invalid-metadata fallback with device assertions disabled."),
+            ],
+        ),
+    ],
+)
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(block_cyclic, halo_slots):
+    """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
+    invalid_wrap = block_cyclic and halo_slots == 1
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
@@ -4668,7 +4684,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
         tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
         tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
         tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
-        sliding_shape = (1, nhk, 256 if block_cyclic else 128, head_dim)
+        sliding_shape = (1, nhk, halo_slots * 128, head_dim)
         dense_shape = (1, nhk, stable_kv_seq, head_dim)
         sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
         sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
@@ -4728,6 +4744,10 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
                 kv_cache_num_layers=num_layers if use_metadata else None,
                 kv_cache_layer_idx=layer_idx if use_metadata else None,
             )
+            sliding_args = common
+            if invalid_wrap and not use_metadata:
+                # Scalar reference for the invalid replay's first-chunk safety fallback.
+                sliding_args = {**common, "kv_actual_isl": 0, "logical_n": chunk_global}
             sliding = call_sdpa(
                 tt_q,
                 tt_k,
@@ -4735,7 +4755,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
                 p_buf_k=sliding_k,
                 p_buf_v=sliding_v,
                 sliding_window_size=128,
-                **common,
+                **sliding_args,
             )
             dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
             return sliding, dense

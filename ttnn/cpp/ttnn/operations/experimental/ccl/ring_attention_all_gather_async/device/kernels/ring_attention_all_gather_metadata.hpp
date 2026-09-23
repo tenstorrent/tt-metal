@@ -132,10 +132,12 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     uint32_t ring_size,
     uint32_t halo_tile_rows,
     uint32_t source_device,
-    uint32_t cache_local_tile_rows) {
+    uint32_t cache_local_tile_rows,
+    uint32_t halo_slot_count) {
     namespace sliding = ttnn::operations::transformer::sdpa::ring_joint;
     const uint32_t group_rows = q_local_tile_rows * ring_size;
-    kv_actual_isl = trace_metadata::bounded_kv_actual_isl(kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
+    kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
+        kv_actual_isl, q_local_tile_rows, ring_size, cache_local_tile_rows, halo_slot_count);
     const uint32_t end = trace_metadata::logical_tile_rows_clamped_to_cache(
         kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
     const auto mapping = sliding::build_chunked_q_mapping(

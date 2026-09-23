@@ -665,8 +665,11 @@ void bind_sdpa(nb::module_& mod) {
                 K blocks 128, and no joint tokens. The rounded window must fit one local Q slab.
                 KV-pad rotation supports tile-aligned starts and partial groups natively. Compact K/V
                 buffers need two predecessor-halo slots for wrapped Q. Metadata traces that may wrap Q
-                must reserve both slots; aligned traces can retain one slot. Each slot holds
-                ceil((window - 1) / 128) * 128 tokens.
+                must reserve both slots; one-slot traces must never require a second tail on replay.
+                Each slot holds ceil((window - 1) / 128) * 128 tokens. Violating the one-slot contract
+                triggers a device assertion when enabled. With assertions disabled, all metadata consumers
+                fall back to prefix zero to keep accesses in bounds; outputs from that invalid replay
+                must be discarded.
             circular_kv_cache (bool): The sliding KV cache is a circular buffer of whole chunk-sized
                 slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side). The
                 slab count is derived on-device from the cache/Q geometry (>= 2 whole slabs required).

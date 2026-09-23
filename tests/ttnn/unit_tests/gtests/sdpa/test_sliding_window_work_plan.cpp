@@ -63,6 +63,27 @@ TEST(ChunkedQMapping, MatchesPackedAbsoluteTiles) {
     }
 }
 
+TEST(ChunkedQMapping, WrapDetectionMatchesPackedSegments) {
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 32u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t start = 0; start < 2 * group; ++start) {
+                for (uint32_t length : {1u, local, group - 1, group}) {
+                    bool has_split_device = false;
+                    for (uint32_t device = 0; device < ring; ++device) {
+                        const auto mapping = build_chunked_q_mapping(start, start + length, local, ring, device);
+                        has_split_device |= mapping.q_pre_wrap_tile_count > 0 &&
+                                            mapping.q_valid_tile_count > mapping.q_pre_wrap_tile_count;
+                    }
+                    EXPECT_EQ(chunked_q_wraps(start, start + length, local, ring), has_split_device);
+                }
+            }
+        }
+    }
+    EXPECT_FALSE(chunked_q_wraps(47, 288, 32, 8));  // Stops before the second segment.
+    EXPECT_TRUE(chunked_q_wraps(47, 289, 32, 8));
+}
+
 TEST(ChunkedQMapping, Offset1504SplitsOneDeviceSlab) {
     constexpr auto mapping = build_chunked_q_mapping(67040 / 32, 75232 / 32, 1024 / 32, 8, 1);
     static_assert(mapping.q_pre_wrap_start_tile == 67040 / 32);

@@ -358,9 +358,10 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
     if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
         const uint32_t local = tensor_args.input_q.logical_shape()[2];
-        const uint32_t start = args.kv_actual_isl.value_or(0);
-        const uint32_t second_slab_start = (start / local + args.ring_size) * local;
-        const bool needs_two = start % local != 0 && args.logical_n > second_slab_start;
+        // Live metadata is checked against the halo capacity by every device consumer.
+        const bool needs_two =
+            args.has_kv_pad_rotation() &&
+            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, local, args.ring_size);
         const uint32_t halo = sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
         TT_FATAL(
             tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1),

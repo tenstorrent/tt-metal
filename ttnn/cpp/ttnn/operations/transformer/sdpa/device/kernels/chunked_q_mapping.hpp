@@ -16,6 +16,12 @@ struct ChunkedQMapping {
     uint32_t q_valid_tile_count = 0;
 };
 
+// Whether any device's packed Q contains segments from two groups.
+constexpr bool chunked_q_wraps(uint32_t start_tile, uint32_t end_tile, uint32_t q_local_tile_rows, uint32_t ring_size) {
+    const uint32_t second_slab_start = (start_tile / q_local_tile_rows + ring_size) * q_local_tile_rows;
+    return start_tile % q_local_tile_rows != 0 && end_tile > second_slab_start;
+}
+
 // Map [start_tile, end_tile) into a device's Q slab. The range length must not
 // exceed q_local_tile_rows * ring_size; both dimensions must be nonzero.
 constexpr ChunkedQMapping build_chunked_q_mapping(
