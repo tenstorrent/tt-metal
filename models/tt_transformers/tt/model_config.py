@@ -1988,6 +1988,19 @@ class ModelArgs:
         n_q_heads = getattr(self, "n_heads", 32)
         use_big_grid = is_blackhole() and (batch_size * n_q_heads) > 128
         sdpa_grid = (8, 10) if use_big_grid else (8, 8)
+        # Both branches above are hardcoded to at most 80 cores, but a P150 reports
+        # 12x10 = 120 workers, so SDPA leaves 33-47% of the device idle. The work
+        # unit count is batch * n_q_heads * ceil(seq_len / q_chunk); at bs=1 with
+        # q_chunk == seq_len that is only 32 units, so the op runs on 32 of 120
+        # cores regardless of grid. Sweeping grid and q_chunk together is the lever
+        # (the two interact: more cores only pays once there are units to fill them).
+        # QWEN_SDPA_GRID=x,y overrides; clamped to the real grid so it stays portable
+        # across harvest configurations.
+        _grid_ov = os.getenv("QWEN_SDPA_GRID")
+        if _grid_ov:
+            _parts = _grid_ov.replace("x", ",").split(",")
+            if len(_parts) == 2:
+                sdpa_grid = self._clamp_grid_to_device((int(_parts[0]), int(_parts[1])))
         # exp_approx_mode uses a fast piecewise-polynomial approximation of exp()
         # inside the online softmax; verified to have negligible impact on
         # Qwen3-Embedding cosine-similarity accuracy and cuts SDPA kernel time
