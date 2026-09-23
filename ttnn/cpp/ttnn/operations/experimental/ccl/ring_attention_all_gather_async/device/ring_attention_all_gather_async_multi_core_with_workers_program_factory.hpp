@@ -61,14 +61,14 @@ struct RingAttentionRankMapping {
     uint32_t mesh_cols = 0;
 };
 
-// Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
-// Each device sends one local tile-row range to its logical next device and
-// receives the predecessor's corresponding range into compact output slot 0.
+// One hop of the sparse cyclic-predecessor halo used by chunked sliding attention.
+// The device sends one local tile-row range to the device `hop` ring positions ahead,
+// into that device's compact output buffer starting at tile row dest_row_base.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
-    // A linear topology has no physical wrap link. The final device sends its
-    // predecessor tail back to device 0 over the backward fabric direction.
+    // A linear topology has no physical wrap link, so a hop whose destination wraps
+    // the ring travels backward, unicast_hops devices, instead.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
     // Which cyclic predecessor this exchange ships from: 1 = the immediate neighbour. A halo wider
@@ -106,7 +106,7 @@ struct RingAttentionNeighborHaloConfig {
     // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
     // start themselves, making one capture valid for every chunk. slot_id also selects the flattened
     // cache batch on-device. The remaining fields are static inputs to those derivations;
-    // source_device selects which group.s tail is read.
+    // source_device is the sending device, whose slab tail is read.
     const ttnn::Tensor* slot_id = nullptr;
     const ttnn::Tensor* kv_actual_isl = nullptr;
     uint32_t kv_cache_num_layers = 1;

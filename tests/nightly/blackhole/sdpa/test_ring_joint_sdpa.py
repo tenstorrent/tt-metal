@@ -4583,11 +4583,17 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
 RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
-def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
-    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
+@pytest.mark.parametrize("sliding_window_size", [128, 384, 1024], ids=["one_hop", "two_hop_partial", "four_hop"])
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(sliding_window_size):
+    """Replay changing prefixes and cache slots through mixed sliding/dense CCL.
+
+    With a 256-token slab the 384 and 1024 windows need two (the second a partial slab) and four
+    halo hops, so replays also cover the per-hop page relocation and the shared-link hand-off.
+    """
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
+    halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     chunk_global = chunk_local * sp_size
     prefix_groups = (0, 1, 2)
     stable_groups = max(prefix_groups) + 2
@@ -4668,7 +4674,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
         tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
         tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
         tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
-        sliding_shape = (1, nhk, 128, head_dim)
+        sliding_shape = (1, nhk, halo_tokens, head_dim)
         dense_shape = (1, nhk, stable_kv_seq, head_dim)
         sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
         sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
@@ -4734,7 +4740,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
                 tt_v,
                 p_buf_k=sliding_k,
                 p_buf_v=sliding_v,
-                sliding_window_size=128,
+                sliding_window_size=sliding_window_size,
                 **common,
             )
             dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
@@ -4764,7 +4770,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
             k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
             v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
             0,
-            sliding_window_size=128,
+            sliding_window_size=sliding_window_size,
         )
         scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
         assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
@@ -5728,12 +5734,13 @@ def test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error
     )
 
 
-@pytest.mark.parametrize("chunk_size_local", [512, 256], ids=["two_hop", "four_hop"])
+@pytest.mark.parametrize("chunk_size_local", [512, 384, 256], ids=["two_hop", "three_hop_partial", "four_hop"])
 def test_ring_joint_attention_gemma_multi_hop_sliding_halo_geometry(expect_error, chunk_size_local):
     """Gemma's W1024 window over a Q slab too narrow to hold it, so the halo spans several predecessors.
 
-    The Gemma4 chunk-4096 (two-hop) and chunk-2048 (four-hop) shapes at CP8. On this SP4 ring the
-    four-hop halo also wraps onto the device's own earlier slab, which is read locally.
+    The Gemma4 chunk-4096 (two-hop) and chunk-2048 (four-hop) shapes at CP8, plus a 384-token slab
+    whose farthest hop carries only a partial slab. On this SP4 ring the four-hop halo also wraps
+    onto the device's own earlier slab, which is read locally.
     """
     run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
         gpt_oss_chunked_mesh_config(),

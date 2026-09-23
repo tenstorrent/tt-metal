@@ -768,7 +768,7 @@ void kernel_main() {
     // the host work plan selected before starting that pass; this keeps the hot loop free of
     // device-wide ring phases and makes Q/accumulator state single-lifetime.
     if constexpr (has_sliding_window) {
-        // Sliding has a compact one-hop write plan (local slab + cyclic predecessor). Consume
+        // Sliding has a compact write plan (local slab + cyclic predecessor tails). Consume
         // its signal so a cached program cannot observe the previous invocation's token.
         const uint32_t synchronization_iters =
             1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
