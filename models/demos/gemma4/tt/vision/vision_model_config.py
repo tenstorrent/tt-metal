@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
+from pathlib import Path
 
 from loguru import logger
 
@@ -10,7 +12,11 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.tt_transformers.tt import model_config as _ttt_model_config
 from models.tt_transformers.tt.model_config import ModelArgs
+
+# models/demos/gemma4/tt/vision/ -> models/demos/gemma4/configs/
+_GEMMA4_CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
 
 class ModelOptimizations:
@@ -23,8 +29,64 @@ class ModelOptimizations:
 
 
 class VisionModelArgs(ModelArgs):
+    # ``ModelArgs`` resolves a dummy-weights run through ``LOCAL_HF_PARAMS``,
+    # which lists tt_transformers' own checkpoints and has no Gemma4 entry -- so
+    # every vision test died in the constructor with ``KeyError: gemma-4-31B-it``
+    # before reaching a device. The Gemma4 configs are checked in under this demo
+    # (``models/demos/gemma4/configs/``) and already carry ``vision_config``, so
+    # the map is extended HERE rather than in the shared table: this is our
+    # model's requirement, not a gap in tt_transformers.
+    LOCAL_HF_PARAMS = {
+        **ModelArgs.LOCAL_HF_PARAMS,
+        **{p.name: str(p) for p in sorted(_GEMMA4_CONFIGS.glob("gemma-4-*")) if p.is_dir()},
+    }
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _tolerate_text_rope_scaling():
+        """Let the TEXT config's RoPE type through while the parent parses it.
+
+        ``ModelArgs.__init__`` parses the text config, and Gemma4's full-attention
+        layers declare ``rope_type: "proportional"`` (with
+        ``partial_rotary_factor: 0.25``), which tt_transformers' factory rejects
+        outright -- so every vision test died before reaching a device.
+
+        The vision tower does not consume text RoPE at all: it has its own rotary
+        embedding (``vision_rotary_embedding.py``, ``rope_type: "default"``,
+        theta 100), and nothing under ``tt/vision/`` reads ``args.rope_scaling``.
+        So for THIS construction the text value is genuinely irrelevant.
+
+        Scoped to the vision constructor on purpose. The obvious alternative --
+        adding "proportional" to the shared accept-and-warn list -- would silently
+        disable proportional RoPE for the TEXT model, where Gemma4 really does use
+        it, trading a loud failure here for a quiet accuracy loss there.
+        """
+        # Patch the name in the CALLING module: model_config does
+        # ``from ...common import rope_scaling_model_factory`` at import time, so
+        # it holds its own reference and patching ``common`` would do nothing.
+        original = _ttt_model_config.rope_scaling_model_factory
+
+        def tolerant(rope_scaling_params, *a, **kw):
+            try:
+                return original(rope_scaling_params, *a, **kw)
+            except ValueError as exc:
+                if "Unexpected RoPE scaling type" not in str(exc):
+                    raise
+                logger.info(
+                    f"VisionModelArgs: ignoring text RoPE scaling ({rope_scaling_params}) -- "
+                    "the vision tower carries its own rotary embedding and never reads it"
+                )
+                return None
+
+        _ttt_model_config.rope_scaling_model_factory = tolerant
+        try:
+            yield
+        finally:
+            _ttt_model_config.rope_scaling_model_factory = original
+
     def __init__(self, *args, mesh_config=None, ccl_manager=None, **kwargs):
-        super().__init__(*args, **kwargs)
+        with self._tolerate_text_rope_scaling():
+            super().__init__(*args, **kwargs)
 
         # Tensor parallelism: the vision tower is sharded across every device of the
         # mesh (attention by heads, MLP by intermediate dim), and each block ends in an
