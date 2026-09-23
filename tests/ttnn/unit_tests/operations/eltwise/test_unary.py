@@ -2836,3 +2836,19 @@ def test_unary_chain_of_generic_ops_still_runs(device):
     tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]
     assert torch.equal(ttnn.to_torch(ttnn.unary_chain(tx, chain)), -torch.relu(x))
+
+
+# MAC_TSS takes its scalars from op_chain[0] and needs mac_tss_kernel.cpp to fill the DST registers
+# mac_tile reads, so it may lead a chain but not follow another op.
+def test_unary_chain_mac_tss_position(device, expect_error):
+    x = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    mac = ttnn.UnaryWithParam(ttnn.UnaryOpType.MAC_TSS, 2.0, -1.0)
+    relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+
+    with expect_error(RuntimeError, "MAC_TSS uses a dedicated compute kernel and must be the first op"):
+        ttnn.unary_chain(tx, [relu, mac])
+
+    out = ttnn.to_torch(ttnn.unary_chain(tx, [mac, relu])).float()
+    expected = torch.relu(x.float() * 2.0 - 1.0)
+    assert torch.allclose(out, expected, rtol=1e-2, atol=1e-2), (out - expected).abs().max()
