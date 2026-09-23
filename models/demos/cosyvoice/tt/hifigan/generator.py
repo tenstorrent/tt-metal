@@ -225,14 +225,14 @@ class TtHiFTGenerator:
                     dtype=ttnn.float32,  # the whole excitation path stays wide
                 )
 
-        # Wormhole disagrees with itself about `prepare_conv_weights` -- see
-        # `conv.prepare_weights_default`. Applied here, after everything is built, rather
-        # than threaded through four builder signatures, and scoped to the vocoder because
-        # the flow estimator shares `TtConv1d` and *is* traced.
+        # `prepare_conv_weights` disagrees with the op's own preparation at some lengths,
+        # on both architectures -- see `conv.prepare_weights_default`. Applied here, after
+        # everything is built, rather than threaded through four builder signatures, and
+        # scoped to the vocoder because the flow estimator shares `TtConv1d` and *is* traced.
         if not prepare_weights_default(device):
             n = self._verify_weight_preparation()
-            logger.warning(
-                f"Wormhole: conv weight preparation will be verified once per geometry for {n} "
+            logger.info(
+                f"conv weight preparation will be verified once per geometry for {n} "
                 "vocoder convolutions (prepare_conv_weights disagrees with the op at some lengths)"
             )
 

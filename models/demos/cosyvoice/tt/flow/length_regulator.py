@@ -26,6 +26,7 @@ in streaming, which is precisely the failure the streaming test exists to catch.
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 
@@ -79,7 +80,12 @@ class TtInterpolateRegulator:
             w = sub.tensor("weight")
             if w.dim() == 3:  # Conv1d
                 k = w.shape[-1]
-                self.convs.append(TtConv1d(device, w, sub.optional("bias"), padding=(k - 1) // 2, dtype=dtype))
+                # The op prepares its own weights. Prepared weights for this convolution are
+                # wrong on Blackhole at some lengths (`TtConv1d._prepared` lists the ones
+                # measured), and this stack runs once per utterance outside any trace, so it
+                # has no use for them.
+                conv = TtConv1d(device, w, sub.optional("bias"), padding=(k - 1) // 2, dtype=dtype, prepare=False)
+                self.convs.append(conv)
                 nsub = bag.sub(f"model.{i + 1}")
                 if nsub.has("weight") and nsub.tensor("weight").dim() == 1:
                     # groups=1 here, so the statistic spans all 80 channels and the
@@ -148,6 +154,24 @@ class TtInterpolateRegulator:
                 h = ttnn.mish(n)
                 ttnn.deallocate(n)
         return h
+
+    @staticmethod
+    def torch_reference_convs(bag, x: torch.Tensor) -> torch.Tensor:
+        """The conv stack (`__call__`) in torch, from the same weights, on `[B, T, C]`."""
+        h = x.transpose(1, 2)
+        i = 0
+        while bag.sub(f"model.{i}").has("weight"):
+            w = bag.tensor(f"model.{i}.weight")
+            if w.dim() != 3:
+                break
+            h = F.conv1d(h, w, bag.optional(f"model.{i}.bias"), padding=(w.shape[-1] - 1) // 2)
+            if bag.sub(f"model.{i + 1}").has("weight") and bag.tensor(f"model.{i + 1}.weight").dim() == 1:
+                g, b = bag.tensor(f"model.{i + 1}.weight"), bag.tensor(f"model.{i + 1}.bias")
+                h = F.mish(F.group_norm(h, 1, g, b, 1e-5))
+                i += 3
+            else:
+                i += 1
+        return h.transpose(1, 2)
 
     @staticmethod
     def torch_reference_resample(x1, x2, mel_len1: int, mel_len2: int, frame_rate: int = 50):

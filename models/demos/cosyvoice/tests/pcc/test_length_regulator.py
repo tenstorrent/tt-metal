@@ -10,12 +10,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from models.demos.cosyvoice.tt.common import GOLDEN_DIR, as_torch, load_golden
+from models.demos.cosyvoice.tt.common import GOLDEN_DIR, as_torch, load_golden, pcc
 from models.demos.cosyvoice.tt.flow.length_regulator import (
     TtInterpolateRegulator,
     linear_resample_matrix,
     torch_resample,
 )
+from models.demos.cosyvoice.tt.weights import default_weights_path
 
 needs_golden = pytest.mark.skipif(
     not os.path.exists(os.path.join(GOLDEN_DIR, "flow.length_regulator.npz")),
@@ -67,3 +68,38 @@ def test_head_mid_tail_split_reproduces_reference_length():
     got = TtInterpolateRegulator.torch_reference_resample(x1, x2, ml1, ml2)
     assert got.shape == want.shape, (got.shape, want.shape)
     assert got.shape[1] == ml1 + ml2
+
+
+FLOW_WEIGHTS = default_weights_path().replace("hift_", "flow_")
+needs_weights = pytest.mark.skipif(
+    not os.path.exists(FLOW_WEIGHTS),
+    reason="run scripts/export_weights.py --module flow in the CosyVoice venv first",
+)
+
+
+@needs_weights
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("t", [891, 1717, 1895])
+def test_device_conv_stack_matches_torch(device, t):
+    """The conv stack on device against torch, at flow lengths the goldens do not reach.
+
+    The flow length includes the prompt, and cross-lingual's prompt is 1289 frames, so its
+    utterances run this stack at 1700-2300 frames; zero-shot's run near 900 and the golden
+    at 282. With prepared conv weights the stack was at PCC 0.02 against torch at 1717 and
+    1895 on Blackhole, and exact at 891: the mel condition lost its content and the
+    speech its words. The stack takes the op's own weight preparation now.
+    """
+    import ttnn
+
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    bag = WeightBag.load(FLOW_WEIGHTS).sub("length_regulator")
+    lr = TtInterpolateRegulator(device, bag, 80)
+    x = torch.randn(1, t, 80, generator=torch.Generator().manual_seed(t)) * 5.0
+    xd = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(lr(xd, t)).float()
+    want = TtInterpolateRegulator.torch_reference_convs(bag, ttnn.to_torch(xd).float())
+    p = pcc(got, want)
+    print(f"\n  T={t}: conv stack PCC {p:.6f}")
+    assert got.shape == want.shape, (got.shape, want.shape)
+    assert p >= 0.999, p
