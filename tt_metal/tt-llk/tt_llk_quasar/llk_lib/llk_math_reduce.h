@@ -96,8 +96,11 @@ inline void _reduce_row_transpose_fpu_()
     TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12);
 
     // Step 5: Write cached lo16 from SrcA back to dest lo16 address space.
-    TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, 0);
-    TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, 8);
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+    {
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, row, ADDR_MOD_0, FPU_MOV_ROWS, row);
+    }
 
     _reduce_row_transpose_alu_cfg_exit_();
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
@@ -378,11 +381,9 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
-    constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    // The B->A copy below uses MOVB2A, ELTWISE_MATH_ROWS rows per instruction: 2 MOVB2A on Quasar
-    // (8-row), 4 on 4row_arch (4-row FPU) -> +2 instructions on 4row_arch.
-    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "reduce scalar supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
-    const std::uint32_t replay_buf_len = 6 + ((ELTWISE_MATH_ROWS == 4) ? 2 : 0) + tensor_shape.total_num_faces() - 1 +
+    constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
+    constexpr std::uint32_t b2a_moves  = FACE_R_DIM / ELTWISE_MATH_ROWS;
+    const std::uint32_t replay_buf_len = 4 + b2a_moves + tensor_shape.total_num_faces() - 1 +
                                          (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
@@ -425,19 +426,10 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
             // Following will move 1x16 pool result to SrcB to be transposed into 16 rows
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, scratch_dst_addr);
 
-            // copy over all 16 rows from B to A (MOVB2A moves ELTWISE_MATH_ROWS rows each: 2x8 on
-            // Quasar, 4x4 on 4row_arch).
-            if constexpr (ELTWISE_MATH_ROWS == 8)
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<FACE_R_DIM>())
             {
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
-            }
-            else if constexpr (ELTWISE_MATH_ROWS == 4)
-            {
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 4);
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
-                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 12);
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + row, ADDR_MOD_0, FPU_MOV_ROWS, p_movb2a::SRCB_ROW32_OFFSET + row);
             }
 
             // zero out scratch in dest
