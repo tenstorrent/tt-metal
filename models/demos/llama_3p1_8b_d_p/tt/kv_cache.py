@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
 
@@ -62,11 +62,11 @@ class LlamaKVCache:
 
 def _validate_target(mesh_device, mesh_config, *, num_users, num_layers, max_seq_len, cache_dtype):
     validate_mesh(mesh_device, mesh_config, "Llama KV cache")
-    if type(num_users) is not int or num_users != layout.num_users:
-        raise ValueError(f"Llama KV cache requires num_users={layout.num_users}, got {num_users!r}")
     if type(num_layers) is not int or num_layers != Model.NUM_LAYERS:
         raise ValueError(f"Llama KV cache requires num_layers={Model.NUM_LAYERS}, got {num_layers!r}")
-    PrefillGeometry(max_seq_len)
+    # num_users (the concurrent slot count) is bounded by DRAM, not by the layout: PrefillGeometry
+    # rejects anything but a positive int, and allocate_kv_cache reports what does not fit.
+    PrefillGeometry(max_seq_len, num_users)
     if cache_dtype not in SUPPORTED_CACHE_DTYPES:
         raise ValueError(f"Llama KV cache dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
 
@@ -93,12 +93,17 @@ def allocate_kv_cache(
     mesh_device,
     mesh_config,
     *,
-    num_users=layout.num_users,
+    num_users=DEFAULT_NUM_USERS,
     num_layers=Model.NUM_LAYERS,
     max_seq_len=DEFAULT_MAX_SEQ_LEN,
     cache_dtype=ttnn.bfloat8_b,
 ):
-    """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout."""
+    """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout.
+
+    ``num_users`` is how many sequences the caches can hold at once. Each slot is an independent
+    ``num_layers``-plane K/V region addressed by ``slot_idx``, so the footprint is linear in the slot
+    count: one slot of a 128K-token context is ~285 MB per chip per cache at bfloat8_b.
+    """
     _validate_target(
         mesh_device,
         mesh_config,
@@ -108,7 +113,7 @@ def allocate_kv_cache(
         cache_dtype=cache_dtype,
     )
     memory_config = _cache_memory_config(mesh_device)
-    geometry = PrefillGeometry(max_seq_len)
+    geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
         return ttnn.from_torch(
@@ -120,9 +125,25 @@ def allocate_kv_cache(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    allocated = []
+    try:
+        for _ in range(2):
+            allocated.append(allocate_one())
+    except RuntimeError as error:
+        for tensor in allocated:
+            tensor.deallocate(True)
+        # Each cache is replicated per chip, so an out-of-memory here is a per-chip DRAM limit and the
+        # two knobs are the slot count and the context length. Say so: the allocator's own message
+        # reports a byte shortfall with no hint that num_users is what multiplies it.
+        raise RuntimeError(
+            f"Llama KV cache allocation failed for num_users={num_users}, max_seq_len={max_seq_len}, "
+            f"{cache_dtype}: both caches need {geometry.cache_shape} per chip, and the footprint is "
+            f"linear in num_users. Lower num_users or max_seq_len."
+        ) from error
+
     return LlamaKVCache(
-        k=allocate_one(),
-        v=allocate_one(),
+        k=allocated[0],
+        v=allocated[1],
         num_users=num_users,
         num_layers=num_layers,
         max_seq_len=max_seq_len,
@@ -135,8 +156,8 @@ def _validate_scalar(name, value):
         raise TypeError(f"{name} must be an eager Python int, got {type(value).__name__}")
 
 
-def _validate_cache_tensor(name, tensor, mesh_device, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
-    cache_shape = PrefillGeometry(max_seq_len).cache_shape
+def _validate_cache_tensor(name, tensor, mesh_device, *, max_seq_len=DEFAULT_MAX_SEQ_LEN, num_users=DEFAULT_NUM_USERS):
+    cache_shape = PrefillGeometry(max_seq_len, num_users).cache_shape
     if not isinstance(tensor, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(tensor):
         raise ValueError(f"Llama KV cache {name} must be a device ttnn.Tensor")
     if tensor.device() != mesh_device:
@@ -189,16 +210,22 @@ def _validate_write(kv_cache, k, v, *, slot_idx, layer_idx, actual_start, actual
         ("actual_end", actual_end),
     ):
         _validate_scalar(name, value)
-    geometry = PrefillGeometry(kv_cache.max_seq_len)
+    geometry = PrefillGeometry(kv_cache.max_seq_len, kv_cache.num_users)
     geometry.validate_cache_metadata(kv_cache)
-    if not 0 <= slot_idx < layout.num_users:
-        raise ValueError(f"slot_idx {slot_idx} out of range [0, {layout.num_users})")
+    if not 0 <= slot_idx < kv_cache.num_users:
+        raise ValueError(f"slot_idx {slot_idx} out of range [0, {kv_cache.num_users})")
     if not 0 <= layer_idx < Model.NUM_LAYERS:
         raise ValueError(f"layer_idx {layer_idx} out of range [0, {Model.NUM_LAYERS})")
     geometry.validate_chunk_range(actual_start, actual_end, allow_empty=True)
     mesh_device = kv_cache.k.device()
-    _validate_cache_tensor("k", kv_cache.k, mesh_device, max_seq_len=geometry.max_seq_len)
-    _validate_cache_tensor("v", kv_cache.v, mesh_device, max_seq_len=geometry.max_seq_len)
+    for name, tensor in (("k", kv_cache.k), ("v", kv_cache.v)):
+        _validate_cache_tensor(
+            name,
+            tensor,
+            mesh_device,
+            max_seq_len=geometry.max_seq_len,
+            num_users=geometry.num_users,
+        )
     if kv_cache.k.dtype != kv_cache.v.dtype:
         raise ValueError(f"Llama K/V cache dtypes must match, got {kv_cache.k.dtype} and {kv_cache.v.dtype}")
     _validate_input("K", k, mesh_device)
