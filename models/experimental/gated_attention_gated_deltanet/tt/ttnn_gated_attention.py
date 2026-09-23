@@ -49,6 +49,54 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
+    """Apply RoPE to query and key tensors using the fused ttnn.experimental.rotary_embedding_hf op.
+
+    Prefill-only (T > 1): q/k must be [1, n_heads, seq_len, head_dim] TILE bf16; cos/sin must be
+    [1, 1, seq_len, rotary_dim] (reshaped here from [1, seq_len, rotary_dim] if 3-D) TILE bf16,
+    with cos/sin seq_len >= q/k seq_len. rotary_embedding_hf implements HF rotate_half semantics
+    directly, so this replaces the hand-rolled slice/neg/concat/mul/add of apply_rotary_pos_emb_ttnn.
+
+    When rotary_dim == head_dim (full rotary), the op runs directly on q and k. Otherwise (partial
+    rotary, e.g. Qwen3.5's rotary_dim=64 of head_dim=256), the op runs only on the rotary slice and
+    the untouched pass-through dims are concatenated back on: slice + rotary + slice + concat = 4
+    ops per tensor (8 total), vs. ~10 ops for the legacy elementwise path.
+    """
+    if len(cos.shape) == 3:
+        cos = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
+        sin = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
+
+    rotary_dim = cos.shape[-1]
+    head_dim = q.shape[-1]
+
+    if rotary_dim == head_dim:
+        q_embed = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, memory_config=memory_config)
+        k_embed = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, memory_config=memory_config)
+        return q_embed, k_embed
+
+    q_rot = q[..., :rotary_dim]
+    q_pass = q[..., rotary_dim:]
+    q_rot_embed = ttnn.experimental.rotary_embedding_hf(
+        q_rot, cos, sin, is_decode_mode=False, memory_config=memory_config
+    )
+    ttnn.deallocate(q_rot)
+    q_embed = ttnn.concat([q_rot_embed, q_pass], dim=-1, memory_config=memory_config)
+    ttnn.deallocate(q_rot_embed)
+    ttnn.deallocate(q_pass)
+
+    k_rot = k[..., :rotary_dim]
+    k_pass = k[..., rotary_dim:]
+    k_rot_embed = ttnn.experimental.rotary_embedding_hf(
+        k_rot, cos, sin, is_decode_mode=False, memory_config=memory_config
+    )
+    ttnn.deallocate(k_rot)
+    k_embed = ttnn.concat([k_rot_embed, k_pass], dim=-1, memory_config=memory_config)
+    ttnn.deallocate(k_rot_embed)
+    ttnn.deallocate(k_pass)
+
+    return q_embed, k_embed
+
+
 def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     """
     Zero-centered RMSNorm using TTNN: x * rsqrt(mean(x^2) + eps) * (1 + weight).
@@ -74,11 +122,17 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=No
     grid_size = device.compute_with_storage_grid_size()
     if chunk_start_idx is not None and chunk_start_idx == 0:
         # First chunk of paged prefill: no divisibility constraint.
-        # Use small chunks on Blackhole — chunked_sdpa has higher L1 overhead
-        # than regular sdpa (page table indirection + block metadata).
-        # 256/256 causes L1 clash; 64/64 is safe on Blackhole P150.
-        q_chunk = 64
-        k_chunk = 64
+        # Swept on P150 at S=4096 (8x256 q, 2x256 kv, causal): 64/64 2.81 ms, 128/128 1.52 ms,
+        # 256/128 1.07 ms; 256/256 does not fit L1. QWEN36_SDPA_PREFILL_CHUNKS="q,k" overrides.
+        env = _os.environ.get("QWEN36_SDPA_PREFILL_CHUNKS")
+        if env:
+            q_chunk, k_chunk = (int(v) for v in env.split(","))
+        elif seq_len >= 4096:
+            q_chunk, k_chunk = 256, 128
+        elif seq_len >= 2048:
+            q_chunk, k_chunk = 128, 128
+        else:
+            q_chunk, k_chunk = 64, 64
     elif chunk_start_idx is not None and chunk_start_idx > 0:
         # Subsequent chunks of paged prefill: chunk sizes must divide chunk_start_idx.
         # (x & -x) extracts the largest power-of-2 factor of x.
@@ -163,6 +217,26 @@ def _get_sdpa_compute_kernel_config():
     )
 
 
+def _get_qknorm_compute_kernel_config(device):
+    """Device compute-kernel config for the fast-path q/k rms_norm calls, gated behind
+    QWEN36_ATTN_QKNORM_HIFI2 (default "1" as of step1-F10c phase 2 -- PCC-validated, see the call
+    site's comment; set to "0" for the legacy op-default HiFi4).
+
+    Built the way models/common/rmsnorm.py's compute_kernel_config_hifi2 is (HiFi2,
+    fp32_dest_acc_en, packer_l1_acc=True), but via ttnn.init_device_compute_kernel_config for the
+    device arch, matching models/tt_dit/layers/normalization.py's pattern. gemma4's
+    attention/operations.py deliberately keeps HiFi4 for q/k norm accuracy; this HiFi2 override was
+    PCC-gated (val_b + compare_logits + gt_check where runnable) before being defaulted on here.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def gated_attention_forward_ttnn(
     hidden_states,
     q_proj_weight,
@@ -207,6 +281,19 @@ def gated_attention_forward_ttnn(
     chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
     chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
     chunk_start_idx_tensor=None,  # device tensor [1] int32 — runtime offset for trace-replay (flexible SDPA)
+    prefill_progcfg_fn=None,
+    # De-interleaved/packed prefill fast path (see weights.py load_attention_weights): when all
+    # three are given and T > 1, replaces the q/k/v projection + head-split block below with two
+    # matmuls (q, packed k|v) plus ttnn.experimental.nlp_create_qkv_heads. Decode (T == 1) and
+    # callers that don't pass these (e.g. other models) keep using the plain path.
+    q_deint_weight=None,
+    gate_deint_weight=None,
+    kv_packed_weight=None,
+    # F9: single fused [Q|K|V] weight (weights.py AttentionWeights.qkv_fused). When given (and
+    # QWEN36_ATTN_FUSED_QKV != "0"), replaces the q_deint_weight + kv_packed_weight two-matmul
+    # step with one matmul + the single-input form of ttnn.experimental.nlp_create_qkv_heads.
+    # Falls back to the q_deint_weight/kv_packed_weight two-matmul path when None.
+    qkv_fused_weight=None,
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -239,41 +326,185 @@ def gated_attention_forward_ttnn(
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
 
+    # memory_config is only threaded into the extra prefill-only ops added for F3 (fast-path q/k
+    # rms_norm, fused rotary + its concats, concatenate_heads, gate sigmoid/multiply, chunked SDPA
+    # output) when T > 1. Those ops were never passed memory_config for decode (T == 1) before this
+    # change (only the linears/nlp_create_qkv_heads/o_proj were, via the memory_config param
+    # directly) -- gating on T > 1 keeps decode byte-for-byte identical to before.
+    _prefill_mc = memory_config if T > 1 else None
+
     # Q projection: 2x wide
     ckc = compute_kernel_config
-    qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
-    # Split into query and gate
-    query_states, gate = ttnn.chunk(qg, 2, dim=-1)
-    ttnn.deallocate(qg)
-    gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
-    # Q norm + transpose to [B, H_q, T, D]
-    if norm_weights_pre_offset:
-        query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+    def _pc(x_in, w_in):
+        if prefill_progcfg_fn is None or T <= 1:
+            return None
+        return prefill_progcfg_fn(
+            T, x_in.shape[-1], w_in.shape[-1], x_in.dtype, w_in.dtype, getattr(ckc, "fp32_dest_acc_en", True)
+        )
+
+    # F9: fused single-matmul Q|K|V path, gated on qkv_fused_weight being available and the
+    # QWEN36_ATTN_FUSED_QKV env override (default on). Falls back to the F3 two-matmul
+    # (q_deint + kv_packed) path when qkv_fused_weight is None or the override is "0".
+    _fused_qkv = qkv_fused_weight is not None and _os.environ.get("QWEN36_ATTN_FUSED_QKV", "1") != "0"
+    if (
+        gate_deint_weight is not None
+        and (_fused_qkv or (q_deint_weight is not None and kv_packed_weight is not None))
+        and T > 1
+        and T % 32 == 0
+    ):  # nlp_create_qkv_heads needs a tile-aligned seq
+        # Fast path (prefill only): weight columns were de-interleaved once at load time
+        # (weights.py load_attention_weights), so head-splitting is a single fused
+        # ttnn.experimental.nlp_create_qkv_heads instead of a copying reshape + chunk, a separate
+        # gate reshape, two more K/V reshapes, and three transposes.
+        if _fused_qkv:
+            # F9: one matmul for the fused [Q-block | K-block | V-block] weight (each block
+            # head-major, see weights.py) instead of separate q and kv_packed matmuls.
+            qkv = ttnn.linear(
+                hidden_states,
+                qkv_fused_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, qkv_fused_weight),
+            )  # [B, T, H*Dh + 2*Hkv*Dh]
+        else:
+            q = ttnn.linear(
+                hidden_states,
+                q_deint_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, q_deint_weight),
+            )  # [B, T, H*Dh]
+            kv = ttnn.linear(
+                hidden_states,
+                kv_packed_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, kv_packed_weight),
+            )  # [B, T, 2*Hkv*Dh]
+        gate = ttnn.linear(
+            hidden_states,
+            gate_deint_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, gate_deint_weight),
+        )  # [B, T, H*Dh] flat, used as-is later
+        if _fused_qkv:
+            qkv4 = ttnn.reshape(qkv, [B, 1, T, num_attention_heads * head_dim + 2 * num_key_value_heads * head_dim])
+            query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+                qkv4,
+                num_heads=num_attention_heads,
+                num_kv_heads=num_key_value_heads,
+                transpose_k_heads=False,
+                memory_config=memory_config,
+            )  # [B,H,T,Dh], [B,Hkv,T,Dh], [B,Hkv,T,Dh]
+            ttnn.deallocate(qkv)
+        else:
+            q4 = ttnn.reshape(q, [B, 1, T, num_attention_heads * head_dim])  # metadata only
+            kv4 = ttnn.reshape(kv, [B, 1, T, 2 * num_key_value_heads * head_dim])
+            query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+                q4,
+                kv4,
+                num_heads=num_attention_heads,
+                num_kv_heads=num_key_value_heads,
+                transpose_k_heads=False,
+                memory_config=memory_config,
+            )  # [B,H,T,Dh], [B,Hkv,T,Dh], [B,Hkv,T,Dh]
+            ttnn.deallocate(q)
+            ttnn.deallocate(kv)
+
+        # Q/K norm on head-major tensors: rms_norm reduces over the last dim (Dh), which is the
+        # same dim being normalized whether heads sit at dim 2 (old path, pre-transpose) or dim 1
+        # (here) — numerically identical, so no transpose is needed before or after.
+        # QWEN36_ATTN_QKNORM_HIFI2 (default "1" as of step1-F10c phase 2, 2026-09-21): the op
+        # runs its default HiFi4 only if this is set to "0". Data (val_b T=2048/4096: -1.6/-2.1ms;
+        # compare_logits vs logits_after_f10b.pt: PCC=0.999920/0.999810 at T=512/1024, argmax
+        # match at T=512/1024/2048/4096; traced_4k demo TTFT 0.162s, no regression) supports
+        # defaulting this on -- see patches/step1_f10c_kvbf8_qknorm_lmhead.patch. Set to "0" to
+        # restore the legacy HiFi4 q/k rms_norm for A/B.
+        _qknorm_ckc = (
+            _get_qknorm_compute_kernel_config(device)
+            if _os.environ.get("QWEN36_ATTN_QKNORM_HIFI2", "1") != "0"
+            else None
+        )
+        if norm_weights_pre_offset:
+            query_states = ttnn.rms_norm(
+                query_states,
+                weight=q_norm_weight,
+                epsilon=norm_eps,
+                memory_config=_prefill_mc,
+                compute_kernel_config=_qknorm_ckc,
+            )
+            key_states = ttnn.rms_norm(
+                key_states,
+                weight=k_norm_weight,
+                epsilon=norm_eps,
+                memory_config=_prefill_mc,
+                compute_kernel_config=_qknorm_ckc,
+            )
+        else:
+            query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
     else:
-        query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
-    query_states = ttnn.transpose(query_states, 1, 2)
+        qg = ttnn.linear(
+            hidden_states,
+            q_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, q_proj_weight),
+        )
+        qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+        # Split into query and gate
+        query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+        ttnn.deallocate(qg)
+        gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
-    # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
-    if norm_weights_pre_offset:
-        key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
-    else:
-        key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
-    key_states = ttnn.transpose(key_states, 1, 2)
+        # Q norm + transpose to [B, H_q, T, D]
+        if norm_weights_pre_offset:
+            query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+        else:
+            query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+        query_states = ttnn.transpose(query_states, 1, 2)
 
-    # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
-    value_states = ttnn.transpose(value_states, 1, 2)
+        # K projection + norm + transpose to [B, H_kv, T, D]
+        key_states = ttnn.linear(
+            hidden_states,
+            k_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, k_proj_weight),
+        )
+        key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+        if norm_weights_pre_offset:
+            key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
+        else:
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+        key_states = ttnn.transpose(key_states, 1, 2)
 
-    # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement)
+        # V projection + transpose to [B, H_kv, T, D]
+        value_states = ttnn.linear(
+            hidden_states,
+            v_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, v_proj_weight),
+        )
+        value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
+        value_states = ttnn.transpose(value_states, 1, 2)
+
+    # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement).
+    # For prefill (T>1, tile-aligned), use the fused rotary_embedding_hf op
+    # (apply_rotary_pos_emb_fused): ~4 ops/tensor (slice + rotary + slice + concat) instead of the
+    # ~10-op hand-rolled rotate_half. QWEN36_ROPE_LEGACY=1 forces the legacy elementwise path for A/B.
+    _rope_legacy = _os.environ.get("QWEN36_ROPE_LEGACY") == "1"
     if T == 1 and len(cos.shape) == 3:
         cos_4d = ttnn.reshape(cos, [cos.shape[0], 1, 1, cos.shape[-1]])
         sin_4d = ttnn.reshape(sin, [sin.shape[0], 1, 1, sin.shape[-1]])
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos_4d, sin_4d)
+    elif T > 1 and T % 32 == 0 and not _rope_legacy:
+        query_states, key_states = apply_rotary_pos_emb_fused(
+            query_states, key_states, cos, sin, memory_config=_prefill_mc
+        )
     else:
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
@@ -282,11 +513,15 @@ def gated_attention_forward_ttnn(
     _paged_sdpa_done = False
     if paged_kv_cache_key is not None and page_table is not None and T > 1 and chunk_page_table is not None:
         # Paged prefill: fill K/V into paged cache, then chunked SDPA.
-        # Q/K/V stay bfloat16 — no typecast. Production models (Qwen3_VL) typecast to
-        # bfloat8_b, but on Blackhole P150 this causes L1 clashes in downstream ops
+        # Q/K/V stay bfloat16 by default — no typecast. Production models (Qwen3_VL) typecast to
+        # bfloat8_b, but on Blackhole P150 this previously caused L1 clashes in downstream ops
         # (head concat, gate multiply, output projection) whose programs were compiled
         # for bfloat16. The core fix (paged KV) eliminates the growing-concat L1 issue;
-        # the bfloat8_b optimization can be added later with matching downstream changes.
+        # QWEN36_ATTN_KV_BF8=1 (default "0", see below) re-enables the bfloat8_b typecast for
+        # A/B testing; the downstream concat/gate/o_proj path is left untouched (it reads
+        # whatever dtype SDPA emits), matching the "leave the SDPA output dtype as it comes
+        # out" note this flag was added under.
+        _kv_bf8 = _os.environ.get("QWEN36_ATTN_KV_BF8", "0") == "1"
 
         # Slice K/V to page_len to handle tile-padded tensors.
         block_size_cache = paged_kv_cache_key.shape[2]
@@ -294,33 +529,51 @@ def gated_attention_forward_ttnn(
         key_fill = key_states[:, :, :page_len, :] if page_len < key_states.shape[2] else key_states
         value_fill = value_states[:, :, :page_len, :] if page_len < value_states.shape[2] else value_states
 
+        if _kv_bf8:
+            # Typecast to whatever dtype the paged cache itself was allocated with (matches
+            # tt_transformers/tt/attention.py's k_heads_1KSD_8b/v_heads_1VSD_8b pattern,
+            # ~1141/1153: `ttnn.typecast(k_heads, dtype=keys.dtype)`). The cache is bfloat16
+            # unless model.py's allocate_kv_caches (~2743) was run with QWEN_SDPA_BF8=1, so
+            # this flag only yields an actual bfloat8_b cast when QWEN_SDPA_BF8=1 too --
+            # otherwise it typecasts bfloat16 -> bfloat16 (a harmless no-op copy).
+            key_fill = ttnn.typecast(key_fill, dtype=paged_kv_cache_key.dtype)
+            value_fill = ttnn.typecast(value_fill, dtype=paged_kv_cache_value.dtype)
+
         ttnn.experimental.paged_fill_cache(paged_kv_cache_key, key_fill, chunk_page_table, batch_idx=0)
         ttnn.experimental.paged_fill_cache(paged_kv_cache_value, value_fill, chunk_page_table, batch_idx=0)
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
+
+        # QWEN36_ATTN_KV_BF8 also typecasts Q to bfloat8_b right before SDPA (matches
+        # tt_transformers/tt/attention.py ~1218: `ttnn.typecast(q_heads, dtype=... or
+        # ttnn.bfloat8_b)`). query_states itself is left unmodified -- it's deallocated
+        # unconditionally further below -- so this is a separate tensor used only here.
+        _q_for_sdpa = ttnn.typecast(query_states, dtype=ttnn.bfloat8_b) if _kv_bf8 else query_states
 
         if chunk_start_idx_tensor is not None:
             # Flexible chunked SDPA: chunk_start_idx is a runtime device tensor and the
             # program config is fixed (q/k_chunk=64), so a single captured trace replays
             # for every chunk position (chunk-outer per-chunk prefill).
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                query_states,
+                _q_for_sdpa,
                 paged_kv_cache_key,
                 paged_kv_cache_value,
                 page_table,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 scale=scaling,
+                memory_config=_prefill_mc,
                 program_config=_get_flexible_sdpa_program_config(device),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                query_states,
+                _q_for_sdpa,
                 paged_kv_cache_key,
                 paged_kv_cache_value,
                 page_table,
                 chunk_start_idx,
                 scale=scaling,
+                memory_config=_prefill_mc,
                 program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
             )
@@ -549,17 +802,31 @@ def gated_attention_forward_ttnn(
 
     # Convert from [B, H, T, D] back to [B, T, H*D]
     if use_optimized_concat:
-        attn_output = ttnn.transformer.concatenate_heads(attn_output)
+        attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc)
     else:
         attn_output = ttnn.transpose(attn_output, 1, 2)
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
-    # Apply sigmoid gate
-    gate = ttnn.sigmoid(gate)
-    attn_output = ttnn.multiply(attn_output, gate)
+    # Apply sigmoid gate. F6-E: prefill (T>1) fuses sigmoid(gate) into the multiply's
+    # second-operand activation (one op instead of two); decode (T==1, _prefill_mc is always None
+    # there) always takes the legacy two-op path unchanged. QWEN36_ATTN_GATE_FUSED=0 restores the
+    # legacy two-op path at any T.
+    if T > 1 and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0":
+        attn_output = ttnn.multiply(
+            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
+        )
+    else:
+        gate = ttnn.sigmoid(gate, memory_config=_prefill_mc)
+        attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)
     ttnn.deallocate(gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    attn_output = ttnn.linear(
+        attn_output,
+        o_proj_weight,
+        compute_kernel_config=ckc,
+        memory_config=memory_config,
+        program_config=_pc(attn_output, o_proj_weight),
+    )
 
     return attn_output, new_key, new_value

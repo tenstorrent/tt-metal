@@ -496,8 +496,48 @@ class Qwen36Model:
 
     def _lm_head(self, x):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
-        Single device: plain matmul."""
-        logits = ttnn.linear(x, self.lm_head_weight)
+        Single device: minimal_matmul's default config measured 2.46ms vs ttnn-auto's 3.28ms;
+        every swept 1D/DRAM-sharded progcfg overflows L1 at this N (248320), so no explicit
+        program_config is passed here (default-config minimal_matmul only).
+
+        QWEN36_LMHEAD_SPLIT (default "8" as of step1-F10c phase 2, 2026-09-21; int N>=0, "0"
+        disables): single-device only. Splits the [2048, 248320] lm_head weight into N
+        tile-aligned column chunks (248320 = 7760 tiles; N must divide 7760, so N in
+        {2,4,5,8,10,...}), sliced once on device with ttnn.slice and cached in
+        self._lm_head_split_chunks, then runs N minimal_matmul calls (default config, same as
+        the unsplit path below) and ttnn.concat(dim=-1) -- mirroring tt_transformers/tt/lm_head.py's
+        column split. N=8 was the best of {4,8} swept in phase 2 (val_b T=2048/4096: -2.0/-2.3ms
+        vs N=4's -0.7/-0.8ms; both PCC=1.000000 exact vs logits_after_f10b.pt, math-equivalent
+        split); traced_4k demo TTFT 0.164s, no regression (see
+        patches/step1_f10c_kvbf8_qknorm_lmhead.patch). Set to "0" to restore the single unsplit
+        minimal_matmul below.
+        """
+        _split_n = int(os.environ.get("QWEN36_LMHEAD_SPLIT", "8") or "0")
+        if self.num_devices == 1 and _split_n > 1:
+            cached = getattr(self, "_lm_head_split_chunks", None)
+            if cached is None or cached[0] != _split_n:
+                rows, vocab = self.lm_head_weight.shape[0], self.lm_head_weight.shape[1]
+                tile = 32
+                total_tiles = vocab // tile
+                assert vocab % tile == 0 and total_tiles % _split_n == 0, (
+                    f"QWEN36_LMHEAD_SPLIT={_split_n} must divide the {total_tiles}-tile vocab "
+                    f"dim ({vocab}); e.g. 2, 4, 5, 8, or 10 for vocab={vocab}."
+                )
+                chunk_cols = (total_tiles // _split_n) * tile
+                chunks = []
+                for i in range(_split_n):
+                    start = i * chunk_cols
+                    end = start + chunk_cols
+                    chunks.append(ttnn.slice(self.lm_head_weight, (0, start), (rows, end)))
+                cached = (_split_n, chunks)
+                self._lm_head_split_chunks = cached
+            _, chunks = cached
+            partials = [ttnn.experimental.minimal_matmul(x, w, memory_config=ttnn.DRAM_MEMORY_CONFIG) for w in chunks]
+            logits = ttnn.concat(partials, dim=-1)
+        elif self.num_devices == 1 and os.environ.get("QWEN36_LMHEAD_MINIMAL", "1") != "0":
+            logits = ttnn.experimental.minimal_matmul(x, self.lm_head_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            logits = ttnn.linear(x, self.lm_head_weight)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
@@ -967,7 +1007,20 @@ class Qwen36Model:
         """Trace-safe single-chunk prefill. Updates paged KV + GDN state in place.
         Returns last-layer hidden [1, chunk_size, hidden_size]."""
         x = self.embd(token_buf)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # F10B (item A): keep the post-embedding tensor -- the inter-layer residual stream -- in L1
+        # when T <= 2048, under QWEN36_LAYER_RESID_L1 (same flag/threshold as layer.py's residual-add
+        # split; default "0"). Decoupled from QWEN36_LAYER_L1_MAX_T (F10A's norm-output flag, also
+        # default 0/off). Measured (step1 F10B): re-testing end to end (this call's own warmup, the
+        # first thing capture_prefill_trace_chunked does) with the flag on reproduced the SAME
+        # "Statically allocated circular buffers ... clash with L1 buffers" GDN-conv1d error F10A
+        # found for the norm case -- driven by layer.py's per-layer residual add keeping this same
+        # tensor L1-resident continuously across all 24 layers (see layer.py for detail); isolating
+        # just this one L1 hop (post-embedding into layer 0, reverting to DRAM right after layer 0's
+        # own add) passed standalone but is not adopted as a separate default given the single-flag
+        # framing and its small (one hop of 24) benefit. Default "0" restores DRAM unconditionally
+        # (byte-identical to pre-F10A/F10B); "1" reproduces the clash for further investigation.
+        _resid_l1 = os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and x.shape[1] <= 2048
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG if _resid_l1 else ttnn.DRAM_MEMORY_CONFIG)
         # Trace-safe vision splice (fixed-shape where over persistent buffers; identity when the
         # mask buffer is zero, which is the case for every text-only chunk and request). The caller
         # stages the buffers before replaying chunk 0 of a multimodal prompt; chunks>0 are cleared.
@@ -1988,7 +2041,13 @@ class Qwen36Model:
         # at warmup; mask==0 -> identity, so text-only is unchanged). The caller stages the
         # buffers (prefill_masked_bucket -> _set_vision_merge). No-op until a trace is captured.
         x = self._apply_vision_merge(x, length=bucket)
-        cos, sin = self.rope.get_prefill_rot_mats(chunk_start, bucket)
+        # F10B item C: text-only masked-bucket prefill slices cos/sin straight from the persistent
+        # device table instead of computing on host and uploading (QWEN36_ROPE_DEVICE_TABLE, default
+        # "1"); M-RoPE requests (self.rope._req_cos staged) or the flag off keep the host path.
+        if self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
+            cos, sin = self.rope.get_prefill_rot_mats_table_slice(chunk_start, bucket)
+        else:
+            cos, sin = self.rope.get_prefill_rot_mats(chunk_start, bucket)
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
         # Fill K/V only for real blocks (ceil(valid_len/64)); padded writes would corrupt block 0.
@@ -2021,6 +2080,15 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        # Deallocate per-chunk inputs; only hidden survives (leaving these live let the eager
+        # tail leak device buffers, which made the NEXT execute_trace hang once a chunk-outer
+        # prefill trace was parked -- see the TP twin below for the same pattern).
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        ttnn.deallocate(full_pt)
+        ttnn.deallocate(chunk_pt)
+        if csi_tensor is not None:
+            ttnn.deallocate(csi_tensor)
         return x
 
     def _forward_prefill_chunk_masked_tp(
@@ -2207,7 +2275,16 @@ class Qwen36Model:
         MUST run in GDN serving state, before any trace is parked (capture_prefill_trace_chunked
         calls this just before begin_trace_capture). page_table must cover the largest bucket."""
         if buckets is None:
-            buckets = self._PREFILL_MASK_BUCKETS
+            chunk_size = self._chunked_chunk_size
+            # Cap at chunk_size: a chunk-outer tail is always < chunk_size, and a whole prompt
+            # shorter than a chunk (num_full==0) also routes through a bucket <= chunk_size
+            # (prefill_traced_chunked / prefill_masked_bucket) -- buckets above chunk_size are
+            # never reached at runtime. Also avoids warming a bucket wider than the vision-merge
+            # buffers, which _alloc_vision_merge_buffers sizes to chunk_size (not to the widest
+            # fixed bucket).
+            buckets = (
+                [b for b in self._PREFILL_MASK_BUCKETS if b <= chunk_size] if chunk_size else self._PREFILL_MASK_BUCKETS
+            )
         block_size = get_block_size(self._paged_kv_caches)
 
         # Bucket-keyed programs: one masked + one no-mask forward per bucket.
@@ -2404,21 +2481,34 @@ class Qwen36Model:
             ttnn.copy_host_to_device_tensor(cpt_host, self._chunk_page_table_buf)
 
             # M-RoPE-aware per-chunk cos/sin (slices the staged per-request table for multimodal;
-            # 1D RoPE for text). Updated into the persistent buffer per chunk via host->device copy,
-            # so it stays trace-safe.
-            cos_seq, sin_seq = self.rope.prefill_cos_sin_torch(cs, chunk_size)
-            cos_host = ttnn.from_torch(
-                cos_seq.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            sin_host = ttnn.from_torch(
-                sin_seq.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
-            ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
+            # 1D RoPE for text). Updated into the persistent buffer per chunk so it stays trace-safe
+            # (the buffer's device address is baked into the parked trace; only its contents change).
+            #
+            # F10B item C (QWEN36_ROPE_DEVICE_TABLE, default "1"): text-only requests slice the
+            # persistent device table (self.rope.cos_device/sin_device) and ttnn.copy the slice
+            # straight into _chunk_cos_buf/_chunk_sin_buf -- device-to-device, no host round trip.
+            # M-RoPE requests (self.rope._req_cos staged) or the flag off keep the original host
+            # compute (prefill_cos_sin_torch) + upload (copy_host_to_device_tensor) path.
+            if self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
+                cos_slice, sin_slice = self.rope.get_prefill_rot_mats_table_slice(cs, chunk_size)
+                ttnn.copy(cos_slice, self._chunk_cos_buf)
+                ttnn.copy(sin_slice, self._chunk_sin_buf)
+                ttnn.deallocate(cos_slice)
+                ttnn.deallocate(sin_slice)
+            else:
+                cos_seq, sin_seq = self.rope.prefill_cos_sin_torch(cs, chunk_size)
+                cos_host = ttnn.from_torch(
+                    cos_seq.unsqueeze(0).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+                sin_host = ttnn.from_torch(
+                    sin_seq.unsqueeze(0).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+                ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
+                ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
 
             # Stage the trace-safe vision buffers: each chunk splices its own slice of the packed
             # vision rows (vis_row_offset = image tokens before cs); a chunk with no image tokens
@@ -2429,14 +2519,22 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
 
+            if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
+                print(f"[PTC] before execute_trace chunk={c}", flush=True)
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
+            if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
+                print(f"[PTC] after execute_trace chunk={c}", flush=True)
 
         ttnn.synchronize_device(self.device)
+        if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
+            print(f"[PTC] after synchronize chunk={num_full - 1}", flush=True)
 
         # Tail via masked bucket (or last full chunk hidden if exact multiple of chunk_size).
         if tail_real > 0:
             cs = num_full * chunk_size
-            return self.prefill_masked_bucket(
+            if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
+                print("[PTC] before tail", flush=True)
+            result = self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
                 page_table,
                 actual_len=tail_real,
@@ -2444,6 +2542,9 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
+            if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
+                print("[PTC] after tail", flush=True)
+            return result
         hidden = self._chunked_trace_output  # last full chunk's hidden state
         pos_in_chunk = (actual_len - 1) - (num_full - 1) * chunk_size
         ttnn.synchronize_device(self.device)

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prefill forward passes for Qwen3.5-9B gated attention.
 
-Branch A: paged prefill (chunk_page_table is not None) — no memory_config, no cur_pos_tensor.
+Branch A: paged prefill (chunk_page_table is not None) — uses memory_config (F3: L1 for short
+prefill via QWEN36_ATTN_L1_MAX_T), no cur_pos_tensor.
 Branch C: concat prefill (else) — uses memory_config, past_key/past_value; returns new_key/new_value.
 """
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
@@ -26,11 +27,15 @@ def prefill_forward(
     past_key=None,
     past_value=None,
     use_paged_attention=False,
+    prefill_progcfg_fn=None,
 ):
     """Dispatch prefill to paged (Branch A) or concat (Branch C) path."""
     if use_paged_attention and chunk_page_table is not None:
-        # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA
-        # No memory_config, no cur_pos_tensor.
+        # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA.
+        # memory_config=mc threads L1 placement (short prefill, F3) into the attention-layer glue
+        # ops (rms_norm, fused rotary, concatenate_heads, gate, chunked SDPA output); paged_fill_cache
+        # and the paged KV cache itself are untouched (stay DRAM) — mc is not used for those.
+        # No cur_pos_tensor (that's decode-only).
         output, _, _ = gated_attention_forward_ttnn(
             hidden_states=x,
             q_proj_weight=weights.q_proj,
@@ -48,6 +53,7 @@ def prefill_forward(
             norm_eps=config.norm_eps,
             compute_kernel_config=ckc,
             use_optimized_concat=True,
+            memory_config=mc,
             norm_weights_pre_offset=True,
             page_table=page_table,
             paged_kv_cache_key=paged_kv_cache_key,
@@ -55,6 +61,11 @@ def prefill_forward(
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             chunk_start_idx_tensor=chunk_start_idx_tensor,
+            prefill_progcfg_fn=prefill_progcfg_fn,
+            q_deint_weight=weights.q_deint,
+            gate_deint_weight=weights.gate_deint,
+            kv_packed_weight=weights.kv_packed,
+            qkv_fused_weight=weights.qkv_fused,
         )
         return output
     else:
@@ -81,5 +92,9 @@ def prefill_forward(
             use_optimized_concat=True,
             memory_config=mc,
             norm_weights_pre_offset=True,
+            prefill_progcfg_fn=prefill_progcfg_fn,
+            q_deint_weight=weights.q_deint,
+            gate_deint_weight=weights.gate_deint,
+            kv_packed_weight=weights.kv_packed,
         )
         return output, new_key, new_value

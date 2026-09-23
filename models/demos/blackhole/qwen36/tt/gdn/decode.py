@@ -7,6 +7,9 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
+import functools
+import os
+
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, split_fused_conv_state
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
@@ -38,6 +41,14 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
 
     # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32, chunk_size=128).
     seq_masks = w.chunk_seq_masks_long
+
+    chunk_delta_fn = None
+    if mode == "chunk" and os.environ.get("QWEN36_GDN_FUSED_PREFILL", "1") != "0":
+        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_adapter
+
+        chunk_delta_fn = functools.partial(
+            chunk_gated_delta_rule_fused_adapter, const_tiles=getattr(gdn, "_fused_const_tiles", None)
+        )
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
         hidden_states=x,
@@ -95,7 +106,23 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         use_inplace_state=gdn.use_inplace_state,
         chunk_seq_masks=seq_masks,
         valid_len=valid_len,
+        chunk_delta_fn=chunk_delta_fn,
+        prefill_progcfg_fn=getattr(gdn, "_prefill_progcfg_fn", None),
+        decode_progcfg_fn=getattr(gdn, "_decode_progcfg_fn", None),
+        native_conv1d_fn=getattr(gdn, "_native_conv1d_fn", None) if mode == "chunk" else None,
     )
+
+    if chunk_delta_fn is not None and new_state is not None:
+        # Fused adapter returns fp32 state; the seq adapter returns bf16 unless
+        # QWEN_GDN_FP32_STATE=1. Match whichever convention the destination expects: the
+        # preallocated recurrent_state buffer's dtype when writing in place below (ttnn.copy
+        # writes into that fixed-dtype buffer), else the seq adapter's env-selected convention.
+        if gdn._chunk_inplace_state and mode == "chunk" and gdn.recurrent_state is not None:
+            target_dtype = gdn.recurrent_state.dtype
+        else:
+            target_dtype = ttnn.float32 if os.environ.get("QWEN_GDN_FP32_STATE") == "1" else ttnn.bfloat16
+        if new_state.dtype != target_dtype:
+            new_state = ttnn.typecast(new_state, target_dtype)
 
     if gdn._chunk_inplace_state and mode == "chunk":
         # Per-chunk traced-prefill replay: write state into the persistent external

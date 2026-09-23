@@ -6,6 +6,8 @@ Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
 
+import os
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
@@ -182,6 +184,10 @@ class Qwen36DecoderLayer:
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        # F10A (G5) / F10B (item A): L1-resident residual add + norm outputs, single-device
+        # prefill only (see below); TP and decode are untouched (memory_config=None below ==
+        # omitting the kwarg, today's behavior).
+        _residual_mc = None
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -197,10 +203,56 @@ class Qwen36DecoderLayer:
                 _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
         else:
             # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);
-            # in prefill the framework RMSNorm returns interleaved DRAM (matches the old None default).
-            _attn_norm_config = _ff_norm_config = (
-                {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
-            )
+            # unchanged by F10A/G5/F10B (decode, T==1, is out of scope for these changes).
+            #
+            # F10A (G5): prefill norm output also goes to L1 when T <= QWEN36_LAYER_L1_MAX_T
+            # (new flag, default 0/off -- see below). Above the threshold the framework RMSNorm
+            # keeps returning interleaved DRAM (matches the old None default).
+            #
+            # Caution (see models/common/rmsnorm.py forward()): output_mem_config is applied via a
+            # SEPARATE ttnn.to_memory_config after ttnn.rms_norm (rms_norm itself always writes
+            # DRAM here, since neither in_sharded nor out_sharded is set) -- this is an *extra* copy
+            # op per norm call, not a free reinterpretation.
+            #
+            # Measured (step1 F10A): at T=2048 this norm-output-in-L1 placement makes a GDN layer's
+            # native conv1d (conv1d_native.py) throw "Statically allocated circular buffers ...
+            # clash with L1 buffers" -- the L1-resident norm output is still alive when conv1d's own
+            # CBs are sized, and the two don't both fit. Isolated A/B (QWEN36_LAYER_L1_DEBUG,
+            # residual-only vs norm-only) confirmed the residual-add L1 placement below is NOT the
+            # cause (it passes standalone); the norm output_mem_config alone reproduces the clash.
+            # Since one flag drove both and the norm half breaks GDN layers at the production T,
+            # QWEN36_LAYER_L1_MAX_T stays 0 by default (fully off, matching pre-F10A prefill
+            # behavior) -- set it explicitly (e.g. =2048) only for further A/B experimentation.
+            #
+            # F10B (item A): the residual add is now split onto its OWN flag (QWEN36_LAYER_RESID_L1)
+            # instead of being coupled to QWEN36_LAYER_L1_MAX_T above. F10A's isolated A/B claimed
+            # the residual-add-in-L1 half is safe standalone at T=2048; step1-F10B re-measured it
+            # end to end (full 24-layer model, real traced-chunk-outer capture) and found the
+            # opposite: turning this on for EVERY layer keeps the whole inter-layer residual stream
+            # L1-resident continuously (each layer's `output` is the next layer's `x`), and that
+            # persistent L1 pressure clashes with a GDN layer's native conv1d CBs exactly like the
+            # norm case above -- "Statically allocated circular buffers ... clash with L1 buffers",
+            # reproduced in capture_prefill_trace_chunked's WARMUP call (the traced path this item
+            # targets) at T=2048, and again in the eager multi-chunk path (prefill_layer_chunked) at
+            # T=4096, and again in the T<=1024 single-shot short-prefill path. Isolating just the
+            # model.py post-embedding placement (this same flag, one L1 hop from embd into layer 0,
+            # reverting to DRAM after layer 0's own add) passed standalone -- so the risk is specific
+            # to chaining the L1 placement across many layers, not to any single add. Given this,
+            # QWEN36_LAYER_RESID_L1 now DEFAULTS TO "0" (off, byte-identical to pre-F10A/F10B) --
+            # set it to "1" only to reproduce the clash or to continue investigating a narrower
+            # (e.g. GDN-layer-aware, or freed-between-layers) placement.
+            _residual_mc = None
+            if mode == "decode":
+                _attn_norm_config = _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
+            else:
+                _layer_l1_max_t = int(os.environ.get("QWEN36_LAYER_L1_MAX_T", "0"))
+                _T = x.shape[1] if len(x.shape) >= 3 else 1
+                if _T <= _layer_l1_max_t:
+                    _attn_norm_config = _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
+                else:
+                    _attn_norm_config = _ff_norm_config = None
+                if os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and _T <= 2048:
+                    _residual_mc = ttnn.L1_MEMORY_CONFIG
         attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
@@ -260,7 +312,7 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        h = ttnn.add(x, attn_output, memory_config=_residual_mc)
         ttnn.deallocate(attn_output)
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
@@ -268,7 +320,7 @@ class Qwen36DecoderLayer:
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
-        output = ttnn.add(h, ff_output)
+        output = ttnn.add(h, ff_output, memory_config=_residual_mc)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 

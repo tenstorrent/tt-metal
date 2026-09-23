@@ -5,7 +5,9 @@
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+import functools
 import math
+import os
 
 import torch
 
@@ -25,6 +27,86 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+
+# --- Prefill matmul compute-kernel-config levers (step2, 2026-09-22; read once at import) --------
+# QWEN36_PREFILL_MM_PACKER_L1_ACC (default "1"): packer_l1_acc used by every PREFILL (T>1) matmul
+#   ckc built via prefill_matmul_ckc(). "0" = legacy (False -- what mlp.py's Qwen36MLP,
+#   gdn/gated_deltanet.py's Qwen36GatedDeltaNet, and attention/gated_attention.py's
+#   Qwen36GatedAttention each built inline, before this helper existed).
+# QWEN36_PREFILL_MM_FP32_ACC (default "0" (off) since 2026-09-22 per user decision -- traced 4k
+#   TTFT 0.153 -> 0.146 s, logits PCC vs legacy 0.9997, argmax unchanged): fp32_dest_acc_en for the
+#   same ckc. "1" restores fp32 accumulation. Every `_pick_prefill_progcfg` caller reads this back
+#   off the ckc itself (`getattr(ckc, "fp32_dest_acc_en", True)`), so program configs stay legal
+#   either way with no separate plumbing. legacy = QWEN36_PREFILL_MM_PACKER_L1_ACC=0
+#   QWEN36_PREFILL_MM_FP32_ACC=1 QWEN36_PREFILL_MINIMAL_CFG=0.
+# QWEN36_PREFILL_MINIMAL_CFG (default "1"): use an explicit MinimalMatmulConfig (see
+#   prefill_minimal_matmul_config below) for the fused-SwiGLU (T<4096, mlp.py forward()) and
+#   GDN-qkv (ttnn_gated_deltanet.py) minimal_matmul calls. "0" = legacy (config=None at both).
+#   The T>=4096 fused-SwiGLU minimal_matmul keeps an explicit MinimalMatmulConfig(8,8,8) either
+#   way; this flag only changes whether it also sets a non-default subblock.
+# math_fidelity stays LoFi, and math_approx_mode stays True (the WormholeComputeKernelConfig
+# default every one of these ckcs relied on implicitly) for every value of these three flags.
+# Decode ckcs (packer_l1_acc=True, built separately as `compute_kernel_config_decode`) are never
+# touched by this table.
+PREFILL_MM_PACKER_L1_ACC = os.environ.get("QWEN36_PREFILL_MM_PACKER_L1_ACC", "1") != "0"
+PREFILL_MM_FP32_ACC = os.environ.get("QWEN36_PREFILL_MM_FP32_ACC", "0") != "0"
+PREFILL_MINIMAL_CFG = os.environ.get("QWEN36_PREFILL_MINIMAL_CFG", "1") != "0"
+
+
+def prefill_matmul_ckc():
+    """Compute-kernel-config for PREFILL (T>1) matmuls; centralizes the ckc flags above.
+
+    QWEN36_PREFILL_MM_FP32_ACC default "0" (off) since 2026-09-22 per user decision (traced 4k
+    TTFT 0.153 -> 0.146 s, logits PCC vs legacy 0.9997, argmax unchanged); "1" restores fp32
+    accumulation. legacy = QWEN36_PREFILL_MM_PACKER_L1_ACC=0 QWEN36_PREFILL_MM_FP32_ACC=1
+    QWEN36_PREFILL_MINIMAL_CFG=0, which reproduces, bit-for-bit, every prefill ckc mlp.py /
+    gdn/gated_deltanet.py / attention/gated_attention.py built inline before this helper existed:
+        ttnn.WormholeComputeKernelConfig(math_fidelity=LoFi, fp32_dest_acc_en=True, packer_l1_acc=False)
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=PREFILL_MM_FP32_ACC,
+        packer_l1_acc=PREFILL_MM_PACKER_L1_ACC,
+    )
+
+
+def prefill_minimal_matmul_config(M, K, N, grid):
+    """MinimalMatmulConfig for a PREFILL minimal_matmul call, or None to keep the op's own default.
+
+    M, K, N: the call's matmul shape, kept for the call-site record / future shape-based tuning --
+    the swept config below is a single fixed block/subblock choice validated (step1 sweeps) across
+    the current GDN-qkv and fused-SwiGLU (T<4096) call shapes, not derived from M/K/N.
+    grid: caller's cached ttnn.CoreCoord from device.compute_with_storage_grid_size() (13x10 on
+    P150 -- same grid mlp.py's `self._mm_grid` already captures for `_prefill_matmul`'s
+    minimal_matmul calls).
+
+    QWEN36_PREFILL_MM_FP32_ACC default "0" (off) since 2026-09-22 per user decision (traced 4k
+    TTFT 0.153 -> 0.146 s, logits PCC vs legacy 0.9997, argmax unchanged); "1" restores fp32
+    accumulation. legacy = QWEN36_PREFILL_MM_PACKER_L1_ACC=0 QWEN36_PREFILL_MM_FP32_ACC=1
+    QWEN36_PREFILL_MINIMAL_CFG=0.
+
+    QWEN36_PREFILL_MINIMAL_CFG=0 (legacy): always None.
+    QWEN36_PREFILL_MINIMAL_CFG=1 (default) with fp32_dest_acc_en on (QWEN36_PREFILL_MM_FP32_ACC=1,
+    legacy value): also None -- a 2x4 subblock is illegal with fp32 dest, and 2x2 with the default
+    (1,1,1) blocks measured no gain, so the op's own default config wins.
+    QWEN36_PREFILL_MINIMAL_CFG=1 with fp32_dest_acc_en off (QWEN36_PREFILL_MM_FP32_ACC=0, now the
+    default): swept M_block_size=4, K_block_size=8, N_block_size=16, subblock_h=2, subblock_w=4.
+    """
+    del M, K, N  # shape kept for interface symmetry with _pick_prefill_progcfg; unused today
+    if not PREFILL_MINIMAL_CFG:
+        return None
+    if PREFILL_MM_FP32_ACC:
+        return None
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=4,
+        K_block_size=8,
+        N_block_size=16,
+        subblock_h=2,
+        subblock_w=4,
+        compute_with_storage_grid_size=grid,
+    )
 
 
 # Grid helpers
@@ -182,6 +264,53 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
     return out
 
 
+# Single-device DECODE (T==1, activations padded to M=32) 1D matmul progcfg selection, by shape
+# class. Swept on P150 with the model's decode compute config (LoFi, fp32_dest_acc_en=True,
+# packer_l1_acc=True), x in L1 interleaved, weights DRAM interleaved; every config built via
+# create_matmul_1d_decode_progcfg(m=32, k, n, num_cores=c, grid_w=device_grid.x):
+#
+#   matmul                    K      N      dtype   auto ttnn      1D (num_cores)   speedup
+#   w2 (MLP down-proj)        6144   2048   bfp8    154 us         c=110   74 us    2.1x
+#   w1/w3 (MLP up-proj)       2048   6144   bfp4     95 us         c=32    63 us    1.5x
+#   GDN out-proj              2048   2048   bfp8     81 us         c=110   50 us    1.6x
+#   GDN mega in-proj          2048   8224   bfp8    103 us         c=64    85 us    1.2x
+#
+# Shape class -> num_cores: K>N (down-proj) and K==N (square) both want the ~full-grid 110-core 1D
+# config. Of the two N>K (up-proj-like) shapes, the moderately-wide one (w1/w3, N=3K) wants the
+# small 32-core grid; the very-wide one (GDN mega in-proj, N~=4.02K) wants 64 instead -- num_cores is
+# NOT a monotonic function of N/K here, so this is a lookup keyed on the 4 measured shapes, not a
+# smooth formula. N >= 4*K routes to the wide-N bucket (64); K < N < 4*K routes to the up-proj
+# bucket (32). Do not extrapolate this table to unmeasured shapes without a sweep.
+@functools.lru_cache(maxsize=None)
+def _pick_decode_progcfg(k, n, gx, gy):
+    if k >= n:
+        num_cores = 110  # down-proj (k>n) or square (k==n)
+    elif n >= 4 * k:
+        num_cores = 64  # very wide N (e.g. GDN mega in-proj)
+    else:
+        num_cores = 32  # moderately wide N (e.g. MLP up-proj)
+    num_cores = min(num_cores, gx * gy)
+    return create_matmul_1d_decode_progcfg(m=32, k=k, n=n, num_cores=num_cores, grid_w=gx)
+
+
+def make_decode_progcfg_fn(device):
+    """Per-device callable `(k, n) -> progcfg | None` for single-token (T==1, M padded to 32)
+    decode matmuls (see the measured table above `_pick_decode_progcfg`).
+
+    Captures the worker grid once (grid.x, NOT a hardcoded default -- e.g. 13 on this P150, vs the
+    create_matmul_1d_decode_progcfg default grid_w=8 for callers that don't pass the device width).
+    QWEN36_DECODE_PROGCFG=0 disables it (every call returns None -> ttnn auto-config)."""
+    if os.environ.get("QWEN36_DECODE_PROGCFG", "1") == "0":
+        return lambda k, n: None
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid.x, grid.y
+
+    def fn(k, n):
+        return _pick_decode_progcfg(int(k), int(n), gx, gy)
+
+    return fn
+
+
 def create_activation_shard_config(k):
     """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
     k_tiles = k // TILE_SIZE
@@ -245,6 +374,107 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+
+
+_PREFILL_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}
+
+
+def _mk_2d_progcfg(cols, rows, in0_block_w, per_core_M, per_core_N, out_subblock_w):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_M,
+        out_block_w=per_core_N,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
+# Per-shape overrides for prefill matmuls where logs/step1/mm_sweep_summary.md found a config
+# faster than the general _pick_prefill_progcfg rule below. Keyed by (m, k, n); only applied on the
+# swept 13x10 grid (BH P150). QWEN36_PREFILL_PROGCFG_OVERRIDES=0 disables this table.
+_PREFILL_PROGCFG_OVERRIDES = {
+    # GDN mega in-proj (bf16 x bfloat8_b): sweep measured 400us vs 544us for the rule's config.
+    (2048, 2048, 8224): dict(in0_block_w=8, out_subblock_h=1, out_subblock_w=4, per_core_M=7, per_core_N=20),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _pick_prefill_progcfg(m, k, n, in0_tile_b, in1_tile_b, fp32_acc, gx, gy, budget):
+    """Single-device, DRAM-output prefill matmul config, or None to keep ttnn auto-config.
+
+    Swept on P150 (Qwen3.5-2B shapes): the largest in0_block_w whose static CBs fit the per-core L1
+    budget wins, then the widest column count whose per-core N still gives an output subblock >= 2
+    (a 1-wide subblock costs ~15%). Auto-config picks in0_block_w=1 on the 13x10 grid (Kt % 13 != 0)
+    and measured 2.5-5x slower on every shape. Tiny N is left to auto-config."""
+    if gx == 13 and gy == 10 and os.environ.get("QWEN36_PREFILL_PROGCFG_OVERRIDES", "1") != "0":
+        override = _PREFILL_PROGCFG_OVERRIDES.get((m, k, n))
+        if override is not None:
+            return _mk_2d_progcfg(
+                gx,
+                gy,
+                override["in0_block_w"],
+                override["per_core_M"],
+                override["per_core_N"],
+                override["out_subblock_w"],
+            )
+    Mt, Kt, Nt = math.ceil(m / TILE_SIZE), math.ceil(k / TILE_SIZE), math.ceil(n / TILE_SIZE)
+    if Nt < 8:
+        return None
+    per_core_M = max(1, math.ceil(Mt / gy))
+    out_bytes = 2048 + (4096 if fp32_acc else 2048)  # bf16 out CB + interm CB per tile
+    for bw in (8, 4, 2, 1):
+        if Kt % bw:
+            continue
+        fallback = None
+        for cols in range(min(gx, Nt), 0, -1):
+            per_core_N = math.ceil(Nt / cols)
+            est = (
+                per_core_M * bw * 2 * in0_tile_b
+                + per_core_N * bw * 2 * in1_tile_b
+                + per_core_M * per_core_N * out_bytes
+            )
+            if est > budget:
+                continue
+            sw = _get_out_subblock_w(per_core_N, 1)
+            if sw >= 2 or per_core_N == 1:
+                return _mk_2d_progcfg(cols, gy, bw, per_core_M, per_core_N, sw)
+            if fallback is None:
+                fallback = (cols, per_core_N, sw)
+        if fallback is not None:
+            return _mk_2d_progcfg(fallback[0], gy, bw, per_core_M, fallback[1], fallback[2])
+    return None
+
+
+def make_prefill_progcfg_fn(device):
+    """Per-device callable `(m, k, n, in0_dtype, in1_dtype, fp32_acc=True) -> progcfg | None`.
+
+    Captures the worker grid and the allocator's per-bank L1 budget once. QWEN36_PREFILL_PROGCFG=0
+    disables it (every call returns None -> ttnn auto-config)."""
+    if os.environ.get("QWEN36_PREFILL_PROGCFG", "1") == "0":
+        return lambda *args, **kwargs: None
+    grid = device.compute_with_storage_grid_size()
+    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+
+    def fn(m, k, n, in0_dtype, in1_dtype, fp32_acc=True):
+        return _pick_prefill_progcfg(
+            int(m),
+            int(k),
+            int(n),
+            _PREFILL_TILE_BYTES[in0_dtype],
+            _PREFILL_TILE_BYTES[in1_dtype],
+            bool(fp32_acc),
+            grid.x,
+            grid.y,
+            budget,
+        )
+
+    return fn
 
 
 def _widest_prefill_cols(n, max_cols, subblock_slack=1):

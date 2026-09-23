@@ -952,10 +952,11 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     logger.info(f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens, chunk-outer replay)...")
     signpost("compile_prefill")
     t_cap = time.time()
-    # Warm masked buckets only for short prompts (T < chunk_size)
-    model.capture_prefill_trace_chunked(
-        device, page_table, chunk_size=chunk_size, warmup_masked_buckets=(T < chunk_size)
-    )
+    # Always warm masked-bucket programs before parking the trace: a long prompt's tail (T not a
+    # multiple of chunk_size) also runs the eager masked-bucket path, so skipping this warmup for
+    # T >= chunk_size left its first compile to happen post-park, corrupting the cached program and
+    # hanging the NEXT masked-bucket call (#48536; matches vLLM, which always passes True).
+    model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size, warmup_masked_buckets=True)
     logger.info(f"Prefill trace captured in {time.time() - t_cap:.1f}s")
     pad_len = bucket_size - T
     # Pad bucket with last real token (token 0 corrupts DeltaNet state)

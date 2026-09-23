@@ -8,6 +8,7 @@ constants, cached chunk masks). Behavior-preserving extraction of the original
 `Qwen36GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
 and every env-var read is preserved verbatim.
 """
+import os
 from dataclasses import dataclass
 
 import torch
@@ -15,6 +16,15 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
+
+# Channel-chunk widths for the native ttnn.conv1d chunk-prefill path (conv1d_native.py), measured
+# to fit L1 on P150 with conv1d_bench.py (T=2048, K=4, HEIGHT_SHARDED + Conv2dL1FullSliceConfig):
+# FIR fallback is 3.13 ms; native 2x3072 (chunk_width=3072) is 1.63 ms. chunk_width=2048 (3x2048 on
+# C=6144, or 4x2048 on C=8192) overflows L1 ("grow to 1684544 B beyond max L1 1572864 B"), and a
+# single 1x6144 call clashes with L1 buffers instead. chunk_width=4096 (2x4096 on C=8192) also
+# clashes with L1 buffers, so it is deliberately left off this list. Ordered widest-first so the
+# smallest n_cc (fewest conv1d calls) wins when more than one width divides C.
+_NATIVE_CONV_CHUNK_WIDTHS = (3072, 2560)
 
 
 @dataclass
@@ -49,6 +59,10 @@ class GDNWeights:
     v_bias_dev: object
     fused_conv_weight_taps: list
     fused_conv_bias_dev: object
+    # Depthwise conv1d weight [C, 1, K], host ROW_MAJOR, split into equal channel chunks for the
+    # native ttnn.conv1d chunk-prefill path (see gdn/conv1d_native.py). Same source + channel order
+    # as fused_conv_weight_taps. dict {n_cc: [chunk tensors]} — conv1d_native.py picks n_cc per T.
+    fused_conv_w1d_chunks: object
     # Fused projection weights
     ab_proj_weight: ttnn.Tensor
     mega_fused_weight: object
@@ -205,6 +219,58 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         fused_reshaped = fused.reshape(1, 1, D_total).contiguous()
         return ttnn.from_torch(fused_reshaped, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
+    def _precompute_fused_conv_w1d_chunks():
+        """Depthwise conv1d weight(s) for the native ttnn.conv1d chunk-prefill path (conv1d_native.py).
+
+        Same source + same channel order as _precompute_fused_weight_taps's fused_w: already
+        [C, 1, K], i.e. torch.stack(taps, dim=-1).reshape(C, 1, K) as in load_gdn_weights_tp.
+
+        Returns a dict {n_cc: [chunk tensors]}, one entry per channel-chunk-count this layer might
+        use at runtime (conv1d_native.py picks between them per-call, by T — see its T3_MAX gate):
+          - the default entry: smallest n_cc such that C is divisible by n_cc and C // n_cc is an
+            allow-listed width in `_NATIVE_CONV_CHUNK_WIDTHS` (see its comment for the measured
+            numbers, e.g. n_cc=2 / width 3072 on C=6144);
+          - an n_cc=3 entry whenever C % 3 == 0 (width C // 3, e.g. 2048 on C=6144), IN ADDITION to
+            the default — conv1d_native.py only ever selects it when that width also equals
+            q_dim == k_dim == v_dim (so the 3 conv outputs are usable as Q/K/V directly, no
+            concat) and it fits L1 for the current T. Host tensors, kept on CPU — no tensor cache
+            needed (tiny: C*K bf16 values total, cheap to precompute even if unused at runtime).
+
+        env QWEN36_GDN_CONV_CHUNKS=<n> overrides: returns only {n: [chunks]} for that n_cc (still
+        must evenly divide C) — conv1d_native.py then always uses it regardless of T.
+        Returns None if no allow-listed width fits and n_cc=3 doesn't divide C either — caller
+        then keeps the FIR fallback path.
+        """
+        q_w = ttnn.to_torch(q_conv_weight)  # [D_q, 1, K]
+        k_w = ttnn.to_torch(k_conv_weight)  # [D_k, 1, K]
+        v_w = ttnn.to_torch(v_conv_weight)  # [D_v, 1, K]
+        W1d = torch.cat([q_w, k_w, v_w], dim=0).contiguous()  # [C, 1, K]
+        C = W1d.shape[0]
+
+        def _split(n_cc):
+            cw = C // n_cc
+            return [
+                ttnn.from_torch(
+                    W1d[i * cw : (i + 1) * cw].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                for i in range(n_cc)
+            ]
+
+        override = os.environ.get("QWEN36_GDN_CONV_CHUNKS")
+        if override is not None:
+            n_cc = int(override)
+            assert n_cc > 0 and C % n_cc == 0, f"QWEN36_GDN_CONV_CHUNKS={override!r} must evenly divide C={C}"
+            return {n_cc: _split(n_cc)}
+
+        chunks_by_ncc = {}
+        candidates = [C // cw for cw in _NATIVE_CONV_CHUNK_WIDTHS if C % cw == 0]
+        if candidates:
+            default_n_cc = min(candidates)
+            chunks_by_ncc[default_n_cc] = _split(default_n_cc)
+        if C % 3 == 0 and 3 not in chunks_by_ncc:
+            chunks_by_ncc[3] = _split(3)
+        return chunks_by_ncc or None
+
     def _precompute_fused_ab_weight():
         """Pre-concatenate a_proj + b_proj weights into [4096, 64] for fused matmul."""
         a_w = ttnn.to_torch(a_proj_weight)  # [4096, 32]
@@ -213,10 +279,15 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         return ttnn.from_torch(fused, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
     def _precompute_mega_fused_weight():
-        """Fuse QKV + a + b + g projections into one [4096, D_total] weight.
+        """Fuse QKV + g + a + b projections into one [4096, D_total] weight.
 
         Saves 2 matmul kernel launches per decode step (QKV=1, ab=1, g=1 -> mega=1).
-        Output split: [qkv_dim | a_dim | b_dim | g_dim]
+        Output split: [qkv_dim | g_dim | a_dim | b_dim] — qkv_dim and g_dim are both tile-width
+        multiples, so ttnn_gated_deltanet.py can device-slice qkv and gate straight off mega_out
+        (tile-aligned begin) and only pays a small untilize on the combined 1-tile-wide a|b slice,
+        instead of untiling the whole [*, D_total] tensor (a/b used to sit mid-tensor at a
+        non-tile-aligned boundary between qkv and g). Cached under a new name (below) so an
+        old qkv|a|b|g-ordered cache entry is never loaded for this new qkv|g|a|b layout.
         """
         if qkv_proj_weight is None:
             return None
@@ -224,8 +295,17 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         a_w = ttnn.to_torch(a_proj_weight)  # [4096, 32]
         b_w = ttnn.to_torch(b_proj_weight)  # [4096, 32]
         g_w = ttnn.to_torch(g_proj_weight)  # [4096, 4096]
-        fused = torch.cat([qkv_w, a_w, b_w, g_w], dim=1).contiguous()
-        return ttnn.from_torch(fused, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        fused = torch.cat([qkv_w, g_w, a_w, b_w], dim=1).contiguous()
+        return ttnn.as_tensor(
+            fused,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # New cache name (qgab, not the old qkv|a|b|g order) so a stale cache file from the
+            # previous concat order is never loaded.
+            cache_file_name=(tensor_cache_path / "linear_attn.mega_fused_weight_qgab") if tensor_cache_path else None,
+        )
 
     # Precompute conv weight taps and bias on device to avoid CPU round-trips during decode
     q_weight_taps = _precompute_weight_taps(q_conv_weight)
@@ -238,14 +318,18 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
     # Precompute fused QKV conv weight taps [1, 1, D_total] for fused conv decode
     fused_conv_weight_taps = _precompute_fused_weight_taps()
     fused_conv_bias_dev = _precompute_fused_bias_dev()
+    fused_conv_w1d_chunks = _precompute_fused_conv_w1d_chunks()
 
     # Fused a+b projection weight: [4096, 64] — saves 1 matmul per decode step
     ab_proj_weight = _precompute_fused_ab_weight()
 
-    # Mega-fused weight: QKV + a + b + g in one [4096, 12352] matmul
+    # Mega-fused weight: QKV + g + a + b in one [4096, 12352] matmul (see
+    # _precompute_mega_fused_weight for why g moved before a/b).
     # Eliminates 2 separate matmuls (g_proj, ab_proj) per decode step
     mega_fused_weight = _precompute_mega_fused_weight()
     if mega_fused_weight is not None:
+        # Dims below are widths, not offsets — order in the concatenated tensor is qkv|g|a|b
+        # (see _precompute_mega_fused_weight); ttnn_gated_deltanet.py computes offsets from these.
         mega_qkv_dim = config.q_dim + config.k_dim + config.v_dim
         mega_a_dim = num_v_heads
         mega_b_dim = num_v_heads
@@ -290,6 +374,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         v_bias_dev=v_bias_dev,
         fused_conv_weight_taps=fused_conv_weight_taps,
         fused_conv_bias_dev=fused_conv_bias_dev,
+        fused_conv_w1d_chunks=fused_conv_w1d_chunks,
         ab_proj_weight=ab_proj_weight,
         mega_fused_weight=mega_fused_weight,
         mega_qkv_dim=mega_qkv_dim,
