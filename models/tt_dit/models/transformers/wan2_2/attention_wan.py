@@ -172,8 +172,13 @@ class WanAttention(Module):
         )
         self.sdpa_recipe_kwargs = None
         if sdpa_precision is not None:
-            # exp_ring recipes are not integrated yet; the recipe uses ring_joint on every SP mesh.
-            self.use_exp_ring_sdpa = False
+            if self.use_exp_ring_sdpa:
+                # Exp ring keeps recipe state resident, so odd Q chunks only matter to paired recipes.
+                self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=full_grid,
+                    q_chunk_size=self._recipe_q_chunk(ring_sdpa_chunk_size[0], sdpa_precision, ring=False),
+                    k_chunk_size=512,
+                )
             self.sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=full_grid,
                 q_chunk_size=self._recipe_q_chunk(256, sdpa_precision, ring=False),
@@ -487,7 +492,7 @@ class WanAttention(Module):
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.exp_ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        **self._self_sdpa_kwargs(),
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
