@@ -1358,10 +1358,12 @@ tests:
       End-to-end narrow-row pack-untilize on Quasar, which the HW packer cannot do on
       its own (its untilize output stride is face-granular, and the compute API exposes
       it only in whole tiles). Stage 1 is the stock whole-tile HW pack_untilize, leaving
-      32 rows padded out to a tile boundary; stage 2 is ONE iDMA scatter-list transaction
-      that compacts each row to matrix_w = (ct_dim-1)*32 + last_tile_w datums. Compared
-      against a per-row iDMA loop and against the current workaround (one NOC read per
-      row). Every shape and engine is checked datum for datum.
+      32 rows padded out to a tile boundary; stage 2 is an iDMA gather that compacts each
+      row to matrix_w = (ct_dim-1)*32 + last_tile_w datums, fanned out over all 8 VCs.
+      Measured against the current workaround (one NOC read per row) at 23 row widths
+      from 2 B to 512 B: the workaround is payload-blind at ~785 cyc for a 32-row block
+      at every width, iDMA is flat at 274-313, so the win is a near-constant 2.5-2.9x.
+      Every shape is checked datum for datum.
 
   1012:
     name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"

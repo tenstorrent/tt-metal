@@ -29,10 +29,21 @@
 // granular, so this path has no minimum narrow width, no spill into the next row and no
 // two-pass write ordering (see SubFaceWidths).
 //
-// THE ENGINE AXIS. All three engines produce identical output and all three are verified:
-//   0 IDMA_SCATTER  one transaction; the hardware walks a 32-entry address list  <- proposal
-//   1 IDMA_PER_ROW  32 transactions from the address generator, one drain
-//   2 NOC_PER_ROW   32 stateful NOC reads == the current workaround == the bar to beat
+// THE ENGINE AXIS.
+//   1 IDMA_PER_ROW  32 transactions, addresses from the address generator, one drain, fanned
+//                   out over all 8 VCs. THE SHIPPING ENGINE and the default: correct in every
+//                   run at every width and channel count measured.
+//   2 NOC_PER_ROW   32 stateful NOC reads == the current workaround == the bar to beat.
+//   0 IDMA_SCATTER  one transaction; the hardware walks a 32-entry address list. 3% faster
+//                   and WRONG -- SCATTER_INDEX does not advance for the first 16 entries at
+//                   8 channels (see ScatterListMapping, which root-causes it). Reachable only
+//                   from that diagnostic; no correctness test selects it.
+//
+// MEASURED (emu-quasar-1x3, 32-row block, Float16_b, 23 row widths from 2 B to 512 B/row):
+// the workaround is payload-blind at 781.6-790.2 cyc (24.5 cyc/row at every width, entirely
+// issue-bound), iDMA at 8 channels is flat at 273.6-313.4 cyc, so the win is a near-constant
+// 2.5-2.9x. ALWAYS fan out: one channel is data-bound past a ~100 B knee at 15.9 B/cyc (one
+// VC) and crosses the workaround at ~347 B/row, losing at 0.70x on a 504 B row.
 //
 // Running, reporting and the layout contract: see README.md in this directory.
 
@@ -221,7 +232,10 @@ Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device
 struct RunConfig {
     std::uint32_t ct_dim = 1;
     std::uint32_t last_tile_w = 32;  // datums kept from the LAST tile; matrix_w derives from it
-    std::uint32_t engine_mode = ENGINE_IDMA_SCATTER;
+    // Per-row is the SHIPPING engine: correct in every run at every width and channel count.
+    // Scatter-list is 3% faster and has an open correctness bug (see ScatterListMapping), so
+    // it is never the default and no correctness test selects it.
+    std::uint32_t engine_mode = ENGINE_IDMA_PER_ROW;
     std::uint32_t num_channels = 1;
     // 0 => the default policy: one packet per row (max_packet_bytes = out_row_bytes). That is
     // the RIGHT default even when fanning out, because both iDMA engines already emit one
@@ -230,7 +244,7 @@ struct RunConfig {
     std::uint32_t max_packet_bytes = 0;
     // How many times the compaction repeats inside the timed zone. The default gives a
     // steady-state rate; 1 removes the per-iteration re-arm, which is what
-    // ScatterListDrainProbe needs to tell a drain race apart from an addressing bug.
+    // ScatterListMapping needs, so exactly one transaction's work is on screen.
     std::uint32_t compact_iterations = COMPACT_ITERATIONS;
     // Rows this run compacts. 0 means all OUT_ROWS. A smaller value is a diagnostic: two rows
     // is the minimum case for two scatter entries landing on the same destination slot.
@@ -772,7 +786,7 @@ TEST_F(QuasarNarrowRowUntilize, EngineComparison) {
         bool fan_out;  // only worth it where the row is long enough to be data-bound
     };
     for (const Shape& s : {Shape{1, 16, false}, Shape{4, 16, true}, Shape{8, LAST_W_252, true}}) {
-        for (std::uint32_t engine : {ENGINE_IDMA_SCATTER, ENGINE_IDMA_PER_ROW, ENGINE_NOC_PER_ROW}) {
+        for (std::uint32_t engine : {ENGINE_IDMA_PER_ROW, ENGINE_NOC_PER_ROW}) {
             EXPECT_TRUE(run_narrow_row(
                 devices_[0], buffers, {.ct_dim = s.ct_dim, .last_tile_w = s.last_tile_w, .engine_mode = engine}))
                 << "engine=" << engine_name(engine) << " ct_dim=" << s.ct_dim;
@@ -921,80 +935,38 @@ TEST_F(QuasarNarrowRowUntilize, NarrowExtremes) {
     }
 }
 
-// Diagnostic for the scatter-list corruption, NOT a perf test.
+// THE SCATTER-LIST BUG, ROOT-CAUSED. Diagnostic only -- it asserts nothing, because the
+// engine it exercises is not the one this test ships.
 //
-// Scatter-list fails at 8 channels every time and at 1 channel about a quarter of the time,
-// while the per-row engine -- which differs only in issuing 32 times instead of once -- is
-// correct everywhere. The suspect is the drain: idma_acked_cmdbuf_0() is
-// `CMDBUF_IDMA_TR_ACK == 0`, an outstanding counter. The per-row loop registers 32 outstanding
-// before it polls, so the count cannot read zero early. A scatter-list transaction registers
-// ONE issue and then generates its packets as the hardware walks the list, so the counter can
-// legitimately read zero before the walk has produced anything -- the drain returns, and the
-// next iteration's set_scatter_list/set_dest yank SCATTER_INDEX back to 0 and DEST back to
-// base underneath a live transaction. Those are two separate register writes, which is exactly
-// how a row ends up holding its predecessor's data.
+// FINDING (emu-quasar-1x3): at 8 channels the source index sequence is
 //
-// num_iterations = 1 removes the re-arm entirely: one issue, one drain, then the program ends
-// and the host's read-back is separated by a full workload boundary. If this is reliably
-// correct while the 16-iteration version is not, the race is confirmed and the fix belongs in
-// the drain, not in the addressing.
-TEST_F(QuasarNarrowRowUntilize, ScatterListDrainProbe) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    std::uint32_t passes = 0, total = 0;
-    // Repeat each configuration: the failure is intermittent at one channel, so a single
-    // passing run would prove nothing.
-    for (std::uint32_t rep = 0; rep < 3; rep++) {
-        for (std::uint32_t channels : {1u, CHANNELS_ALL}) {
-            total++;
-            passes += run_narrow_row(
-                          devices_[0],
-                          buffers,
-                          {.ct_dim = 8,
-                           .last_tile_w = LAST_W_252,
-                           .engine_mode = ENGINE_IDMA_SCATTER,
-                           .num_channels = channels,
-                           .compact_iterations = 1})
-                          ? 1
-                          : 0;
-        }
-    }
-    log_info(
-        tt::LogTest,
-        "scatter-list with a single un-rearmed transaction: {}/{} correct "
-        "(16-iteration version fails 4/4 at 8 channels and ~1/4 at 1 channel)",
-        passes,
-        total);
-    EXPECT_EQ(passes, total) << "single-shot scatter-list is also wrong -- the bug is not the re-arm race";
-}
-
-// WHERE DID EACH ROW ACTUALLY COME FROM? The experiment that settles the scatter-list bug.
+//     0 x16, 16, 17, 18, ... 31          with unwritten = 0
 //
-// What is known: scatter-list is wrong at 8 channels every time and at 1 channel about once in
-// four, while the per-row engine -- same concurrency, up to 32 transactions in flight across
-// the same 8 VCs -- is correct in every run. So iDMA moving many rows at once is not the
-// problem. The one structural difference is WHO computes the destination address:
+// Every destination slot is written exactly ONCE, so nothing is overwritten and the
+// destination auto-increment is correct. What fails is SCATTER_INDEX: it does not advance for
+// the first 16 entries, so the first 16 destinations all receive entry 0's offset, then the
+// index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block --
+// which reads as the engine consuming entries before the first block lands and using the
+// reset value until it does.
 //
-//   per-row       the RISC computes each destination explicitly, via the address generator
-//   scatter-list  ONE shared pointer that the hardware auto-increments (dest_addr_inc_en)
+// Two earlier hypotheses died here, and the probes that killed them are kept below:
+//   * A DRAIN RACE (idma_acked reading zero before a one-issue multi-entry walk generates its
+//     packets, so the next iteration re-arms under a live transaction). Refuted: this runs
+//     with compact_iterations = 1, so there is no re-arm at all, and it still fails.
+//   * DESTINATION COLLISIONS. Refuted by unwritten = 0 -- two entries sharing a slot must
+//     leave another slot untouched.
 //
-// If that shared pointer is advanced on dispatch rather than on completion, or two backend
-// engines read it before either increments, two entries land on the same destination slot and
-// one overwrites the other. That would be genuine write-over-write, and it fits: worse with
-// more concurrency, absent when the RISC supplies the addresses.
+// Discriminators, all measured here:
+//   * 1 channel is CORRECT; 8 channels always wrong. Slow serial consumption lets the fetch
+//     land first, which is also why 1 channel passed roughly three runs in four earlier.
+//   * COMPACTION IS IRRELEVANT -- last_tile_w = 32 gives out_row_bytes == pad_row_bytes and
+//     fails identically. This is a plain scatter-list bug, nothing to do with narrow-row.
+//   * 4 rows correct but 2 rows wrong, which does NOT fit a clean block-latency story. Treat
+//     the 128 B reading as strong but not proven.
 //
-// Against it: the failure is suspiciously deterministic -- exactly half the rows wrong,
-// repeatedly, at the same count. A pure race should vary. The mapping dump separates these:
-// duplicates plus untouched slots means collisions; a clean permutation means misassignment
-// with the pointer advancing correctly; identity rows at a nonzero column offset means the
-// pointer is fine and the source address composition is wrong.
-//
-// Runs with compact_iterations = 1 so exactly one transaction's work is on screen, and leads
-// with the per-row engine as a CONTROL: if that does not print IDENTITY, the instrument is
-// broken and nothing below it means anything.
+// The CONTROL leads: the per-row engine, same shape and the same 32 transactions in flight
+// across the same VCs, prints IDENTITY at both channel counts. If it ever stops doing so the
+// decoder is broken and nothing below it means anything.
 TEST_F(QuasarNarrowRowUntilize, ScatterListMapping) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {

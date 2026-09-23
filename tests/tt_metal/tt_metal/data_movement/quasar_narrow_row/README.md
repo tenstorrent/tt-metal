@@ -1,8 +1,11 @@
 # Quasar narrow-row pack-untilize via iDMA (test id 918)
 
-End-to-end narrow-row pack-untilize on Quasar: **stock hardware pack-untilize, then one iDMA
-transaction to squeeze out the padding.** Every shape and every engine is verified datum for
-datum against a golden, so this is a correctness test that also reports cycles.
+End-to-end narrow-row pack-untilize on Quasar: **stock hardware pack-untilize, then an iDMA
+pass to squeeze out the padding.** Every shape is verified datum for datum against a golden,
+so this is a correctness test that also reports cycles.
+
+**Result: 2.5-2.9x faster than the current workaround**, at every one of 23 row widths from
+2 B to 512 B per row, all verified. For the 32x252 reference workload, 786 -> 313 cycles.
 
 ## The problem
 
@@ -28,7 +31,7 @@ per row so each row's valid prefix is taken and the junk skipped. That replaces 
              [ keep .......... | junk ]
              [ keep .......... | junk ]      32 rows
                             |
-   stage 2   ONE iDMA transaction                      (DM core, zone COMPACT)
+   stage 2   iDMA gather, one transaction per row       (DM core, zone COMPACT)
                             v
           out_l1:  32 rows x matrix_w datums           <- dense, no junk
              [ keep .......... ]
@@ -60,39 +63,61 @@ where RV_PACR's output address is **16-byte granular**:
 | face de-interleave | software `remap()` per op | done by the HW untilize |
 | minimum narrow width | 8 datums (16-bit fmt), 16 (8-bit fmt) | none — see `SubFaceWidths` |
 | width not a multiple of 8 | writes a full 16-datum face-row that spills into the next row, fixed by a second pass | nothing spills; one pass |
-| ops issued | 64 per tile | 1 per tile-row (scatter-list) |
+| ops issued | 64 per tile | 32 per 32-row block, whatever the width |
 
 The cost is a second L1 buffer: the compaction is not done in place. Overlapping source and
 destination in one DMA would need the engine to respect read-before-write across rows, which
 is not guaranteed. In the real use case the dense buffer is what the consumer reads anyway.
 
-## The three engines
+## The engines
 
-All three produce byte-identical output and all three are verified, which is what makes the
-timing comparison fair. Selected per run by `engine_mode`:
+Selected per run by `engine_mode`. The two that ship produce byte-identical output and are
+verified at every shape, which is what makes the timing comparison fair.
 
-| mode | engine | what it costs |
+| mode | engine | |
 |---|---|---|
-| 0 | **iDMA scatter-list** | ONE transaction; the hardware walks a 32-entry address list in L1 and the destination auto-increments. One RISC issue for the whole matrix. **This is the proposal.** |
-| 1 | iDMA per-row | 32 transactions, addresses from the address generator, one drain at the end. Separates "iDMA is fast" from "one issue is fast". |
+| 1 | **iDMA per-row** | 32 transactions, addresses from the address generator, one drain at the end, fanned out over all 8 VCs. **The shipping engine and the default** — correct in every run at every width and channel count. |
 | 2 | NOC per-row | 32 stateful NOC reads from this core's own L1. **The current workaround, and the bar to beat.** Stateful means only the addresses change per call, so it is the cheapest NOC read available — not a straw man. |
+| 0 | iDMA scatter-list | ONE transaction; the hardware walks a 32-entry address list. 3% faster and **wrong** — see the bug below. Reachable only from `ScatterListMapping`; no correctness test selects it. |
 
-### The scatter list
+The addressing follows `quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp`
+exactly: set the address generator's base and inner loop once, then `push_both_addrgen_0()` +
+`issue_cmdbuf_0()` per row. All four addrgen examples do one push and one issue per address —
+the 2D, face and interleaved loops change *which* address is yielded, not how many issues it
+takes — so the address generator cannot amortise the per-issue cost, and ~8.7 cyc/row is the
+floor. What this kernel adds over the examples is the iDMA channel autoincrement
+(`req_vc_inc_en`), which neither iDMA example uses and which is worth 3.6x at 512 B/row.
+
+### The scatter-list bug (why mode 0 is not shipped)
 
 Entry `r` is the **offset** of padded row `r`, and the kernel passes the `pad` DFB's L1 base as
 `SCATTER_BASE_ADDR`, so the host can build the list without knowing where the DFB landed.
-Entries are 8 bytes and the engine takes the low 32 bits. That encoding is not documented
-anywhere in this tree; it was resolved empirically (a reversed-permutation list, which can only
-verify if the hardware really reads the entries written).
+Entries are 8 bytes and the engine takes the low 32 bits.
 
-Two configuration facts that are easy to get wrong:
+`ScatterListMapping` inverts the output back to the source position of every datum — the
+stimulus makes each datum name its own place — and the answer at 8 channels is:
 
-- `apply_scatter_to_dest = false` + `dest_addr_inc_en = true` is what makes it a *compacting*
-  gather: the list drives the strided source side, the destination walks contiguously.
-- **Every run must use a distinct list address.** The engine fetches a list once per address;
-  later writes to the same address do not take effect, so a second run at the same address
-  silently replays the first one's list. The test uses a process-global slot counter, not a
-  per-test one, so two tests cannot collide even if the allocator hands them the same base.
+```
+source index sequence: 0 x16, 16, 17, 18, ... 31        unwritten = 0
+```
+
+Every destination slot is written exactly once, so **nothing is overwritten and the
+destination auto-increment is correct**. What fails is `SCATTER_INDEX`: it does not advance
+for the first 16 entries, so the first 16 destinations all receive entry 0's offset, then the
+index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block.
+
+- One channel is correct; eight is always wrong — consistent with the engine consuming entries
+  before the first block lands.
+- **Compaction is irrelevant**: `last_tile_w = 32` gives `out_row_bytes == pad_row_bytes` and
+  fails identically. This is a plain scatter-list bug, not a narrow-row one.
+- 4 rows correct but 2 rows wrong, which does not fit a clean block-latency story, so treat
+  the 128 B reading as strong but not proven.
+
+One more property worth knowing if anyone revives this: **every run must use a distinct list
+address.** The engine fetches a list once per address; later writes to the same address do not
+take effect, so a second run at the same address silently replays the first one's list. The
+test uses a process-global slot counter so two tests cannot collide even if the allocator
+hands them the same buffer base.
 
 ### `MAX_BYTES_IN_PACKET`
 
@@ -146,7 +171,7 @@ path, not `1`). The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
 | `ChannelSweep` | whether sub-splitting a row into packets helps fan-out or just costs issue, below the knee and well past it. |
 | `WorkaroundSweep` | **the adoption decision.** The full grid: `ct_dim` 1/2/4/8 x `last_tile_w` 8/16/24/32, each run as the workaround, as iDMA at 1 channel, and as iDMA at 8 channels. 48 runs. |
 | `NarrowExtremes` | the high-waste end — `last_tile_w` 1/2/4/8, where up to 97% of the padded row is junk and reading it whole is not an option. Workaround vs iDMA, 16 runs. |
-| `ScatterListDrainProbe` | diagnostic, not perf: scatter-list with `num_iterations = 1` so there is no re-arm inside the zone. Confirms or refutes the drain race. |
+| `ScatterListMapping` | diagnostic, asserts nothing. Inverts the output back to the source position of every datum and root-causes the scatter-list bug above. Leads with the per-row engine as a control. |
 
 ## Correctness and timing are joined, not assumed
 
@@ -159,34 +184,61 @@ the report joins the two — flagging `!! WRONG OUTPUT` and excluding those rows
 verdict table. If the verdict file is missing, the report says correctness is unknown rather
 than implying everything passed.
 
-## Measured so far (emu-quasar-1x3)
+## Measured results (emu-quasar-1x3)
 
-First run, 2026-09-21, `SingleTileHalfWidth` + `WidthSweep` + `SubFaceWidths`, scatter-list on
-one channel:
+`WorkaroundSweep` + `NarrowExtremes`, 23 row widths, 32-row block, `Float16_b`, single DM
+core. Every run verified datum for datum. Two of the three lines are flat, and that is the
+whole result.
 
-- **The compaction is descriptor-bound and flat at ~8.3 cyc/row up to ~80 B/row**, then costs
-  roughly one cycle per 16-20 B — i.e. one iDMA VC becomes the limit. Measured cyc/row: 8.38
-  at 16 B, 8.33 at 64 B, 8.52 at 72 B, 9.34 at 88 B, 10.20 at 104 B.
-- That reproduces the independently measured scatter-list cost model **78 cyc/transaction +
-  5.8 cyc/entry** almost exactly: it predicts `78 + 32*5.8 = 263.6` and the flat region
-  measured 263.5-269 on a completely different harness.
-- **Byte-granular placement is free.** 66 and 70 B rows (odd datum widths, destinations at
-  2 mod 4) cost 8.70 and 8.55 cyc/row against 8.56 and 8.52 for the adjacent even widths —
-  1-2%, and not even monotonic.
-- **Stage 1 single-shot is pipeline fill, not pack throughput.** ct_dim 1 cost 225-237 cycles
-  and ct_dim 2 cost 213 — two tiles took *less* wall time than one, so the marginal per-tile
-  cost is buried under a ~215-cycle fixed latency. Do not read the stage-1 `cyc/tile` column
-  as a pack rate, and do not read a falling end-to-end `cyc/tile` at higher `ct_dim` as
-  efficiency; it is that constant divided by more tiles.
-- End to end against RV_PACR at `ct_dim` 1: 2.9-4.8x faster, and that *understates* it,
-  because stage 1 is carrying the fixed cost above while the RV_PACR reference is
-  steady-state.
+**The workaround is payload-blind.** 781.6-790.2 cycles across a **256x span in payload** —
+24.5 cyc/row at every width. Entirely issue-bound; the bytes are free. Its cost is ~785 cycles
+for a 32-row block no matter how wide the matrix is, so iDMA's advantage cannot grow with
+width — it narrows slightly, 2.88x at 16 B/row to 2.51x at 504 B.
 
-Consequence for fan-out, and why `ChannelSweep` changed: both iDMA engines already emit one
-packet per row, so 32 rows always give the round-robin more packets than it has channels.
-Sub-splitting on top of that (the original policy, which would have turned 504 B rows into
-256 packets of 64 B) multiplies the packet count while the bytes stay the same. The default
-`max_packet_bytes = out_row_bytes` is the right one even when fanning out.
+**iDMA at 8 channels is also flat.** 273.6-313.4 cycles over the same range, 8.6-9.8 cyc/row.
+At 512 B/row the data time spread over 8 VCs is only 4 cyc/row, well under the ~9-cycle issue
+floor, so this should stay flat to roughly 1250 B/row.
+
+| B/row | junk | NOC | iDMA 1 ch | iDMA 8 ch | speed-up |
+|---|---|---|---|---|---|
+| 2 | 96.9% | 786.2 | 294.6 | — | 2.67x |
+| 16 | 75.0% | 786.8 | 273.8 | 273.6 | 2.88x |
+| 64 | 0.0% | 785.1 | 279.8 | 279.8 | 2.81x |
+| 128 | 0.0% | 781.6 | 345.9 | 278.0 | 2.81x |
+| 256 | 0.0% | 781.9 | 601.2 | 294.4 | 2.66x |
+| **504** | **1.6%** | **786.2** | **1120.9** | **313.4** | **2.51x** |
+| 512 | 0.0% | 785.9 | 1117.4 | 313.1 | 2.51x |
+
+**Always fan out.** One channel is flat only to a ~100 B knee, then grows at **15.9 B/cyc —
+one iDMA VC's 16 B/cyc** — and crosses the workaround at **~347 B/row**. On a 504 B row a
+one-channel implementation runs at 0.70x: slower than the code it replaces. Eight channels is
+never more than 0.4% behind one channel anywhere in the grid, so there is no width threshold
+to tune.
+
+**Byte-granular placement is free.** 66 and 70 B rows (odd datum widths, destinations at
+2 mod 4) cost 8.70 and 8.55 cyc/row against 8.56 and 8.52 for the adjacent even widths — 1-2%,
+and not even monotonic.
+
+### Two things these numbers do not say
+
+**Stage 1 is a broken measurement.** It reports a flat ~233 cycles at ct_dim 1, 4 *and* 8 —
+29.1 cyc/tile at ct_dim 8, below tt-llk's steady-state 77.4, which is impossible as a rate.
+`pack_untilize_block` returns once the MOP is issued, so the zone closes before the pack
+drains and the drain is absorbed by the following `push_back`. Both paths share stage 1, so
+the comparison above is unaffected, but **do not quote the end-to-end `cyc/tile` column or its
+"vs RV_PACR" multipliers.** Using tt-llk's 77.4 cyc/tile instead, the *whole* narrow-row
+untilize improves ~1.5x at eight tiles wide and ~2.5x at one — iDMA helps most where
+narrow-row matters most, because the pack is cheap there.
+
+**The consumer-side saving is not counted.** Every number above is the producer-side
+compaction only. The workaround makes the consumer issue 32 reads; this path leaves it one.
+
+### Check `junk%` before adopting this at all
+
+At 32x252 only 1.6% of the padded row is waste. If the consumer's row stride is negotiable it
+can read the padded buffer whole and discard 256 bytes, which beats both paths and costs
+nothing to build. Compaction is only unavoidable where the junk share is large — 75-97% at one
+tile wide, which is also where iDMA's margin is best.
 
 ## Reading the numbers
 
