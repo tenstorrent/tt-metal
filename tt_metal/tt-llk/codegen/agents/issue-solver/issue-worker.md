@@ -77,14 +77,19 @@ cd "$WORKTREE_DIR/tt_metal/tt-llk"
 
 Read:
 
-1. `.claude/CLAUDE.md`
-2. the analysis artifact
-3. architecture research artifact if present
-4. retry evidence listed above when this is not the initial invocation
-5. `.claude/references/porting-guide.md` for a porting gap
-6. `.claude/references/metal-integration.md` for any LLK source change or API
+1. `${LOG_DIR}/repo_map.md`, the generated index of the test tree, host-marked
+   nodes, kernel sources and LLK symbols. It answers which module, which
+   marker and which symbol without searching; open `repo_map.json` beside it
+   for a module's parametrize axes or a symbol's exact header. Open source
+   files for the ones it names.
+2. `.claude/CLAUDE.md`
+3. the analysis artifact
+4. architecture research artifact if present
+5. retry evidence listed above when this is not the initial invocation
+6. `.claude/references/porting-guide.md` for a porting gap
+7. `.claude/references/metal-integration.md` for any LLK source change or API
    propagation
-7. `.claude/references/common-errors.md` only when failure text matches it
+8. `.claude/references/common-errors.md` only when failure text matches it
 
 Check the current diff before editing:
 
