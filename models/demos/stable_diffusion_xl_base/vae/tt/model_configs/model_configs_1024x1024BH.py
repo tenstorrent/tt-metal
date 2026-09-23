@@ -8,6 +8,8 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1
 )
 
 
+# NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
+# For now, it has identical configs as Wormhole_b0.
 class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
     def __init__(
         self,
@@ -17,15 +19,6 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
-
-        # Preserve variance accuracy in sharded GroupNorm without changing its reduction algorithm.
-        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]["op_config"][
-            "compute_kernel_config"
-        ] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-        )
 
         self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
