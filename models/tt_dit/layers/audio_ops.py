@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Sequence
 
 import torch
@@ -19,6 +18,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.matmul import log_warning
 from ..utils.tap_filter_configs import (
     applicable_formulations,
     format_formulation_row,
@@ -32,21 +32,9 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
-# TODO: Cleanup and centralize logging.
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
 _TAP_WARNED = _ONCE_WARNINGS  # name used by tests/unit/test_audio_tap_path.py
-_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
-
-
-def log_warning(message):
-    if _ENABLE_MM_LOG:
-        logger.warning(message)
-
-
-def log_info(message):
-    if _ENABLE_MM_LOG:
-        logger.info(message)
 
 
 def _warn_once(key, message: str) -> None:

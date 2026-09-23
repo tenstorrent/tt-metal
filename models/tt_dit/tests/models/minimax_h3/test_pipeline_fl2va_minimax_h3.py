@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from loguru import logger
 from PIL import Image
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -22,16 +23,15 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
+    CALIBRATED_FOX_PROMPT,
     artifact_dir,
     check_audio_sanity,
     check_av_sync,
     check_spatial_seams,
     check_written_file,
-    is_host,
+    gate_clip,
     log_pipeline_perf,
-    log_quality,
     log_spectral_flatness,
-    quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -43,15 +43,14 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-PROMPT = "Brad Pitt from age 18 to age 60"
-
-FIRST_KEYFRAME = Path("/data/DC-deploy/vision-models/brad_18_resize.png")
-LAST_KEYFRAME = Path("/data/DC-deploy/vision-models/brad_60_resize.png")
+PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
 
 # Ring collectives require FABRIC_1D_RING.
 MESHES = GALAXY_MESHES
 
 ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
+
+CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
 
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
@@ -68,7 +67,7 @@ def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pc
 
     pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
     label = "first" if index == 0 else "last"
-    log_quality(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
     assert pcc > pcc_floor, (
         f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
         "the fl2va conditioning path is likely broken"
@@ -93,7 +92,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
         ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
         results[name] = ratios
         if ratios:
-            log_quality(
+            logger.info(
                 f"{name} tile-boundary gradient ratios (1.0 = no seam): "
                 + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
             )
@@ -103,7 +102,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
     control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
     control_ratios = [ratio(gx, int(c)) for c in control]
     mean_control = float(np.mean(control_ratios))
-    log_quality(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
     assert mean_control < 1.15, (
         f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
         "than tile boundaries, so its boundary numbers mean nothing"
@@ -138,25 +137,17 @@ def _first_frame(path: Path) -> Image.Image:
     return Image.fromarray(np.asarray(iio.imread(path, index=0, plugin="pyav"))).convert("RGB")
 
 
-def _load_keyframe(path: Path) -> Image.Image:
-    if not path.is_file():
-        pytest.skip(f"no keyframe at {path}")
-    return Image.open(path).convert("RGB")
-
-
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_end_to_end(mesh_device, reset_seeds):
     """The `first_and_last` case: both preparation paths and a two-run vision scatter; perf + quality."""
     case = "first_and_last"
-    image = _load_keyframe(FIRST_KEYFRAME)
-    last_image = _load_keyframe(LAST_KEYFRAME)
+    keyframe = _gated_keyframe()
+    image = keyframe
+    last_image = keyframe
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device,
-        weights_dir=weights_dir(),
-        dit_fsdp=False,
-        vae_output_type="float",
+        mesh_device=mesh_device, weights_dir=weights_dir(), vae_output_type="float"
     )
 
     # Warmup must be fl2va-shaped (keyframes included): programs are keyed on padded length; the helper asserts it.
@@ -165,65 +156,52 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         pipeline,
         PROMPT,
         image=image,
-        # last_image=last_image,
+        last_image=last_image,
         num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
         profiler=benchmark_profiler,
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    height, width = int(output.video.shape[-2]), int(output.video.shape[-1])
-    log_quality(
-        f"fl2va[{case}] padded_len={pipeline.last_seq_len.padded} canvas={width}x{height} "
+    logger.info(
+        f"fl2va[{case}] padded_len={pipeline.last_seq_len.padded} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
 
-    num_forwards = NUM_INFERENCE_STEPS - 1
     log_pipeline_perf(
         benchmark_profiler,
         label="fl2va",
         pipeline=pipeline,
-        num_forwards=num_forwards,
-        width=width,
-        height=height,
+        num_forwards=NUM_INFERENCE_STEPS - 1,
+        width=WIDTH,
+        height=HEIGHT,
         num_frames=expected_frames,
         fps=output.fps,
         num_inference_steps=NUM_INFERENCE_STEPS,
         extra_lines=("Conditioning: first+last anchors",),
     )
+    assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 
     frames = to_uint8_frames(output)
-    if is_host():
-        artifacts = artifact_dir("h3_fl2va_artifacts")
-        paths = write_artifacts(
-            frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}"
-        )
-        for index in (0, 17, 62, frames.shape[0] - 1):
-            Image.fromarray(frames[index]).save(artifacts / f"fl2va_{case}_frame_{index}.png")
-        check_written_file(paths, expected_frames)
 
-    check_output_sanity(
-        frames,
-        num_frames=expected_frames,
-        height=height,
-        width=width,
-        log=quality_logs_enabled() and is_host(),
-    )
+    check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=expected_frames / output.fps)
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=output.fps)
     log_spectral_flatness(output.audio, sampling_rate=output.sampling_rate)
 
     # Boundaries from the VAE's own tile grid (vertical seams come from the x starts).
     ratio = pipeline.vae_config.spatial_compression_ratio
-    (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(height // ratio, width // ratio)
+    (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(HEIGHT // ratio, WIDTH // ratio)
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
     check_tile_boundary_gradient(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
 
     # `stretch` follows the pipeline's rule: the FIRST keyframe given is the geometry anchor.
     if image is not None:
         check_keyframe_anchor(
-            frames, image, index=0, stretch=True, width=width, height=height, pcc_floor=ANCHOR_PCC_FLOOR
+            frames, image, index=0, stretch=True, width=WIDTH, height=HEIGHT, pcc_floor=ANCHOR_PCC_FLOOR
         )
     if last_image is not None:
         check_keyframe_anchor(
@@ -231,12 +209,21 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
             last_image,
             index=-1,
             stretch=image is None,
-            width=width,
-            height=height,
+            width=WIDTH,
+            height=HEIGHT,
             pcc_floor=ANCHOR_PCC_FLOOR,
         )
 
-    log_quality(
+    artifacts = artifact_dir("h3_t2va_artifacts")
+    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}")
+    check_written_file(paths, expected_frames)
+    if "mp4" in paths:
+        for index in (0, 17, 62, expected_frames - 1):
+            Image.fromarray(frames[index]).save(artifacts / f"fl2va_{case}_frame_{index}.png")
+
+    gate_clip(frames, PROMPT, CLIP_THRESHOLD, f"fl2va[{case}]")
+
+    logger.info(
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
         "whole-tensor metric averages away, and both are parallelism bugs"
     )
@@ -277,36 +264,34 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     """Discriminating gate: a fractal keyframe the model would never produce must drive frame 0."""
     fractal = create_fractal_image(WIDTH, HEIGHT)
     pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device,
-        weights_dir=weights_dir(),
-        dit_fsdp=False,
-        vae_output_type="float",
+        mesh_device=mesh_device, weights_dir=weights_dir(), vae_output_type="float"
     )
     output = pipeline(
         PROMPT,
         image=fractal,
         num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
     )
     frames = to_uint8_frames(output)
-    height, width = frames.shape[1], frames.shape[2]
 
     def pcc(a, b):
         a = np.asarray(a, dtype=np.float64).ravel()
         b = np.asarray(b, dtype=np.float64).ravel()
         return float(np.corrcoef(a, b)[0, 1])
 
-    prepared = np.asarray(prepare_keyframe_image(fractal, height, width, True))
+    prepared = np.asarray(prepare_keyframe_image(fractal, HEIGHT, WIDTH, True))
     to_keyframe = pcc(frames[0], prepared)
     to_t2va = pcc(frames[0], np.asarray(_gated_keyframe()))
     tail = pcc(frames[-1], prepared)
 
-    log_quality(
+    logger.info(
         f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
         f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
     )
-    artifacts = artifact_dir("h3_fl2va_artifacts")
+    artifacts = artifact_dir("h3_t2va_artifacts")
     for index in (0, 17, 62, align_num_frames(NUM_FRAMES) - 1):
         Image.fromarray(frames[index]).save(artifacts / f"fl2va_fractal_frame_{index}.png")
 

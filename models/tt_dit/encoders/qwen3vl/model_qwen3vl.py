@@ -183,11 +183,12 @@ class Qwen3VlTextEncoder(Module):
             other_axis = 1 - tp_axis  # If TP is on axis 1, check axis 0; if TP is on axis 0, check axis 1
             if device.shape[other_axis] > 1:
                 fsdp_mesh_axis = other_axis
-            if fsdp_mesh_axis is None:
-                logger.warning(
-                    f"Qwen3-VL: FSDP was requested but is disabled — no mesh axis other than the "
-                    f"tensor-parallel axis has size > 1 (mesh shape {tuple(device.shape)})."
-                )
+
+        if is_fsdp and fsdp_mesh_axis is None:
+            logger.warning(
+                f"Qwen3-VL: FSDP was requested but is disabled — no mesh axis other than the "
+                f"tensor-parallel axis has size > 1 (mesh shape {tuple(device.shape)})."
+            )
 
         # `high_fidelity_linears` builds every decoder linear at HiFi4 instead of the tt_dit-wide
         # HiFi2 default. Everything else (fp32 DEST accumulate, packer L1 accumulate, non-approx)

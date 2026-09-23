@@ -22,7 +22,7 @@ MINIMAX_H3_DEFAULT_ASPECT_RATIO = (16, 9)
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
 MINIMAX_H3_DEFAULT_DURATION_S = 5
 
-# Fixed: the AdaLN modulation table is precomputed per step count.
+# Served denoising step count.
 MINIMAX_H3_NUM_INFERENCE_STEPS = 50
 
 # Text token budget: 5120 prompt arena rows - 2112 for two max-canvas keyframe blocks.
@@ -30,9 +30,6 @@ MINIMAX_H3_MAX_TEXT_TOKENS = 3008
 
 # Served ref2va image resize mode; other modes are rejected on the request path.
 MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE = "match"
-
-# ref2va presentation pad targets (multiples of 1024); the top rung is the prompt arena cap.
-MINIMAX_H3_REF2VA_PRESENTATION_LADDER = (1024, 4096, 8192, 16384, 32768, 57344)
 
 
 def minimax_h3_parse_aspect_ratio(value: str) -> tuple[int, int]:

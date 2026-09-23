@@ -4,8 +4,9 @@
 
 """Reproduce tt-inference-server#5044's ref2va reference-count OOMs at the conditioning-encode stage.
 
-Runs only ``prepare_references`` + ``encode_prompt``. ``H3_OOM_BALLAST_GB`` pre-allocates DRAM per device
-to stand in for the resident DiT/VAE. Run one case per process (an OOM poisons in-process state).
+Runs only ``prepare_references`` + ``encode_prompt``. The 4x8 preset is coresident, so the DiT is loaded
+here as in serving. The VAE and warmup/trace buffers are not; ``H3_OOM_BALLAST_GB`` pre-allocates that
+many GiB of DRAM per device to stand in for them. Run one case per process (an OOM poisons in-process state).
 """
 
 import os

@@ -120,7 +120,6 @@ from .policy import (
     MINIMAX_H3_DEFAULT_ASPECT_RATIO,
     MINIMAX_H3_DURATIONS_S,
     MINIMAX_H3_MAX_TEXT_TOKENS,
-    MINIMAX_H3_REF2VA_PRESENTATION_LADDER,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     served_canvases,
     served_envelope,
@@ -188,6 +187,9 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 
 # ref2va ladder; the top rung must admit everything the ref2va arena caps do (322336 rows, aligned).
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 322560)
+
+# ref2va text-encoder pad targets below the prompt arena cap; the cap itself is always the top rung.
+MINIMAX_H3_REF2VA_PRESENTATION_RUNGS = (1024, 4096, 8192, 16384, 32768)
 
 
 def default_bucket_ladder(task: str) -> tuple[int, ...]:
@@ -399,7 +401,6 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
-        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -472,6 +473,9 @@ class MiniMaxH3Pipeline:
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
         self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
+        self.presentation_ladder = tuple(
+            rung for rung in MINIMAX_H3_REF2VA_PRESENTATION_RUNGS if rung < self.arena_caps.prompt
+        ) + (self.arena_caps.prompt,)
         if self.bucket_denoise:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
@@ -592,7 +596,6 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
-        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -626,7 +629,6 @@ class MiniMaxH3Pipeline:
             task=task,
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
-            precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
             bucket_denoise=bucket_denoise,
@@ -958,11 +960,10 @@ class MiniMaxH3Pipeline:
         if self.task == "ref2va" and self.sp_factor > 1:
             target = self._force_prompt_pad
             if target is None:
-                target = select_bucket(seq_len, MINIMAX_H3_REF2VA_PRESENTATION_LADDER)
-            elif target not in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
+                target = select_bucket(seq_len, self.presentation_ladder)
+            elif target not in self.presentation_ladder:
                 raise ValueError(
-                    f"forced prompt pad {target} is not in the presentation ladder "
-                    f"{MINIMAX_H3_REF2VA_PRESENTATION_LADDER}"
+                    f"forced prompt pad {target} is not in the presentation ladder {self.presentation_ladder}"
                 )
             elif seq_len > target:
                 raise ValueError(f"forced prompt pad {target} is smaller than the presentation {seq_len}")
@@ -2168,7 +2169,7 @@ class MiniMaxH3Pipeline:
 
         pad_canvas = min(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
         pad_size = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
-        for rung in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
+        for rung in self.presentation_ladder:
             add(f"presentation rung {rung}", [image_ref(pad_size)], pad_to=rung)
 
         for canvas, size in served_envelope(self.task):
