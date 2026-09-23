@@ -254,8 +254,9 @@ uint32_t kv_chain_mode_for(
         return 0;
     }
     // Measured on Blackhole: at one or two q tiles per chunk the relay latency rules and the reader's own forward
-    // is fastest; from four q tiles the writer's forward pays; past eight q tiles no chain beats the DRAM stream.
-    if (Sq_chunk_t > 8) {
+    // is fastest; at four the writer's forward pays; from eight q tiles the DRAM stream is already hidden behind
+    // the compute and the chain handshake only adds to the step (1 to 5 percent at q256 with k128 and k256).
+    if (Sq_chunk_t > 4) {
         return 0;
     }
     return Sq_chunk_t <= 2 ? 2 : 3;
