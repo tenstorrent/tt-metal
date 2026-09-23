@@ -237,6 +237,53 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
 
     if probe.category not in {"LLM", "VLM"}:
         return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
+    # Already scaffolded -> nothing to do, and that is SUCCESS, not an error.
+    #
+    # Scaffold's outputs are create-once (a tuning-table row, a model_params
+    # copy), so a second run on the same model produces no changes. Two
+    # separate raises below then fire on a scaffold that is complete and
+    # usable: "already supported — no scaffolding needed" (the table row this
+    # function itself added now reads as support) and "nothing to scaffold".
+    # Either one aborts Step 2, so every retry of a component that failed
+    # later — or any run whose overlay restores a prior scaffold — dies before
+    # the steps that would make progress, and the only way forward was to
+    # throw the previous run's work away with `overlay-drop`.
+    #
+    # The manifest is the tool's own definition of "this component is
+    # scaffolded" (`bringup_loop.find_demo_dir` matches on it), so its
+    # presence is the authority here. Return a no-op plan naming that dir;
+    # callers apply zero changes and continue to Step 3 with the state that is
+    # already on disk. The escalation hook is exempt: it re-scaffolds on
+    # purpose to demote REUSE -> ADAPT.
+    if not force_already_supported:
+        from .bringup_loop import find_demo_dir as _find_demo_dir_idem
+
+        _root = BRINGUP_ROOT()
+        _done_dir = _find_demo_dir_idem(new_model_id, repo_root=_root)
+        if _done_dir is not None and (_done_dir / "bringup_status.json").is_file():
+            try:
+                _done_rel = _done_dir.relative_to(_root)
+            except Exception:
+                _done_rel = _done_dir
+            _tail = new_model_id.split("/")[-1]
+            return ScaffoldPlan(
+                new_model_id=new_model_id,
+                new_base_name=derive_base_model_name(new_model_id),
+                new_tail=_tail,
+                sibling_model_id="",
+                sibling_base_name="",
+                sibling_tail="",
+                compat_overall="ALREADY SCAFFOLDED",
+                compat_summary=(
+                    f"`{_done_rel}` already holds a bring-up manifest for this "
+                    "model; scaffold has nothing to add. Continuing with the "
+                    "existing scaffold."
+                ),
+                changes=[],
+                skipped=[f"scaffold is already complete at {_done_rel}"],
+                warnings=[],
+                new_demo_dir=str(_done_rel),
+            )
 
     compat = check_compatibility(new_model_id, probe.raw_config)
 
@@ -456,15 +503,6 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
                     "size; verify it fits your KV budget."
                 )
 
-    if not changes:
-        raise ScaffoldError(
-            "nothing to scaffold — sibling had no entries to copy, and no new "
-            "model_params files to create. This typically means the sibling lives "
-            "outside `tt_transformers/` (e.g. a vision/audio demo). Run "
-            "`tt_hw_planner prepare <model>` to see the routed family backend "
-            "(closest demo) you can adapt manually."
-        )
-
     # The sibling route used to return here with NO demo dir and NO
     # manifest: it edits the tuning tables and copies model_params, then
     # reports success. Everything downstream, though, locates a component
@@ -500,6 +538,26 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             "no family backend mapped for this model — scaffold wrote the "
             "tuning-table rows but no bring-up manifest, so per-component "
             "steps cannot enumerate components for it yet"
+        )
+
+    if not changes:
+        # Reached here with an EMPTY change set in two very different
+        # situations, and only one of them is a failure:
+        #   * nothing scaffoldable — the sibling lives outside
+        #     `tt_transformers/`, so there were never rows or params to copy;
+        #   * already scaffolded — a previous run (or its restored overlay)
+        #     wrote the rows and params, so both contributions are skipped.
+        # The manifest above is rewritten unconditionally, so a re-run of an
+        # already-scaffolded model still has it in `changes` and lands in
+        # neither case. Raising on a complete, usable scaffold is what made
+        # every retry abort at Step 2 with "nothing to scaffold".
+        raise ScaffoldError(
+            "nothing to scaffold — sibling had no entries to copy, no new "
+            "model_params files to create, and no bring-up manifest could be "
+            "generated (no family backend mapped). This typically means the "
+            "sibling lives outside `tt_transformers/` (e.g. a vision/audio "
+            "demo). Run `tt_hw_planner prepare <model>` to see the routed "
+            "family backend (closest demo) you can adapt manually."
         )
 
     return ScaffoldPlan(
