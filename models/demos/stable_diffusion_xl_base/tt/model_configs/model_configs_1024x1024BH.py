@@ -600,7 +600,7 @@ class ModelOptimisations1024x1024BH:
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     in0_block_w=1,
-                    out_subblock_h=1,  # FP32 destination accumulation supports at most four tiles.
+                    out_subblock_h=5,
                     out_subblock_w=1,
                     per_core_M=5,
                     per_core_N=10,
@@ -612,7 +612,7 @@ class ModelOptimisations1024x1024BH:
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     in0_block_w=1,
-                    out_subblock_h=1,
+                    out_subblock_h=5,
                     out_subblock_w=1,
                     per_core_M=5,
                     per_core_N=10,
@@ -755,13 +755,6 @@ class ModelOptimisations1024x1024BH:
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-
-        self.compute_configs["FP32_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -917,9 +910,6 @@ class ModelOptimisations1024x1024BH:
         return None
 
     def get_mm_compute_config(self, module_path):
-        if module_path in {f"up_blocks.2.resnets.{i}.conv_shortcut" for i in range(3)}:
-            # Preserve small residual corrections in the final up-block shortcuts.
-            return self.compute_configs["FP32_MM_COMPUTE_CONFIG"]
         if ".to_q" in module_path:
             return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
