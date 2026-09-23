@@ -91,10 +91,13 @@ namespace tt::tt_metal {
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 private:
     bool enable_2_erisc_mode_;
+    bool enable_aerisc_ptp_trace_;
 
 public:
-    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
-        HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
+    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode, bool enable_aerisc_ptp_trace) :
+        HalJitBuildQueryBase(hal),
+        enable_2_erisc_mode_(enable_2_erisc_mode),
+        enable_aerisc_ptp_trace_(enable_aerisc_ptp_trace) {}
 
     std::string linker_flags([[maybe_unused]] const Params& params) const override {
         // Suppress LTO false positive on the device-print lock's atomic exchange.
@@ -180,6 +183,9 @@ public:
                 defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
             } else {
                 defines.push_back("PHYSICAL_AERISC_ID=1");
+            }
+            if (enable_aerisc_ptp_trace_) {
+                defines.push_back("AERISC_PTP_TRACE_SUPPORTED");
             }
         }
         return defines;
@@ -326,7 +332,8 @@ void Hal::initialize_bh(
     std::uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) {
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -527,7 +534,8 @@ void Hal::initialize_bh(
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode);
+    this->jit_build_query_ =
+        std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode, enable_aerisc_ptp_trace);
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
