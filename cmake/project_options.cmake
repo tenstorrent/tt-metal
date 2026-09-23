@@ -27,14 +27,14 @@ option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" 
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
-set(TT_EMULE_PATH "" CACHE PATH "Path to a tt-emule-blaze checkout providing the tt-emule runtime")
+set(TT_EMULE_PATH "" CACHE PATH "Path to a tt-emule checkout providing the tt-emule runtime")
 
 if(TT_METAL_USE_EMULE)
     set(TT_UMD_BUILD_EMULE ON)
     if(NOT TT_EMULE_PATH)
         message(
             FATAL_ERROR
-            "TT_METAL_USE_EMULE=ON requires -DTT_EMULE_PATH=<tt-emule-blaze checkout> "
+            "TT_METAL_USE_EMULE=ON requires -DTT_EMULE_PATH=<tt-emule checkout> "
             "(it provides the tt-emule headers and the tt_emule_runtime library)."
         )
     endif()
