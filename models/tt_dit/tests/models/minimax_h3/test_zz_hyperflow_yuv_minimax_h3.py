@@ -52,14 +52,21 @@ FLOAT_VAE_REFERENCE = {5: "float VAE, 8 forwards: 15.2 s compute (denoise 9.2 s,
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
 def test_t2va_hyperflow_yuv_timing(mesh_device, reset_seeds, duration_s):
-    lora_path = os.environ.get(LORA_PATH_ENV)
-    if not lora_path:
-        pytest.skip(f"set {LORA_PATH_ENV} to a two-time adapter safetensors file")
+    # The A/B the adapter's speed-up is quoted against: the same request on the base model at
+    # diffusers' own grid. Without it a HyperFlow number is an absolute time and nothing else.
+    baseline = bool(int(os.environ.get("MINIMAX_H3_BASELINE", "0")))
+    baseline_steps = int(os.environ.get("MINIMAX_H3_BASELINE_STEPS", "50"))
+    lora_path = None if baseline else os.environ.get(LORA_PATH_ENV)
+    if not baseline and not lora_path:
+        pytest.skip(f"set {LORA_PATH_ENV} to a two-time adapter safetensors file, or MINIMAX_H3_BASELINE=1")
 
     # MINIMAX_H3_VAE_PHASES synchronizes between the decode's phases to separate them, which also
     # serializes them: the stage total it reports is inflated and only the shares are readable.
     stitch = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
     profile_phases = bool(int(os.environ.get("MINIMAX_H3_VAE_PHASES", "0")))
+    # The audio stage has its own switch: the two profiles serialise different stages, so enabling
+    # one leaves the other's number a warm one.
+    audio_phases = bool(int(os.environ.get("MINIMAX_H3_AUDIO_PHASES", "0")))
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
@@ -75,15 +82,21 @@ def test_t2va_hyperflow_yuv_timing(mesh_device, reset_seeds, duration_s):
         vae_output_type="yuv420",
         vae_stitch_exchange=stitch,
         vae_profile=profile_phases,
+        audio_profile=audio_phases,
     )
 
     contract = pipeline.hyperflow
-    assert contract is not None, (
-        f"{lora_path} publishes no sampling contract, so this pipeline would run it at 50 sigma "
-        f"points; point {LORA_PATH_ENV} at a two-time adapter"
-    )
-    num_forwards = contract.num_forwards
-    logger.info(f"adapter {lora_path}: {contract.identity()}")
+    if baseline:
+        assert contract is None, "baseline must run the bare base model"
+        num_forwards = baseline_steps - 1
+        logger.info(f"baseline: no adapter, {baseline_steps} sigma points")
+    else:
+        assert contract is not None, (
+            f"{lora_path} publishes no sampling contract, so this pipeline would run it at 50 sigma "
+            f"points; point {LORA_PATH_ENV} at a two-time adapter"
+        )
+        num_forwards = contract.num_forwards
+        logger.info(f"adapter {lora_path}: {contract.identity()}")
     logger.info(f"working point: {width}x{height}, {num_frames} frames, {num_forwards} forwards, yuv420 readback")
 
     output = run_warm_generation(
@@ -93,12 +106,15 @@ def test_t2va_hyperflow_yuv_timing(mesh_device, reset_seeds, duration_s):
         height=height,
         width=width,
         seed=SEED,
+        **({"num_inference_steps": baseline_steps} if baseline else {}),
     )
     assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
 
-    assert_hyperflow_applied(pipeline, num_forwards=num_forwards)
+    if not baseline:
+        assert_hyperflow_applied(pipeline, num_forwards=num_forwards)
 
-    stem = f"t2va_hyperflow_yuv420_{stitch}_{width}x{height}_{duration_s}s_{num_forwards}fwd"
+    label = "base" if baseline else "hyperflow"
+    stem = f"t2va_{label}_yuv420_{stitch}_{width}x{height}_{duration_s}s_{num_forwards}fwd"
     log_timing_table(
         pipeline,
         stem,

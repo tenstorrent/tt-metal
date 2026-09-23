@@ -318,6 +318,7 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
+        audio_profile: bool = False,
         audio_trace: bool | None = None,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
@@ -431,6 +432,9 @@ class MiniMaxH3Pipeline:
         # are separable, which inflates the stage -- diagnostics only, never a measurement configuration.
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
+        # Separately switched from `vae_profile`: the two decodes are profiled independently, and each
+        # profile serialises only its own stage.
+        self.audio_profile = bool(audio_profile)
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -473,6 +477,7 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
+        audio_profile: bool = False,
         audio_trace: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -510,6 +515,7 @@ class MiniMaxH3Pipeline:
             vae_output_type=vae_output_type,
             vae_stitch_exchange=vae_stitch_exchange,
             vae_profile=vae_profile,
+            audio_profile=audio_profile,
         )
 
     @staticmethod
@@ -1602,6 +1608,7 @@ class MiniMaxH3Pipeline:
                 pack_bands=_AUDIO_PACK_BANDS,
                 act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
+                profile=self.audio_profile,
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
