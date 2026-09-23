@@ -621,6 +621,11 @@ PY
     # Snapshot the playbooks this run executed. `review/` is nested, so a flat glob
     # would skip it and the round would archive instructions it never ran.
     cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
+    # Playbooks reach branch-specific routes through codegen/references, so the
+    # snapshot must carry those too or it archives less than the run could run.
+    for f in codegen/references/*.md; do
+        [ -f "$f" ] && cp "$f" "$LOG_DIR/instructions/reference-$(basename "$f")" 2>/dev/null || true
+    done
     if [ "$RUN_KIND" = "review" ]; then
         for f in codegen/agents/issue-solver/review/*.md; do
             [ -f "$f" ] && cp "$f" "$LOG_DIR/instructions/review-$(basename "$f")" 2>/dev/null || true

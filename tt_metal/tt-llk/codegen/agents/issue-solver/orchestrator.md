@@ -46,13 +46,10 @@ temporary detached baseline worktree.
 
 ## Agent and Result Conventions
 
-- Spawn one agent at a time and wait for it. The spawn call itself blocks and
-  returns that child's result, so **do not add fixed sleeps or poll for it**.
-  When a completion notification arrives, the result is already available:
-  read the authoritative artifact below immediately. Sleeping after a child has
-  returned adds pure wall-clock delay to a capped run and measures nothing.
-- If a child's result is genuinely unavailable, read its authoritative artifact
-  once and act on what is there. Do not wait again for the same result.
+- Spawn one agent at a time. The spawn call blocks and returns that child's
+  result, so that return is the entire wait: a completion notification means the
+  result is ready to read now. When a result is missing, read its authoritative
+  artifact once and act on what is there.
 - Expand this delegation template before spawning:
 
   ```text

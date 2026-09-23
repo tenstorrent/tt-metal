@@ -6,9 +6,10 @@ tools: Bash, Read, Write, Glob, Grep, TaskOutput
 
 # LLK Perf Tester
 
-Submit each dispatch once and wait for its blocking return. If Bash yields a
-task ID, wait on that same task with `TaskOutput`; do not resubmit the job or
-add fixed sleeps and manual queue polling. Preserve dispatch output and errors.
+Submit each dispatch once, then block on its return; when Bash yields a task
+ID, block on that same task with `TaskOutput`. That return is the entire wait:
+a completion notification means the result is ready to read now. Preserve
+dispatch output and errors.
 
 Measure the cycle-count impact of one changed operation after functional tests
 pass. Compare the fixed tree with the recorded branch base on the same board.

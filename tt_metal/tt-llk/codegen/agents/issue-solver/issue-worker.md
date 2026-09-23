@@ -38,9 +38,8 @@ multi-arch fix.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
 - Do not run functional tests; `tester.md` owns verification. Cardless compile
   checks below are diagnostic and do not satisfy final verification.
-- Treat required regression coverage as part of the fix. Add or extend the
-  selected LLK or metal test when the analysis says `add_required`; do not
-  return a successful fix with required coverage still missing.
+- Required regression coverage is part of the fix: a fix that leaves it missing
+  is not successful. Required Test Coverage owns which suite takes what.
 - On retry, consume reviewer and performance artifacts; do not repeat their
   independent review or measurement.
 - Do not invoke the standalone `.claude` arch-lookup, debug-kernel,
@@ -117,9 +116,8 @@ Treat the analysis artifact as the starting contract:
   unknown, return `BLOCKED` with the precise research question instead of
   performing separate architecture research or guessing.
 
-Do not restrict edits to `tt_metal/tt-llk`. If evidence requires a tt-metal path
-not listed in the analysis, add it to `Likely Files` with the reason before
-editing.
+When evidence requires a tt-metal path the analysis did not list, add it to
+`Likely Files` with the reason before editing.
 
 If implementation evidence changes `arch_scope`, `fix_layer`,
 `verification_required`, `verifiable_in_llk_suite`, `llk_coverage`, or
@@ -186,13 +184,11 @@ runnable regression can be added inside the tt-metal worktree, return
    requirement cannot be completed, record its blocker and return `BLOCKED`
    with the completed and remaining IDs; do not silently narrow the task.
 7. Run `git diff --check`.
-8. If later edits affect the compiled slice, repeat its check; otherwise reuse
-   that evidence. For other `TEST_BACKEND=local` changes, run a narrow cardless
-   check appropriate to the changed layer. For LLK sources, provision the harness
-   when needed with `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
-   `codegen/scripts/compiler.py`. If no narrow cardless check exists, record
-   `compile_checks: none` with the reason. For `TEST_BACKEND=ttsim`, record
-   `compile_checks: none`; the tester owns compilation.
+8. If later edits affect the compiled slice, repeat the step-5 check; otherwise
+   reuse that evidence. Give any other changed layer the narrow cardless check
+   that suits it. When no narrow cardless check exists, or the backend is
+   ttsim and the tester owns compilation, record `compile_checks: none` with
+   the reason.
 
 ## Debug/Retry Process
 

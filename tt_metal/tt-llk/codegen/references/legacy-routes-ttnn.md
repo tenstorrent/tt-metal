@@ -1,0 +1,257 @@
+# Fallback execution routes — TTNN tester
+
+Reference for `ttnn-tester.md` (suite `ttnn`). Read this **only** when the sealed dispatch path in that
+playbook does not apply, that is when any of these hold:
+
+- `HW_TEST_DISPATCH_CMD` is unset, or its `--help` does not advertise
+  `--requirement-id`;
+- `TEST_BACKEND=ttsim`;
+- the architecture is `quasar`, which never uses the silicon queue;
+- local silicon execution without a dispatcher.
+
+For Blackhole or Wormhole with a sealed dispatcher, the playbook's sealed path
+is authoritative and this file is not needed. Every coverage, scope, manifest,
+identity and verdict rule in the playbook still applies to these routes.
+
+---
+
+## Step A — targeted local compile gate
+
+Build once on the compute runner before any execution. The `ttnn` target
+rebuilds only its stale transitive dependencies; it does not build the broad
+`install` target. Copy the freshly linked build-tree `_ttnn.so` into the source
+Python package so pytest cannot import a stale binding. Do not use CMake's
+`tt_pybinds` install component here: it rewrites the extension's runtime path
+toward `build/lib`, whose separately installed `_ttnncpp.so` may be stale.
+
+Use the clean warm verification tree when it is available and the candidate
+has no untracked files. Apply the candidate patch there and always reverse it
+on exit. Otherwise build the issue worktree directly. Follow the same clean
+tree/base checks as `metal-tester.md`; never apply a patch to an unrelated or
+dirty warm tree. Keep the cleanup trap active through local execution so the
+candidate is still present when TTNN JIT-compiles its device kernels.
+Require `dashboard.hw_test.builder` from the companion `llk_code_gen` checkout
+to be importable by `python`. Preserve the dashboard-provided `PYTHONPATH`;
+for standalone runs, add the `llk_code_gen` checkout root to `PYTHONPATH`.
+Prepare the selected tree with the hardware builder helper. Export `TTNN_PYTHON`
+to choose the interpreter when creating a missing private `python_env`. After
+preparation, use the private environment and its selected-tree dependencies.
+
+```bash
+set -euo pipefail
+CACHE_USER="${USER:-$(id -un)}"
+export CCACHE_DIR="${CCACHE_DIR:-/localdev/$CACHE_USER/ccache}"
+mkdir -p "$CCACHE_DIR"
+
+HOME_TREE="$WORKTREE_DIR"
+BUILD_DIR="$WORKTREE_DIR/build"
+FIX_PATCH=
+FRESH_CACHE=
+FRESH_CACHE_ARCH=
+TEMP_TTNN_SO=
+cleanup_fresh_cache() {
+  local cache="${FRESH_CACHE:-}" root="${TTCACHE_ROOT:-}" cache_arch="${FRESH_CACHE_ARCH:-}"
+  [ -z "$cache" ] && return 0
+  case "$root" in
+    /*) ;;
+    *) echo "ENV_ERROR: TTCACHE_ROOT must be absolute"; return 1 ;;
+  esac
+  local expected_prefix="${root%/}/ttcache_${cache_arch}."
+  case "$cache" in
+    "$expected_prefix"*) rm -rf -- "$cache" ;;
+    *) echo "ENV_ERROR: refusing to remove unexpected cache path: $cache"; return 1 ;;
+  esac
+  FRESH_CACHE=
+  FRESH_CACHE_ARCH=
+}
+cleanup_ttnn_build() {
+  cleanup_fresh_cache || true
+  if [ -n "${TEMP_TTNN_SO:-}" ]; then
+    case "$TEMP_TTNN_SO" in
+      "$HOME_TREE/ttnn/ttnn/._ttnn."*) rm -f -- "$TEMP_TTNN_SO" ;;
+      *) echo "ENV_ERROR: refusing to remove unexpected staging path: $TEMP_TTNN_SO" ;;
+    esac
+  fi
+  if [ -n "${FIX_PATCH:-}" ] && [ -n "${METAL_VERIFY_HOME:-}" ]; then
+    git -C "$METAL_VERIFY_HOME" apply -R "$FIX_PATCH" 2>/dev/null || true
+  fi
+}
+trap cleanup_ttnn_build EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [ -n "${METAL_VERIFY_HOME:-${CODEGEN_METAL_VERIFY_HOME:-}}" ] &&
+   ! git -C "$WORKTREE_DIR" status --porcelain | rg -q '^\?\?'; then
+  METAL_VERIFY_HOME="${METAL_VERIFY_HOME:-$CODEGEN_METAL_VERIFY_HOME}"
+  METAL_VERIFY_BUILD_DIR="${METAL_VERIFY_BUILD_DIR:-${CODEGEN_METAL_VERIFY_BUILD_DIR:-$METAL_VERIFY_HOME/build}}"
+  [ "$(git -C "$METAL_VERIFY_HOME" rev-parse HEAD)" = "$(sg GIT_COMMIT)" ] || {
+    echo "ENV_ERROR: warm verification tree is at the wrong base"; exit 3;
+  }
+  [ -z "$(git -C "$METAL_VERIFY_HOME" status --porcelain)" ] || {
+    echo "ENV_ERROR: warm verification tree is dirty"; exit 3;
+  }
+  FIX_PATCH="$LOG_DIR/ttnn_fix.patch"
+  git -C "$WORKTREE_DIR" diff --binary "$(sg GIT_COMMIT)" -- >"$FIX_PATCH"
+  git -C "$METAL_VERIFY_HOME" apply "$FIX_PATCH"
+  HOME_TREE="$METAL_VERIFY_HOME"
+  BUILD_DIR="$METAL_VERIFY_BUILD_DIR"
+fi
+
+export CCACHE_BASEDIR="$(realpath "$HOME_TREE")"
+cd "$HOME_TREE"
+python -m dashboard.hw_test.builder --prepare-workspace "$HOME_TREE" --kind ttnn \
+  2>&1 | tee -a "$LOG_DIR/ttnn_build.log" \
+  || { echo "ENV_ERROR: workspace preparation failed"; exit 3; }
+TTNN_PYTHON="$HOME_TREE/python_env/bin/python3"
+export PATH="$HOME_TREE/python_env/bin:$PATH"
+export VIRTUAL_ENV="$HOME_TREE/python_env"
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] ||
+   ! rg -q '^ENABLE_CCACHE:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
+   ! rg -q '^WITH_PYTHON_BINDINGS:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
+   [ "$(sed -n 's/^Python3_EXECUTABLE:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt")" != "$TTNN_PYTHON" ]; then
+  ./build_metal.sh --enable-ccache --build-metal-tests \
+    --build-dir "$BUILD_DIR" --configure-only \
+    2>&1 | tee -a "$LOG_DIR/ttnn_build.log"
+fi
+cmake --build "$BUILD_DIR" --target ttnn \
+  2>&1 | tee -a "$LOG_DIR/ttnn_build.log"
+BUILT_TTNN_SO="$BUILD_DIR/ttnn/_ttnn.so"
+test -s "$BUILT_TTNN_SO" || {
+  echo "COMPILE_FAILED: ttnn target produced no _ttnn.so"; exit 2;
+}
+STAGED_TTNN_SO="$HOME_TREE/ttnn/ttnn/_ttnn.so"
+TEMP_TTNN_SO="$(mktemp "$HOME_TREE/ttnn/ttnn/._ttnn.XXXXXX")"
+install -m 0755 "$BUILT_TTNN_SO" "$TEMP_TTNN_SO"
+mv -f "$TEMP_TTNN_SO" "$STAGED_TTNN_SO"
+TEMP_TTNN_SO=
+test -s "$HOME_TREE/ttnn/ttnn/_ttnn.so" || {
+  echo "COMPILE_FAILED: could not stage the fresh _ttnn.so"; exit 2;
+}
+
+env TT_METAL_HOME="$HOME_TREE" TT_METAL_RUNTIME_ROOT="$HOME_TREE" \
+  PYTHONPATH="$HOME_TREE/ttnn:$HOME_TREE:$HOME_TREE/tools${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHONDONTWRITEBYTECODE=1 "$TTNN_PYTHON" -c 'import ttnn' \
+  2>&1 | tee -a "$LOG_DIR/ttnn_build.log"
+```
+
+Because `pipefail` is set, a compiler/linker failure through `tee` remains a
+failure. Record local compile wall time separately from any queue build time.
+
+## Resolve and collect each sealed selector
+
+Iterate only architectures with a sealed TTNN leaf and extract each exact
+selector from the manifest:
+
+```bash
+mapfile -t SELECTOR_PARTS < <(python - "$(sg REQUIRED_VERIFICATION_MANIFEST)" "$arch" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+matches = [r for r in manifest["requirements"]
+           if r["architecture"] == sys.argv[2] and r["suite"] == "ttnn"]
+if len(matches) != 1:
+    raise SystemExit(f"expected one TTNN requirement, found {len(matches)}")
+s = matches[0]["selector"]
+print(s["test_id"] or s["test"])
+print(s["k"] or "")
+print(manifest["run_id"])
+print(manifest["attempt_id"])
+print(matches[0]["requirement_id"])
+PY
+)
+TEST_SELECTOR="${SELECTOR_PARTS[0]}"
+K_FILTER="${SELECTOR_PARTS[1]}"
+export CODEGEN_RUN_ID="${SELECTOR_PARTS[2]}"
+export CODEGEN_ATTEMPT_ID="${SELECTOR_PARTS[3]}"
+export CODEGEN_REQUIREMENT_ID="${SELECTOR_PARTS[4]}"
+
+pytest_args=(--collect-only -q "$TEST_SELECTOR")
+[ -z "$K_FILTER" ] || pytest_args=(-k "$K_FILTER" "${pytest_args[@]}")
+env TT_METAL_HOME="$HOME_TREE" TT_METAL_RUNTIME_ROOT="$HOME_TREE" \
+  CHIP_ARCH="$arch" \
+  ARCH_NAME="$([ "$arch" = wormhole ] && echo wormhole_b0 || echo "$arch")" \
+  PYTHONPATH="$HOME_TREE/ttnn:$HOME_TREE:$HOME_TREE/tools${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "$TTNN_PYTHON" -m pytest "${pytest_args[@]}" \
+  2>&1 | tee -a "$LOG_DIR/ttnn_collect_${arch}.log"
+```
+
+Require at least one collected test before execution.
+
+## Step B — queued Blackhole/Wormhole silicon
+
+Use this route for `TEST_BACKEND=local`, Blackhole/Wormhole, and a non-empty
+`HW_TEST_DISPATCH_CMD`. The queue rebuilds `ttnn`, stages the fresh build-tree
+extension, then runs the exact pytest selector with a fresh cache.
+
+```bash
+result_args=()
+if [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ]; then
+  RESULT_JSON_OUT="$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json"
+  mkdir -p "$(dirname "$RESULT_JSON_OUT")"
+  result_args+=(--result-json-out "$RESULT_JSON_OUT")
+fi
+k_args=(); [ -z "$K_FILTER" ] || k_args+=(--k "$K_FILTER")
+set +e
+$HW_TEST_DISPATCH_CMD --kind ttnn --arch "$arch" \
+  --test "$TEST_SELECTOR" "${k_args[@]}" \
+  --dispatch "${TTNN_DISPATCH:-fast}" \
+  --worktree "$WORKTREE_DIR" --base "$(sg GIT_COMMIT)" \
+  --session "${HW_TEST_SESSION:-issue-$(sg ISSUE_NUMBER)}-${arch}" \
+  "${result_args[@]}" --timeout "${TIMEOUT:-1800}" \
+  2>&1 | tee -a "$LOG_DIR/ttnn_run_${arch}.log"
+dispatch_exit=${PIPESTATUS[0]}
+set -e
+```
+
+Require exactly one final `HW_TEST_RESULT` marker for the architecture. A
+`failure_stage=build` after Step A passed is `ENV_ERROR`, because the isolated
+queue could not reproduce the compute build. A completed non-passing pytest is
+`TESTS_FAILED`. For audit jobs, the protocol-v2 result and strict reducer are
+authoritative.
+
+## Step C — local ttsim, silicon, or Quasar Aether
+
+Use this when the queue route does not apply. Create a new cache directory per
+architecture and remove only that exact directory afterward. Run from
+`HOME_TREE` with the freshly installed binding:
+
+```bash
+CACHE_USER="${USER:-$(id -un)}"
+TTCACHE_ROOT="${TTCACHE_ROOT:-/localdev/$CACHE_USER/ttcache}"
+case "$TTCACHE_ROOT" in
+  /*) ;;
+  *) echo "ENV_ERROR: TTCACHE_ROOT must be absolute"; exit 3 ;;
+esac
+mkdir -p "$TTCACHE_ROOT"
+FRESH_CACHE="$(mktemp -d "$TTCACHE_ROOT/ttcache_${arch}.XXXXXX")"
+FRESH_CACHE_ARCH="$arch"
+pytest_args=(-x "$TEST_SELECTOR" --junitxml "$LOG_DIR/ttnn_${arch}.xml")
+[ -z "$K_FILTER" ] || pytest_args=(-x -k "$K_FILTER" "$TEST_SELECTOR" --junitxml "$LOG_DIR/ttnn_${arch}.xml")
+env_args=(
+  TT_METAL_HOME="$HOME_TREE"
+  TT_METAL_RUNTIME_ROOT="$HOME_TREE"
+  TT_METAL_CACHE="$FRESH_CACHE"
+  CHIP_ARCH="$arch"
+  ARCH_NAME="$([ "$arch" = wormhole ] && echo wormhole_b0 || echo "$arch")"
+  PYTHONPATH="$HOME_TREE/ttnn:$HOME_TREE:$HOME_TREE/tools${PYTHONPATH:+:$PYTHONPATH}"
+  PYTHONDONTWRITEBYTECODE=1
+)
+[ "${TTNN_DISPATCH:-fast}" = slow ] && env_args+=(TT_METAL_SLOW_DISPATCH_MODE=1)
+```
+
+For ttsim, add the architecture's `TTSIM_SO_PATH`/`TTSIM_SO_PATHS` value as
+`TT_METAL_SIMULATOR` and force slow dispatch. For Quasar local execution, use
+the shared Aether wrapper's explicit-command mode:
+
+```bash
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_qsr_metal_test.sh" \
+  --tt-metal-home "$HOME_TREE" --cache "$FRESH_CACHE" \
+  --log-dir "$LOG_DIR" --timeout "${TIMEOUT:-1200}" -- \
+  env "${env_args[@]}" "$TTNN_PYTHON" -m pytest "${pytest_args[@]}"
+```
+
+Otherwise run
+`env "${env_args[@]}" "$TTNN_PYTHON" -m pytest "${pytest_args[@]}"`.
+Always remove `FRESH_CACHE` after the command, including after failure or
+interruption. Derive selected/executed/passed counts from the JUnit report; an
+exit-zero run with zero selected or zero executed tests is not success.
