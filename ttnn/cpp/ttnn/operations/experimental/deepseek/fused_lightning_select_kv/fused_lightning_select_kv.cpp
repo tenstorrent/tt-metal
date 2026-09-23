@@ -8,7 +8,7 @@
 
 namespace ttnn::experimental::deepseek {
 
-Tensor fused_lightning_select_kv(
+std::vector<Tensor> fused_lightning_select_kv(
     const Tensor& query,
     const Tensor& key_cache,
     const Tensor& head_weights,
