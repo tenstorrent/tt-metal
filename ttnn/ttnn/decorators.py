@@ -508,8 +508,9 @@ def get_output_tensor_ids(output):
     return ids
 
 
-def _convert_ttnn_to_torch_for_comparison(tensor, **kwargs):
-    if tensor.dtype == ttnn.DataType.FP8_E4M3:
+def _convert_ttnn_to_torch_for_comparison(tensor, *, preserve_fp8_bytes=False, **kwargs):
+    # Mixed-format rows stored as FP8 bytes (e.g. scaled-FP8 sparse KV) must bypass value conversion.
+    if tensor.dtype == ttnn.DataType.FP8_E4M3 and not preserve_fp8_bytes:
         # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
         # This matches the FP8 golden's dequantized torch.float32 representation.
         if ttnn.is_tensor_storage_on_device(tensor):
@@ -518,7 +519,7 @@ def _convert_ttnn_to_torch_for_comparison(tensor, **kwargs):
     return ttnn.to_torch(tensor, **kwargs)
 
 
-def to_torch_for_comparison(tensor, golden_tensor=None):
+def to_torch_for_comparison(tensor, golden_tensor=None, *, preserve_fp8_bytes=False):
     import math
     import torch
 
@@ -527,12 +528,15 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
+    def convert(value, **kwargs):
+        return _convert_ttnn_to_torch_for_comparison(value, preserve_fp8_bytes=preserve_fp8_bytes, **kwargs)
+
     mesh_index = getattr(golden_tensor, "_ttnn_mesh_index", None)
     if mesh_index is not None:
         device_tensors = list(ttnn.get_device_tensors(tensor))
         if not 0 <= mesh_index < len(device_tensors):
             raise ValueError(f"Runtime output has no shard at mesh index {mesh_index}")
-        return _convert_ttnn_to_torch_for_comparison(device_tensors[mesh_index])
+        return convert(device_tensors[mesh_index])
 
     try:
         topology = tensor.tensor_topology()
@@ -557,7 +561,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
         if not device_tensors:
             return None
 
-        torch_shards = [_convert_ttnn_to_torch_for_comparison(device_tensor) for device_tensor in device_tensors]
+        torch_shards = [convert(device_tensor) for device_tensor in device_tensors]
         # Device tensors arrive in physical storage order; compose them in that order.
         if len(torch_shards) == 1:
             return torch_shards[0]
@@ -604,7 +608,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
                 for placement in placements
             ):
-                return _convert_ttnn_to_torch_for_comparison(device_tensors[0])
+                return convert(device_tensors[0])
 
         if not has_shard:
             composed = compose_device_tensors()
@@ -633,13 +637,13 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                     mesh_shape_override=ttnn.MeshShape(composer_shape),
                 ),
             )
-            return _convert_ttnn_to_torch_for_comparison(tensor, mesh_composer=mesh_composer)
+            return convert(tensor, mesh_composer=mesh_composer)
 
     composed = compose_device_tensors()
     if composed is not None:
         return composed
 
-    return _convert_ttnn_to_torch_for_comparison(tensor)
+    return convert(tensor)
 
 
 def _structured_output_leaves(golden_outputs, outputs):

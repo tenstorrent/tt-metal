@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 
 import ttnn
+from ttnn.operations.transformer_golden import sparse_mla
 
 
 SDPA_GOLDEN_OPERATIONS = (
@@ -186,6 +188,63 @@ def test_sparse_sdpa_golden_honors_masked_index_and_attention_sink():
     weights = torch.softmax(logits, dim=0)[:2]
     expected = (weights * torch.tensor([1.0, -1.0])).sum().reshape(1, 1, 1, 1)
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "query_dtype, kv_dtype",
+    [(torch.bfloat16, torch.float32), (torch.float32, torch.bfloat16)],
+    ids=["bf16-q-fp8-kv", "fp8-q-bf16-kv"],
+)
+def test_sparse_sdpa_golden_supports_mixed_query_and_kv_dtypes(query_dtype, kv_dtype):
+    torch.manual_seed(15)
+    # FP8 operands reach the golden as FP8-quantized float32 tensors.
+    query = torch.randn(1, 2, 3, 8).to(torch.float8_e4m3fn).float().to(query_dtype)
+    kv = torch.randn(1, 1, 5, 8).to(torch.float8_e4m3fn).float().to(kv_dtype)
+    indices = torch.tensor([[[[0, 2, 0xFFFFFFFF], [1, 3, 4], [4, 0xFFFFFFFF, 0xFFFFFFFF]]]], dtype=torch.int64)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
+    actual = golden(query, kv, indices, 4, kv_format=None, scale=0.5)
+
+    expected = sparse_mla(query.float(), kv[0, 0].float(), indices, 0.5, 4).to(query_dtype)
+    assert actual.dtype == query_dtype
+    torch.testing.assert_close(actual, expected)
+
+
+def _pack_scaled_fp8_kv(latent, scales, rope):
+    raw = torch.cat((latent.view(torch.uint8), scales.view(torch.uint8), rope.view(torch.uint8)), dim=-1)
+    return raw.view(torch.float8_e4m3fn)
+
+
+def test_sparse_sdpa_golden_decodes_packed_scaled_fp8_kv():
+    torch.manual_seed(16)
+    latent_dim, rope_dim, tokens = 512, 64, 3
+    latent = torch.randn(1, 1, tokens, latent_dim).to(torch.float8_e4m3fn)
+    scales = torch.tensor([0.25, 0.5, 1.0, 2.0]).reshape(1, 1, 1, 4).expand(1, 1, tokens, 4).contiguous()
+    rope = torch.randn(1, 1, tokens, rope_dim).to(torch.bfloat16)
+    packed = _pack_scaled_fp8_kv(latent, scales, rope)
+    assert packed.shape[-1] == 656
+
+    logical = torch.cat(
+        ((latent.float() * scales.repeat_interleave(128, dim=-1)).to(torch.bfloat16), rope),
+        dim=-1,
+    )
+    query = torch.randn(1, 2, 2, latent_dim + rope_dim).to(torch.bfloat16)
+    indices = torch.tensor([[[[0, 2], [1, 0xFFFFFFFF]]]], dtype=torch.int64)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
+    actual = golden(query, packed, indices, latent_dim, kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8)
+    expected = golden(query, logical, indices, latent_dim, kv_format=ttnn.transformer.SparseKVFormat.BF16)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_sparse_sdpa_golden_rejects_value_converted_scaled_fp8_kv(expect_error):
+    query = torch.randn(1, 1, 1, 576)
+    packed = torch.zeros(1, 1, 2, 656)
+    indices = torch.tensor([[[[0, 1]]]], dtype=torch.int64)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
+    with expect_error(ValueError, "packed bytes"):
+        golden(query, packed, indices, 512, kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8)
 
 
 def test_ring_distributed_golden_returns_rank_query_chunks():
@@ -416,6 +475,30 @@ def test_sdpa_decode_golden_broadcasts_a_single_mask_batch():
     torch.testing.assert_close(actual, expected)
 
 
+def test_sdpa_decode_golden_keeps_query_batch_with_shared_cache():
+    torch.manual_seed(14)
+    batch, heads, dim, keys = 2, 32, 64, 64
+    query = torch.randn(1, batch, heads, dim)
+    key = torch.randn(1, 1, keys, dim)
+    value = torch.randn(1, 1, keys, dim)
+    positions = [63, 31]
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(query, key, value, cur_pos=positions, share_cache=True)
+
+    query_by_batch = query.permute(1, 2, 0, 3)
+    expected_rows = [
+        torch.nn.functional.scaled_dot_product_attention(
+            query_by_batch[user : user + 1],
+            key[..., : position + 1, :].repeat_interleave(heads, dim=1),
+            value[..., : position + 1, :].repeat_interleave(heads, dim=1),
+        )
+        for user, position in enumerate(positions)
+    ]
+    expected = torch.cat(expected_rows).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
 def test_paged_decode_golden_converts_circular_mask_layout():
     query = torch.tensor([[[[1.0], [2.0]]]])
     page_table = torch.tensor([[0, 1]], dtype=torch.int64)
@@ -453,7 +536,7 @@ def test_paged_decode_golden_converts_circular_mask_layout():
 
 def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
     torch.manual_seed(3)
-    query = torch.randn(4, 2, 3, 4)
+    query = torch.randn(4, 2, 3, 6)
     kv = torch.randn(4, 1, 3, 6)
 
     golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
@@ -472,7 +555,7 @@ def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
 
 def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
     torch.manual_seed(9)
-    query = torch.randn(1, 2, 2, 4)
+    query = torch.randn(1, 2, 2, 6)
     kv = torch.randn(4, 1, 8, 6)
 
     golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)

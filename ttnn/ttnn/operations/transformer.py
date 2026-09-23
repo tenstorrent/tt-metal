@@ -222,9 +222,25 @@ ttnn.attach_golden_function(
     ttnn.transformer.scaled_dot_product_attention_decode,
     golden_function=scaled_dot_product_attention_decode_golden,
 )
+
+
+def _preprocess_sparse_sdpa_golden_inputs(function_args, function_kwargs):
+    if function_kwargs.get("kv_format") == SparseKVFormat.SCALED_FP8:
+        function_args = list(function_args)
+        if len(function_args) > 1:
+            function_args[1] = ttnn.decorators.to_torch_for_comparison(function_args[1], preserve_fp8_bytes=True)
+        elif "kv" in function_kwargs:
+            function_kwargs = dict(function_kwargs)
+            function_kwargs["kv"] = ttnn.decorators.to_torch_for_comparison(
+                function_kwargs["kv"], preserve_fp8_bytes=True
+            )
+    return ttnn.decorators.default_preprocess_golden_function_inputs(function_args, function_kwargs)
+
+
 ttnn.attach_golden_function(
     ttnn.transformer.sparse_sdpa,
     golden_function=sparse_sdpa_golden,
+    preprocess_golden_function_inputs=_preprocess_sparse_sdpa_golden_inputs,
 )
 ttnn.attach_golden_function(
     ttnn.transformer.sparse_sdpa_msa,

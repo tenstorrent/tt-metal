@@ -18,6 +18,7 @@ from typing import Optional
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
 SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
 BLK_KV = 128  # MSA block size in tokens (= 4 tile-rows)
+SCALE_BLOCK_WIDTH = 128  # latent columns sharing one FP32 scale in a scaled-FP8 sparse KV row
 
 
 def _scalar(value, default=None):
@@ -429,11 +430,11 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
     return attn_out
 
 
-def _decode_layout(input_tensor_q, input_tensor_k):
-    batch = input_tensor_k.shape[0]
-    if input_tensor_q.shape[0] == 1 and input_tensor_q.shape[1] == batch:
-        return input_tensor_q.permute(1, 2, 0, 3), True
-    return input_tensor_q, False
+def _decode_layout(input_tensor_q):
+    """Move a public decode query from [1, batch, heads, dim] onto [batch, heads, 1, dim]."""
+    if input_tensor_q.ndim != 4 or input_tensor_q.shape[0] != 1:
+        raise ValueError(f"Decode query must be [1, B, NH, D], got shape {tuple(input_tensor_q.shape)}")
+    return input_tensor_q.permute(1, 2, 0, 3)
 
 
 def _decode_attention_mask(mask, num_heads):
@@ -466,7 +467,7 @@ def _decode_attention(
 ):
     import torch
 
-    query, transposed = _decode_layout(input_tensor_q, input_tensor_k)
+    query = _decode_layout(input_tensor_q)
     batch, num_heads, _, _ = query.shape
     positions = cur_pos_tensor if cur_pos_tensor is not None else cur_pos
     if positions is None or (not isinstance(positions, torch.Tensor) and len(positions) == 0):
@@ -503,8 +504,7 @@ def _decode_attention(
                 query_start=position,
             )
         )
-    output = torch.cat(outputs, dim=0)
-    return output.permute(2, 0, 1, 3) if transposed else output
+    return torch.cat(outputs, dim=0).permute(2, 0, 1, 3)
 
 
 def scaled_dot_product_attention_decode_golden(
@@ -557,8 +557,7 @@ def _paged_circular_decode_attention(
         raise ValueError("cache_position_modulo requires cur_pos_tensor to define logical cache order")
 
     batch = page_table_tensor.shape[0]
-    transposed = input_tensor_q.shape[0] == 1 and input_tensor_q.shape[1] == batch
-    query = input_tensor_q.permute(1, 2, 0, 3) if transposed else input_tensor_q
+    query = _decode_layout(input_tensor_q)
     if query.shape[0] != batch:
         raise ValueError(f"Query batch size {query.shape[0]} does not match page-table batch size {batch}")
 
@@ -621,8 +620,7 @@ def _paged_circular_decode_attention(
             )
         )
 
-    output = torch.cat(outputs, dim=0)
-    return output.permute(2, 0, 1, 3) if transposed else output
+    return torch.cat(outputs, dim=0).permute(2, 0, 1, 3)
 
 
 def paged_scaled_dot_product_attention_decode_golden(
@@ -776,6 +774,11 @@ def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     B, H, S, Dk = q.shape
     k = indices.shape[-1]
     T = kvpe.shape[0]
+    # TTNN accepts mixed Q/KV formats; both contractions need one dtype, while the output follows Q.
+    compute_dtype = torch.promote_types(q.dtype, kvpe.dtype)
+    output_dtype = q.dtype
+    q = q.to(compute_dtype)
+    kvpe = kvpe.to(compute_dtype)
     idx = indices.reshape(B, S, k)
     masked = idx == MASKED_INDEX
     idx_safe = torch.where(masked, torch.zeros_like(idx), idx).to(torch.int64)  # clamp sentinels in-bounds
@@ -790,10 +793,37 @@ def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     if attention_sink is not None:
         sink_scores = attention_sink.float().expand(B, H, S, 1) * scale
         scores = torch.cat([scores, sink_scores], dim=-1)
-    probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
+    probs = scores.softmax(dim=-1, dtype=torch.float32).to(compute_dtype)
     if attention_sink is not None:
         probs = probs[..., :-1]
-    return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
+    out = torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
+    return out.to(output_dtype)
+
+
+def _unpack_scaled_fp8_kv(kv, latent_dim, rope_dim):
+    """Decode packed [FP8 latent | FP32 scales | BF16 RoPE] rows into logical BF16 [scaled latent || RoPE]."""
+    import torch
+
+    if kv.dtype not in (torch.float8_e4m3fn, torch.uint8):
+        raise ValueError(
+            f"Scaled-FP8 sparse KV must keep its packed bytes as float8_e4m3fn or uint8, got {kv.dtype}; "
+            "value-converted packed rows cannot be decoded"
+        )
+    if latent_dim % SCALE_BLOCK_WIDTH != 0:
+        raise ValueError(f"Scaled-FP8 latent width {latent_dim} must be a multiple of {SCALE_BLOCK_WIDTH}")
+    num_scales = latent_dim // SCALE_BLOCK_WIDTH
+    rope_offset = latent_dim + 4 * num_scales
+    packed_width = rope_offset + 2 * rope_dim
+    if kv.shape[-1] != packed_width:
+        raise ValueError(f"Scaled-FP8 sparse KV width must be {packed_width}, got {kv.shape[-1]}")
+
+    prefix = kv.shape[:-1]
+    raw = kv.contiguous().view(torch.uint8)
+    latent = raw[..., :latent_dim].contiguous().view(torch.float8_e4m3fn).float()
+    scales = raw[..., latent_dim:rope_offset].contiguous().view(torch.float32).reshape(*prefix, num_scales)
+    rope = raw[..., rope_offset:].contiguous().view(torch.bfloat16).reshape(*prefix, rope_dim)
+    scaled = latent * scales.repeat_interleave(SCALE_BLOCK_WIDTH, dim=-1)
+    return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
 
 
 def sparse_sdpa_golden(
@@ -802,6 +832,7 @@ def sparse_sdpa_golden(
     indices,
     v_dim,
     *,
+    kv_format=None,
     scale=None,
     cache_batch_idx=None,
     attention_sink=None,
@@ -811,6 +842,8 @@ def sparse_sdpa_golden(
 
     scale = q.shape[-1] ** -0.5 if scale is None else scale
     cache_batch_idx = int(_scalar(cache_batch_idx, 0))
+    if getattr(kv_format, "name", kv_format) == "SCALED_FP8":
+        kv = _unpack_scaled_fp8_kv(kv, int(v_dim), q.shape[-1] - int(v_dim))
     kvpe = kv[cache_batch_idx, 0]
     if attention_sink is not None and attention_sink.shape[-1] == q.shape[1]:
         attention_sink = attention_sink.permute(0, 3, 1, 2)
@@ -1631,6 +1664,7 @@ def gated_delta_attn_seq_golden(
 __all__ = [
     "BLK_KV",
     "MASKED_INDEX",
+    "SCALE_BLOCK_WIDTH",
     "SENTINEL",
     "chunk_gated_delta_rule",
     "chunk_gated_delta_rule_golden",
