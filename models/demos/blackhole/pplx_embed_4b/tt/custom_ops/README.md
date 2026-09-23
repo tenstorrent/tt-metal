@@ -25,16 +25,27 @@ The stock ops split work by `(batch, seq_tile)` only. At bs=1 / ISL=512 that is
 16 work units on a 130-core Blackhole grid — roughly 12% occupancy. Adding a
 head-group axis raises this to `16 * head_groups` units:
 
-- QKV: `head_groups = num_kv_heads = 8` → **128 units**, each moving 8 Q + 4 K + 4 V tiles.
-- Concat: `head_groups = num_heads = 16` → **256 units**, each moving 4 tiles.
+- QKV: `head_groups = num_kv_heads = 8` → **128 units**, each moving 16 Q + 4 K + 4 V tiles.
+- Concat: `head_groups = num_heads = 32` → **512 units**, each moving 4 tiles.
+
+Override either with `QWEN_HEADSPLIT_GROUPS_{QKV,CONCAT}`. Swept at bs=32 and
+flat (558.0-561.0 ms across 8/32, 4/16, 2/8, 8/8, 1/4, 4/32), so the defaults
+are already at the optimum for this shape.
 
 Both are pure tile-copy reorders, so output is **bit-identical** to the stock
 ops — only the dispatch pattern changes.
 
 ## Geometry
 
-pplx-embed-v1-4B is GQA: 16 Q heads over 8 KV heads, `head_dim` 128
-(4 tiles). The fused QKV row is `(16 + 2*8) * 128 = 4096` wide = 128 tiles.
+pplx-embed-v1-4B is GQA: **32 Q heads over 8 KV heads** (4 Q per KV),
+`head_dim` 128 (4 tiles), `dim` 2560, 36 layers. The fused QKV row is
+`(32 + 2*8) * 128 = 6144` wide = 192 tiles.
+
+Note this differs from the 0.6B sibling (16 Q / 8 KV, `dim` 1024), which is why
+the concat head-split is a win here and a small loss there: 32 heads at 4 tiles
+each give it enough work per unit. Measured bs=1: QKV split -1.5 ms, concat
+split a further -1.2 ms; on 0.6B the concat split cost +0.2 ms and is default
+off.
 
 ## How it's wired in
 
@@ -59,29 +70,25 @@ exactly equal, PCC 1.0.
 
 ## Measured and rejected
 
-**Rotary DEST_TO_SRCA fusion.** The pre-rebase branch carried a rewrite of
-`rotary_embedding_llama`'s compute kernel that collapsed its 4 ACQ/REL phases
-into 2 by reusing DST across FPU ops, removing two intermediate CB
-round-trips. Upstream has since rewritten that kernel onto `ckl::eltwise_chain`
-(which does expose `ckl::DestReuseBinary<..., DEST_TO_SRCA>`, so the fusion is
-expressible), and re-homing it here would mean reimplementing the whole op as a
-`generic_op` — reader, compute, writer and ~8 CBs — because the program factory
-selects the compute kernel by fixed path.
+**Rotary DEST_TO_SRCA fusion.** Not ported. The pre-rebase branch carried a
+rewrite of `rotary_embedding_llama`'s compute kernel collapsing its 4 ACQ/REL
+phases into 2 by reusing DST, removing two intermediate CB round-trips.
+Upstream has since rewritten that kernel onto `ckl::eltwise_chain`, which does
+expose `ckl::DestReuseBinary<..., DEST_TO_SRCA>`, so the fusion is
+expressible — but re-homing it here means reimplementing the whole op as a
+`generic_op` (reader, compute, writer, ~8 CBs), because the program factory
+selects the compute kernel by fixed path. Unlike the head-splits it is
+unconditional, so a mis-port corrupts every run rather than a flag-gated path.
 
-Before doing that we measured the ceiling. Stubbing `rotary_embedding_llama`
-to identity (numerically wrong, timing-valid) on P150 bs=1 ISL=512, 3 runs:
+Size, from the profiler rather than a stub: rotary is **1.66 ms of 25.9 ms at
+bs=1 (6.7%)** and **28.0 ms of ~502 ms at bs=32 (5.6%)**. The fusion removes
+two of four CB round-trips, so realistically ~0.5 ms at bs=1 and ~10 ms at
+bs=32.
 
-    rotary normal    7.9 - 8.1 ms avg / 7.8 - 7.9 ms best
-    rotary stubbed   7.8 ms avg      / 7.6 ms best
-
-Deleting the op **entirely** is worth only ~0.2-0.25 ms. The fusion removes
-two of four CB round-trips, so it could recover at most a fraction of that —
-roughly 0.1 ms, about 1% of prefill. Unlike the head-splits it is unconditional,
-so a mis-port silently corrupts every run. Not worth the risk at this shape;
-revisit only if a profile shows rotary dominating at some other batch/ISL.
-
-Note this also means the remaining gap to the pre-rebase 7.2 ms baseline is
-**not** mostly rotary — at most a third of it is. The rest is unattributed.
+An earlier note here claimed stubbing the op out was worth only ~0.2-0.25 ms
+and used that to dismiss the fusion. That measurement was wrong: the stub
+returned `ttnn.clone(input)`, a full tensor copy, so the delta measured
+*rotary minus clone*, not rotary. Use the profiler figures above.
 
 ## Conventions
 

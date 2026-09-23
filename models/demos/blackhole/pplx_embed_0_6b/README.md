@@ -504,8 +504,16 @@ Applied by default across all workloads (centralized in
   | HiFi4 (op default) |         0.8481 |                 7.7ms |
   | **LoFi (default here)** | **0.8487** |             **7.3ms** |
 
-- **Head-split QKV / concat-heads** — native head-split program variants of
-  `nlp_create_qkv_heads` / `nlp_concat_heads` (≈ −1.3ms in the masked path).
+- **Head-split QKV** — model-local `ttnn.generic_op` replacement for
+  `nlp_create_qkv_heads`, in `tt/custom_ops/` (see its README). Worth −0.9 ms
+  at bs=1 / ISL=512. These were previously in-tree patches to the op program
+  factories; upstream's migration of both ops to the Metal 2.0 descriptor API
+  removed the hooks they attached to, so they now live in the demo directory
+  and survive rebases. Bit-identical to the stock ops.
+  The matching **concat-heads** split is implemented but **off by default here**:
+  measured +0.2 ms at this geometry (16 Q heads at 4 tiles each is too little
+  work per unit). It is a −1.2 ms win on the 4B sibling, which has 32 Q heads,
+  so re-measure rather than inherit either default.
 - **Workload-tuned memory placement** — L1 activations + large core grid for
   bs=1; batched L1 for bs=8/ISL=512; DRAM for the large shapes.
 - **Per-op L1 intermediates for batched prefill (bs≥16, ISL≤512)** — at bs≥16 the

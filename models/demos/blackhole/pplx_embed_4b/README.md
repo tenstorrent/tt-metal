@@ -81,15 +81,42 @@ activations in **L1** when the per-user sequence is ≤ 512
 (`TT_SHORT_SEQ_L1_PREFILL_MAX`, default 512). Activation bytes (bf16) =
 `bs × seq × 2560 × 2`:
 
-| Workload        | Activation | Placement | Matmul grid | Best (full pipeline) |
-|-----------------|-----------:|-----------|-------------|----------------------|
-| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | standard (8×8) | 30.4 ms · 16.4k tok/s |
-| bs=2  ISL=512   |  5 MB      | **L1** (batched) | 130-core | 67.4 ms · 15.2k tok/s |
-| **bs=4  ISL=512** | **10.5 MB** | **L1** (batched) | **130-core (13×10)** | **74.8 ms · 27.4k tok/s** |
-| bs=8  ISL=512   | 20 MB      | DRAM | 130-core | 172 ms · 23.8k tok/s |
-| bs=32 ISL=512   | 80 MB      | DRAM | 130-core | ~686 ms · 23.9k tok/s |
+| Workload        | Activation | Placement | Matmul grid | Best prefill |
+|-----------------|-----------:|-----------|-------------|--------------|
+| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | standard (8×8) | **25.9 ms · 19.8k tok/s** |
+| bs=2  ISL=512   |  5 MB      | **L1** (batched) | 130-core | 67.4 ms · 15.2k tok/s ᵃ |
+| bs=4  ISL=512   | 10.5 MB    | **L1** (batched) | 130-core (13×10) | 74.8 ms · 27.4k tok/s ᵃ |
+| bs=8  ISL=512   | 20 MB      | DRAM | 130-core | **157.6 ms · 26.0k tok/s** |
+| bs=16 ISL=512   | 40 MB      | DRAM | 130-core | **291.4 ms · 28.1k tok/s** |
+| **bs=32 ISL=512** | **80 MB** | DRAM | 130-core | **558.0 ms · 29.4k tok/s** |
 | bs=1  ISL=1024  |  5 MB      | DRAM | 130-core | — |
 | bs=1  ISL=2048  | 10 MB      | DRAM | 130-core | — |
+
+ᵃ bs=2 / bs=4 rows are the pre-optimization figures; not re-measured since.
+All other rows measured on a **harvested P150 exposing 12×10 = 120 worker
+cores** (nominal 13×10 = 130), so they are roughly 8% pessimistic against a
+full part. For reference, H200 FP8 at the same shapes: bs=1 5.44 ms,
+bs=8 33.08, bs=16 67.23, bs=32 139.15 — i.e. 4.0-4.8x.
+
+### Optimization history
+
+Against the BFP8 / FF13-BFP4 reference configuration
+(bs=1 44.08 ms, bs=8 185.01, bs=16 366.23, bs=32 690.53) the current defaults
+are **-41% / -15% / -20% / -19%**. STS-B Spearman 0.8125 throughout
+(pre-optimization 0.8116). What moved, in order of size:
+
+| Change | Env | Effect |
+|---|---|---|
+| MinimalMatmul output subblock (was 1x1) | `QWEN_MM_SUBBLOCK=1,8` | bs8 -12%, bs16 -13%, bs32 -18% |
+| Head-split QKV + concat (`tt/custom_ops`) | `QWEN_NLP_*_HEAD_SPLIT=1` | bs1 -2.7 ms, bs32 -8.8 ms |
+| `in0_block_w` cap 8 -> 38 (FF2 was pinned at 2) | `QWEN_MM_MAX_DIVISOR=38` | bs1 -4.4 ms |
+| Fused SwiGLU MLP (`tt/mlp.py`) | `QWEN_FUSE_SWIGLU` | bs16 -5.7%, bs8 -1.6%, **off at bs32** |
+| Block-sharded LayerNorm (was silently inert) | `QWEN_LN_GRID_MAX_X=10` | bs1 -1.9 ms |
+| SDPA q/k chunk | `QWEN_SDPA_Q_CHUNK=512` / `_K_CHUNK=256` | bs8/16/32 -2..-4% |
+
+Most of these were constants tuned for the 0.6B sibling that silently
+mis-applied to 4B, which has 2.5x the hidden size and 2x the head count.
+Re-check them before reusing this config on another model in the family.
 
 - **L1 path (bs≤4, ISL≤512):** activations stay resident in L1, eliminating DRAM
   round-trips for the residual stream. **bs=4 batched-L1 is the throughput-optimal
