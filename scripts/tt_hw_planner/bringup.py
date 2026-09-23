@@ -285,6 +285,7 @@ def _build_tt_transformers_invocation(
     trace: bool,
     paged_attention: bool,
     instruct: bool,
+    data_parallel: int = 1,
 ) -> PytestInvocation:
     selector = ("accuracy" if accuracy else "performance") + f" and batch-{batch}"
     args: List[str] = [
@@ -306,6 +307,10 @@ def _build_tt_transformers_invocation(
         "full",
         "--enable_trace" if trace else "--disable_trace",
     ]
+    # Only pass the split when it is one: the demo defaults to a single group,
+    # and every other caller keeps its existing command unchanged.
+    if data_parallel > 1:
+        args += ["--data_parallel", str(data_parallel)]
     env = {"HF_MODEL": hf_model, "MESH_DEVICE": mesh_device, "TT_HW_PLANNER_OVERLAY_MODEL": hf_model}
     return PytestInvocation(test_path=DEMO_TEST_PATH, args=args, env=env)
 
@@ -634,9 +639,26 @@ def prepare_bringup(
         ]
     )
 
+    # TP x DP is decided in ONE place: select_parallelism, the only component
+    # that consults per-TP kernel viability (largest TP that divides the chip
+    # count and has no blockers; the rest of the mesh becomes DP replicas).
+    # emit-e2e and optimize already route through it via plan_parallelism.
+    #
+    # Bring-up used to infer `chosen_tp = best.mesh_shape[1]` — the mesh's
+    # COLUMN count — which knows nothing about the model. On a model whose
+    # head counts do not divide the column count that reported blockers and
+    # refused to emit a command, even when a viable split existed on the same
+    # chips. And because the split was never passed to the demo, the demo
+    # defaulted to data_parallel=1 and put every chip in one TP group,
+    # re-creating the very split the planner had rejected.
+    from .parallelism import select_parallelism
+
     kernel_blockers: List[str] = []
+    _chips = max(1, int(best.mesh_shape[0]) * int(best.mesh_shape[1]))
+    _pcfg = select_parallelism(_chips, kernels) if kernels is not None else None
+    chosen_tp = _pcfg.tp if _pcfg is not None else max(1, int(best.mesh_shape[1]))
+    data_parallel = _pcfg.dp if _pcfg is not None else 1
     if kernels is not None:
-        chosen_tp = max(1, int(best.mesh_shape[1]))
         tps_to_check = {1, chosen_tp}
         for tp in sorted(tps_to_check):
             for f in kernels.findings_by_tp.get(tp, []):
@@ -685,6 +707,7 @@ def prepare_bringup(
                 trace=trace,
                 paged_attention=paged_attention,
                 instruct=instruct,
+                data_parallel=data_parallel,
             )
             for tc in tuning:
                 if tc.auto_resolved_env:
