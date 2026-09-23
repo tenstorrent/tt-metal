@@ -598,6 +598,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     // One GCB block per sender, all at the same DRISC L1 offset.
     target.state_addr_per_sender.assign(
         target.mapping.size(), static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb)));
+    target.state_alloc_per_sender.assign(target.mapping.size(), experimental::sender_state_drisc_l1_allocation(gcb));
     // The GCB's mapping is immutable and fixes its own bank-local slab numbering, so the bases
     // come straight back out of it.
     target.recv_index_base_per_sender = recv_index_bases_per_sender(target.mapping);
@@ -619,6 +620,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     // laid out for a subset has fewer slabs per bank than the pipes' slab bases assume.
     target.mapping = experimental::GetPrefetcherPipeSenderReceiverMapping(prefetcher_pipes);
     target.state_addr_per_sender.reserve(target.mapping.size());
+    target.state_alloc_per_sender.reserve(target.mapping.size());
     target.recv_index_base_per_sender.reserve(target.mapping.size());
 
     std::unordered_set<CoreCoord> distinct_receivers;
@@ -680,6 +682,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         // reads it off the pipe instead of re-deriving it from where the pipe sits in this list.
         target.recv_index_base_per_sender.push_back(pipe.impl().recv_index_base());
         target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+        target.state_alloc_per_sender.emplace_back(experimental::sender_state_drisc_l1_allocation(pipe));
     }
     TT_FATAL(
         distinct_receivers.size() == total_receivers,
@@ -807,7 +810,6 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 ordinary_mpfe_weight,
                 static_cast<uint32_t>(dynamic_mpfe_weighting),
                 static_cast<uint32_t>(mpfe_policy.has_value()),
-                target_table_l1_addr_,
             };
 
             // WATCHER_NOINLINE only takes effect in watcher builds: it lets the compiler outline the
@@ -899,7 +901,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
     }
     enumerate_dram_senders();
-    targets_per_sender_.assign(num_senders_, {});
+    drain_targets_per_sender_.assign(num_senders_, {});
 
     // DRISC L1 layout: the kernel working region (above the GCB zone) is now
     // entirely the ping-pong stage ring. noc_xy table, config block, and the
@@ -932,11 +934,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     cq_signal_slot_stride_ = l1_alignment;
     const uint32_t cq_signal_bytes = kNumCqSignalSlots * cq_signal_slot_stride_;
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
-    // Then the kernel's target table: the targets each sender has loaded since start, which the stop
-    // sentinel drains. Only the kernel reads or writes it.
-    target_table_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, l1_alignment);
-    const uint32_t target_table_bytes = kMaxTargetsPerSender * sizeof(uint32_t);
-    socket_config_l1_addr_ = align_up(target_table_l1_addr_ + target_table_bytes, pcie_alignment_for_layout);
+    socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
     stage_ring_base_ = align_up(socket_data_l1_addr_ + socket_data_bytes, l1_alignment);
     const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
@@ -1360,26 +1358,13 @@ void TensorPrefetcherManager::queue_to_target(
         }
     }
 
-    // Each sender records every target it is sent a request for, so that stop can drain them all, in a
-    // table of kMaxTargetsPerSender entries. The request has passed every other check by now, so count
-    // this target against every sender it maps to, even when the request is only captured into a
-    // trace: a replay sends it.
+    // Remember this target on every sender it maps to, so stop can drain it. The request has passed
+    // every other check by now, and a request only captured into a trace counts too: a replay sends it.
+    const uint32_t pipe_bit =
+        target.transport == TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE ? kDrainTargetPipeBit : 0u;
     for (size_t m = 0; m < target_sender_indices.size(); ++m) {
-        const uint32_t s = target_sender_indices[m];
-        auto& targets = targets_per_sender_[s];
-        const uint32_t state_addr = target.state_addr_per_sender[m];
-        if (std::find(targets.begin(), targets.end(), state_addr) != targets.end()) {
-            continue;
-        }
-        TT_FATAL(
-            targets.size() < kMaxTargetsPerSender,
-            "QueueTensorPrefetcherRequest would send DRAM sender core ({}, {}) requests for more than {} distinct "
-            "GlobalCircularBuffers and PrefetcherPipes since StartTensorPrefetcher. Reuse targets, or stop and restart "
-            "the prefetcher between groups of them.",
-            sender_logical_cores_[s].x,
-            sender_logical_cores_[s].y,
-            kMaxTargetsPerSender);
-        targets.push_back(state_addr);
+        record_drain_target(
+            target_sender_indices[m], target.state_addr_per_sender[m] | pipe_bit, target.state_alloc_per_sender[m]);
     }
 
     // Engaged only when the caller named a queue that is mid trace-capture; that is what
@@ -1407,6 +1392,68 @@ void TensorPrefetcherManager::queue_to_target(
     if (!recording_trace_id.has_value()) {
         queue_cv_.notify_one();
     }
+}
+
+void TensorPrefetcherManager::record_drain_target(
+    uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state) {
+    auto& targets = drain_targets_per_sender_[sender];
+    std::erase_if(targets, [](const DrainTarget& t) { return t.state.expired(); });
+    const auto it = std::find_if(targets.begin(), targets.end(), [&](const DrainTarget& t) { return t.word == word; });
+    if (it == targets.end()) {
+        targets.push_back(DrainTarget{word, state});
+    }
+}
+
+std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_drain_requests() {
+    std::vector<std::vector<uint32_t>> words_per_sender(num_senders_);
+    size_t max_words = 0;
+    for (uint32_t s = 0; s < num_senders_; ++s) {
+        for (const DrainTarget& t : drain_targets_per_sender_[s]) {
+            // Held for the rest of stop, so the range cannot be released and reused between this check
+            // and the kernel reading it.
+            if (auto alive = t.state.lock()) {
+                words_per_sender[s].push_back(t.word);
+                drain_holds_.push_back(std::move(alive));
+            }
+        }
+        max_words = std::max(max_words, words_per_sender[s].size());
+    }
+
+    const uint32_t pcie_alignment =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
+    const MeshCoordinateRangeSet full_subset = full_mesh_subset();
+    std::vector<MeshCoordinate> all_devices;
+    for (const auto& range : full_subset.ranges()) {
+        for (const auto& coord : range) {
+            all_devices.push_back(coord);
+        }
+    }
+
+    // Page p of every sender that has more than p pages' worth of targets, so a sender with many
+    // targets gets several DRAIN pages and one with none gets none.
+    std::vector<Request> requests;
+    for (size_t first = 0; first < max_words; first += kDrainTargetsPerPage) {
+        Request req;
+        req.target_devices = all_devices;
+        for (uint32_t s = 0; s < num_senders_; ++s) {
+            const auto& words = words_per_sender[s];
+            if (words.size() <= first) {
+                continue;
+            }
+            const size_t count = std::min<size_t>(kDrainTargetsPerPage, words.size() - first);
+            std::vector<uint8_t> page(page_bytes, 0);
+            auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
+            header->base.cmd_id = DRAM_PREFETCHER_CMD_DRAIN;
+            header->drain.num_targets = static_cast<uint16_t>(count);
+            std::memcpy(
+                page.data() + sizeof(TensorPrefetcherRequestHeader), words.data() + first, count * sizeof(uint32_t));
+            req.sender_pages.push_back(std::move(page));
+            req.target_sender_indices.push_back(s);
+        }
+        requests.push_back(std::move(req));
+    }
+    return requests;
 }
 
 void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
@@ -1642,8 +1689,15 @@ void TensorPrefetcherManager::stop() {
         }
     }
 
+    // Drain every target still in memory before STOP: the kernel exits on STOP, and receivers that
+    // have not acked yet would otherwise land their acks in DRISC L1 the next program may reuse.
+    std::vector<Request> drains = build_drain_requests();
+
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
+        for (auto& drain : drains) {
+            pending_.push_back(std::move(drain));
+        }
         pending_.push_back(std::move(sentinel));
         stop_requested_.store(true);
     }
@@ -1670,7 +1724,8 @@ void TensorPrefetcherManager::stop() {
     device_index_by_coord_.clear();
     sender_logical_cores_.clear();
     trace_requests_.clear();
-    targets_per_sender_.clear();
+    drain_targets_per_sender_.clear();
+    drain_holds_.clear();
     num_senders_ = 0;
     num_banks_ = 0;
     active_ = false;

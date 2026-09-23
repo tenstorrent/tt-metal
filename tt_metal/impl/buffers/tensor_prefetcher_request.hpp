@@ -79,17 +79,9 @@ inline constexpr uint32_t kRequestPageBytes = 128;
 // the dispatcher; a WAIT_CQ request makes the kernel spin until it is reached.
 constexpr uint32_t kNumCqSignalSlots = 2;
 
-// Most distinct delivery targets (GlobalCircularBuffers or PrefetcherPipes) one sender core may be
-// sent requests for between StartTensorPrefetcher and StopTensorPrefetcher. Each sender records every
-// target it loads in a table of this many words in its DRISC L1, and on stop waits for every
-// receiver of every recorded target to ack, since an earlier target's receivers may still be
-// consuming after the sender has moved on to another. The host rejects a queue call that would take a
-// sender past this count.
-inline constexpr uint32_t kMaxTargetsPerSender = 32;
-
-// A target's word in that table: its target_state_addr, which is L1-aligned, with the low bit set for
-// a PrefetcherPipe and clear for a GlobalCircularBuffer.
-inline constexpr uint32_t kTargetTablePipeBit = 1;
+// How a DRAIN request names a target: its target_state_addr, which is L1-aligned, with the low bit
+// set for a PrefetcherPipe and clear for a GlobalCircularBuffer.
+inline constexpr uint32_t kDrainTargetPipeBit = 1;
 
 // Address-independent per-tensor geometry handed to the Tensor prefetcher kernel.
 // All values are derived from the tensor shape + dtype + GCB ring topology + DRISC L1
@@ -157,6 +149,7 @@ enum TensorPrefetcherCmdId : uint8_t {
     DRAM_PREFETCHER_CMD_STOP = 0,      // exit the request loop (no payload; all-zero page)
     DRAM_PREFETCHER_CMD_PREFETCH = 1,  // entry + layout tables follow the header
     DRAM_PREFETCHER_CMD_WAIT_CQ = 2,   // spin until cq slot[cq_index] >= cq_wait_value
+    DRAM_PREFETCHER_CMD_DRAIN = 3,     // wait for every receiver of the listed targets to ack
 };
 
 struct TensorPrefetcherBaseCmd {
@@ -197,12 +190,23 @@ struct TensorPrefetcherWaitCqCmd {
     uint32_t cq_wait_value;  // wait until slot >= this value (wrap-safe int32 compare)
 } __attribute__((packed));
 
+// DRAIN payload. A request returns without waiting for its receivers, so an earlier target's
+// receivers may still be acking into this sender's L1 after it has moved on to another target. The
+// host sends DRAIN pages naming every target this sender was queued for, and still holds the memory
+// of, right before STOP, so the kernel exits only once those acks have all landed. The target words
+// (kDrainTargetPipeBit encoding) follow the header.
+struct TensorPrefetcherDrainCmd {
+    uint8_t pad0;
+    uint16_t num_targets;
+} __attribute__((packed));
+
 // Header at the start of each request page: command id + per-command payload union.
 struct TensorPrefetcherRequestHeader {
     TensorPrefetcherBaseCmd base;
     union {
         TensorPrefetcherPrefetchCmd prefetch;
         TensorPrefetcherWaitCqCmd wait_cq;
+        TensorPrefetcherDrainCmd drain;
     } __attribute__((packed));
 } __attribute__((packed));
 
@@ -213,6 +217,10 @@ struct TensorPrefetcherRequestHeader {
 static_assert(
     sizeof(TensorPrefetcherRequestHeader) == 12,
     "TensorPrefetcherRequestHeader must be 12 bytes (host↔kernel wire contract)");
+
+// Target words one DRAIN page carries after its header.
+inline constexpr uint32_t kDrainTargetsPerPage =
+    (kRequestPageBytes - sizeof(TensorPrefetcherRequestHeader)) / sizeof(uint32_t);
 
 // A single tensor must fit in an otherwise-empty PREFETCH page (header + one layout + one entry).
 // This is a compile-time floor; a streaming tensor's layout slot additionally carries
