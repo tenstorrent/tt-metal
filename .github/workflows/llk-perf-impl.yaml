@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      pipeline:
+        description: "Value for the runs' pipeline column"
+        required: false
+        default: ""
+        type: string
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -131,6 +136,7 @@ jobs:
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
         run: |
           ${{ matrix.test-group.cmd }}
 
