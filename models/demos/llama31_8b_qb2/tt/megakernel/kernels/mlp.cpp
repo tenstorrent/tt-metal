@@ -18,7 +18,7 @@ constexpr unsigned gu_width = 224 / GU_WORKERS;
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#if COMPACT_ACTIVATIONS & 2
+#if (COMPACT_ACTIVATIONS & 2) || TINY_PROJECTION_M
 #include "compact_rows.hpp"
 #endif
 
@@ -117,6 +117,14 @@ void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(5), 128);
     const uint32_t scratch = get_write_ptr(31);
+#if TINY_PROJECTION_M
+    if (initialize_layer_scratch(1)) {
+        // Packers write only the first two faces. Preserve zero padding in
+        // the untouched lower faces of externally visible 32-row tiles.
+        zero_compact_input<gu_width * 2048>(get_write_ptr(16));
+        zero_compact_input<16 * 2048>(get_write_ptr(17));
+    }
+#endif
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(6)), scratch, 128);
     noc_async_read_barrier();
     const auto* addresses = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);

@@ -28,12 +28,25 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     compact_activations: str = "off"
+    projection_tile_height: int = 32
+    qkv_buffers: int = 0
+    qkv_early_blocks: int = -1
     head_placement: str = "row"
     profiler_phase: int = 0
     split_gu_bank_rows: bool = False
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.projection_tile_height not in (16, 32):
+            raise ValueError("Projection tile height must be sixteen or thirty-two")
+        if self.projection_tile_height == 16 and self.share_qkv_workers:
+            raise ValueError("Tiny projection tiles currently require separate QKV workers")
+        if self.qkv_buffers not in (0, 3, 4, 5, 6, 8) or self.qkv_early_blocks not in (-1, 0, 2, 3, 4, 5, 6, 8):
+            raise ValueError("Unsupported independent QKV buffering/prefix")
+        if self.qkv_early_blocks > (self.qkv_buffers or self.buffer_count):
+            raise ValueError("QKV prefix must fit its independent ring")
+        if (self.qkv_buffers or self.qkv_early_blocks >= 0) and (self.reader != "pipelined" or self.share_qkv_workers or self.prefetch_head_workers or self.compact_activations != "off"):
+            raise ValueError("Independent QKV buffers require ordinary separate QKV pipelined readers without head staging or compact transport")
         if self.head_placement not in ("row", "order", "select"):
             raise ValueError("Head placement must be row/order/select")
         if self.compact_activations not in ("off", "norm", "all"):
@@ -84,6 +97,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("TINY_PROJECTION_M", str(int(self.projection_tile_height == 16))),
             ("COMPACT_ACTIVATIONS", str({"off":0, "norm":1, "all":3}[self.compact_activations])),
             ("PROFILER_PROJECTION_PHASE", str(self.profiler_phase)),
             ("GU_BANK_SPLIT", str(int(self.split_gu_bank_rows))),

@@ -107,13 +107,21 @@ class FusedPreparation:
             )
 
         def kernel(file, cores, config, ct, rt, defines=()):
+            merged_defines = dict([*defines, *self.body.tuning.defines])
+            if file == "qkv.cpp":
+                buffers = self.body.tuning.qkv_buffers or self.body.tuning.buffers
+                prefix = self.body.tuning.qkv_early_blocks
+                merged_defines["PROJECTION_BUFFERS"] = str(buffers)
+                merged_defines["PROJECTION_LOOKAHEAD"] = str(min(buffers, self.body.tuning.lookahead))
+                if prefix >= 0:
+                    merged_defines["EARLY_WEIGHT_BLOCKS"] = str(prefix)
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=str(source / file),
                     core_ranges=_grid(cores),
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[*defines, *self.body.tuning.defines],
+                    defines=list(merged_defines.items()),
                     config=config,
                 )
             )
@@ -164,13 +172,22 @@ class FusedPreparation:
             ):
                 kernel("qkv.cpp", self.projection_cores, config, ct, rt, [(role, "1")])
             for index, count, dtype in (
-                (0, 16 * self.body.tuning.buffers, ttnn.bfloat16),
-                (1, 96 * self.body.tuning.buffers, ttnn.bfloat8_b),
+                (0, 16 * (self.body.tuning.qkv_buffers or self.body.tuning.buffers), ttnn.bfloat16),
+                (1, 96 * (self.body.tuning.qkv_buffers or self.body.tuning.buffers), ttnn.bfloat8_b),
                 (24, 6, ttnn.bfloat16),
                 (31, 1, ttnn.uint32),
             ):
                 cb([index], count, dtype, self.projection_cores)
-            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(16, self.packed))
+            packed_cb = ttnn.cb_descriptor_from_sharded_tensor(16, self.packed)
+            cbs.append(packed_cb)
+            if self.body.tuning.projection_tile_height == 16:
+                for item in cbs:
+                    if item.core_ranges == _grid(self.projection_cores):
+                        formats = list(item.format_descriptors)
+                        for fmt in formats:
+                            if fmt.buffer_index in (0, 16, 24):
+                                fmt.tile = ttnn.TileDescriptor(16, 32)
+                        item.format_descriptors = formats
         for role, core, head_tensor in zip(("QUERY", "KEY"), self.rope_cores, self.heads):
             rt = ttnn.RuntimeArgs()
             destination = self.rope_cores[0] if role == "QUERY" else self.cache_cores[0]

@@ -127,6 +127,13 @@ class FusedHead:
             output = next(item for item in cbs if item.format_descriptors[0].buffer_index == 16)
             partial.format_descriptors = [*partial.format_descriptors, *output.format_descriptors]
             cbs.remove(output)
+        if self.tuning.projection_tile_height == 16:
+            for item in cbs:
+                formats = list(item.format_descriptors)
+                for fmt in formats:
+                    if fmt.buffer_index in (0, 16, 24):
+                        fmt.tile = ttnn.TileDescriptor(16, 32)
+                item.format_descriptors = formats
         program.kernels = [*program.kernels, *kernels]
         program.cbs = [*program.cbs, *cbs]
         program.semaphores = [

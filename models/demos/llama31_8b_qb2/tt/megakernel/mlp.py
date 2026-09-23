@@ -391,6 +391,14 @@ class FusedMLP:
                 ttnn.cb_descriptor_from_sharded_tensor(18, self.product),
             )
         )
+        if self.tuning.projection_tile_height == 16:
+            for item in cbs:
+                if item.core_ranges == self.projection_grid:
+                    formats = list(item.format_descriptors)
+                    for fmt in formats:
+                        if fmt.buffer_index in (0, 4, 6, 16, 17, 24, 25):
+                            fmt.tile = ttnn.TileDescriptor(16, 32)
+                    item.format_descriptors = formats
         semaphores = [
             ttnn.SemaphoreDescriptor(
                 id=i,

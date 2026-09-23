@@ -5,6 +5,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef READER
 #include "projection_reader.hpp"
+#if TINY_PROJECTION_M
+#include "compact_rows.hpp"
+#endif
 #ifdef HEAD_PREFETCH_HELPER
 #include "head_prefetch.hpp"
 #endif
@@ -18,6 +21,9 @@ void kernel_main() {
 #ifdef READER
 #ifdef HEAD_PREFETCH_HELPER
     head_worker_prefetch();
+#endif
+#if TINY_PROJECTION_M
+    zero_compact_input<64 * 2048>(get_write_ptr(16));
 #endif
     if (worker == 0) {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 8);

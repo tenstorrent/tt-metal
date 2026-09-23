@@ -8,6 +8,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef READER
 #include "projection_reader.hpp"
+#if TINY_PROJECTION_M
+#include "compact_rows.hpp"
+#endif
 #ifdef HEAD_PREFETCH_RECEIVER
 #include "prefetch_receiver.hpp"
 #endif
@@ -21,6 +24,9 @@ uint64_t peer(uint32_t i, uint32_t address) {
 void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
 #ifdef READER
+#if TINY_PROJECTION_M
+    if (initialize_layer_scratch(1)) { zero_compact_input<6 * 2048>(get_write_ptr(16)); }
+#endif
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(2), 128);
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(3)), get_write_ptr(31), 128);
     noc_async_read_barrier();

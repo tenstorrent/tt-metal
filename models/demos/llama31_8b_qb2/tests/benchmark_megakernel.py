@@ -87,7 +87,10 @@ def parse_args():
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument("--compact-activations", choices=("off", "norm", "all"), default="off")
+    parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6, 8), default=0)
+    parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6, 8), default=-1)
     parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
+    parser.add_argument("--projection-tile-height", type=int, choices=(16, 32), default=32)
     parser.add_argument("--batch-swiglu", action="store_true")
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--scratch-init-once", choices=("off", "padding", "norm", "all"), default="off")
@@ -134,12 +137,13 @@ def run(args):
         profiler_phase={"main":0, "o":1, "gu":2, "down":3}[args.profiler_phase],
         compact_activations=args.compact_activations,
         head_placement=args.head_placement,
+        qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
-        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu,
+        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu, projection_tile_height=args.projection_tile_height,
         head_prefetch_targets=args.head_prefetch_targets, share_qkv_workers=args.share_qkv_workers,
         early_weight_blocks=args.early_weight_blocks, scratch_init_once=args.scratch_init_once,
         early_weight_phases={"qkv":1, "o":2, "gu":4, "qkv_o_gu":7, "down":8, "all":15}[args.early_weight_phases],
