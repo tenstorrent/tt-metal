@@ -67,8 +67,10 @@ void kernel_main() {
             const uint32_t b = 0x40u + (ex::tt_uva_t6_selector_core(t->origin) & 0x1Fu);
             const uint32_t want = b | (b << 8) | (b << 16) | (b << 24);
             const auto* p = reinterpret_cast<const volatile uint32_t*>(landing_addr);
-            if (p[0] >= expect) {
-                ++bad;  // word 0 is the sender's iteration stamp
+            // Word 0 is the sender's per-frame stamp. Frames from one origin arrive in
+            // order, so anything but seen-1 is a stale slot or a duplicated page.
+            if (p[0] != seen - 1) {
+                ++bad;
                 continue;
             }
             for (uint32_t k = 1; k < payload_bytes / sizeof(uint32_t); ++k) {
