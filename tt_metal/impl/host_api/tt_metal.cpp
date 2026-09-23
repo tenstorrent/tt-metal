@@ -75,7 +75,7 @@
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
-#include "impl/emulation/emulated_program_runner.hpp"
+#include "emulated_program_runner.hpp"
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"

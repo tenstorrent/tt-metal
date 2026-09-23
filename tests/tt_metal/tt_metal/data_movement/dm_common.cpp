@@ -38,8 +38,7 @@ L1AddressInfo get_l1_address_and_size(
     // Buffer allocation, so it's invisible to LiveL1Ranges). Under emule ASAN,
     // register it as host-managed L1 so the OOB check accepts the kernels' raw
     // reads/writes — including outputs the host only reads back AFTER launch,
-    // which the per-poke WriteToDeviceL1 hook can't see in time. See
-    // SANITIZER_CHECKS.md "Host-poked L1 regions".
+    // which the per-poke WriteToDeviceL1 hook can't see in time.
     if constexpr (emule::kEmuleAsanBuild) {
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
