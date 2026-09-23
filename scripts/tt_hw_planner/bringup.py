@@ -67,6 +67,10 @@ MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
     ("Wormhole", (1, 2)): "N300",
     ("Wormhole", (1, 4)): "N150x4",
     ("Wormhole", (1, 8)): "T3K",
+    # 8 chips as TP=4 x DP=2. chosen_tp is the mesh COLUMN count, so (2,4)
+    # gives TP=4 -- the viable split for models whose head counts divide 4
+    # but not 8 (e.g. 28 attention / 4 KV heads), which (1,8) blocks.
+    ("Wormhole", (2, 4)): "T3K_2x4",
     # Galaxy is a 32-chip box; its canonical large-scale shape is [4,8]
     # (see hardware.py). Both orientations map to the same device label so a
     # request for the canonical (4,8) resolves directly instead of failing.
