@@ -196,6 +196,96 @@ def test_moe_expert_token_remaps(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize(
+    "seq, reduction_size",
+    [
+        # default chunk size: the last metadata page of every group after the first is dropped
+        (32, REDUCTION_SIZE),
+        # small chunks: the surplus write runs past the core's slice of the reduced output
+        (4, 2),
+        # one page per group: only the first group a core owns is ever written
+        (2, 1),
+    ],
+    ids=["reduction_size_16", "reduction_size_2", "reduction_size_1"],
+)
+def test_moe_expert_token_remap_multiple_reduction_groups_per_core(
+    mesh_device,
+    mesh_shape,
+    experts_per_device,
+    batches_per_device,
+    seq,
+    selected_experts_k,
+    input_memory_config,
+    scheme,
+    reduction_size,
+):
+    """Regression coverage for issue #57461.
+
+    The reduced output is only exercised across group boundaries when a core owns more than one
+    reduction group, which requires batch*seq/reduction_size to exceed the core count the work is
+    split over. test_moe_expert_token_remaps stays below that threshold."""
+    devices = prod(mesh_shape)
+    batch = devices * batches_per_device
+    experts = devices * experts_per_device
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    reduction_groups = batch * seq // reduction_size
+    assert reduction_groups > num_cores, (
+        f"configuration leaves at most one reduction group per core ({reduction_groups} groups over "
+        f"{num_cores} cores) and would not cover the multi-group path"
+    )
+
+    expert_mapping, metadata_tensor, topk_tensor, output_mapping, output_reduced = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, reduction_size, scheme
+    )
+
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    mapping_test, reduced_test = ttnn.moe_expert_token_remap(
+        tt_topk, tt_expert_mapping, tt_metadata, reduction_size=reduction_size
+    )
+
+    mapping_test_torch = ttnn.to_torch(mapping_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_with_pcc(mapping_test_torch, output_mapping)
+
+    reduced_test_torch = ttnn.to_torch(reduced_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_equal(reduced_test_torch, output_reduced)
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("seq", [1, 2])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
