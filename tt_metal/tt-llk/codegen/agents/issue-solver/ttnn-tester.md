@@ -20,13 +20,6 @@ The compute build is an early compile gate. For queued Blackhole/Wormhole
 silicon, the queue independently repeats the same targeted build in its warm
 workspace; never transfer the compute build to the queue.
 
-## Core Rules
-
-- Batch independent reads. When several file reads, greps or globs do not
-  depend on each other's results, issue them in one message so they run
-  together. A call whose target comes from an earlier result waits for it;
-  edits, dispatch and git stay one per message.
-
 ## State and pre-flight
 
 ```bash

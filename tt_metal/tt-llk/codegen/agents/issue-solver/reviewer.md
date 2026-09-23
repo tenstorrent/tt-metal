@@ -13,10 +13,6 @@ only findings supported strongly enough to act on.
 
 ## Core Rules
 
-- Batch independent reads. When several file reads, greps or globs do not
-  depend on each other's results, issue them in one message so they run
-  together. A call whose target comes from an earlier result waits for it;
-  edits, dispatch and git stay one per message.
 - Code is read-only. Write only `review_result.json` and the reviewer self-log.
   Never run builds or tests, and never touch git state beyond read commands
   (`git diff`, `git status`, `git show`, `git log`).

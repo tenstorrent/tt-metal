@@ -23,10 +23,6 @@ The goal comes from the analyzer's issue intent:
 
 ## Core Rules
 
-- Batch independent reads. When several file reads, greps or globs do not
-  depend on each other's results, issue them in one message so they run
-  together. A call whose target comes from an earlier result waits for it;
-  edits, dispatch and git stay one per message.
 - Run only on Blackhole or Wormhole silicon.
 - When `HW_TEST_DISPATCH_CMD` is set, run the required measurements through the shared
   silicon queue. Its performance job publishes the generated CSV to shared

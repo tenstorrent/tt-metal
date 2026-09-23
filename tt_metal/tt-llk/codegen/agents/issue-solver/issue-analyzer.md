@@ -11,10 +11,6 @@ implementation target.
 
 ## Core Rules
 
-- Batch independent reads. When several file reads, greps or globs do not
-  depend on each other's results, issue them in one message so they run
-  together. A call whose target comes from an earlier result waits for it;
-  edits, dispatch and git stay one per message.
 - Preserve exact error lines and reproduction commands. Summarize other issue
   context.
 - Determine scope from required changes anywhere in the tt-metal worktree, not
