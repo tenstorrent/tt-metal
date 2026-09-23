@@ -442,26 +442,11 @@ class CosyVoiceTTNN:
     ) -> "StreamResult":
         """The full chain, **interleaved**: waveform chunks start before the LLM stops.
 
-        The audio this returns is correct, and for most of this port's life it was not.
-        Interleaved synthesis used to peak around 72 against a batch path peaking at
-        0.001 on the same prompt, with identical tokens and a correct chunk schedule.
-        The cause was that the state `StreamState` carries across a chunk boundary sat
-        in device buffers while `generate()`'s trace was live, and a later
-        `execute_trace` overwrote it.
-
-        Those four tensors now live in persistent buffers on the synthesizer, allocated
-        before any trace is captured and thereafter written only by `ttnn.copy`, so
-        neither an allocation nor a readback crosses a live trace. That is also why the
-        warm-up below is a correctness requirement and not a speed trick: it is what
-        allocates the buffers at a safe moment. `TtStreamingSynthesizer._carry_store`
-        carries the reasoning, including why the earlier remedy -- reading those tensors
-        back to the host at every seam -- cured the audio and wedged
-        `tests/perf/test_streaming_perf.py` on Blackhole instead.
-
-        Checked by
-        `tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`,
-        which asserts the streamed peak stays in proportion to the batch path's, and by
-        `tests/perf/test_streaming_perf.py` for the schedule.
+        The warm-up chunk below is required for correct audio: it allocates the
+        synthesizer's carry buffers before `generate` captures its decode trace (see
+        `TtStreamingSynthesizer._carry_store`). The audio is checked against the batch
+        path by
+        `tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`.
 
         `synthesize` above runs the three stages strictly in order -- every token,
         then all the mel, then all the audio -- so the first sample of output exists

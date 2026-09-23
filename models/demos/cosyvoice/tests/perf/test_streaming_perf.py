@@ -231,11 +231,8 @@ def test_device_streaming_first_audio_latency(device):
     def run_streaming(toks, synth):
         """The same three stages, interleaved -- `synthesize_streaming`'s order.
 
-        `synth` is built by the caller *before* the decode trace is captured, and that
-        is a correctness requirement rather than tidiness: the four tensors a stream
-        carries across a chunk seam live in persistent buffers on the synthesizer, and
-        a buffer first allocated while a trace is live can be overwritten by that
-        trace. `TtStreamingSynthesizer._carry_store` has the full account.
+        `synth` must be built and warmed before the decode trace is captured, so its
+        carry buffers exist before the trace does (`TtStreamingSynthesizer._carry_store`).
         """
         reset_decoder()
         first_s, chunks, n_samples = None, [], 0
@@ -283,9 +280,8 @@ def test_device_streaming_first_audio_latency(device):
     )
     for t in (warm_mel, w_wav, w_src):
         ttnn.deallocate(t)
-    # The measured run reuses this synthesizer rather than building its own, so the
-    # carry buffers it allocates here -- with no trace live -- are the ones the
-    # interleaved pass writes into later.
+    # `run_streaming` reuses this synthesizer, so its carry buffers are allocated here,
+    # with no trace live.
     synth = TtStreamingSynthesizer(device, flow, hift, cfg)
     with synth.session(ctx, rng) as warm_session:
         for token in tokens:

@@ -116,7 +116,7 @@ shipped (see below).
 | Efficient KV-cache for long sequences | ✅ | `test_device_fixed_shape_cache_matches_the_growing_one` | *Fixed-width KV cache* |
 | Flash attention or equivalent | ✅ both stages | `test_device_fused_attention_matches_explicit` | *Fused decode attention*, *Flash attention* |
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
-| **Batch processing for multiple utterances** | ✅ decode and end-to-end synthesis, both checked | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked), `test_device_batched_synthesis_agrees_with_one_at_a_time` (end to end, since 2026-09-23) | *Batched decode* |
+| **Batch processing for multiple utterances** | ✅ decode and end-to-end synthesis, both checked | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked), `test_device_batched_synthesis_agrees_with_one_at_a_time` (end to end) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
 | **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real; Blackhole), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API, all three boards) | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
@@ -126,19 +126,17 @@ shipped (see below).
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* and *Known limitations* | — |
 | `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
 | `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
-| Streaming inference | ✅ content, schedule and audio | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio, since 2026-09-22) | *Streaming* |
+| Streaming inference | ✅ content, schedule and audio | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio) | *Streaming* |
 | Efficient multi-lingual switching | ✅ 5 languages × 4 modes | `demo/sweep.py` | *Speech quality* |
 
 ---
 
-## What is not met, what was fixed, and why
+## What is not met, and why
 
-Three requirements are unmet (`RTF < 0.2`, `RTF < 0.5` on n300, speculative decoding)
-and three device defects remain open (the Wormhole `test_streaming_perf` hang, the n300
-amplitude difference, and the vocoder's per-geometry L1_SMALL growth). Two entries that
-were in this list are now fixed -- the interleaved schedule's corrupt audio and
-end-to-end batched synthesis -- and their accounts are kept, because in both cases the
-remedies that failed are the instructive half.
+Three requirements are unmet: `RTF < 0.2`, `RTF < 0.5` on n300, and speculative
+decoding. Three device defects are open: the Wormhole `test_streaming_perf` hang, the
+n300 amplitude difference, and the vocoder's per-geometry L1_SMALL growth. End-to-end
+batched synthesis works, under the constraint below.
 
 ### `RTF < 0.2` — reached the floor of this decomposition
 
@@ -182,67 +180,28 @@ per-token cost rather than the number of sequential steps — was taken instead:
 capture, the fused decode attention, the fixed-width and in-place KV caches, and now
 batching. `PERF.md` *The LLM decode step* carries what each was worth.
 
-### End-to-end batched synthesis — fixed 2026-09-23
+### End-to-end batched synthesis — runs with the CFM trace cache off
 
-Closed. `test_device_batched_synthesis_agrees_with_one_at_a_time` ran for the life of
-this PR as a skip, on the grounds that `synthesize_batch` wedged the board on the second
-utterance and the cause was not established. It now passes in 18 s, two utterances at
-100 % token agreement against the same two run alone.
-
-`TtTransformerLM.generate_batch` was never the problem and was always verified: batched
-rows match single-row decode at ragged prompt lengths, and the `B = 1..8` sweep fails if
-batching amortises nothing. That is where the win is — the LLM runs once per *token* and
-is the large majority of an utterance, while the flow decoder and the vocoder run once
-per utterance each.
-
-What blocked it was two traces alive at once. `COSYVOICE_CFM_TRACE_CACHE` keeps the flow
-decoder's estimator trace across utterances, which is what makes a second utterance of
-the same mel length cheap. `synthesize_batch` then captures a *decode* trace in
-`generate_batch` and runs the flow decoder once per utterance, so a cached estimator
-trace is live while another trace is captured — and TTNN is explicit: *"Allocating
-device buffers is unsafe due to the existence of an active trace."* The last line before
-each hang is that warning.
-
-Four configurations on `p150a`, and the scope is the part worth recording:
-
-| configuration | result |
-|---|---|
-| cache on (the shipped default) | hangs; 40-minute timeout, twice |
-| cached trace released at entry to `synthesize_batch` | hangs; 40-minute timeout |
-| cache disabled for the duration of `synthesize_batch` | hangs; 40-minute timeout |
-| cache never captured in this process (`COSYVOICE_CFM_TRACE_CACHE=0`) | **passes, 18 s, 100 % agreement** |
-
-So a *released* trace still makes a later capture unsafe. That is an upstream TTNN
-property rather than something this port can fix from the outside, and it is why the
-test sets the variable before the pipeline is constructed — `TtConditionalCFM` reads it
-once, in its constructor — rather than toggling it around the call.
+`test_device_batched_synthesis_agrees_with_one_at_a_time` sets
+`COSYVOICE_CFM_TRACE_CACHE=0` before the pipeline is built; `TtConditionalCFM` reads it
+once, in its constructor. With the cache on, the flow decoder's estimator trace from an
+earlier utterance is still live when `generate_batch` captures its decode trace, and the
+device hangs; the last log line is TTNN's *"Allocating device buffers is unsafe due to
+the existence of an active trace."* Releasing the cached trace at entry to
+`synthesize_batch`, or disabling the cache only for the call, hangs the same way: a
+released trace still makes a later capture unsafe, which is TTNN behaviour this port
+cannot change.
 
 The cost is one estimator capture per utterance instead of one per distinct mel length,
-paid only by `synthesize_batch`. Single-utterance `synthesize` keeps the cache and its
-figures in `PERF.md` are unchanged.
+paid only by `synthesize_batch`; `synthesize` keeps the cache.
 
-### The L1_SMALL growth across vocoder geometries — measured, still open
+### L1_SMALL grows with each distinct vocoder geometry — open
 
-Separate from the above, and the reason this section used to blame it. The vocoder parks
-prepared `conv_transpose2d` weights in L1_SMALL per distinct mel geometry and never frees
-them. Measured on `p150a` by synthesising one prompt at a sweep of token budgets on one
-open device:
-
-| geometries seen | L1_SMALL allocated | per-geometry cost |
-|---|---:|---:|
-| 1 (96 tokens) | `16 896 B` | — |
-| 2 (128) | `31 680 B` | `+14 784` |
-| 3 (160) | `48 640 B` | `+16 960` |
-| 4 (192) | `65 280 B` | `+16 640` |
-| 7 (288) | `123 520 B` | `+20 160` |
-
-Revisiting a geometry already seen costs nothing — five calls alternating two geometries
-stay flat at `32 064 B`. So the growth is per distinct geometry, not per call, and it
-scales with mel length.
-
-At the `l1_small_size = 131072` the e2e tests ask for, that admits about three geometries
-before the allocator's top clashes with `conv_transpose2d`'s static circular-buffer
-region:
+The vocoder keeps prepared `conv_transpose2d` weights in L1_SMALL for each distinct mel
+geometry and never frees them: 15-20 KB per geometry, growing with mel length.
+Revisiting a geometry costs nothing. At `l1_small_size = 131072` about three geometries
+fit before the allocator's top clashes with `conv_transpose2d`'s static circular-buffer
+region, which raises rather than hangs:
 
 ```
 RuntimeError: Statically allocated circular buffers in program 2455 clash with L1
@@ -250,77 +209,9 @@ buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1384576 and static cir
 buffer region ends at 1395648
 ```
 
-That is a clean exception rather than a hang, which is how it is distinguishable from
-the trace defect above. `test_device_batched_synthesis_agrees_with_one_at_a_time` asks
-for `524288` for headroom. Freeing the per-geometry state is upstream work and is not
-done here; `scripts/probe_l1_growth.py` reproduces the sweep.
-
-### The interleaved schedule's corrupt audio — fixed 2026-09-22
-
-Closed. `CosyVoiceTTNN.synthesize_streaming` used to return audio peaking around 72
-against a batch path peaking at 0.001 on the same prompt — identical tokens, correct
-chunk schedule, destroyed waveform. Measured on `p150a` one commit apart, with the
-whole `tests/e2e/` suite and `tests/perf/test_streaming_perf.py` in the same two runs:
-
-| | streamed peak | batch peak | `test_streaming_perf` |
-|---|---:|---:|---|
-| before | `72.5000` | `0.0003` | passes, first-audio gain `1.19×` |
-| after | `0.0006` | `0.0005` | passes, first-audio gain `1.19×` |
-
-The remedy is in `TtStreamingSynthesizer._carry_store`. The four tensors a stream
-carries across a seam now live in persistent buffers allocated before any trace is
-captured, and are written thereafter only by `ttnn.copy` — so neither an allocation nor
-a readback crosses a live trace. The first chunk of the warm-up pass adopts each
-buffer, which is what sizes and types them, and is why both callers run that warm-up
-before capturing a trace.
-
-`tests/e2e/test_pipeline_api.py` no longer pins a defect band; it asserts `peak < 1.5`
-and that the streamed peak stays in proportion to the batch path's. Streaming content
-equivalence is unchanged at mel-space PCC `0.901830`, the same figure `PERF.md` already
-records. The full suite at that commit: 20 passed, 1 skipped — the skip is end-to-end
-batched synthesis, which is a different defect and still open.
-
-The account below is kept because it is what made the fix findable, and because the
-remedy that did *not* work is the more useful half of it.
-
-The cause was established first:
-
-* `generate(use_trace=False)` makes it correct. Same conditioning, same schedule,
-  same tokens; the only variable is whether a decode trace exists. So it is not the
-  per-chunk conditioning, which an earlier revision of this document wrongly blamed.
-* Per chunk against a no-trace reference: chunk 0, vocoded mid-generation with the
-  trace live, matches at mel PCC `0.99999988` and waveform PCC `0.99999994`. Chunk 1,
-  the finalize, has a bit-identical mel at PCC `1.000000000` and waveform PCC
-  `0.011`.
-
-Identical mel with destroyed audio rules out the flow decoder and the vocoder's
-arithmetic and leaves what `StreamState` carries across a seam — `mel_overlap`,
-`hift_mel`, `hift_source`, `hift_speech` — allocated during chunk 0 while the trace was
-live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"These
-buffers may be corrupted once a trace is executed."*
-
-The first remedy tried was to park those four on the host between chunks (`to_torch`
-out, `from_torch` back). It fixes the audio — verified on `p150a` and n300 — and it is
-*not* what shipped, because it wedges `tests/perf/test_streaming_perf.py` on Blackhole,
-where that test otherwise passes in 12.7 s. Draining the queue before the readback and
-hoisting the synthesizer out of the traced region were also tried, and changed nothing.
-
-Why it wedged is the part worth keeping, because it is what pointed at the fix that
-worked. Parking trades one half of TTNN's warning for the other: instead of *carrying*
-a device buffer across a live trace, it *allocates* one (`from_torch`) and *reads one
-back* (`to_torch`) inside the window where a trace is live, at every seam. The readback
-is the expensive half — it forces a device-to-host transfer at a point where the trace
-owns the queue.
-
-What ships avoids both. The carried tensors live in buffers allocated *before* any
-trace is captured, and every later chunk writes into them with a device-to-device
-`ttnn.copy`: no allocation, no readback, nothing new asked of the allocator at a moment
-when the trace already owns addresses. That also explains why the ordering constraint
-is real rather than superstition — a buffer first allocated *after* capture can sit on
-an address the trace has baked in, which is the original defect wearing a different
-hat. Both callers therefore build their synthesizer before capturing a trace, and
-`tests/perf/test_streaming_perf.py` was changed to reuse one rather than construct a
-second after capture.
+`demo/demo.py` opens a fresh device per utterance for this reason, and
+`test_device_batched_synthesis_agrees_with_one_at_a_time` asks for `524288`. Freeing the
+per-geometry state is upstream work. `scripts/probe_l1_growth.py` measures the growth.
 
 ### `test_streaming_perf` hangs on Wormhole — open
 
@@ -352,7 +243,8 @@ What remains is the work this test runs *under* the live trace and
 four passes. That is where to look next, and it is a narrowing rather than a diagnosis.
 
 Ruled out along the way: the trace region size (384 MB → 64 MB changed nothing — it
-captures one trace, not the in-place path's 65); and the `StreamState` fix above.
+captures one trace, not the in-place path's 65); and parking `StreamState` on the host
+between chunks.
 
 Two different warm-ups are in play here and they are worth keeping apart. The one this
 test already performs warms the flow decoder and the vocoder before the AR trace is
@@ -360,33 +252,12 @@ captured. The one that mattered for the probe above warms the AR decoder's own p
 This test does not do that second one — its prefill still compiles under a live trace,
 after capture — which makes it the cheapest thing to try next.
 
-**The warm-before-capture constraint no longer holds on Blackhole, as of the carry-buffer
-fix.** That constraint is what made this lead hard to test without a Wormhole: reversing
-the order — capture the decode trace first, then drive the flow decoder and the vocoder
-*through* it — used to hang Blackhole outright, log frozen and JIT cache flat. It is the
-same mechanism the Wormhole hang is now narrowed to, and it is reproducible on hardware
-that is available.
-
-`scripts/probe_warm_order.py --order reversed` forces exactly that ordering. Measured on
-`p150a` at the commit that fixed the streaming carry buffers:
-
-| JIT cache | result |
-|---|---|
-| warm | survives; capture at `0.2 s`, warm-up through the traced path at `3.8 s`, interleaved pass complete at `6.2 s` |
-| **cleared** | survives; capture at `10.7 s`, warm-up at `258.8 s`, interleaved pass complete at `273.8 s` |
-
-The cleared-cache row is the one that matters, because the recorded hang was reproducible
-"with a cleared cache on a freshly reset board" — so in that run `248 s` of kernels
-genuinely compiled while the trace was live, which is the condition the constraint
-existed for.
-
-What that does and does not say. It says the Blackhole-reproducible instance of
-"allocating under a live trace wedges the board" is fixed by holding the carried buffers
-in allocations made before capture. It does **not** say the n300 hang is fixed: n300 was
-unavailable throughout this work and the claim has not been tested there. What it changes
-is the priority — the next person with an n300 should run
-`tests/perf/test_streaming_perf.py` unskipped before investigating further, because the
-mechanism it was blocked on now survives the equivalent test on the other architecture.
+The reverse order — capture the decode trace first, then run the flow decoder and the
+vocoder through it — completes on Blackhole:
+`scripts/probe_warm_order.py --order reversed` finishes on `p150a` in 6.2 s with a warm
+JIT cache and 273.8 s with a cleared one, 248 s of that compiling kernels under the live
+trace. It is untested on n300, where the next step is to run `test_streaming_perf`
+unskipped.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 

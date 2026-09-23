@@ -143,24 +143,9 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     )
     assert streamed.shape[1] > 0 and torch.isfinite(streamed).all(), "streamed audio is empty or not finite"
 
-    # **The interleaved path must produce audio, not a corrupted waveform.**
-    # This assertion used to pin a *defect* band -- interleaved synthesis peaked around
-    # 72 on Blackhole and 8 on Wormhole against a batch path peaking at 0.001, with
-    # identical tokens and a correct chunk schedule. The cause was that the state
-    # `StreamState` carries across a chunk seam sat in device buffers while
-    # `generate()`'s trace was live, and a later `execute_trace` overwrote it.
-    #
-    # That is fixed. The carried tensors now live in persistent buffers allocated
-    # before any trace is captured and are only ever written by `ttnn.copy`, so neither
-    # an allocation nor a readback crosses a live trace --
-    # `TtStreamingSynthesizer._carry_store` has the account, and `docs/VALIDATION.md`
-    # records what an earlier host-parking remedy cost and why this one is different.
-    # Measured on p150a at the commit that shipped it: streamed peak 0.0006 against a
-    # batch peak 0.0005, where the same test on the previous commit gave 72.5.
-    #
-    # Checked against the batch path rather than a constant, because the absolute peak
-    # depends on the utterance: what has to hold is that interleaving does not change
-    # the signal's scale.
+    # Interleaving must not change the signal's scale. The streamed peak is checked for
+    # clipping and against the batch path's on the same prompt, because the absolute
+    # peak depends on the utterance.
     peak, batch_peak = float(streamed.abs().max()), float(n_batch.abs().max())
     assert peak < 1.5, (
         f"streamed peak {peak:.4f} -- the interleaved path is clipping or corrupted. "
@@ -190,30 +175,9 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
         )
 
 
-# **Blocked by a pre-existing defect, not by batching.** This test synthesises two
-# utterances of different lengths on one open device -- first singly, then batched --
-# and it hangs on the second one, before printing anything, with the device needing a
-# reset afterwards. That is the known L1_SMALL growth across differing vocoder
-# geometries: something in the `conv_transpose2d`/halo path accumulates per-geometry
-# device state that `release_caches()` does not free. It is why `demo/demo.py` opens a
-# fresh device per utterance, and it predates every change here.
-#
-# So what is blocked is *end-to-end* batched synthesis on one device, not batching.
-# The batched decode itself -- which is the whole of the throughput win, since the LLM
-# runs once per token and the other two stages once per utterance -- is verified in
-# `tests/perf/test_batching.py`: batched rows match single-row decode at ragged
-# prefixes (PCC 0.9999998808 on Blackhole), and the batch=1..8 sweep is gated.
-#
-# Skipped rather than deleted, because the moment the L1 growth is root-caused this is
-# the test that says whether `synthesize_batch` was right all along.
-# **A larger L1_SMALL bank, and the measurement that says why.** The vocoder parks
-# prepared `conv_transpose2d` weights in L1_SMALL per distinct mel geometry and never
-# frees them -- measured at 15-20 KB each, growing with mel length, and revisiting a
-# geometry already seen costs nothing. The 131072 the rest of this file asks for
-# therefore admits about three geometries before the allocator's top clashes with
-# `conv_transpose2d`'s static circular-buffer region, which is what used to wedge this
-# test on the second utterance. Seven geometries fit in 524288 with room to spare.
-# `docs/VALIDATION.md` carries the sweep.
+# `l1_small_size` is raised for headroom: the vocoder keeps per-geometry
+# `conv_transpose2d` state in L1_SMALL and never frees it, and the 131072 the rest of
+# this file uses fills after a few distinct mel geometries (`docs/VALIDATION.md`).
 @needs_weights
 @needs_inputs
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 524288, "trace_region_size": 402653184}], indirect=True)
@@ -231,25 +195,12 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch)
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
 
-    # **The CFM estimator's trace cache is off for this test, and that is what
-    # unblocked it.** `TtConditionalCFM` reads `COSYVOICE_CFM_TRACE_CACHE` once, in its
-    # constructor, so this has to be set before `_model` builds the pipeline.
-    #
-    # The cache keeps the flow decoder's estimator trace alive between utterances. This
-    # test then captures a *decode* trace in `generate_batch` and runs the flow decoder
-    # once per utterance, so a cached estimator trace is live while another trace is
-    # captured -- and TTNN says what that costs: "Allocating device buffers is unsafe
-    # due to the existence of an active trace."
-    #
-    # Measured on p150a, and the scope is the surprising part. Three configurations
-    # hang the board for the full 40-minute timeout: the cache left on; the cached
-    # trace released at entry to `synthesize_batch`; and the cache disabled only for
-    # the duration of that call. The one that passes -- in 18 s, at 100 % token
-    # agreement on both rows -- is the cache never having captured at all in this
-    # process, which is what setting the variable before construction achieves. So a
-    # *released* trace still makes a later capture unsafe, which is an upstream TTNN
-    # property rather than something this port can fix from the outside.
-    # `docs/VALIDATION.md` carries the full account of all four.
+    # `synthesize_batch` needs the CFM estimator's trace cache off for the whole process:
+    # with it on, the estimator trace cached by an earlier utterance is live when
+    # `generate_batch` captures its decode trace, and the device hangs. Releasing the
+    # cached trace, or disabling the cache only around the call, hangs the same way.
+    # `TtConditionalCFM` reads the variable once, in its constructor, so it is set
+    # before `_model` builds the pipeline.
     monkeypatch.setenv("COSYVOICE_CFM_TRACE_CACHE", "0")
 
     paths = _cases(2)

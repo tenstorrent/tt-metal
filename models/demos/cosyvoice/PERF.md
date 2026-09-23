@@ -64,10 +64,8 @@ The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 | `perf` | 14 | `/dev/tenstorrent` | 14 passed, on each of the three configurations, on all three boards |
 
 The device tier re-runs the host tier (it lives in `tests/pcc/`), which is why 150 is
-not 113 + 37. The skip in that column was end-to-end batched synthesis, blocked by a
-device defect; it is fixed as of 2026-09-23 and the test now runs — see §10 item 5 and
-`docs/VALIDATION.md`. These counts are the 2026-08-30 certification run and are not
-re-stated here for the two fixes that followed it.
+not 113 + 37. These counts are from the 2026-08-30 certification run, which skipped
+end-to-end batched synthesis; that test now runs (§10 item 5).
 
 ## 2. The requirements, and the verdict on each
 
@@ -231,8 +229,8 @@ passes. What has no Wormhole timing is this head-to-head measurement.
 
 The test wedges the board — log frozen, JIT cache flat, needing a reset — where both
 Blackhole boards run the identical code over identical geometries. Ruled out: the trace
-region size, the warm-before-capture ordering, and the `StreamState` fix that cured the
-corruption described in §10. The untested lead is that this test holds one decode trace
+region size, the warm-before-capture ordering, and parking `StreamState` on the host
+between chunks. The untested lead is that this test holds one decode trace
 live across four passes while `synthesize_streaming` captures and releases per call.
 It skips on Wormhole with that reason rather than hanging the rest of the run; §10 and
 `docs/VALIDATION.md` carry the detail.
@@ -381,49 +379,34 @@ against the requirements they touch.
 
 1. `RTF < 0.2` is not reachable on this decomposition — §3.4. Bounded below by the
    Euler count and by the decode step's weight traffic, not by tuning.
-2. L1_SMALL grows across differing vocoder geometries on one open device, and the
-   growth is now measured: the prepared `conv_transpose2d` weights cost `15-20 KB` per
-   *distinct* mel geometry and are never freed, while revisiting a geometry already
-   seen costs nothing. At `l1_small_size = 131072` that admits about three geometries
-   before the allocator's top clashes with `conv_transpose2d`'s static circular-buffer
-   region — a clean exception, not a hang. It is why `demo/demo.py` opens a fresh
-   device per utterance. Freeing the state is upstream work and is not done here;
-   `scripts/probe_l1_growth.py` reproduces the sweep and `docs/VALIDATION.md` has the
-   table. This is *not* what blocked end-to-end batched synthesis, which is fixed —
-   see item 5.
+2. L1_SMALL grows with each distinct vocoder geometry on one open device and is never
+   freed, which is why `demo/demo.py` opens a fresh device per utterance. Running out
+   raises an allocator exception rather than hanging. Freeing it is upstream work;
+   `docs/VALIDATION.md` has the measurement.
 3. Device buffers allocated while a trace is live get corrupted, and can hang the
    board. TTNN warns about it — *"Allocating device buffers is unsafe due to the
    existence of an active trace"* — and this port has been bitten by two distinct
-   symptoms of it, unrelated to each other beyond sharing that cause. One:
-   `synthesize_streaming`'s interleaved audio was corrupted across a chunk seam.
-   Fixed 2026-09-22 — the carried tensors moved into persistent buffers allocated
-   before capture and written only by `ttnn.copy`, so neither an allocation nor a
-   readback crosses a live trace; streamed peak `72.5` → `0.0006` against a batch peak
-   of `0.0005`, with `test_device_streaming_first_audio_latency` still passing at the
-   same `1.19×` first-audio gain. Two, still open:
+   symptoms of it, unrelated to each other beyond sharing that cause. One: corrupted
+   interleaved audio in `synthesize_streaming`, avoided by allocating the state carried
+   across chunk seams before the AR decode trace is captured — so the streaming
+   synthesizer must be built and warmed before capture. Two, still open:
    `test_device_streaming_first_audio_latency` hangs Wormhole, cause not established.
    A previous entry here called it an upstream TTNN defect and
    named re-seeding a trace's buffers after execution; that was withdrawn when the
    probe behind it turned out to be compiling kernels under a live trace, which the
    real path does not do.
-   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each,
-   why host-parking cured the audio but wedged a Blackhole perf test, and the design
-   constraint that leaves (the flow decoder and vocoder must be warmed, and the
-   streaming synthesizer built, before the AR decode trace is captured).
+   `docs/VALIDATION.md` records what has been ruled out.
 
 4. An n300/Blackhole streaming amplitude difference on one synthetic case, found
    while diagnosing the above and not yet explained. Which figure is wrong is not
    established; the content-comparison test passes on n300.
    `docs/VALIDATION.md` records what has been ruled out.
 
-5. End-to-end batched synthesis is fixed, and the cause was not item 2. Two traces
-   alive at once did it: `COSYVOICE_CFM_TRACE_CACHE` keeps the flow decoder's estimator
-   trace across utterances, and `synthesize_batch` captures a decode trace in
-   `generate_batch` while that one is live. Four configurations were measured on `p150a` — cache
-   on, cached trace released at entry, cache disabled for the duration of the call, and
-   cache never captured in the process. Only the last passes, in `18 s` at `100 %`
-   token agreement, so a *released* trace still makes a later capture unsafe.
-   `docs/VALIDATION.md` carries the table of all four.
+5. `synthesize_batch` needs `COSYVOICE_CFM_TRACE_CACHE=0` set before the pipeline is
+   built. With the cache on, the flow decoder's estimator trace from an earlier
+   utterance is live when `generate_batch` captures its decode trace, and the device
+   hangs; releasing the cached trace first does not prevent it. `docs/VALIDATION.md`
+   has the detail.
 
 Items 2 and 3's hang share a shape — device state accumulating across geometries or
 across a trace — and may share a cause. That is a guess, and is labelled as one.

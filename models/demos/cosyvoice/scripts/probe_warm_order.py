@@ -1,37 +1,17 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Does the warm-before-capture constraint still hold once the carry buffers are safe?
+"""Run the flow decoder and the vocoder under a live AR decode trace.
 
-`docs/VALIDATION.md` records two facts that this probe puts together.
+`tests/perf/test_streaming_perf.py` warms the flow decoder and the vocoder, then
+captures the AR decode trace (`--order shipping`). `--order reversed` captures first and
+warms through the traced path, so both compile and allocate under the live trace: the
+condition the open Wormhole hang in that test is narrowed to (`docs/VALIDATION.md`).
+Both orders end with one interleaved pass and print `ORDER_<order>_SURVIVED` on
+completion. Only survival is checked, not the audio.
 
-The first is a design constraint, reproducible on Blackhole: `test_streaming_perf` warms
-the flow decoder and the vocoder *before* the AR decode trace is captured, and
-"reversing that order hangs Blackhole outright". That is the same mechanism TTNN warns
-about -- "Allocating device buffers is unsafe due to the existence of an active trace"
--- reached from the other side.
-
-The second is that the Wormhole hang in that same test is not root-caused, and the
-remaining lead is the flow decoder and the vocoder running *under* the live trace,
-which is exactly what the reversed order forces.
-
-So the reversed order is the Wormhole lead's mechanism, reproducible on hardware that
-is available. Running it before and after the carry-buffer fix says whether that fix
-addresses the general case or only the streaming state it was written for:
-
-  survives  -> allocating under a live trace is no longer fatal here, and the
-               constraint can be relaxed; good evidence for the n300 case
-  hangs     -> the flow decoder and vocoder allocate their own buffers under the
-               live trace, so the carry-buffer fix is necessary and not sufficient,
-               and that is where to look next
-
-Measured on p150a after the fix: survives both warm (6.2 s end to end) and with the JIT
-cache cleared (273.8 s, of which 248 s is kernels compiling while the trace is live).
-Clear the cache for the result that means anything -- the recorded hang reproduced "with
-a cleared cache on a freshly reset board", so a warm cache skips the condition the
-constraint existed for. `docs/VALIDATION.md` carries both rows.
-
-Run with a wall clock, because the failure mode under test is a hang:
+Clear the JIT cache first; with a warm cache nothing compiles under the trace. Run under
+a timeout, since the failure mode is a hang:
 
     timeout 900 python3 probe_warm_order.py --order reversed
     timeout 900 python3 probe_warm_order.py --order shipping   # control
@@ -132,8 +112,9 @@ def main():
             ttnn.deallocate(s.finish()[0])
         ttnn.synchronize_device(device)
 
-    # The synthesizer is built before capture in both arms: its carry buffers have to be
-    # pre-trace for the fix to mean anything, and that is not the variable under test.
+    # Built before capture in both orders. Its carry buffers come from the first chunk it
+    # synthesises: before capture in the shipping order, under the live trace in the
+    # reversed one.
     synth = TtStreamingSynthesizer(device, flow, hift, cfg)
     t0 = time.perf_counter()
 
@@ -149,7 +130,7 @@ def main():
         warm_flow_and_vocoder(synth)
         print(f"  warm survived at {time.perf_counter() - t0:.1f} s", flush=True)
 
-    # One real interleaved pass, so the arm is not merely "did the warm-up survive".
+    # One real interleaved pass, so completing means more than a surviving warm-up.
     caches = dec.empty_cache(max_len, prefix_len)
     ys, caches = dec.forward_chunk_fixed(
         dev(prefix),

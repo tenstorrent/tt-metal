@@ -1,28 +1,21 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Measure L1_SMALL growth across vocoder geometries on one open device.
+"""Measure L1_SMALL occupancy across vocoder geometries on one open device.
 
-`docs/VALIDATION.md` records that `CosyVoiceTTNN.synthesize_batch` wedges the board on
-the second utterance, and attributes it to per-geometry state in the vocoder's
-`conv_transpose2d`/halo path that `release_caches()` does not free. That is a
-description, not a measurement. This probe supplies the measurement, and it does so
-without driving the device into the hang: it synthesises one utterance at a time and
-reports the allocator's L1_SMALL occupancy after each, so the growth can be seen as a
-curve rather than as a crash.
+Synthesises one utterance at a time and prints the allocator's L1_SMALL occupancy after
+each, so growth shows as a curve rather than a crash. The mel geometry follows the
+token count, so the per-call token budget is the variable:
 
-Two modes, because the interesting variable is geometry rather than utterance count:
+  --arm same       one prompt for every call
+  --arm differing  a different prompt for each call
+  --lengths a,b,c  one call per budget; without it, `--n` calls at `--max-tokens`
 
-  --arm same      the same prompt N times   -> one geometry, repeated
-  --arm differing N distinct prompts        -> N geometries
+Per-geometry growth climbs at each new budget and stays flat on a repeated one; per-call
+growth climbs every time. Equal budgets give equal geometries and a flat curve, so give
+`--lengths` distinct values. Seven geometries, on a bank large enough to hold them:
 
-If the growth is per-geometry as recorded, `same` should flatten after the first pass
-and `differing` should climb. If both climb, the state is per-*call* and the geometry
-story is wrong. `--lengths` varies the token budget per call, which is what actually
-separates the two: capping every call to one budget gives identical geometries and a
-flat curve that says nothing.
-
-    python3 probe_l1_growth.py --arm differing --n 4 --max-tokens 96
+    python3 probe_l1_growth.py --arm same --l1-small 524288 --lengths 96,128,160,192,224,256,288
 """
 from __future__ import annotations
 
@@ -51,10 +44,6 @@ def main():
     ap.add_argument("--arm", choices=("same", "differing"), default="differing")
     ap.add_argument("--n", type=int, default=4)
     ap.add_argument("--max-tokens", type=int, default=96)
-    # Geometry is the variable, and capping every utterance to the same token budget
-    # hides it -- a first pass did exactly that and produced four identical 42240-sample
-    # runs with L1_SMALL flat, which says nothing. `--lengths` varies the token budget
-    # per call instead, so one prompt yields several distinct mel geometries.
     ap.add_argument("--lengths", type=str, default="", help="comma-separated per-call max_tokens")
     ap.add_argument("--l1-small", type=int, default=131072, help="l1_small_size for open_device")
     args = ap.parse_args()

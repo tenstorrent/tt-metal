@@ -89,29 +89,9 @@ class StreamConfig:
 
 @dataclass
 class StreamState:
-    """What is carried between chunks, as references into persistent buffers.
-
-    Each field points at a buffer owned by `TtStreamingSynthesizer`, not at a tensor
-    this class allocated, and the distinction is a correctness requirement rather than
-    bookkeeping.
-
-    **A device buffer allocated while a trace is live can be corrupted by that trace.**
-    When the caller is interleaving -- driving this synthesizer from inside the AR
-    decode loop, which is what `StreamSession` is for -- an `execute_trace` runs between
-    one chunk and the next, and TTNN says what that costs: *"Allocating device buffers
-    is unsafe due to the existence of an active trace. These buffers may be corrupted
-    once a trace is executed."*
-
-    It was measured rather than inferred. Interleaved synthesis produced a first chunk
-    matching the non-interleaved reference at waveform PCC `0.99999994`, and a second
-    chunk whose mel was *bit-identical* (PCC `1.0`) but whose waveform scored PCC
-    `0.011`. Identical mel with destroyed audio localises it exactly: not the flow
-    decoder, not the vocoder's arithmetic, but these four tensors.
-
-    The fix is to allocate them **before** any trace is captured and then only ever
-    write into them, so no allocation and no readback crosses a live trace. See
-    `TtStreamingSynthesizer._carry_store`, which is where the buffers come from and why
-    the first chunk of a warm-up pass is what sizes them.
+    """What is carried between chunks: references to buffers owned by
+    `TtStreamingSynthesizer`, never tensors allocated here. `_carry_store` there
+    explains why those buffers must exist before a trace is captured.
     """
 
     mel_overlap: object | None = None  # [1, mel_overlap_len, 80]
@@ -121,8 +101,8 @@ class StreamState:
     emitted: list = field(default_factory=list)
 
     def free(self):
-        """Drop the references. The buffers themselves belong to the synthesizer and
-        outlive any one session -- `TtStreamingSynthesizer.release_carry` frees them."""
+        """Drop the references. The buffers belong to the synthesizer and outlive the
+        session; `TtStreamingSynthesizer.release_carry` frees them."""
         self.mel_overlap = self.hift_mel = self.hift_source = self.hift_speech = None
 
 
@@ -158,27 +138,20 @@ class TtStreamingSynthesizer:
 
     # ----------------------------------------------------------------------
     def _carry_store(self, key, t):
-        """Move `t` into this synthesizer's persistent buffer for `key`; return it.
+        """Store `t` as the carry for `key`; return the persistent buffer holding it.
 
-        The first chunk to produce a given carry *adopts* its tensor as the buffer,
-        because that is the only way to size and type it without duplicating the
-        vocoder's shape arithmetic here. Every later chunk copies into that buffer and
-        frees the temporary, so after the first chunk this path allocates nothing.
+        The first tensor stored under a key, or one whose shape or dtype differs from
+        the buffer's, becomes the buffer, which sizes and types it without repeating the
+        vocoder's shape arithmetic. Later tensors are copied into it with `ttnn.copy`
+        and freed, so storing allocates nothing.
 
-        **Why that ordering matters.** `StreamState` explains the defect; this is the
-        half that fixes it. A buffer allocated before the AR decode trace is captured
-        keeps its address across `execute_trace`; one allocated afterwards may sit on
-        an address the trace already owns and be overwritten. Both callers therefore
-        run a throwaway chunk through this synthesizer *before* capturing a trace --
-        `CosyVoiceTTNN.synthesize_streaming` for the shipped path, and
-        `tests/perf/test_streaming_perf.py` for the head-to-head measurement -- which
-        is what makes the adoption happen at a safe moment.
-
-        Copying rather than parking on the host is deliberate. Reading these back with
-        `to_torch` between chunks also cures the corruption, and was tried: it forces a
-        device-to-host transfer at every seam, inside the window where a trace is live,
-        and that wedged `test_streaming_perf` on Blackhole. A device-to-device copy into
-        a buffer that already exists needs neither an allocation nor a readback.
+        TTNN warns that buffers allocated while a trace is live "may be corrupted once a
+        trace is executed", and an interleaved stream runs an `execute_trace` between
+        every two chunks. The buffers must therefore exist before the AR decode trace is
+        captured: callers push one chunk through this synthesizer first, as
+        `CosyVoiceTTNN.synthesize_streaming` and `tests/perf/test_streaming_perf.py` do.
+        Carrying on the host instead (`to_torch`/`from_torch` at each seam) also avoids
+        the corruption, but wedges `test_streaming_perf` on Blackhole.
         """
         buf = self._carry.get(key)
         if buf is None or tuple(buf.shape) != tuple(t.shape) or buf.dtype != t.dtype:
@@ -191,8 +164,8 @@ class TtStreamingSynthesizer:
         return buf
 
     def release_carry(self):
-        """Free the persistent carry buffers. Idempotent; a session's `close()` does
-        not do this, because the buffers are meant to outlive any one session."""
+        """Free the carry buffers. Idempotent. A session's `close()` leaves them alone,
+        since they outlive the session."""
         for t in self._carry.values():
             ttnn.deallocate(t)
         self._carry.clear()
