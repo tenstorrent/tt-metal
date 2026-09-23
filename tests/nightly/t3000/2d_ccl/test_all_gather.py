@@ -142,3 +142,36 @@ def test_all_gather_training_shapes(
         num_iters=num_iters,
         use_persistent_buffers=False,
     )
+
+
+# A 1x8 view of the 2x4 board is its perimeter, so axis 1 bends. Multicast cannot route that.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("ag_output_shape, dim", [([1, 1, 128, 256], 3)])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True, ids=["fabric_2d"]
+)
+def test_all_gather_bent_axis(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=2,
+        use_persistent_buffers=False,
+    )

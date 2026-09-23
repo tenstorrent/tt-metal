@@ -30,6 +30,8 @@ def test_run_resnet50_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet50_inference(
         mesh_device,
         device_batch_size,
@@ -56,6 +58,8 @@ def test_run_resnet50_trace_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet50_trace_inference(
         mesh_device,
         device_batch_size,
@@ -82,6 +86,8 @@ def test_run_resnet50_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet50_2cqs_inference(
         mesh_device,
         device_batch_size,
@@ -110,6 +116,8 @@ def test_run_resnet50_trace_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet50_trace_2cqs_inference(
         mesh_device,
         device_batch_size,

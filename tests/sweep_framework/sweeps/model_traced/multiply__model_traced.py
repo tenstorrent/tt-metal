@@ -125,7 +125,11 @@ def run(
             t = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
         st = start_measuring_time()
         ttnn.multiply_(t, scalar_value, **extra_kwargs)
-        out = mesh_tensor_to_torch(t, device if is_mesh_device else None)
+        out = mesh_tensor_to_torch(
+            t,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         perf = stop_measuring_time(st)
         return out, perf
 

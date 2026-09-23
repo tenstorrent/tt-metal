@@ -116,7 +116,12 @@ class UnpackerAB(Unpacker):
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        tile_id_b = (
+            block.tile_id_global
+            if compute_unit.broadcast_tile is None
+            else compute_unit.broadcast_tile
+        )
+        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{tile_id_b}]));\n"
 
     def uninit(
         self,

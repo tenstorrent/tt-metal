@@ -23,9 +23,9 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(output_tensor_args, output_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb(dfb_out0);
-    const uint32_t tile_bytes = get_tile_size(dfb_out0);
+    const uint32_t tile_bytes = dfb.get_tile_size();
 
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {
         const uint32_t write_tile_id = start_id + out_i;

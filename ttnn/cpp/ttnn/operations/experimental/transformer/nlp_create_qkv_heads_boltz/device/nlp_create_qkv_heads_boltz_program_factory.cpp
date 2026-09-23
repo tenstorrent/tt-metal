@@ -582,57 +582,57 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
     return desc;
 }
 
-void NlpCreateHeadsBoltzDeviceOperation::override_runtime_arguments(
+// Both overrides run on EVERY program-cache hit, so they patch the cached program in place instead of
+// rebuilding the descriptor (a rebuild would pay the cache-MISS host cost — work split, kernel sources,
+// TensorAccessorArgs, a fresh per-core arg vector for every core — on every hit).
+//
+// There is no custom compute_program_hash, so shapes/dtypes/layouts/memory configs and all
+// operation_attributes are part of the cache key: buffer addresses are the ONLY per-dispatch state.
+// This hook supersedes resolve_bindings, so every Buffer* runtime-arg slot AND every tensor-pinned
+// CB address is ours to re-apply.
+void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Runs on EVERY program-cache hit, so it patches the cached program in place instead of rebuilding
-    // the descriptor (a rebuild would pay the cache-MISS host cost — work split, kernel sources,
-    // TensorAccessorArgs, a fresh per-core arg vector for every core — on every hit).
-    //
-    // There is no custom compute_program_hash, so shapes/dtypes/layouts/memory configs and all
-    // operation_attributes are part of the cache key: buffer addresses are the ONLY per-dispatch state.
-    // This hook supersedes resolve_bindings, so every Buffer* runtime-arg slot AND every tensor-pinned
-    // CB address is ours to re-apply.  Mirror select_program_factory() so we patch the factory that
-    // actually built the cached program.
-    if (std::holds_alternative<Sharded>(select_program_factory(operation_attributes, tensor_args))) {
-        // The Sharded reader/writer bake raw q/k/v base addresses AND per-core `base + head_offset`
-        // start addresses; re-run the shared builder so the patched values are, by construction,
-        // identical to the baked ones.  The active core set is fixed by the (hashed) output shard
-        // specs, so it never shifts across hits: every core the miss path emplaced args for is here.
-        const auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
-        for (const auto& e : per_core_args) {
-            auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kShardedReaderKernelIdx, e.core);
-            reader_args[kQBaseAddrIdx] = e.reader_args[kQBaseAddrIdx];
-            reader_args[kQStartAddrIdx] = e.reader_args[kQStartAddrIdx];
-            reader_args[kKVBaseAddrIdx] = e.reader_args[kKVBaseAddrIdx];
-            reader_args[kKVStartAddrIdx] = e.reader_args[kKVStartAddrIdx];
+    // The Sharded reader/writer bake raw q/k/v base addresses AND per-core `base + head_offset`
+    // start addresses; re-run the shared builder so the patched values are, by construction,
+    // identical to the baked ones.  The active core set is fixed by the (hashed) output shard
+    // specs, so it never shifts across hits: every core the miss path emplaced args for is here.
+    const auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
+    for (const auto& e : per_core_args) {
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kShardedReaderKernelIdx, e.core);
+        reader_args[kQBaseAddrIdx] = e.reader_args[kQBaseAddrIdx];
+        reader_args[kQStartAddrIdx] = e.reader_args[kQStartAddrIdx];
+        reader_args[kKVBaseAddrIdx] = e.reader_args[kKVBaseAddrIdx];
+        reader_args[kKVStartAddrIdx] = e.reader_args[kKVStartAddrIdx];
 
-            auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kShardedWriterKernelIdx, e.core);
-            writer_args[kQBaseAddrIdx] = e.writer_args[kQBaseAddrIdx];
-            writer_args[kQStartAddrIdx] = e.writer_args[kQStartAddrIdx];
-            writer_args[kKVBaseAddrIdx] = e.writer_args[kKVBaseAddrIdx];
-            writer_args[kKVStartAddrIdx] = e.writer_args[kKVStartAddrIdx];
-        }
-
-        // The q/k/v output tensors ride on globally-allocated CBs, so their addresses live on the CBs
-        // rather than in runtime args.  Missing one is a silent stale-address bug.  Positional mapping
-        // into desc.cbs (push order q, k, v), the same one resolve_bindings uses.
-        const auto cbs = program.circular_buffers();
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, cbs[0]->id(), *std::get<0>(tensor_return_value).buffer());
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, cbs[1]->id(), *std::get<1>(tensor_return_value).buffer());
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, cbs[2]->id(), *std::get<2>(tensor_return_value).buffer());
-        return;
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kShardedWriterKernelIdx, e.core);
+        writer_args[kQBaseAddrIdx] = e.writer_args[kQBaseAddrIdx];
+        writer_args[kQStartAddrIdx] = e.writer_args[kQStartAddrIdx];
+        writer_args[kKVBaseAddrIdx] = e.writer_args[kKVBaseAddrIdx];
+        writer_args[kKVStartAddrIdx] = e.writer_args[kKVStartAddrIdx];
     }
 
-    // Interleaved: the input/output addresses are the leading reader/writer runtime args (emplaced as
-    // Buffer* by create_descriptor); every other slot derives from hashed shapes and the work split.
-    // Its CBs are program-local scratch — none is tensor-pinned, so there is nothing to re-point.
+    // The q/k/v output tensors ride on globally-allocated CBs, so their addresses live on the CBs
+    // rather than in runtime args.  Missing one is a silent stale-address bug.  Positional mapping
+    // into desc.cbs (push order q, k, v), the same one resolve_bindings uses.
+    const auto cbs = program.circular_buffers();
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(tensor_return_value).buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(tensor_return_value).buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(tensor_return_value).buffer());
+}
+
+// The input/output addresses are the leading reader/writer runtime args (emplaced as Buffer* by
+// create_descriptor); every other slot derives from hashed shapes and the work split.  The Interleaved
+// CBs are program-local scratch — none is tensor-pinned, so there is nothing to re-point.
+void NlpCreateHeadsBoltzDeviceOperation::Interleaved::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto split = interleaved_work_split(operation_attributes, tensor_args);
     const uint32_t in0_addr = tensor_args.input_tensor_q.buffer()->address();
     // 0 when there is no kv tensor, matching the literal create_descriptor() bakes into that slot.

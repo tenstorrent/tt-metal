@@ -15,20 +15,22 @@ void kernel_main() {
     const std::uint32_t NCht = get_arg(args::num_rows);
     const std::uint32_t tile_offset = get_arg(args::tile_offset);
     const std::uint32_t Wt = get_arg(args::Wt);
+    // Capacity shared by the streamed CBs; a partial last pass is padded up to it.
+    constexpr std::uint32_t dfb_length_t = get_arg(args::dfb_length);
 
     constexpr std::uint32_t dfb_id_in0 = dfb::in0;
 
     // ublocks size defined in tiles
     constexpr std::uint32_t onetile = 1;
     DataflowBuffer dfb_id_in0_obj(dfb_id_in0);
-    std::uint32_t src0_tile_bytes = dfb_id_in0_obj.get_entry_size();
+    const std::uint32_t src0_tile_bytes = dfb_id_in0_obj.get_entry_size();
 
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     const std::uint32_t pre_scale = get_arg(args::pre_scale);
     std::uint32_t Ht = get_arg(args::Ht);
     std::uint32_t start_ht = get_arg(args::start_ht);
     std::uint32_t start_mask_id = get_arg(args::start_mask_id);
-#if CAUSAL_MASK
+#ifdef CAUSAL_MASK
     std::uint32_t mask_start_ht = get_arg(args::mask_start_ht);
     std::uint32_t mask_offset = get_arg(args::mask_offset);
 #endif
@@ -39,7 +41,7 @@ void kernel_main() {
 
     const auto addr_mask = TensorAccessor(tensor::mask);
 
-#if CAUSAL_MASK
+#ifdef CAUSAL_MASK
     constexpr std::uint32_t num_tiles_causal_mask = get_arg(args::num_tiles_causal_mask);
 
     std::uint32_t mask_ht = mask_start_ht;
@@ -67,7 +69,7 @@ void kernel_main() {
             ckernel::ReduceDim::REDUCE_ROW>();
     }
 
-    Noc noc;
+    const Noc noc;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #if NUMERIC_STABLE
@@ -76,7 +78,7 @@ void kernel_main() {
 #else
     constexpr std::uint32_t total_passes = 2;
 #endif
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     std::uint32_t mask_id_offset = mask_id;
     std::uint32_t mask_index = mask_id;
 #endif
@@ -86,17 +88,18 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             std::uint32_t tile_index = tile_offset + (ncht * Wt);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
             mask_index = mask_id_offset;
 #endif
             for (std::uint32_t wt = 0; wt < Wt; wt += blk) {
-                dfb_id_in0_obj.reserve_back(blk);
+                const std::uint32_t rem = (wt + blk > Wt) ? (Wt - wt) : blk;  // clamped final block
+                dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(rem));
                 std::uint32_t write_offset = 0;
-#if FUSED_SCALE_MASK
-                dfb_id_attn_obj.reserve_back(blk);
+#ifdef FUSED_SCALE_MASK
+                dfb_id_attn_obj.reserve_back(rem);
                 std::uint32_t mask_write_offset = 0;
 #endif
-                for (std::uint32_t regs = 0; regs < blk; regs++) {
+                for (std::uint32_t regs = 0; regs < rem; regs++) {
                     noc.async_read(
                         src_a,
                         dfb_id_in0_obj,
@@ -105,7 +108,7 @@ void kernel_main() {
                         {.offset_bytes = write_offset});
                     tile_index++;
                     write_offset += src0_tile_bytes;
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
                     noc.async_read(
                         addr_mask,
                         dfb_id_attn_obj,
@@ -117,14 +120,25 @@ void kernel_main() {
 #endif
                 }
                 noc.async_read_barrier();
-                dfb_id_in0_obj.push_back(blk);
-#if FUSED_SCALE_MASK
-                dfb_id_attn_obj.push_back(blk);
+                dfb_id_in0_obj.push_back(static_cast<uint16_t>(rem));
+#ifdef FUSED_SCALE_MASK
+                dfb_id_attn_obj.push_back(rem);
 
 #endif
             }
+            // Complete the CB cycle after a partial last Wt pass so compute can realign to fifo base.
+            // Pad tiles are discarded by compute; contents are unused.
+            const std::uint32_t dfb_align_pad = (dfb_length_t - (Wt % dfb_length_t)) % dfb_length_t;
+            if (dfb_align_pad > 0) {
+                dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(dfb_align_pad));
+                dfb_id_in0_obj.push_back(static_cast<uint16_t>(dfb_align_pad));
+#ifdef FUSED_SCALE_MASK
+                dfb_id_attn_obj.reserve_back(dfb_align_pad);
+                dfb_id_attn_obj.push_back(dfb_align_pad);
+#endif
+            }
         }
-#if CAUSAL_MASK
+#ifdef CAUSAL_MASK
         ++ht;
         ++mask_ht;
         if (ht == Ht) {
@@ -135,7 +149,7 @@ void kernel_main() {
             mask_ht = 0;
             mask_id = mask_id_offset;
         }
-#elif FUSED_SCALE_MASK
+#elif defined(FUSED_SCALE_MASK)
         ht++;
         if (ht != Ht) {
             mask_index = mask_id_offset;

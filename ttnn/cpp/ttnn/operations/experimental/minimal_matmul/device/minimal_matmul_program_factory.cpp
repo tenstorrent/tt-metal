@@ -130,11 +130,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<const Tensor>& optional_input_tensor) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
+
+    // Fused concat (concat-free): in0's K is sourced from input_tensor (prefix K-tiles) then
+    // optional_input_tensor (suffix), via the in0 second-source (in3) read path, instead of a
+    // materialized concat. The split point is input_tensor's own K width. Mutually exclusive with AG.
+    const bool two_input_split = optional_input_tensor.has_value();
+    TT_FATAL(!(two_input_split && fuse_op), "Fused concat is not supported together with the AG-fused matmul path");
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -185,9 +192,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
-    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M
-    uint32_t K = in0_tensor_shape[-1];
-    uint32_t M = input_tensor.physical_volume() / K;
+    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M.
+    // M is derived from input_tensor's OWN K width (K_in); for fused concat that's only the prefix
+    // half, so the matmul contraction K must instead span the full weight K (both concat halves).
+    uint32_t K_in = in0_tensor_shape[-1];
+    uint32_t M = input_tensor.physical_volume() / K_in;
+    uint32_t K = two_input_split ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -449,6 +459,17 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
+    // Fused concatenation of in0: only the in0 SENDER reads from the two source buffers; the
+    // receiver gets the assembled block by mcast and needs no split. Copy AFTER all base defines are
+    // finalized (incl. SRS_FUSE_OP_SIGNALER) so the sender still signals the fused reduce-scatter.
+    std::map<std::string, std::string> in0_concat_defines;
+    if (two_input_split) {
+        in0_concat_defines = defines;
+        in0_concat_defines["IN0_VIRTUAL_CONCAT"] = "1";
+        // Split point = input_tensor's own K width (prefix half), in tiles.
+        in0_concat_defines["IN0_K_SPLIT_TILES"] = std::to_string(K_in / tt::constants::TILE_WIDTH);
+    }
+
     std::vector<CoreCoord> all_worker_cores_noc;
     if (fuse_srs) {
         all_worker_cores_noc.reserve(num_cores);
@@ -465,13 +486,17 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // They are appended as a variable-length array at the end of the runtime-args:
     //   - for in0 output-writer cores the first output address is at index 13
     //   - for in1 output-writer cores the first output address is at index 12
+    // in3 is the second in0 source buffer: AG local pre-gather slice, or (fused concat) the second
+    // concat half supplied via optional_input_tensor.
     uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
                             ? fused_op_signaler->ag_input.value().buffer()->address()
-                            : 0;
+                        : two_input_split ? optional_input_tensor.value().buffer()->address()
+                                          : 0;
     auto in3_data_format =
         (fuse_op && fused_op_signaler->read_local_slice_from_input)
             ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
-            : in1_data_format;
+        : two_input_split ? tt::tt_metal::datatype_to_dataformat_converter(optional_input_tensor.value().dtype())
+                          : in1_data_format;
 
     auto in3_tile_size = tt::tile_size(in3_data_format);
 
@@ -506,12 +531,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
     };
+    // The in0 sender's second source: AG local slice, or (fused concat) optional_input_tensor.
+    std::optional<Tensor> in0_sender_in3_tensor;
+    if (fuse_op && fused_op_signaler->read_local_slice_from_input) {
+        in0_sender_in3_tensor = fused_op_signaler->ag_input.value();
+    } else if (two_input_split) {
+        in0_sender_in3_tensor = optional_input_tensor.value();
+    }
     append_accessors(
         in0_sender_compile_time_args,
         input_tensor,
         output_tensors,
         bias_tensor,
-        (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input : std::nullopt,
+        in0_sender_in3_tensor,
         fused_ternary_input_a,
         fused_ternary_input_b);
     auto in0_sender_kernels_id = CreateKernel(
@@ -522,7 +554,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .processor = in0_risc,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
+            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines
+                       : two_input_split                                           ? in0_concat_defines
+                                                                                   : defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -903,69 +937,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->read_local_slice_from_input,
+        two_input_split};
 }
 
-MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    const std::optional<const MinimalMatmulConfig>& config,
-    const Tensor& output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
-    bool fuse_swiglu) {
-    std::vector<Tensor> output_tensors = {output_tensor};
-    return minimal_matmul_factory_helper_common(
-        program,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        fused_activation,
-        config,
-        output_tensors,
-        compute_kernel_config,
-        fused_op_signaler,
-        1,  // N_chunks = 1 for regular minimal_matmul
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        srs_fused_op_signaler,
-        fuse_swiglu);
-}
-
-MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
-    const MinimalMatmulParams& operation_attributes,
-    const MinimalMatmulInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
-
-    auto shared_vars = minimal_matmul_factory_helper_common(
-        program,
-        tensor_args.input_tensor,
-        tensor_args.weight_tensor,
-        tensor_args.bias_tensor,
-        operation_attributes.fused_activation,
-        operation_attributes.config,
-        tensor_return_value,
-        operation_attributes.compute_kernel_config,
-        empty_fused_op_signaler,
-        static_cast<uint32_t>(operation_attributes.chunks),
-        operation_attributes.fused_ternary_scalar,
-        tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b,
-        empty_srs_fused_op_signaler,
-        operation_attributes.fuse_swiglu);
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-// Common helper for override_runtime_arguments - works with both single and multiple output tensors
+// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common.
+// Works with both single and multiple output tensors.
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const MinimalMatmulParams& operation_attributes,
@@ -1016,7 +993,8 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             in0_sender_args[in0_in2_addr_idx] =
                 tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             in0_sender_args[in0_in3_addr_idx] = tensor_args.optional_input_tensor.has_value() &&
-                                                        cached_program.shared_variables.read_local_slice_from_input
+                                                        (cached_program.shared_variables.read_local_slice_from_input ||
+                                                         cached_program.shared_variables.two_input_split)
                                                     ? tensor_args.optional_input_tensor.value().buffer()->address()
                                                     : 0;
             // Update ternary addresses if present

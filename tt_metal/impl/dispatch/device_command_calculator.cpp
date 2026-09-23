@@ -8,8 +8,12 @@
 
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
+
+DeviceCommandCalculator::DeviceCommandCalculator(MetalContext& ctx) :
+    pcie_alignment(ctx.hal().get_alignment(HalMemType::HOST)), l1_alignment(ctx.hal().get_alignment(HalMemType::L1)) {}
 
 template <typename PackedSubCmd>
 uint32_t DeviceCommandCalculator::get_max_write_packed_sub_cmds(
@@ -50,8 +54,7 @@ void DeviceCommandCalculator::insert_write_packed_payloads(
     const uint32_t max_prefetch_command_size,
     const uint32_t packed_write_max_unicast_sub_cmds,
     std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    const uint32_t aligned_sub_cmd_sizeB = tt::align(sub_cmd_sizeB, l1_alignment);
+    const uint32_t aligned_sub_cmd_sizeB = tt::align(sub_cmd_sizeB, this->l1_alignment);
     const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
         aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
     uint32_t rem_num_sub_cmds = num_sub_cmds;
@@ -59,7 +62,7 @@ void DeviceCommandCalculator::insert_write_packed_payloads(
         const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
         const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
         const uint32_t dispatch_cmd_sizeB =
-            tt::align(sizeof(CQDispatchCmd) + (num_sub_cmds_in_cmd * sizeof(PackedSubCmd)), l1_alignment);
+            tt::align(sizeof(CQDispatchCmd) + (num_sub_cmds_in_cmd * sizeof(PackedSubCmd)), this->l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
         this->add_dispatch_write_packed<PackedSubCmd>(

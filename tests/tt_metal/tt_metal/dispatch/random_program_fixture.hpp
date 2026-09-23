@@ -410,13 +410,12 @@ private:
             distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        const distributed::MeshTraceId trace_id =
-            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+        const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
         log_info(tt::LogTest, "All workloads enqueued in trace, calling end_mesh_trace");
-        this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+        this->device_->end_mesh_trace(mesh_command_queue, trace_id);
         log_info(tt::LogTest, "end_mesh_trace complete");
         return trace_id;
     }
@@ -427,7 +426,7 @@ private:
             if (i % 10 == 0) {
                 log_info(tt::LogTest, "Replaying trace iteration {}", i);
             }
-            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue, trace_id, false);
         }
         log_info(tt::LogTest, "All trace iterations enqueued, calling Finish");
     }

@@ -116,8 +116,18 @@ def build_embedding_weights(state_dict: dict[str, torch.Tensor], dtype: object) 
 
 
 def build_attention_weights(
-    state_dict: dict[str, torch.Tensor], layer_num: int, dtype: object, norm_dtype: object
+    state_dict: dict[str, torch.Tensor],
+    layer_num: int,
+    dtype: object,
+    norm_dtype: object,
+    q_scale: float | None = None,
 ) -> AttentionWeights:
+    """``q_scale`` (default None): if set, pre-multiply the Q projection weight and
+    bias by this factor. Used at S8192 to fold the SDPA attention scale into Q at
+    build time (in fp32, before bf8 quantization) so the per-layer runtime
+    ``q * scale`` multiply is eliminated and SDPA runs with scale=1.0. Numerically
+    identical to (slightly more accurate than) the runtime multiply. Other configs
+    pass None and keep scaling inside SDPA."""
     attention_scope = f"roberta.encoder.layer.{layer_num}.attention"
     attention_state = substate(state_dict, attention_scope)
     self_state = substate(attention_state, "self")
@@ -127,9 +137,13 @@ def build_attention_weights(
     q_weight = _preprocess_linear_weight(_require_tensor(self_state, "query.weight", scope=f"{attention_scope}.self"))
     k_weight = _preprocess_linear_weight(_require_tensor(self_state, "key.weight", scope=f"{attention_scope}.self"))
     v_weight = _preprocess_linear_weight(_require_tensor(self_state, "value.weight", scope=f"{attention_scope}.self"))
+    if q_scale is not None:
+        q_weight = q_weight * q_scale
     wqkv = torch.cat((q_weight, k_weight, v_weight), dim=-1).contiguous()
 
     query_bias = self_state.get("query.bias")
+    if q_scale is not None and query_bias is not None:
+        query_bias = query_bias * q_scale
     key_bias = self_state.get("key.bias")
     value_bias = self_state.get("value.bias")
     all_qkv_biases_present = all(bias is not None for bias in (query_bias, key_bias, value_bias))

@@ -147,8 +147,7 @@ FORCE_INLINE bool fabric_write_set_unicast_route_impl(
     udm_write_fields& udm,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id) {
-    tt_l1_ptr routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_chip_id = routing_table->my_device_id;
     uint16_t my_mesh_id = routing_table->my_mesh_id;
 
@@ -219,8 +218,7 @@ FORCE_INLINE bool fabric_read_set_unicast_route_impl(
     udm_read_fields& udm,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id) {
-    tt_l1_ptr routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_chip_id = routing_table->my_device_id;
     uint16_t my_mesh_id = routing_table->my_mesh_id;
 
@@ -328,7 +326,7 @@ WorkerToFabricEdmSender build_from_reserved_l1_info() {
     const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
     constexpr uint32_t eth_channel = 0;  // always use channel 0 for UDM mode
     const auto conn = &connection_info->read_only[eth_channel];
     const auto aligned_conn = &connection_info->read_write[eth_channel];
@@ -383,13 +381,13 @@ WorkerToFabricEdmSender build_from_reserved_l1_info() {
 /**
  * @brief Get the sync region for fabric connection state
  *
- * Uses dedicated MEM_FABRIC_CONNECTION_LOCK_BASE address in L1.
+ * Uses dedicated FABRIC_CONNECTION_LOCK_BASE address in L1.
  * The region contains a spinlock and initialized flag.
  *
  * @return Pointer to the sync region in L1
  */
 FORCE_INLINE volatile tt::tt_fabric::fabric_connection_sync_t* get_fabric_connection_sync() {
-    return reinterpret_cast<volatile tt::tt_fabric::fabric_connection_sync_t*>(MEM_FABRIC_CONNECTION_LOCK_BASE);
+    return reinterpret_cast<volatile tt::tt_fabric::fabric_connection_sync_t*>(FABRIC_CONNECTION_LOCK_BASE);
 }
 
 /**
@@ -414,7 +412,7 @@ FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_or_open_fabric_connecti
 
     // Get connection pointer from L1 storage (at fixed offset after sync struct)
     auto* connection = reinterpret_cast<tt::tt_fabric::WorkerToFabricEdmSender*>(
-        MEM_FABRIC_CONNECTION_LOCK_BASE + tt::tt_fabric::FABRIC_CONNECTION_OBJECT_OFFSET);
+        FABRIC_CONNECTION_LOCK_BASE + tt::tt_fabric::FABRIC_CONNECTION_OBJECT_OFFSET);
 
     if (!sync->initialized) {
         // Build connection in L1 storage using placement new

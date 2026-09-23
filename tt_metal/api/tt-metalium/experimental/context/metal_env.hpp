@@ -12,14 +12,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
-namespace tt::tt_fabric {
-class ControlPlane;
-}  // namespace tt::tt_fabric
-
-namespace tt::tt_metal::distributed {
-class SystemMesh;
-}  // namespace tt::tt_metal::distributed
-
 namespace tt::tt_metal {
 
 // Describes the fabric topology and routing configuration for the devices in the environment.
@@ -66,8 +58,8 @@ class MetalEnvImpl;
 // It exposes several query functions for the hardware capabilities and cluster configuration.
 //
 // The FabricConfigDescriptor in the MetalEnvDescriptor describes the topology of the devices — how they are
-// interconnected and how traffic is routed between them. From this topology the MetalEnv constructs the fabric
-// control plane and the system mesh, which virtualize and partition the physical hardware.
+// interconnected and how traffic is routed between them. From this topology the MetalEnv constructs the
+// system mesh, which virtualizes and partitions the physical hardware for placement queries.
 //
 // Note, MetalEnv is a RAII object. As such, it must outlive every object that uses it (e.g. MeshDevice).
 // The MetalEnv should be destroyed before forking to avoid undefined behavior.
@@ -120,11 +112,6 @@ public:
 
     /// @return Representable SFPU Infinity value of this environment.
     float get_inf() const;
-
-    /// @return The fabric control plane, lazily initialized.
-    /// The control plane manages routing tables and fabric channels based on the device topology
-    /// described by the environment's FabricConfigDescriptor.
-    tt::tt_fabric::ControlPlane& get_control_plane();
 
     /// @return The system mesh, lazily initialized.
     /// The system mesh provides a virtualized coordinate system over the physical devices, allowing

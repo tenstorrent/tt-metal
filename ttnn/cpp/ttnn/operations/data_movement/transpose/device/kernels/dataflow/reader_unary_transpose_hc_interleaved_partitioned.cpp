@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 using uint32_t = std::uint32_t;
 
@@ -16,42 +17,45 @@ inline uint32_t TADDR_FLOAT32(uint32_t ti) { return ti << 12; }
 inline uint32_t TADDR_BFLOAT16(uint32_t ti) { return ti << 11; }
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t WT = get_arg_val<uint32_t>(1);
-    uint32_t H = get_arg_val<uint32_t>(2);
-    uint32_t CT = get_arg_val<uint32_t>(3);
-    uint32_t HW_bytes = get_arg_val<uint32_t>(4);
-    uint32_t CHW_bytes = get_arg_val<uint32_t>(5);
-    uint32_t start_id = get_arg_val<uint32_t>(6);
-    uint32_t num_tiles = get_arg_val<uint32_t>(7);
-    uint32_t batch_addr = get_arg_val<uint32_t>(8);
-    uint32_t h = get_arg_val<uint32_t>(9);
-    uint32_t htWT = get_arg_val<uint32_t>(10);
-    uint32_t ct = get_arg_val<uint32_t>(11);
-    uint32_t ctoffs = get_arg_val<uint32_t>(12);
-    uint32_t wt = get_arg_val<uint32_t>(13);
+    uint32_t WT = get_arg(args::WT);
+    uint32_t H = get_arg(args::H);
+    uint32_t CT = get_arg(args::CT);
+    uint32_t HW_bytes = get_arg(args::HW_bytes);
+    uint32_t CHW_bytes = get_arg(args::CHW_bytes);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t batch_addr = get_arg(args::batch_addr);
+    uint32_t h = get_arg(args::h);
+    uint32_t htWT = get_arg(args::htWT);
+    uint32_t ct = get_arg(args::ct);
+    uint32_t ctoffs = get_arg(args::ctoffs);
+    uint32_t wt = get_arg(args::wt);
 
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(0);
-    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(1);
-    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
+    constexpr auto SUBTILE_LINE_BYTES = get_arg(args::subtile_line_bytes);
+    constexpr auto FLOAT32_DTYPE = get_arg(args::float32_dtype);
+#ifdef MISALIGNED
+    constexpr auto ALIGNMENT = get_arg(args::alignment);
+#endif
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dfb_id_in0 = 0;
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const auto s0 = TensorAccessor(src_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb(dfb_id_in0);
-    DataflowBuffer dfb_scratch(1);
+    DataflowBuffer dfb(dfb::in0);
 
-    uint32_t intermed_l1_scratch = MISALIGNED ? dfb_scratch.get_write_ptr() : 0;
+    // The scratch buffer exists only on the misaligned path, where a sub-tile line has to be
+    // staged through an alignment-sized landing area before being copied into the tile. It is
+    // bound (and this code compiled) only when the host saw dst alignment > sub-tile line bytes.
+#ifdef MISALIGNED
+    DataflowBuffer dfb_scratch(dfb::scratch);
+    uint32_t intermed_l1_scratch = dfb_scratch.get_write_ptr();
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
+#endif
     for (uint32_t t = 0; t < num_tiles; t++) {
         auto h32 = (h & 31);
 
@@ -107,7 +111,8 @@ void kernel_main() {
                     rem = (bsrc_offs & 2047);
                 }
 
-                if constexpr (MISALIGNED) {
+#ifdef MISALIGNED
+                {
                     uint64_t banked_addr = s0.get_noc_addr(batch_itile, rem);
                     uint32_t banked_alignment = banked_addr % ALIGNMENT;
                     if (dest_tr0_l1 % ALIGNMENT != banked_alignment) {
@@ -132,7 +137,9 @@ void kernel_main() {
                             {.page_id = batch_itile, .offset_bytes = rem},
                             {.offset_bytes = 0});
                     }
-                } else {
+                }
+#else
+                {
                     CoreLocalMem<uint32_t> dst(dest_tr0_l1);
                     noc.async_read(
                         s0,
@@ -141,6 +148,7 @@ void kernel_main() {
                         {.page_id = batch_itile, .offset_bytes = rem},
                         {.offset_bytes = 0});
                 }
+#endif
 
                 // the output address is just linearly incremented
                 dest_tr0_l1 += SUBTILE_LINE_BYTES;

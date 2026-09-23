@@ -21,13 +21,11 @@ namespace ttnn::operations::data_movement::repeat_codegen {
 namespace {
 
 // Shared correctness rule for repeating dim `d` (in a tensor of rank `ndim`)
-// by `reps` on `layout`/`dtype`, transcribed from codegen_repeat.py's
-// invalidate_vector (both the base suite, which wraps the upstream
-// sweeps.data_movement.repeat.repeat gate, and the broaden suite). A
-// non-repeated dim (reps <= 1) never constrains the call.
+// by `reps` on `layout`/`dtype`. A non-repeated dim (reps <= 1) never
+// constrains the call.
 //
 // TILE: only H (d == ndim-2) or W (d == ndim-1) repeats require tile
-// alignment on that axis. RepeatCodegen repeats in tile-page space
+// alignment on that axis. The codegen path repeats in tile-page space
 // (ceil(H/TILE_HEIGHT) / ceil(W/TILE_WIDTH) tiles); repeating a tile-page-
 // quantized axis that isn't itself tile-aligned makes
 // ceil(dim/tile)*reps disagree with ceil(dim*reps/tile), which
@@ -36,24 +34,24 @@ namespace {
 // included) is just duplicated, which is correct regardless of whether H/W
 // happen to be sub-tile.
 //
-// RM last-dim (d == ndim-1) has an extra hardware constraint beyond
-// correctness: RepeatCodegenProgramFactory's last-dim-RM branch sizes its
-// output CB as kRepeatCbDepth pages of dst_buffer->aligned_page_size(), and
-// that page IS the output stick -- `reps` copies of the input stick -- so the
-// CB allocation grows linearly with reps and input width with no cap
-// (mirrors ops/repeat/spec.py's "_CB_DEPTH ... repeat has no L1 clamp").
-// Reject upfront any case whose projected CB wouldn't fit in one core's L1,
-// so an oversized repeat cleanly routes to native (which streams the same
-// output without a repeat-scaled CB) instead of TT_THROWing out of circular
-// buffer allocation at program-compile time.
-bool last_dim_rm_fits_in_l1(const Tensor& input, uint32_t reps) {
+// Both ROW_MAJOR branches carry a hardware constraint beyond correctness: each
+// sizes its CB as kRepeatCbDepth pages of one stick, and a stick scales with
+// the tensor's width with no L1 clamp. Reject upfront any case whose projected
+// CB wouldn't fit in one core's L1, so an oversized repeat cleanly routes to
+// native (which streams the same output without a stick-sized CB) instead of
+// TT_THROWing out of circular buffer allocation at program-compile time.
+//
+// `cb_stick_elems` is the width of the stick that branch pages through: the
+// output stick on the last-dim branch (`reps` copies of the input stick, so it
+// grows with reps too) and the input stick on the higher-dim branch, where
+// input and output share a width.
+bool rm_cb_fits_in_l1(const Tensor& input, uint64_t cb_stick_elems) {
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
         // Not yet on device (e.g. host-side probing); nothing to bound against.
         // Tensor::device() throws for a non-device tensor, so check first.
         return true;
     }
-    const uint64_t out_stick_bytes =
-        static_cast<uint64_t>(input.logical_shape()[-1]) * static_cast<uint64_t>(reps) * input.element_size();
+    const uint64_t stick_bytes = cb_stick_elems * input.element_size();
     // The eventual output buffer type (DRAM vs L1) isn't known at this
     // routing-time check, so round up to the stricter (larger) of the two
     // alignments for a conservative (never-too-small) estimate.
@@ -61,8 +59,8 @@ bool last_dim_rm_fits_in_l1(const Tensor& input, uint32_t reps) {
     const uint32_t dram_alignment = allocator->get_alignment(tt::tt_metal::BufferType::DRAM);
     const uint32_t l1_alignment = allocator->get_alignment(tt::tt_metal::BufferType::L1);
     const uint32_t alignment = std::max(dram_alignment, l1_alignment);
-    const uint64_t out_aligned = tt::round_up(out_stick_bytes, static_cast<uint64_t>(alignment));
-    const uint64_t projected_cb_bytes = out_aligned * ttnn::prim::kRepeatCbDepth;
+    const uint64_t stick_aligned = tt::round_up(stick_bytes, static_cast<uint64_t>(alignment));
+    const uint64_t projected_cb_bytes = stick_aligned * ttnn::prim::kRepeatCbDepth;
     return projected_cb_bytes <= static_cast<uint64_t>(get_max_l1_space(input));
 }
 
@@ -81,10 +79,10 @@ bool single_dim_ok(const Tensor& input, uint32_t d, uint32_t reps) {
         if (dtype == tt::tt_metal::DataType::BFLOAT16 && shape[-1] < 2) {
             return false;
         }
-        if (d == ndim - 1 && !last_dim_rm_fits_in_l1(input, reps)) {
-            return false;
-        }
-        return true;
+        const uint64_t width = shape[-1];
+        // Last-dim repeats page the widened output stick; every other dim pages
+        // the input stick, whose width the repeat leaves alone.
+        return rm_cb_fits_in_l1(input, d == ndim - 1 ? width * reps : width);
     }
     if (layout == ttnn::TILE_LAYOUT) {
         if (d == ndim - 1) {
@@ -98,26 +96,31 @@ bool single_dim_ok(const Tensor& input, uint32_t d, uint32_t reps) {
     return false;
 }
 
-}  // namespace
-
-ImplementationSelector parse_implementation(const std::string& implementation) {
-    if (implementation == "auto") {
-        return ImplementationSelector::Auto;
+// The host-side page map that feeds the codegen prim derives Ht/Wt from the 32x32
+// constants, so an off-default tile shape gives the kernels both a page count and a
+// page size the buffer does not have. A transposed tile keeps both but swizzles the
+// datums within the page, and compute_output_specs() derives the output tile from the
+// layout alone, so the copied pages would come back labelled untransposed. A ROW_MAJOR
+// page is a whole stick and never consults the tile, so this constrains TILE only.
+bool tile_geometry_ok(const Tensor& input) {
+    if (input.layout() != ttnn::TILE_LAYOUT) {
+        return true;
     }
-    if (implementation == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (implementation == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    TT_THROW("Unknown repeat implementation '{}': expected 'auto', 'native', or 'codegen'", implementation);
+    const auto tile = input.tensor_spec().tile();
+    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+           !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
+}  // namespace
+
 bool supported_by_codegen(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
-    // Sharded input: RepeatCodegen only ever reaches sharded tensors via a
-    // native unshard-to-interleaved-DRAM hop that this port does not
-    // implement; see the manifest's hand-authored sharded case.
+    // Sharded input: the codegen path would only reach a sharded tensor through
+    // an unshard-to-interleaved-DRAM hop it does not implement, so those stay
+    // on native.
     if (input.memory_config().is_sharded()) {
+        return false;
+    }
+    if (!tile_geometry_ok(input)) {
         return false;
     }
     const auto& shape = input.logical_shape();
@@ -131,10 +134,13 @@ bool supported_by_codegen(const Tensor& input, const ttsl::SmallVector<uint32_t>
     if (input.memory_config().is_sharded()) {
         return false;
     }
+    if (!tile_geometry_ok(input)) {
+        return false;
+    }
     const auto& shape = input.logical_shape();
     const uint32_t ndim = shape.rank();
-    // repeat_codegen's kernels assume a 4D-padded tensor (ops/repeat/spec.py's
-    // _page_map / build_repeat_rm_factory); a rank > 4 input has no path here.
+    // The codegen kernels index pages through a fixed 4D page map, so a rank > 4
+    // input has no path here.
     if (repeat_dims.size() != ndim || ndim < 2 || ndim > 4) {
         return false;
     }

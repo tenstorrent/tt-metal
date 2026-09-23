@@ -41,7 +41,16 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
         (1, 4096, 512),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
+)
 def test_transformer_block_flux1(
     *,
     mesh_device: ttnn.MeshDevice,

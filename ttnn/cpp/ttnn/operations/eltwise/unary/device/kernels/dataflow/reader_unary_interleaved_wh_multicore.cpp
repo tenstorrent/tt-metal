@@ -3,6 +3,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_interleaved_wh_multicore_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this
+// file is retired, changes here likely belong in the fork too.
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -14,11 +19,13 @@ void kernel_main() {
     uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(2);
     uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
     constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    // The block factories emit one reader instance per buffer set, so the input buffer index is a
+    // compile-time arg rather than a fixed c_0 -- see BlockBufferSet in data_movement/common.
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
+    constexpr auto src_args = TensorAccessorArgs<4>();
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;

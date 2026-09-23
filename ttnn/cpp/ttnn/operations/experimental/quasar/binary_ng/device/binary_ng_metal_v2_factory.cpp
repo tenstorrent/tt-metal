@@ -63,7 +63,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 

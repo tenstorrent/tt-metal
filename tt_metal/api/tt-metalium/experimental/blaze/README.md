@@ -21,6 +21,19 @@ host merges named values after positional ones, and a JIT-generated header
 uint32_t n = blaze_rt_args::get<blaze_ct_args::my_op::num_tiles>();
 ```
 
+`KernelDescriptor::named_compile_time_args` retains both legacy lookups through
+`get_named_compile_time_arg_val()` and `blaze_ct_args::` constants.
+`KernelDescriptor::blaze_named_args.named_compile_time_args` (Python constructor
+keyword/property `blaze_named_compile_time_args`) supplies only typed constants.
+Each name may appear in only one field. Argument spelling does not select an API.
+Names must be unique within the new Blaze field, even when repeated values match.
+The legacy field still accepts repeated names with the same value and rejects
+conflicting values.
+
+Only the legacy field populates `named_ct_arg_map_generated.h`; when empty, that
+header is neither generated nor force-included. Existing Blaze callers can update
+the Metal pin first and migrate to the new field later to omit the legacy header.
+
 ### Why experimental
 
 This feature is used by the Blaze codebase but is not part of the stable
@@ -36,7 +49,7 @@ related to it is quarantined in `namespace tt::tt_metal::experimental::blaze`
 | Device | `tt_metal/hw/inc/experimental/blaze_named_args.h` | `#include "experimental/blaze_named_args.h"` in kernel source |
 | Host C++ | `tt_metal/api/tt-metalium/experimental/blaze/named_kernel_args.hpp` | `experimental::blaze::NamedKernelArgs` on `KernelDescriptor` |
 | Host impl | `tt_metal/impl/experimental/blaze/named_kernel_args.cpp` | `experimental::blaze::process_named_args()` + `emit_named_args_header()` |
-| Python | `_ttnn.experimental` submodule | `blaze_named_*` property bindings on `KernelDescriptor` |
+| Python | `_ttnn.experimental` submodule | `blaze_named_compile_time_args` and `blaze_named_*` runtime properties on `KernelDescriptor` |
 
 ### Core runtime touch-points
 

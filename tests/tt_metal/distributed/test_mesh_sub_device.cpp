@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -37,11 +38,111 @@
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/program/sub_device_setup_batch.hpp"
+
+namespace tt::tt_metal::distributed {
+class SubDeviceSetupCacheTestAccessor {
+public:
+    static auto keys(MeshCommandQueue& queue) {
+        auto& cq = dynamic_cast<FDMeshCommandQueue&>(queue);
+        std::vector<std::vector<std::pair<CoreRangeSet, uint32_t>>> keys;
+        keys.reserve(cq.sub_device_setup_commands_.size());
+        for (const auto& entry : cq.sub_device_setup_commands_) {
+            keys.push_back(entry.core_mapping);
+        }
+        return keys;
+    }
+    static constexpr size_t capacity() { return FDMeshCommandQueue::max_sub_device_setup_cache_entries; }
+};
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_metal::distributed::test {
 namespace {
 
 namespace tt::tt_metal {
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
+
+// Two hardware CQs plus a trace region, so a trace replay can be left running on one CQ while the
+// host keeps issuing on the other.
+class MeshSubDeviceMultiCQTraceTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshSubDeviceMultiCQTraceTestSuite() :
+        MeshDeviceFixtureBase(Config{.num_cqs = 2, .trace_region_size = (16 << 20)}) {}
+};
+
+TEST(SubDeviceSetupBatchTest, PreservesGroupsAtFetchBoundary) {
+    using program_dispatch::setup_batch::append_setup_commands;
+    // One cache line per group; two groups fit exactly in this synthetic fetch limit.
+    const vector_aligned<uint32_t> first(16, 1), second(16, 2), third(16, 3);
+    std::vector<vector_aligned<uint32_t>> batches;
+    append_setup_commands(batches, first, 128);
+    append_setup_commands(batches, second, 128);
+    ASSERT_EQ(batches.size(), 1);
+    EXPECT_EQ(batches[0].size() * sizeof(uint32_t), 128);
+    append_setup_commands(batches, third, 128);
+    ASSERT_EQ(batches.size(), 2);
+    vector_aligned<uint32_t> expected(first);
+    expected.insert(expected.end(), second.begin(), second.end());
+    EXPECT_EQ(batches[0], expected);
+    EXPECT_EQ(batches[1], third);
+    const auto saved = batches;
+    const vector_aligned<uint32_t> oversized(48, 4);
+    EXPECT_ANY_THROW(append_setup_commands(batches, oversized, 128));
+    EXPECT_EQ(batches, saved);
+}
+
+TEST(SubDeviceSetupBatchTest, ResetAndFirstSetupFetchBoundary) {
+    using program_dispatch::setup_batch::can_combine_setup;
+    EXPECT_TRUE(can_combine_setup(64, 64, 128));
+    EXPECT_FALSE(can_combine_setup(64, 128, 128));
+    EXPECT_TRUE(can_combine_setup(128, 0, 128));
+    EXPECT_FALSE(can_combine_setup(192, 0, 128));
+}
+
+TEST_F(MeshSubDeviceTestSuite, SetupCacheEvictsLeastRecentlyUsedConfiguration) {
+    using Accessor = SubDeviceSetupCacheTestAccessor;
+    std::vector<SubDeviceManagerId> managers;
+    auto& cq = mesh_device_->mesh_command_queue();
+    const auto capacity = Accessor::capacity();
+    // Distinct single-core partitions also exercise changing mailbox mappings with identical counts.
+    for (size_t i = 0; i < capacity; ++i) {
+        const CoreCoord core(i % 4, i / 4);
+        managers.push_back(mesh_device_->create_sub_device_manager(
+            {SubDevice(std::array{CoreRangeSet(CoreRange(core, core))})}, 3200));
+        mesh_device_->load_sub_device_manager(managers.back());
+    }
+    const auto full = Accessor::keys(cq);
+    ASSERT_EQ(full.size(), capacity);
+    mesh_device_->load_sub_device_manager(managers.front());
+    const auto promoted = Accessor::keys(cq);
+    EXPECT_EQ(promoted.front(), full.back());
+    EXPECT_EQ(promoted.back(), full[capacity - 2]);
+
+    // Cycle through removed managers: their historical entries must not accumulate.
+    for (size_t i = capacity; i < 2 * capacity; ++i) {
+        const CoreCoord core(i % 4, i / 4);
+        const auto manager =
+            mesh_device_->create_sub_device_manager({SubDevice(std::array{CoreRangeSet(CoreRange(core, core))})}, 3200);
+        mesh_device_->load_sub_device_manager(manager);
+        const auto keys = Accessor::keys(cq);
+        ASSERT_EQ(keys.size(), capacity);
+        if (i == capacity) {
+            EXPECT_EQ(keys[1], promoted.front());
+            EXPECT_EQ(std::find(keys.begin(), keys.end(), promoted.back()), keys.end());
+        }
+        mesh_device_->clear_loaded_sub_device_manager();
+        mesh_device_->remove_sub_device_manager(manager);
+    }
+    // Rebuild an evicted configuration and verify its setup still dispatches successfully.
+    mesh_device_->load_sub_device_manager(managers.front());
+    EXPECT_EQ(Accessor::keys(cq).front(), full.back());
+    Finish(cq);
+    mesh_device_->clear_loaded_sub_device_manager();
+    for (auto manager : managers) {
+        mesh_device_->remove_sub_device_manager(manager);
+    }
+}
 
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -100,7 +201,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
 
     auto all_cores = syncer_core.merge(datacopy_core);
-    auto global_sem = CreateGlobalSemaphore(mesh_device_.get(), all_cores, 0);
+    auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     Program sync_and_incr_program = CreateProgram();
     auto sync_kernel = CreateKernel(
@@ -214,6 +315,61 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+}
+
+// Switching sub device managers resets the worker GO mailboxes and remaps each core's go message index,
+// state that is shared by every hardware CQ. Both managers below cover the same cores in the opposite
+// order, so the switch flips the go message index of every core the trace runs on. A switch that lands
+// while the trace is still replaying on the other CQ leaves those cores polling a mailbox slot the trace
+// never signals: the workers stop launching and the replay never completes. Regressions here hang rather
+// than fail.
+TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplaysTrace) {
+    constexpr uint32_t k_local_l1_size = 3200;
+    // Enough device side work that the host reaches the manager switch below mid replay.
+    constexpr uint32_t k_delay_iters = 4000000;
+    constexpr uint32_t k_workloads_in_trace = 8;
+
+    CoreRangeSet cores_0(CoreRange({0, 0}, {1, 1}));
+    CoreRangeSet cores_1(CoreRange({2, 2}, {3, 3}));
+    auto sub_device_manager_0 = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{cores_0}), SubDevice(std::array{cores_1})}, k_local_l1_size);
+    auto sub_device_manager_1 = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, k_local_l1_size);
+    mesh_device_->load_sub_device_manager(sub_device_manager_0);
+
+    Program delay_program = CreateProgram();
+    auto delay_kernel = CreateKernel(
+        delay_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+        cores_0,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    std::array<uint32_t, 1> delay_rt_args = {k_delay_iters};
+    SetRuntimeArgs(delay_program, delay_kernel, cores_0, delay_rt_args);
+
+    MeshCoordinateRange devices(mesh_device_->shape());
+    auto delay_mesh_workload = MeshWorkload();
+    delay_mesh_workload.add_program(devices, std::move(delay_program));
+
+    // Compile the workload before capturing it.
+    auto& trace_cq = mesh_device_->mesh_command_queue(1);
+    EnqueueMeshWorkload(trace_cq, delay_mesh_workload, true);
+
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 1);
+    for (uint32_t i = 0; i < k_workloads_in_trace; i++) {
+        EnqueueMeshWorkload(trace_cq, delay_mesh_workload, false);
+    }
+    mesh_device_->end_mesh_trace(1, trace_id);
+
+    // Repeat to exercise both newly built and cached manager setup commands while CQ1 is busy.
+    for (uint32_t i = 0; i < 3; ++i) {
+        mesh_device_->replay_mesh_trace(1, trace_id, false);
+        mesh_device_->load_sub_device_manager(sub_device_manager_1);
+        Finish(mesh_device_->mesh_command_queue(0));
+        Finish(trace_cq);
+        // The trace belongs to the manager it was captured under.
+        mesh_device_->load_sub_device_manager(sub_device_manager_0);
+    }
+    mesh_device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {

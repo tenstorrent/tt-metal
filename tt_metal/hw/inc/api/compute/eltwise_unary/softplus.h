@@ -29,12 +29,13 @@ namespace ckernel {
  * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_softplus,
-        (APPROX, DST_ACCUM_MODE),
+        (APPROX, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC,
         beta,
@@ -49,12 +50,13 @@ ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
 
 #ifndef ARCH_QUASAR
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_softplus,
-        (APPROX, DST_ACCUM_MODE),
+        (APPROX, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC,
         beta,

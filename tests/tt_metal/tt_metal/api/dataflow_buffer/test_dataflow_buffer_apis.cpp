@@ -31,6 +31,8 @@
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "device_fixture.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -40,17 +42,8 @@ namespace tt::tt_metal {
 
 namespace m2 = experimental;
 
-TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
+TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     using DataT = std::uint32_t;
-
-    auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
-    if (device->arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
-    }
-    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
-    }
 
     constexpr uint32_t num_producers = 1;
     constexpr uint32_t num_consumers = 1;
@@ -58,7 +51,13 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     constexpr uint32_t num_entries = 2;
 
     constexpr uint32_t num_results_per_thread = 7;
-    constexpr uint32_t num_trisc_threads = 3;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t compute_class = static_cast<uint32_t>(HalProcessorClassType::COMPUTE);
+    const uint32_t num_trisc_threads = hal.get_processor_class_num_fw_binaries(tensix_idx, compute_class);
+    constexpr std::array<const char*, 4> trisc_slot_names = {"UNPACK", "MATH", "PACK", "ISOLATE_SFPU"};
+    ASSERT_GE(num_trisc_threads, 3u);
+    ASSERT_LE(num_trisc_threads, trisc_slot_names.size());
 
     // Tile 0 / tile 1 scalars at element offsets 0 and 1 within each entry.
     constexpr DataT tile0_val0 = 0xA5A5A5A5u;
@@ -72,14 +71,8 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     // Per thread: {tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0],
     //             read_tile_value<uint16_t>(1)[0], read_tile_value<uint16_t>(1)[1]}
     const std::vector<DataT> expected_per_thread = {
-        tile0_val0,
-        tile0_val1,
-        tile1_val0,
-        tile1_val1,
-        tile1_val0,
-        tile1_val0_lo,
-        tile1_val0_hi};
-    // UNPACK, MATH, and PACK each write expected_per_thread to a distinct L1 slot.
+        tile0_val0, tile0_val1, tile1_val0, tile1_val1, tile1_val0, tile1_val0_lo, tile1_val0_hi};
+    // Each participating TRISC writes expected_per_thread to a distinct L1 slot.
     std::vector<DataT> expected_scalar_reads;
     expected_scalar_reads.reserve(num_results_per_thread * num_trisc_threads);
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
@@ -96,7 +89,7 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     const uint32_t words_per_entry = entry_size / sizeof(DataT);
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -104,6 +97,16 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
         .num_entries = num_entries,
         .data_format_metadata = DataFormat::Float16_b,
     };
+
+    m2::DataMovementHardwareConfig producer_hw;
+    m2::ComputeHardwareConfig consumer_hw;
+    if (this->device().arch() == ARCH::QUASAR) {
+        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
+        consumer_hw = m2::ComputeGen2Config{};
+    } else {
+        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_hw = m2::ComputeGen1Config{};
+    }
 
     m2::KernelSpec producer{
         .unique_id = PRODUCER,
@@ -122,7 +125,7 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
                 {"num_producers", num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .hw_config = producer_hw,
     };
 
     m2::KernelSpec consumer{
@@ -136,7 +139,7 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
               .access_pattern = m2::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"num_entries_per_consumer", num_entries}},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = consumer_hw,
     };
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
@@ -149,12 +152,10 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
-    const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned_result_size = (result_size_bytes + l1_alignment - 1) / l1_alignment * l1_alignment;
-    const uint32_t result_l1_addr = static_cast<uint32_t>(device->l1_size_per_core()) - aligned_result_size;
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -177,23 +178,22 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     input[1] = tile0_val1;
     input[words_per_entry + 0] = tile1_val0;
     input[words_per_entry + 1] = tile1_val1;
-    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
 
-    std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
-    detail::WriteToDeviceL1(device, CoreCoord(0, 0), result_l1_addr, result_init);
+    constexpr DataT result_sentinel = 0xDEADBEEFu;
+    std::vector<DataT> result_init(expected_scalar_reads.size(), result_sentinel);
+    slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     tt_driver_atomics::mfence();
     std::vector<DataT> scalar_results;
-    detail::ReadFromDeviceL1(device, CoreCoord(0, 0), result_l1_addr, result_size_bytes, scalar_results);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_size_bytes, scalar_results);
     ASSERT_EQ(scalar_results.size(), expected_scalar_reads.size());
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         const auto begin = scalar_results.begin() + thread * num_results_per_thread;
-        EXPECT_EQ(
-            std::vector<DataT>(begin, begin + num_results_per_thread),
-            expected_per_thread)
-            << "TRISC thread slot " << thread;
+        EXPECT_EQ(std::vector<DataT>(begin, begin + num_results_per_thread), expected_per_thread)
+            << "TRISC thread slot " << thread << " (" << trisc_slot_names[thread] << ")";
     }
 }
 
@@ -249,16 +249,12 @@ inline uint32_t expected_strided_ring_span_bytes(
 }
 
 inline ExtentRecord expected_strided_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     const auto layout = compute_strided_layout(num_entries, entry_size, num_producers, num_consumers, is_producer);
     const uint32_t total_bytes = num_entries * entry_size;
     const uint32_t num_endpoint_threads = is_producer ? num_producers : num_consumers;
-    const uint32_t ring_span_bytes = expected_strided_ring_span_bytes(
-        entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
+    const uint32_t ring_span_bytes =
+        expected_strided_ring_span_bytes(entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
     return ExtentRecord{
         entry_size,
         entry_size * layout.stride_in_entries,
@@ -273,11 +269,7 @@ inline ExtentRecord expected_strided_extent(
 
 // ALL consumer (cap=ALL): capacity/stride follow num_producers; TC counts match DMTensix ALL.
 inline ExtentRecord expected_all_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     (void)num_consumers;
     const uint32_t capacity = num_entries / num_producers;
     const uint32_t stride_in_entries = 1;
@@ -329,17 +321,11 @@ inline void expect_wh_bh_aliases(const ExtentRecord& rec) {
     EXPECT_EQ(rec[StrideSize], rec[EntrySize]);
 }
 
-inline uint32_t allocate_l1_result_region(IDevice* device, uint32_t bytes) {
-    const uint32_t alignment = device->allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + alignment - 1u) / alignment * alignment;
-    return static_cast<uint32_t>(device->l1_size_per_core()) - aligned;
-}
-
-inline ExtentRecord read_extent_record(IDevice* device, CoreCoord core, uint32_t l1_addr) {
+inline ExtentRecord read_extent_record(distributed::MeshDevice& mesh_device, CoreCoord core, uint32_t l1_addr) {
     constexpr uint32_t num_fields = 8;
     constexpr uint32_t record_bytes = num_fields * sizeof(uint32_t);
     std::vector<uint32_t> words(num_fields, 0u);
-    detail::ReadFromDeviceL1(device, core, l1_addr, record_bytes, words);
+    slow_dispatch::ReadFromL1(mesh_device, core, l1_addr, record_bytes, words);
     ExtentRecord rec{};
     for (uint32_t i = 0; i < num_fields; ++i) {
         rec[i] = words[i];
@@ -370,11 +356,10 @@ struct ExtentProbeParams {
     ConsumerProbeConfig consumer{};
 };
 
-void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ExtentProbeParams& params) {
+void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbeParams& params) {
     constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
-    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
 
     if (!is_quasar && (params.num_producers > 1 || params.num_consumers > 1)) {
         GTEST_SKIP() << "WH/BH supports 1Sx1S only";
@@ -451,13 +436,12 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t producer_records =
-        params.num_producers * params.producer.num_tc_snapshots;
+    const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
     const uint32_t producer_result_l1 =
-        allocate_l1_result_region(device, (producer_records + consumer_records) * extent_record_bytes);
+        top_of_l1_scratch_addr(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
     const uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
 
     m2::ProgramRunArgs run_args;
@@ -473,7 +457,7 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
     };
     m2::SetProgramRunArgs(program, run_args);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
     tt_driver_atomics::mfence();
 
     const CoreCoord core{0, 0};
@@ -496,7 +480,7 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
         for (uint32_t s = 0; s < params.producer.num_tc_snapshots; ++s) {
             const uint32_t l1_addr =
                 producer_result_l1 + (t * params.producer.num_tc_snapshots + s) * extent_record_bytes;
-            const ExtentRecord rec = read_extent_record(device, core, l1_addr);
+            const ExtentRecord rec = read_extent_record(mesh_device, core, l1_addr);
             if (is_quasar) {
                 expect_extent_record(rec, expected_producer);
             } else {
@@ -509,7 +493,7 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
     }
 
     for (uint32_t s = 0; s < params.consumer.num_tc_snapshots; ++s) {
-        const ExtentRecord rec = read_extent_record(device, core, consumer_result_l1 + s * extent_record_bytes);
+        const ExtentRecord rec = read_extent_record(mesh_device, core, consumer_result_l1 + s * extent_record_bytes);
         if (is_quasar) {
             expect_extent_record(rec, expected_consumer);
         } else {
@@ -521,19 +505,19 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
     }
 
     if (is_quasar && params.producer.num_tc_snapshots == 1 && params.num_producers > params.num_consumers) {
-        const ExtentRecord consumer_rec = read_extent_record(device, core, consumer_result_l1);
+        const ExtentRecord consumer_rec = read_extent_record(mesh_device, core, consumer_result_l1);
         EXPECT_LT(consumer_rec[LocalSizeBytes], consumer_rec[RingSpanBytes])
             << "multi-TC consumer RISC: local ring < bounding span";
     }
     if (is_quasar && params.producer.num_tc_snapshots == 1 && params.num_consumers > params.num_producers &&
         params.consumer_access_pattern == m2::DFBAccessPattern::STRIDED) {
-        const ExtentRecord producer_rec = read_extent_record(device, core, producer_result_l1);
+        const ExtentRecord producer_rec = read_extent_record(mesh_device, core, producer_result_l1);
         EXPECT_LT(producer_rec[LocalSizeBytes], producer_rec[RingSpanBytes])
             << "multi-TC producer RISC: local ring < bounding span";
     }
     if (is_quasar && params.producer.num_tc_snapshots == 1 &&
         params.consumer_access_pattern == m2::DFBAccessPattern::ALL && params.num_producers > 1) {
-        const ExtentRecord consumer_rec = read_extent_record(device, core, consumer_result_l1);
+        const ExtentRecord consumer_rec = read_extent_record(mesh_device, core, consumer_result_l1);
         EXPECT_LT(consumer_rec[LocalSizeBytes], consumer_rec[RingSpanBytes])
             << "ALL consumer multi-TC RISC: local ring < bounding span";
     }
@@ -541,13 +525,11 @@ void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_devic
 
 }  // namespace
 
-TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_1Sx1S) {
-    run_extent_probe(devices_.at(0), {});
-}
+TEST_F(UnitMeshFixture, DataflowBufferExtentApis_1Sx1S) { run_extent_probe(this->device(), {}); }
 
-TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_4Sx1S) {
+TEST_F(UnitMeshFixture, DataflowBufferExtentApis_4Sx1S) {
     run_extent_probe(
-        devices_.at(0),
+        this->device(),
         {
             .num_producers = 4,
             .num_consumers = 1,
@@ -555,9 +537,9 @@ TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_4Sx1S) {
 }
 
 // 2Sx4S: each producer RISC round-robins 2 TCs (push advances tc_idx between snapshots).
-TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_2Sx4S_ProducerEachTC) {
+TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4S_ProducerEachTC) {
     run_extent_probe(
-        devices_.at(0),
+        this->device(),
         {
             .num_producers = 2,
             .num_consumers = 4,
@@ -575,9 +557,9 @@ TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_2Sx4S_ProducerEachTC) {
 }
 
 // 2Sx4A: each consumer RISC round-robins 2 TCs (pop advances tc_idx between snapshots).
-TEST_F(MeshDeviceFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
+TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
     run_extent_probe(
-        devices_.at(0),
+        this->device(),
         {
             .num_producers = 2,
             .num_consumers = 4,

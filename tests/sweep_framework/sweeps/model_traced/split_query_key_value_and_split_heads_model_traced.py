@@ -214,9 +214,21 @@ def run(
             query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
                 input_dram, **_std
             )
-    query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
-    key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)
-    value_tensor = mesh_tensor_to_torch(value_tensor, device if is_mesh_device else None)
+    query_tensor = mesh_tensor_to_torch(
+        query_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
+    key_tensor = mesh_tensor_to_torch(
+        key_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
+    value_tensor = mesh_tensor_to_torch(
+        value_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # No unsqueeze needed — experimental op returns 5D [B,1,H,S,D] matching golden

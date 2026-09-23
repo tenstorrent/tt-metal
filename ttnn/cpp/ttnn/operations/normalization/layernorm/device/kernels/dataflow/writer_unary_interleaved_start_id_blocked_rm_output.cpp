@@ -5,11 +5,11 @@
 // Writer kernel for layernorm with ROW_MAJOR output.
 //
 // The compute kernel uses pack_untilize_block<block_size, block_size> to convert completed tiles from
-// cb_out (CB 16) into dfb_out_rm (CB 28) block-by-block.
+// dfb_out into dfb_out_rm block-by-block.
 //
 // pack_untilize_block<block_size, block_size> produces true row-major data in dfb_out_rm:
-//   For each block of block_size tiles, the CB holds a (TILE_H x block_size*TILE_W) row-major array:
-//     row r starts at offset  r * block_size * TILE_W * elem_size  from the CB base.
+//   For each block of block_size tiles, the buffer holds a (TILE_H x block_size*TILE_W) row-major array:
+//     row r starts at offset  r * block_size * TILE_W * elem_size  from the buffer base.
 //   This matches the access pattern used by the standard untilize writer
 //   (writer_unary_stick_layout_split_rows_multi_core.cpp).
 //
@@ -17,19 +17,20 @@
 //   one write per (tile-block row) pair  =  TILE_H writes per block.
 //
 // Compile-time args:
-//   CTA[0]    = block_size  (block size in tiles)
-//   CTA[1..N] = TensorAccessorArgs for output (ROW_MAJOR, page_size = W * elem_size_bytes)
-//   CTA[last] = elem_size_bytes
+//   block_size       (block size in tiles)
+//   elem_size_bytes
 //
 // Runtime args:
-//   arg[0] = dst_addr          (output base address)
-//   arg[1] = Wt                (width in tiles)
-//   arg[2] = num_tile_rows     (number of tile-rows assigned to this core)
-//   arg[3] = start_tile_row    (starting tile-row index for this core, in tiles)
-//   arg[4] = H_logical         (total valid rows — skip writes beyond this to avoid OOB DRAM writes)
+//   Wt               (width in tiles)
+//   num_tile_rows    (number of tile-rows assigned to this core)
+//   writer_start     (starting tile-row index for this core, in tiles)
+//   H_logical        (total valid rows — skip writes beyond this to avoid OOB DRAM writes)
+//
+// The output tensor is bound as tensor::dst rather than passed as an address.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -41,25 +42,21 @@ namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t Wt = get_arg_val<uint32_t>(1);
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);
-    const uint32_t H_logical = get_arg_val<uint32_t>(4);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
+    const uint32_t start_tile_row = get_arg(args::writer_start);
+    const uint32_t H_logical = get_arg(args::H_logical);
 
-    constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
-
-    constexpr uint32_t dfb_id_out_rm = get_named_compile_time_arg_val("cb_out_rm");
+    constexpr auto block_size = get_arg(args::block_size);
+    constexpr auto elem_size_bytes = get_arg(args::elem_size_bytes);
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 
-    const auto dst_a = TensorAccessor(dst_args, dst_addr);
+    const auto dst_a = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_out_rm(dfb_id_out_rm);
+    DataflowBuffer dfb_out_rm(dfb::out_rm);
 
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;
@@ -77,7 +74,7 @@ void kernel_main() {
         }
 
         for (auto block : generic::blocks(Wt, block_size)) {
-            layernorm_dataflow_utils::write_row_major_block_from_cb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
+            layernorm_dataflow_utils::write_row_major_block_from_dfb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
                 noc, dfb_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
         }
     }

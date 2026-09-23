@@ -38,10 +38,10 @@ class GLM51Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/models/deepseek-prefill-cache/GLM-5_1-Cache"
     default_gate_mode = "DEVICE_FP32"  # GLM: single expert group
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+    mla_trace_defaults = ("/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/glm_51_56320_sdpa_mla",)
 
-    # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
-    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-    l1_small_size = 768
+    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+    l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
 
     def load_hf_config(self):
@@ -65,6 +65,7 @@ class GLM51Adapter(MLAPrefillAdapter):
         import ttnn
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
 
+        kv_tp_axis = params.tp_axis
         kvpe_cache = init_mla_kv_cache(
             cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             hf_config=hf_config,
@@ -74,6 +75,7 @@ class GLM51Adapter(MLAPrefillAdapter):
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
+            tp_axis=kv_tp_axis,
         )
         index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
@@ -85,6 +87,7 @@ class GLM51Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
+            tp_axis=kv_tp_axis,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 

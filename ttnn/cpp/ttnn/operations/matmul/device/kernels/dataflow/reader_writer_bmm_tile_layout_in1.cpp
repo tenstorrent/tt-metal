@@ -8,81 +8,68 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // RUNTIME ARGS
     // READER
-    uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    auto in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const auto batch = get_arg(args::batch);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    auto out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
 #ifdef FUSE_BIAS
     // bias tensor args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const auto in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
 #endif
 
     // COMPILE TIME ARGS
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
+    constexpr auto in1_tensor_stride_w = get_arg(args::in1_tensor_stride_w);
+    constexpr auto in1_tensor_stride_h = get_arg(args::in1_tensor_stride_h);
+    constexpr auto in1_tensor_next_block_stride = get_arg(args::in1_tensor_next_block_stride);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_block_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    constexpr auto in1_block_w = get_arg(args::in1_block_w);
+    constexpr auto in1_block_h = get_arg(args::in1_block_h);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
+    constexpr auto num_blocks = get_arg(args::num_blocks);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(7);
-    constexpr uint32_t KtNt = get_compile_time_arg_val(8);
+    constexpr auto bcast_B = get_arg(args::bcast_B);
+    constexpr auto KtNt = get_arg(args::KtNt);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(17);
+    constexpr auto out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr auto out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr auto out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr auto out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
+    constexpr auto out_num_subblocks_w = get_arg(args::out_num_subblocks_w);
+    constexpr auto out_num_subblocks_h = get_arg(args::out_num_subblocks_h);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(18);
+    constexpr auto MtNt = get_arg(args::MtNt);
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    // WRITER
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
-
-    constexpr auto in1_args = TensorAccessorArgs<19>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-#ifdef FUSE_BIAS
-    // bias accessor CT args follow the output accessor
-    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-#endif
-
-    Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out0);
+    const Noc noc;
+    // in1 block staging (this kernel fills it, compute drains it) and the output block
+    // (compute fills it, this kernel drains it to the output tensor).
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
 
 #ifdef FUSE_BIAS
     // Load the whole per-batch [M, N] bias block once.
     // It's reused across all of this core's batch iterations (broadcast over batch).
     constexpr uint32_t bias_block_ntiles = out_subblock_h * out_num_subblocks_h * in1_block_w;  // M*N tiles
-    const uint32_t bias_single_tile_size_bytes = get_tile_size(dfb_id_in3);
-    DataflowBuffer dfb_in3(dfb_id_in3);
-    const auto s3 = TensorAccessor(bias_args, in3_tensor_addr);
+    DataflowBuffer dfb_in3(dfb::bias);
+    const uint32_t bias_single_tile_size_bytes = dfb_in3.get_tile_size();
+    const auto s3 = TensorAccessor(tensor::bias);
     dfb_in3.reserve_back(bias_block_ntiles);
     uint32_t in3_write_offset = 0;
     uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
@@ -105,19 +92,19 @@ void kernel_main() {
     dfb_in1.reserve_back(in1_num_tiles);
     dfb_in1.push_back(in1_num_tiles);
 #else
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t in1_single_tile_size_bytes = dfb_in1.get_tile_size();
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
-    // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
-    // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
-    // the tile size is already aligned.
+    // buffer's entries are sized to match (see the program factory), so tiles are laid out in L1 at
+    // the padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op
+    // when the tile size is already aligned.
     const uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    const auto s1 = TensorAccessor(tensor::in1);
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
-    const uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
+    const auto s = TensorAccessor(tensor::out);
 #endif  // OUT_SHARDED
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED

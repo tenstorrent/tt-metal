@@ -1,4 +1,4 @@
-# Column reduce that reads src_a through the strided tilize unpack
+# Column reduce that reads in0 through the strided tilize unpack
 
 operands:
   - name: "input_A"
@@ -15,8 +15,8 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
+        in1: "input_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_COL"
         reduce_pool: "SUM"

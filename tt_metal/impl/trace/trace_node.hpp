@@ -42,6 +42,10 @@ struct TraceNode {
     std::vector<std::vector<uint32_t>> cb_configs_payloads;
     // Matches dfb_configs_payloads in the ProgramCommandSequence
     std::vector<std::vector<uint8_t>> dfb_configs_payloads;
+    // Matches cross_node_config_updates in the ProgramCommandSequence: capture-time
+    // snapshot of each CrossNodeDFB host config page, so the traced launch replays the
+    // binding that was current at capture.
+    std::vector<std::vector<uint32_t>> cross_node_config_pages;
 
     TraceDispatchMetadata dispatch_metadata;
 };

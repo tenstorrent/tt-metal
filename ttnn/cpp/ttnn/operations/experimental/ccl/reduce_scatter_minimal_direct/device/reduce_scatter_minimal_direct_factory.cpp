@@ -204,15 +204,14 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
     // Parked on the descriptor's `semaphores` slot, which keeps them alive for the cached workload's
     // lifetime -- the kernels take their addresses as runtime args. Order is the contract in
     // SemaphoreIndex: arrivals [0..N-1], then reader_gen, writer_gen, compute_gen, init_sync.
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto& sems = workload_descriptor.semaphores;
     sems.reserve(SemaphoreIndex::count(operation_attributes.num_devices));
     for (size_t s = 0; s < SemaphoreIndex::count(operation_attributes.num_devices); ++s) {
         sems.push_back(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     }
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     const bool needs_init_sync =
         !(tensor_args.persistent_output_tensor.has_value() && tensor_args.persistent_staging_tensor.has_value());

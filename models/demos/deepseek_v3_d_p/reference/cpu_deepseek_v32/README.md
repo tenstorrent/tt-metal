@@ -18,24 +18,6 @@ the latent KV cache.
 | `model.py` | Architecture only: `ModelArgs`, building blocks (`Linear`, `LayerNorm`, `RMSNorm`), and the `IndexerCPU` / `MLACPU` modules |
 | `weights.py` | Weight init (`initialize_weights`) + pretrained HF loading/dequant (`load_attention_state_dict`, `_HF_TO_MLA`, `_dequant_fp8`) |
 | `utils.py` | CPU kernel equivalents (`act_quant_cpu`, `fp8_index_cpu`, `rotate_activation_cpu`) + RoPE helpers (`precompute_freqs_cis`, `apply_rotary_emb`) |
-| `test_model.py` | Forward/equivalence/determinism harness (`test_indexer_layer`, `test_mla_layer`, `test_*_pretrained_layer0`, `test_mla_pretrained_determinism`) |
-
-## How to run
-
-```bash
-cd models/demos/deepseek_v3_d_p/reference/cpu_deepseek_v32
-python test_model.py            # or: pytest test_model.py -m slow
-```
-
-This builds an `IndexerCPU` and an `MLACPU` with random weights (`seed=42`,
-`batch_size=2`, `seq_len=8`) and:
-- **Indexer** — runs one forward pass and asserts output shapes.
-- **MLA** — runs a one-shot **prefill** of `P` tokens, then on a fresh identically-seeded
-  module runs **prefill(P-1) + decode(1)**, and asserts the decoded last position matches
-  the one-shot prefill (the cache-correctness invariant).
-
-Outputs are saved to `test_outputs/` (`topk_indices.pt`, `index_scores.pt`, `k_cache.pt`,
-`mla_prefill_out.pt`, `mla_decode_out.pt`, `mla_metadata.json`).
 
 ## Loading pretrained weights
 
@@ -54,7 +36,7 @@ initialize_weights(mla, layer=0)   # pretrained layer 0; downloads the shard if 
 ```
 
 For layer 0 that shard is `model-00001-of-000163.safetensors` (~5.2 GB). Other modes:
-`local_files_only=True` (cache only, raises if absent — used by tests to skip) and
+`local_files_only=True` (cache only, raises if absent) and
 `checkpoint_path=<shard>` (load from a local path you already have). The repo is public/MIT
 — no gating — but `huggingface_hub` and ~5 GB of free disk are required. The lower-level
 `load_pretrained_hf` / `load_pretrained` / `resolve_layer_shards` remain available.
@@ -70,8 +52,7 @@ Mechanics (`weights.load_attention_state_dict`):
   match the module dtypes.
 - For an `MLACPU` module, `initialize_weights` loads MLA **and** its nested indexer in one
   `load_state_dict(strict=False)`; for a standalone `IndexerCPU` it strips the `indexer.`
-  prefix. `test_mla_pretrained_layer0` exercises this and is skipped if the shard isn't
-  cached.
+  prefix.
 
 ## Config (DeepSeek-V3.2 671B / `config_671B_v3.2.json`)
 
@@ -180,10 +161,10 @@ out = wo(x.flatten(2))
 
 1. **Two code paths must agree.** Prefill (materialized K/V) and decode (absorbed `wkv_b`)
    are algebraically equal by the `wkv_b` absorption identity, *provided they read the same
-   latent cache*. The harness asserts this (the **cache-correctness invariant**,
-   `MLA_LAYER.md` §B.6): prefill `P` tokens vs prefill `P-1` + decode 1 must produce the
-   same output for position `P-1`. On CPU this matches within ~1 bf16 ULP.
-2. **Small `seq_len` in the harness.** With `seq_len = 8 ≤ index_topk = 2048`, the indexer
+   latent cache* (the **cache-correctness invariant**, `MLA_LAYER.md` §B.6): prefill `P`
+   tokens vs prefill `P-1` + decode 1 must produce the same output for position `P-1`. On
+   CPU this matches within ~1 bf16 ULP.
+2. **Small `seq_len`.** With `seq_len ≤ index_topk = 2048`, the indexer
    selects *all* positions, so the additive index mask is all-zero — the equivalence test
    isolates the attention math from the (discrete) top-k selection, which would otherwise be
    sensitive to tiny score perturbations.
@@ -243,8 +224,7 @@ Inputs: `x [B,L,7168]`, `qr [B,L,1536]` (MLA's `q_norm` output), `start_pos`,
 8. **Mask (optional)** — `index_score += mask`.
 9. **Top-K** — `topk_indices = index_score.topk(min(index_topk, end_pos), dim=-1)[1]`.
 
-Output: `topk_indices [B,L,min(index_topk,end_pos)]` (the CPU harness also returns
-`index_score [B,L,end_pos]` for inspection).
+Output: `topk_indices [B,L,min(index_topk,end_pos)]`.
 
 ```mermaid
 flowchart TD

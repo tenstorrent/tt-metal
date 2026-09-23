@@ -9,15 +9,22 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <cstddef>
 #include <vector>
 
 namespace ttnn::experimental::prim {
 
 struct AllToAllAsyncGenericProgram {
+    struct ResolvedRouting {
+        uint32_t num_links;
+        ttnn::ccl::Topology topology;
+        tt::tt_fabric::Topology axis_topology;
+        bool axis_is_straight;
+    };
+
     struct shared_variables_t {
         tt::tt_metal::KernelHandle sender_reader_kernel_id;
-        tt::tt_metal::KernelHandle sender_writer_kernel_id;
-        std::vector<CoreCoord> sender_worker_cores;
+        std::vector<tt::tt_metal::KernelHandle> sender_writer_kernel_ids;
         tt::tt_metal::GlobalSemaphore init_barrier_semaphore;
         tt::tt_metal::GlobalSemaphore final_barrier_semaphore;
     };
@@ -31,6 +38,7 @@ struct AllToAllAsyncGenericProgram {
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const AllToAllAsyncGenericParams& operation_attributes,
+        const ResolvedRouting& routing,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const AllToAllAsyncGenericInputs& tensor_args,
         Tensor& tensor_return_value,

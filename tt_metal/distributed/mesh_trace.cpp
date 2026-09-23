@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -91,8 +92,15 @@ void MeshTrace::populate_mesh_buffer(
         .size = padded_size,
     };
 
-    trace_buffer->mesh_buffer =
-        MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    // Trace storage is safe from every live trace: reserved BufferType::TRACE storage is disjoint from ordinary DRAM,
+    // and dynamic top-down BufferType::DRAM storage is checked against every live trace's high-water mark below. The
+    // "trace_storage" allocation context is explicitly recognized by the trace allocation tracker, which uses it to
+    // exclude both forms from unsafe-allocation accounting (and from the tracking-disabled warning).
+    {
+        auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
+        trace_buffer->mesh_buffer =
+            MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    }
 
     // In dynamic allocation mode, validate that the new trace buffer is outside the replay footprint of every live
     // trace.

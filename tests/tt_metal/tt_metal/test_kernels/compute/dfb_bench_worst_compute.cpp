@@ -18,6 +18,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace {
@@ -33,7 +34,8 @@ void kernel_main() {
     DataflowBuffer in1(dfb::in1);
     DataflowBuffer in2(dfb::in2);
 
-    unary_op_init_common(dfb::in0, dfb::in0);
+    compute_kernel_hw_startup(dfb::in0, dfb::in0);
+    copy_init(dfb::in0);
     for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
         tile_regs_acquire();
         tile_regs_wait();
@@ -46,7 +48,8 @@ void kernel_main() {
         tile_regs_release();
     }
 
-    unary_op_init_common(dfb::in1, dfb::in1);
+    reconfig_data_format_srca(dfb::in0, dfb::in1);
+    copy_init(dfb::in1);
     for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
         tile_regs_acquire();
         tile_regs_wait();
@@ -59,7 +62,8 @@ void kernel_main() {
         tile_regs_release();
     }
 
-    unary_op_init_common(dfb::in2, dfb::in2);
+    reconfig_data_format_srca(dfb::in1, dfb::in2);
+    copy_init(dfb::in2);
     for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
         tile_regs_acquire();
         tile_regs_wait();

@@ -20,6 +20,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
@@ -48,7 +49,6 @@ bool dram_to_l1_multicast(
     const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 
-    auto* device = mesh_device->get_devices()[0];
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -142,7 +142,7 @@ bool dram_to_l1_multicast(
             }
             CoreCoord dest_core = {(std::size_t)core_start.x + j, (std::size_t)core_start.y + i};
             std::vector<uint32_t> dest_core_data;
-            tt_metal::detail::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
+            slow_dispatch::ReadFromL1(*mesh_device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
             auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);
             pass &= (dest_core_data_unpacked == tensor.get_values());
             if (not(dest_core_data_unpacked == tensor.get_values())) {

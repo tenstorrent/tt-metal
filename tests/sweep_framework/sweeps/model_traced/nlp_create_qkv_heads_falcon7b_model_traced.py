@@ -82,7 +82,7 @@ def run(
     )(shape)
 
     # PyTorch reference: Falcon-7B splits into Q (4544), K (64), V (64)
-    (ref_q, ref_k, ref_v) = torch.split(torch_input_tensor_a, [4544, 64, 64], dim=-1)
+    ref_q, ref_k, ref_v = torch.split(torch_input_tensor_a, [4544, 64, 64], dim=-1)
     # Additional shuffling for Q head (71 heads x 64 dims)
     ref_q = torch.reshape(ref_q, [batch, seq_len, 71, 64]).transpose(-3, -2)
 
@@ -112,9 +112,15 @@ def run(
 
     start_time = start_measuring_time()
     q, k, v = ttnn.experimental.nlp_create_qkv_heads_falcon7b(input_tensor_a, **op_kwargs)
-    q_torch = mesh_tensor_to_torch(q, device if is_mesh_device else None)
-    k_torch = mesh_tensor_to_torch(k, device if is_mesh_device else None)
-    v_torch = mesh_tensor_to_torch(v, device if is_mesh_device else None)
+    q_torch = mesh_tensor_to_torch(
+        q, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
+    k_torch = mesh_tensor_to_torch(
+        k, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
+    v_torch = mesh_tensor_to_torch(
+        v, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC for all three outputs

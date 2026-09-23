@@ -50,7 +50,7 @@ def test_snake_beta_broadcast(device, x_shape, ab_shape, seed, torch_dtype, ttnn
         # ULP is a poor metric near y≈0 at fp32 precision; use combined rtol/atol instead.
         assert torch.allclose(expected, result, rtol=1e-5, atol=1e-5)
     else:
-        assert_with_ulp(expected, result, ulp_threshold=2)
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=2)
 
 
 # Per-preset bf16 distribution params from issue #43337:
@@ -130,7 +130,7 @@ def test_snake_beta_real_workload(device, preset, torch_dtype):
     if torch_dtype == torch.float32:
         assert torch.allclose(expected, result, rtol=1e-5, atol=1e-5)
     else:
-        assert_with_ulp(expected, result, ulp_threshold=2)
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=2)
 
 
 def test_snake_beta_pi_boundary(device):
@@ -150,7 +150,7 @@ def test_snake_beta_pi_boundary(device):
     a_tt = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.snake_beta(x_tt, a_tt, b_tt))
-    assert_with_ulp(expected, result, ulp_threshold=1)
+    assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -178,7 +178,7 @@ def test_snake_beta_output_tensor(device, x_shape, ab_shape):
     # Returned tensor must alias the caller-supplied buffer (proves the op wrote into it
     # instead of allocating a fresh one).
     out_pre_torch = ttnn.to_torch(out_pre)
-    assert_with_ulp(expected, out_pre_torch, ulp_threshold=2)
+    assert_with_ulp(expected_result=expected, actual_result=out_pre_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -202,7 +202,7 @@ def test_snake_beta_rank_preservation(device, x_shape, ab_shape):
     result = ttnn.snake_beta(x_tt, a_tt, b_tt)
 
     assert tuple(result.shape) == x_shape, f"expected output shape {x_shape}, got {tuple(result.shape)}"
-    assert_with_ulp(expected, ttnn.to_torch(result), ulp_threshold=2)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=2)
 
 
 # --- Validation failure tests ---

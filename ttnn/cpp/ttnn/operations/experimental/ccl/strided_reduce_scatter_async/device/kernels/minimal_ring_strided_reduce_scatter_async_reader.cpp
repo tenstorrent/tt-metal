@@ -207,10 +207,6 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    // This reader owns credit slot effective_worker_id on every MM core — the same index that
-    // identifies its tile stripe, so slots and stripes cannot disagree.
-    const uint32_t rs_credit_slot_addr = rs_credit_counters + effective_worker_id * sizeof(uint32_t);
-
     // Snapshot the semaphore's value at startup
     uint32_t out_ready_sem_target = 0;
 
@@ -439,6 +435,7 @@ void kernel_main() {
                     slice_idx += direction ? -1 : 1;
                 }
             }
+#ifdef FUSE_MM_OP_SIGNALER
             if constexpr (mm_window_blocks > 0) {
                 // Every tile of this M block is now read: the ring loop above covered all ring_size
                 // slices, i.e. the block's full width. Bump this reader's counter on every matmul
@@ -446,6 +443,7 @@ void kernel_main() {
                 // reached at least this block. One increment per M block, so the counter is the
                 // number of blocks this reader has released. Walking the cores individually mirrors
                 // OpSignaler::signal_op_per_core, the signalling path in the other direction.
+                const uint32_t rs_credit_slot_addr = rs_credit_counters + effective_worker_id * sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_mm_cores; i++) {
                     const uint64_t dst = get_noc_addr(
                         get_arg_val<uint32_t>(rs_credit_mm_coords_arg_base + i * 2),
@@ -454,6 +452,7 @@ void kernel_main() {
                     noc_semaphore_inc(dst, 1);
                 }
             }
+#endif
         }
         // No per-batch reset: a local reset races the writer's monotonic fabric atomic-inc
         // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
@@ -462,6 +461,16 @@ void kernel_main() {
         // Per-core signaling: mm_sem_target and the per-core counters are MONOTONIC across batches
 #endif
     }
+
+#ifdef FUSE_MM_OP_SIGNALER
+    if constexpr (mm_window_blocks > 0) {
+        // The window credits above are non-posted atomics. Wait for their acks before exiting: the
+        // firmware asserts that no non-posted atomics are outstanding at kernel end (watcher trips
+        // "NCRISC detected an inter-kernel data race" otherwise), and an ack landing after the next
+        // program starts could corrupt a freshly zeroed credit counter.
+        noc_obj.async_atomic_barrier();
+    }
+#endif
 
     // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/global_semaphore.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -16,7 +18,7 @@ namespace tt::tt_metal::experimental {
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
+ * | device         | The mesh device to create the semaphore on             | distributed::MeshDevice&                                  |              | Yes      |
  * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
@@ -24,7 +26,7 @@ namespace tt::tt_metal::experimental {
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
+    distributed::MeshDevice& device,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,

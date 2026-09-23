@@ -23,20 +23,11 @@ Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](
 
 ## How to Run
 ### Download Llama-3.3-70B weights
-#### Option 1: From Meta or Huggingface-cli
-You can download llama models [directly from Meta](https://www.llama.com/llama-downloads/), or through the `huggingface-cli` via:
-```
-huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3.3-70B-Instruct
-```
-- **The downloaded weights directories** include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
+This model runs on HuggingFace-format weights (`.safetensors`). Meta-format checkpoints / `LLAMA_DIR`
+are no longer supported (see Issue #42139).
 
-Then set the following environment variable:
-```
-export LLAMA_DIR=<path_to_Llama-3.3-70B-instruct>
-```
-
-#### Option 2: Straight from Huggingface
-If you get the weights [directly from huggingface](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct) they will be `.safetensors` files instead. These are supported by setting one of the following environment variables:
+Get the weights [directly from huggingface](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct)
+and set one of the following environment variables:
 ```
 # For automatic download
 export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
@@ -174,6 +165,22 @@ MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 pytho
 ```
 
 `--data_parallel_size 4 --max_num_seqs 8` runs 4 TT lanes with 8 requests each, for 32-request global concurrency. No config changes are needed versus the historical DP=4 setup.
+
+#### Running the vLLM server (Qwen3-32B)
+Qwen3-32B is served by the same Galaxy generator; select it with `TT_QWEN3_TEXT_VER=qwen3_32b_galaxy`. It additionally requires `HF_MODEL` and `TT_CACHE_PATH` (see the Qwen3-32B section above). On a Wormhole Galaxy run:
+```
+HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "Qwen/Qwen3-32B" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}}'
+```
+
+On a Blackhole Galaxy the decode path runs column-axis collectives that require a 2D-torus fabric (1D fabrics fail on the cross-column route), so swap the fabric config and worker L1 size:
+```
+HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "Qwen/Qwen3-32B" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}}'
+```
+
+For a quick offline sanity check without the HTTP server, use the offline example with the same flags (the async engine is required for lane-DP):
+```
+HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model "Qwen/Qwen3-32B" --async_engine --data_parallel_size 4 --max_seqs_in_batch 8 --greedy_sampling --max_tokens 32 --max_model_len 4096 --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}}'
+```
 
 After the server is up and running you can interact with it by sending prompt files.
 
