@@ -287,9 +287,9 @@ def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    # B16 and B32 write the Q/K/V heads to L1; at B16 this saves 2.06 ms. B8 clashed
-    # with the legacy SDPA circular buffers and stays in DRAM until it is retested.
-    if max_seq_len == 512 and max_batch in (16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    # B8, B16 and B32 write the Q/K/V heads to L1: B8 saves 1.00 ms, B16 2.06 ms.
+    # B8 clashed with the legacy SDPA circular buffers; the streaming kernel fits.
+    if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
 
