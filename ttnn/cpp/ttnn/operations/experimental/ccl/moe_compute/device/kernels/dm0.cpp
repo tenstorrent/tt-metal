@@ -8,8 +8,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
 
-// Triple buffering constants
-#define NUM_SLOTS 3  // 3 slots in CB
+// Weight CB slots (blocks): Cfg::weight_cb_slots -- 3 for 14- and 20-tile transactions (4 for 10-tile); all but one
+// slot hold blocks whose DRAM reads are in flight.
+#define NUM_SLOTS Cfg::weight_cb_slots
 
 // Helper macros for counter advancement (avoids modulo on RISC-V)
 #define ADVANCE_SLOT(s)       \
@@ -34,8 +35,10 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14, or 10)
+    constexpr uint32_t tiles_per_txn = get_named_compile_time_arg_val("tiles_per_txn");
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor, tiles_per_txn>;
 
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. The public
@@ -109,14 +112,16 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
-    constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    // The transaction size is a per-shape parameter (Cfg::tiles_per_txn: 14, or 20 for the 2560/640 expert),
+    // the same for both streams.
+    constexpr uint32_t w0_w1_txns_per_block = Cfg::txns_per_block;
+    constexpr uint32_t w0_w1_tiles_per_txn = Cfg::tiles_per_txn;
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28 (10 * 2)
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w2_txns_per_block = Cfg::txns_per_block;
+    constexpr uint32_t w2_tiles_per_txn = Cfg::tiles_per_txn;
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28 (10 * 2)
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -154,15 +159,16 @@ void kernel_main() {
     constexpr auto w0_w1_block_offset_lut = moe_ring::make_w0_w1_block_offset_lut<Cfg, num_cores>();
     constexpr uint32_t w0_w1_bank_pages_per_expert =
         Cfg::w0_w1_bank_blocks_per_expert(num_banks) * w0_w1_tiles_per_block;
-    // Each transaction is `tiles_per_txn` (=14) contiguous tiles. For the bank-run to work
-    // without splitting a single transaction across a bank boundary, the slice offsets (whole
-    // blocks) and the bank piece size must be multiples of the transaction tile count.
-    static_assert(
-        w0_w1_tiles_per_block % w0_w1_tiles_per_txn == 0,
-        "w0_w1 slice offsets must be a multiple of tiles_per_txn (no mid-txn bank split allowed)");
+    // Each transaction is `tiles_per_txn` (14 or 20) contiguous tiles. For the bank-run to work
+    // without splitting a single transaction across a bank boundary, the slice offsets and the
+    // bank piece size are whole blocks (multiples of the transaction tile count), and the
+    // cores' slices must fit in the num_banks pieces of one expert.
     static_assert(
         w0_w1_bank_pages_per_expert % w0_w1_tiles_per_txn == 0,
         "w0_w1 bank_pages_per_expert must be a multiple of tiles_per_txn");
+    static_assert(
+        w0_w1_block_offset_lut[num_cores] <= num_banks * Cfg::w0_w1_bank_blocks_per_expert(num_banks),
+        "the cores' w0_w1 slices of one expert must fit in its num_banks bank pieces");
 
     constexpr uint32_t w2_pages_per_logical_shard = Cfg::w2_blocks_per_expert * w2_tiles_per_block;
     constexpr uint32_t w2_pages_total = num_cores * w2_pages_per_ring_core_total;
@@ -185,15 +191,20 @@ void kernel_main() {
     const uint32_t w_cb_base_addr = cb_r2c_w0_w1.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
-    // Each slot holds 2 transactions (28 tiles)
-    const uint32_t slot_addr[NUM_SLOTS] = {
-        w_cb_base_addr, w_cb_base_addr + w0_w1_bytes_per_block, w_cb_base_addr + 2 * w0_w1_bytes_per_block};
+    // Each slot holds 2 transactions (one block)
+    uint32_t slot_addr[NUM_SLOTS];
+    for (uint32_t slot = 0; slot < NUM_SLOTS; ++slot) {
+        slot_addr[slot] = w_cb_base_addr + slot * w0_w1_bytes_per_block;
+    }
 
     //-------------------------------------------------------------------------
     // Variables to track pipeline state
     //-------------------------------------------------------------------------
+    // Up to blocks_in_flight blocks have DRAM reads outstanding (one trid each); the remaining slot is the
+    // block compute is consuming. With 3 slots this is the original issue-one / wait-for-the-previous pipeline.
+    constexpr uint32_t blocks_in_flight = NUM_SLOTS - 1;
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
-    bool txns_in_flight = false;
+    uint32_t blocks_pending = 0;
 
     //-------------------------------------------------------------------------
     // Init synchronization with tilize cores
@@ -218,8 +229,8 @@ void kernel_main() {
     // Start pipeline
     //-------------------------------------------------------------------------
 
-    // We reserve one to kick start the pipeline, and then it is steady state
-    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block);
+    // We reserve the blocks issued before the first wait to kick start the pipeline, and then it is steady state
+    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * (blocks_in_flight - 1));
 
     // Pre-set state for this ring core's first bank (WH fast path: when
     // pages_per_ring_core_total <= pages_per_bank_total). The bank-run loop below will
@@ -289,7 +300,7 @@ void kernel_main() {
                 // Set trid (persists in NOC_PACKET_TAG cmd_buf; subsequent fast_reads inherit it).
                 noc_async_read_set_trid(trid_to_issue);
 
-                // Issue 2 transactions of `tiles_per_txn` (=14) tiles each.
+                // Issue 2 transactions of `tiles_per_txn` tiles each.
                 // First transaction:
                 {
                     const uint32_t shard_idx = w0_w1_shard_idx;
@@ -342,17 +353,17 @@ void kernel_main() {
                 ADVANCE_SLOT(slot_to_issue);
                 ADVANCE_TRID(trid_to_issue);
 
-                // Only when we first start the pipeline, we don't have any txns in flight
-                if (txns_in_flight) {
+                // While the pipeline fills (the first blocks_in_flight - 1 blocks) nothing is waited on
+                if (++blocks_pending == blocks_in_flight) {
                     noc_async_read_barrier_with_trid(trid_to_wait);
                     cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
                     ADVANCE_TRID(trid_to_wait);
+                    --blocks_pending;
 
-                    // Reserve for next block
-                    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * 2);
+                    // Reserve for next block (the blocks in flight and the next one)
+                    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * blocks_in_flight);
                 }
-                txns_in_flight = true;
             }
 
             //-------------------------------------------------------------------------
@@ -410,20 +421,26 @@ void kernel_main() {
                 ADVANCE_SLOT(slot_to_issue);
                 ADVANCE_TRID(trid_to_issue);
 
-                noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_r2c_w2.push_back(w2_tiles_per_block);
+                if (++blocks_pending == blocks_in_flight) {
+                    noc_async_read_barrier_with_trid(trid_to_wait);
+                    cb_r2c_w2.push_back(w2_tiles_per_block);
 
-                ADVANCE_TRID(trid_to_wait);
+                    ADVANCE_TRID(trid_to_wait);
+                    --blocks_pending;
 
-                // Reserve for next block
-                cb_r2c_w2.reserve_back(w2_tiles_per_block * 2);
+                    // Reserve for next block (the blocks in flight and the next one)
+                    cb_r2c_w2.reserve_back(w2_tiles_per_block * blocks_in_flight);
+                }
             }
         }
     }
 
-    // Drain the pipeline - the last txn in flight
-    noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_r2c_w2.push_back(w2_tiles_per_block);
+    // Drain the pipeline - the blocks still in flight
+    for (; blocks_pending > 0; --blocks_pending) {
+        noc_async_read_barrier_with_trid(trid_to_wait);
+        cb_r2c_w2.push_back(w2_tiles_per_block);
+        ADVANCE_TRID(trid_to_wait);
+    }
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
