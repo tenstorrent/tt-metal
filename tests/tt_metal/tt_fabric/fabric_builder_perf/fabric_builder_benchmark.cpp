@@ -67,7 +67,7 @@ BenchmarkArgs parse_args(int argc, char** argv) {
     return {output, fabric_config.value()};
 }
 
-// Kernel cache directory that we expect to be empty. 
+// Kernel cache directory that we expect to be empty.
 // For cold cache profiling, an empty directory is expected. Hot cache
 // profiling uses the same cache directory, except it will be populated with
 // artifacts from the cold cache profiling.
@@ -122,11 +122,17 @@ struct PhaseResult {
     size_t artifacts_after;
 };
 
-// Runs a phase of the benchmark. Opens and closes a mesh device.
-PhaseResult run_phase(const fs::path& cache_dir, const std::function<std::shared_ptr<MeshDevice>()>& open_mesh) {
+// Runs a phase of the benchmark. Cleanup is handled by closing the mesh device,
+// which also resets the fabric config to DISABLED.
+PhaseResult run_phase(
+    const fs::path& cache_dir,
+    FabricConfig fabric_config,
+    const std::function<std::shared_ptr<MeshDevice>()>& open_mesh) {
+    tt::tt_fabric::SetFabricConfig(fabric_config);
     const size_t artifacts_before = count_cache_artifacts(cache_dir);
     auto mesh = open_mesh();
     const size_t num_devices = mesh->num_devices();
+    // Also resets the fabric config to DISABLED
     TT_FATAL(mesh->close(), "Mesh teardown failed");
     return {num_devices, artifacts_before, count_cache_artifacts(cache_dir)};
 }
@@ -157,11 +163,10 @@ int main(int argc, char** argv) {
     const auto args = parse_args(argc, argv);
     const auto cache_dir = get_kernel_cache_dir();
     wait_for_tracy_connection();
-    tt::tt_fabric::SetFabricConfig(args.fabric_config);
 
     // Run the benchmark
-    const PhaseResult cold = run_phase(cache_dir, open_cold);
-    const PhaseResult hot = run_phase(cache_dir, open_hot);
+    const PhaseResult cold = run_phase(cache_dir, args.fabric_config, open_cold);
+    const PhaseResult hot = run_phase(cache_dir, args.fabric_config, open_hot);
 
     // Verify that the number of devices opened is the same for both phases
     TT_FATAL(
@@ -180,8 +185,5 @@ int main(int argc, char** argv) {
     const nlohmann::json phases = {{"cold", to_json(cold)}, {"hot", to_json(hot)}};
     write_results(args.output, {{"context", context}, {"phases", phases}});
     log_info(tt::LogTest, "Wrote fabric builder benchmark results to {}", args.output.string());
-
-    // Teardown (each phase already closes the mesh device)
-    tt::tt_fabric::SetFabricConfig(FabricConfig::DISABLED);
     return 0;
 }
