@@ -267,7 +267,7 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
 
         // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
         auto tensix_builder = FabricTensixDatamoverBuilder::build_for_missing_direction(
-            device_, program_, local_node_, routing_plane_id, missing_dir);
+            fabric_context_, device_, program_, local_node_, routing_plane_id, missing_dir);
         tensix_builder.create_and_compile(program_);
     }
 }

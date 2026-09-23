@@ -479,6 +479,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_opt;
     if (will_create_tensix_builder) {
         tensix_builder_opt = FabricTensixDatamoverBuilder::build(
+            fabric_context,
             device,
             program,
             local_node,
