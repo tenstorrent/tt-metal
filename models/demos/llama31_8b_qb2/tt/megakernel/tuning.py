@@ -21,9 +21,17 @@ class ProjectionTuning:
     head_prefetch_targets: str = "both"
     projection_placement: str = "row"
     coalesce_input: bool = False
+    early_weight_blocks: int = 0
+    early_weight_phases: int = 15
     share_qkv_workers: bool = False
 
     def __post_init__(self):
+        if self.early_weight_blocks not in (0, 2, 3) or self.early_weight_blocks > self.buffer_count:
+            raise ValueError("Early weight prefix must be0/2/3 blocks and fit its ring")
+        if self.early_weight_phases not in (1, 2, 4, 8, 15):
+            raise ValueError("Early weight phases must select QKV, O, GU, down or all")
+        if self.early_weight_blocks and (self.reader == "original" or not self.alias_projection_cbs or self.share_qkv_workers or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):
+            raise ValueError("Early local reads currently require aliased separate-QKV workers without helper prefetch")
         if not 2 <= self.lookahead <= min(4, self.buffer_count):
             raise ValueError("Projection lookahead must be2..4 and fit the buffer count")
         if self.buffer_count > 3 and not self.alias_projection_cbs:
@@ -54,6 +62,8 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("EARLY_WEIGHT_BLOCKS", str(self.early_weight_blocks)),
+            ("EARLY_WEIGHT_PHASES", str(self.early_weight_phases)),
             ("SHARED_QKV", str(int(self.share_qkv_workers))),
             ("PROJECTION_COALESCE_INPUT", str(int(self.coalesce_input))),
             ("DRAM_NEAR_PROJECTION", str(int(self.projection_placement == "dram"))),

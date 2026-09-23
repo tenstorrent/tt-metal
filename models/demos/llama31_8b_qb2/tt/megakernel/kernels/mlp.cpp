@@ -86,8 +86,9 @@ void stream_projection(const Input& input, const Weight& weight, uint32_t bank) 
     } else
 #endif
     {
+        constexpr uint32_t local_prefix = (EARLY_WEIGHT_PHASES & (B == 7 ? 2 : B == 1 ? 4 : 8)) ? EARLY_WEIGHT_BLOCKS : 0;
         tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(
-            input, weight, bank, prefetched_base, prefetched_blocks);
+            input, weight, bank, prefetched_base, prefetched_blocks, local_prefix);
     }
 #else
     for (uint32_t k = 0; k < K; k += KBlock) {
@@ -121,6 +122,13 @@ void QB2_ENTRY() {
 #endif
 #ifdef FUSE_OUTPUT
     if (bank < 8) {
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 2)
+        {
+            DeviceZoneScopedN("MLP-O-LOCAL-WEIGHT-PREFETCH");
+            const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
+            prefetch_local_projection_weights<7, 4, 16, 8, 1088>(weight, bank);
+        }
+#endif
 #ifdef FUSE_ATTENTION
         {
 #ifndef LOOP_RT_OFFSET
@@ -136,6 +144,14 @@ void QB2_ENTRY() {
         const auto attn = TensorAccessor(o_input_args, get_arg_val<uint32_t>(7), 2048);
         const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
         stream_projection<6, 7, 4, 16, 32, 8>(attn, weight, bank);
+    }
+#endif
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 4)
+    wait_phase(8);  // The local O writer has finished consuming aliased weight storage.
+    {
+        DeviceZoneScopedN("MLP-GU-LOCAL-WEIGHT-PREFETCH");
+        const auto weight = TensorAccessor(gu_args, addresses[0], 576);
+        prefetch_local_projection_weights<1, 8, 28, 8, 576>(weight, bank);
     }
 #endif
 #ifdef FUSE_NORM
@@ -160,6 +176,13 @@ void QB2_ENTRY() {
         const uint32_t gu_column = DRAM_NEAR_PROJECTION && GU_WORKERS == 16 ? 2 * (bank % 8) + bank / 8 : bank;
         stream_projection<0, 1, 8, gu_width, 128, GU_WORKERS>(input, gu, gu_column);
     }
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 8)
+    wait_phase(9);  // The local GU writer has finished consuming aliased weight storage.
+    {
+        DeviceZoneScopedN("MLP-DOWN-LOCAL-WEIGHT-PREFETCH");
+        prefetch_local_projection_weights<3, 7, 16, 8, 1088>(down, bank);
+    }
+#endif
     {
 #ifndef LOOP_RT_OFFSET
         // Keep all32 layer read/math/barrier phases within the marker buffer.
@@ -192,6 +215,9 @@ void QB2_ENTRY() {
         }
         noc_async_write_barrier();
         cb_pop_front(17, 16);
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 4)
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(8)), 1);
+#endif
         notify_coordinator(10);
         if (bank == 0) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(10)), 8);
@@ -208,6 +234,9 @@ void QB2_ENTRY() {
         noc_async_write_page(gu_column * gu_width + tile, packed_output, get_read_ptr(16) + tile * 2048);
     }
     noc_async_write_barrier();
+#endif
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 8)
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(9)), 1);
 #endif
     notify_coordinator(0);
     if (bank == 0) {

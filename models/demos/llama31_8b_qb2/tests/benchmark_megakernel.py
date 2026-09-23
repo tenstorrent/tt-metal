@@ -86,6 +86,8 @@ def parse_args():
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument("--coalesce-input", action="store_true")
+    parser.add_argument("--early-weight-blocks", type=int, choices=(0, 2, 3), default=0)
+    parser.add_argument("--early-weight-phases", choices=("all", "qkv", "o", "gu", "down"), default="all")
     parser.add_argument("--share-qkv-workers", action="store_true")
     parser.add_argument("--projection-placement", choices=("row", "dram"), default="row")
     parser.add_argument("--prefetch-head-workers", action="store_true")
@@ -128,6 +130,8 @@ def run(args):
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
         projection_placement=args.projection_placement, coalesce_input=args.coalesce_input,
         head_prefetch_targets=args.head_prefetch_targets, share_qkv_workers=args.share_qkv_workers,
+        early_weight_blocks=args.early_weight_blocks,
+        early_weight_phases={"qkv":1, "o":2, "gu":4, "down":8, "all":15}[args.early_weight_phases],
     )
     if args.mode == "baseline" and tuning != ProjectionTuning():
         raise ValueError("Projection tuning applies only to experimental kernels")

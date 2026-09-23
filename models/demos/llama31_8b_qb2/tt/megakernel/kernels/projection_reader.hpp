@@ -23,10 +23,27 @@ void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, 
     }
 }
 
+// Fill an unpublished prefix of the phase's own weight ring while its
+// activation is unavailable. No extra copy or DRAM bytes; the normal stream
+// publishes each block with its activation and skips this prefix's DRAM read.
+template <uint32_t B, uint32_t KBlock, uint32_t N, uint32_t Workers, uint32_t WeightBytes, typename Weight>
+void prefetch_local_projection_weights(const Weight& weight, uint32_t worker) {
+    static_assert(EARLY_WEIGHT_BLOCKS <= PROJECTION_BUFFERS);
+    cb_reserve_back(B, EARLY_WEIGHT_BLOCKS * KBlock * N);
+    const uint32_t base = get_write_ptr(B);
+    for (uint32_t block = 0; block < EARLY_WEIGHT_BLOCKS; ++block) {
+        read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock,
+            base + block * KBlock * N * WeightBytes);
+    }
+    // This join is before the activation wait. It makes prefix readiness
+    // explicit and keeps transaction bookkeeping bounded, including TRID0.
+    noc_async_read_barrier();
+}
+
 template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Workers,
           uint32_t WeightBytes, typename Input, typename Weight>
 void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker,
-                             uint64_t prefetched_base = 0, uint32_t prefetched_blocks = 0) {
+                             uint64_t prefetched_base = 0, uint32_t prefetched_blocks = 0, uint32_t local_prefetched_blocks = 0) {
     constexpr uint32_t blocks = K / KBlock;
     static_assert(K % KBlock == 0 && blocks >= 2);
 #if PROJECTION_READER >= 2
@@ -70,7 +87,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         if (block < prefetched_blocks) {
             noc_async_read<KBlock * N * WeightBytes>(
                 prefetched_base + block * KBlock * N * WeightBytes, b, KBlock * N * WeightBytes);
-        } else {
+        } else if (block >= local_prefetched_blocks) {
             read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
         }
 #if PROJECTION_READER >= 2

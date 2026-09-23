@@ -25,6 +25,13 @@ void QB2_ENTRY() {
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(3)), get_write_ptr(31), 128);
     noc_async_read_barrier();
     const uint32_t weight_address = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(31))[3];
+#if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 1)
+    {
+        DeviceZoneScopedN("QKV-LOCAL-WEIGHT-PREFETCH");
+        const auto weight = TensorAccessor(weight_args, weight_address, 1088);
+        prefetch_local_projection_weights<1, 16, 6, 8, 1088>(weight, bank);
+    }
+#endif
     if (bank == 0) {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 8);
         for (uint32_t c = 0; c < 8; ++c) { noc_semaphore_inc(peer(c, get_semaphore(7)), 1); }
@@ -40,7 +47,8 @@ void QB2_ENTRY() {
     tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank, staging, 8);
     finish_head_prefetch(bank);
 #else
-    tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank);
+    tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank, 0, 0,
+        (EARLY_WEIGHT_PHASES & 1) ? EARLY_WEIGHT_BLOCKS : 0);
 #endif
 #else
     for (uint32_t block = 0; block < 128; block += 16) {
