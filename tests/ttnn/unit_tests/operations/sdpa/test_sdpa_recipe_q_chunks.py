@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Q-chunk generalization must not change any row's arithmetic.
+"""Q-chunk generalization keeps each recipe's arithmetic and accuracy.
 
-Each query row sees the same K chunks in the same order with the same
-reduction width regardless of how rows are grouped into Q chunks, so every
-supported Q chunk must reproduce the Q256 output bit-for-bit within a build.
-The Q256 path itself remains gated by the frozen digests elsewhere.
+Outputs are not bit-identical to Q256. Phase 2 overlaps the final row's
+exponential with the first PV row group of every Q chunk, accumulating that
+group's product in L1 over 4-tile K partials, while later groups accumulate
+all K tiles in dest. Which rows sit in a chunk's first group therefore changes
+their rounding (about one BF16 ulp). Q256 itself stays gated by the frozen
+digests. Other Q chunks are gated on determinism, a tight bound on the
+difference from Q256, and FP64 accuracy no worse than Q256.
 """
 
 import pytest
@@ -13,7 +16,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, prepare
+from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare, reference
 
 Q_CHUNKS = (128, 192, 320)
 # Odd tile counts need single-row groups in the compensated/FP32 state updates.
@@ -57,7 +60,7 @@ def invoke(segments, variant, grid, q_chunk_size):
     ],
     ids=["aligned", "tails", "long_uniform", "joint_tails"],
 )
-def test_recipe_q_chunk_matches_q256(
+def test_recipe_q_chunk_preserves_accuracy(
     device, variant, q_chunk_size, q_length, k_length, heads, grid, distribution, joint_rows, record_property
 ):
     if not is_blackhole():
@@ -80,10 +83,23 @@ def test_recipe_q_chunk_matches_q256(
         record_property("rejected_l1", True)
         pytest.skip(f"{variant} Q{q_chunk_size}/K512 exceeds Blackhole L1")
     actual = torch.cat([ttnn.to_torch(x) for x in outputs], dim=2)
+    rerun = torch.cat([ttnn.to_torch(x) for x in invoke(segments, variant, grid, q_chunk_size)], dim=2)
+    assert digest(rerun) == digest(actual), "Recipe output must be deterministic for a fixed Q chunk"
     assert torch.isfinite(actual.float()).all()
-    equal = digest(actual) == digest(expected)
-    record_property("bitwise_equal_q256", equal)
-    assert equal, f"Q{q_chunk_size} changed the {variant} output relative to Q256"
+    exact = reference(*host)
+    observed, baseline = metrics(actual, exact), metrics(expected, exact)
+    delta = (actual.float() - expected.float()).abs().max().item()
+    for key, value in observed.items():
+        record_property(key, value)
+    record_property("q256_l2_pct", baseline["l2_pct"])
+    record_property("max_abs_delta_vs_q256", delta)
+    record_property("bitwise_equal_q256", digest(actual) == digest(expected))
+    if distribution == "zero_v":
+        assert observed["max_abs"] <= 1e-6
+    else:
+        assert observed["l2_pct"] <= baseline["l2_pct"] * 1.05 + 0.01, (observed["l2_pct"], baseline["l2_pct"])
+    # Only rounding order moves; a larger change means a real indexing or state bug.
+    assert delta <= 0.02, delta
 
 
 @pytest.mark.parametrize("q_chunk_size", UNSUPPORTED_Q_CHUNKS)
