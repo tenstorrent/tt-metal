@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
@@ -12,6 +13,28 @@ namespace ckernel::math
 
 // Number of rows for MATH functions
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for quasar automotive
+static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "FPU MOV helpers support 4-row and 8-row FPUs");
+
+template <std::uint32_t NUM_ROWS>
+constexpr auto fpu_row_offsets()
+{
+    static_assert(NUM_ROWS > 0 && NUM_ROWS % ELTWISE_MATH_ROWS == 0);
+
+    std::array<std::uint32_t, NUM_ROWS / ELTWISE_MATH_ROWS> rows {};
+
+    for (std::uint32_t i = 0; i < rows.size(); ++i)
+    {
+        rows[i] = i * ELTWISE_MATH_ROWS;
+    }
+
+    return rows;
+}
+
+constexpr static std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p_movd2a::MOV_4_ROWS));
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));
+
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
 
@@ -200,17 +223,10 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
-    if constexpr (ELTWISE_MATH_ROWS == 8)
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
     {
-        TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
-        TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
-    }
-    else // ELTWISE_MATH_ROWS == 4 (4row_arch): 4-row FPU needs 4 MOVs per face
-    {
-        TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_4_ROWS, 0);
-        TTI_MOVD2A(0, 4, addrmod, p_movd2a::MOV_4_ROWS, 4);
-        TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_4_ROWS, 8);
-        TTI_MOVD2A(0, 12, addrmod, p_movd2a::MOV_4_ROWS, 12);
+        TTI_MOVD2A(0, row, addrmod, FPU_MOV_ROWS, row);
     }
 }
 
@@ -225,17 +241,10 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
-    if constexpr (ELTWISE_MATH_ROWS == 8)
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
     {
-        TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
-        TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
-    }
-    else // ELTWISE_MATH_ROWS == 4 (4row_arch): 4-row FPU needs 4 MOVs per face
-    {
-        TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_4_ROWS, 0, 0);
-        TTI_MOVD2B(0, 4, addrmod, p_movd2b::MOV_4_ROWS, 0, 4);
-        TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_4_ROWS, 0, 8);
-        TTI_MOVD2B(0, 12, addrmod, p_movd2b::MOV_4_ROWS, 0, 12);
+        TTI_MOVD2B(0, row, addrmod, FPU_MOV_ROWS, 0, row);
     }
 }
 

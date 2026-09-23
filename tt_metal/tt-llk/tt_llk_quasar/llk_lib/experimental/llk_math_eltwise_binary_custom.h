@@ -114,26 +114,20 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
         {
-            if constexpr (ELTWISE_MATH_ROWS == 8)
+            // Even dest face: consume this SrcB face, then rewind so the odd face rereads it.
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<FACE_R_DIM>())
             {
-                // Even dest face: consume this SrcB face, then rewind so the odd face rereads it.
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 8 -> 0
-                // Odd dest face: same SrcB face again, then jump to the next face-row.
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 8 -> 32
+                const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_5 : ADDR_MOD_7;
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
             }
-            else if constexpr (ELTWISE_MATH_ROWS == 4)
-            {
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 4
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 4 -> 8
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 8 -> 12
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 12 -> 0
 
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 4
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 4 -> 8
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 8 -> 12
-                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 12 -> 32
+            // Odd dest face: same SrcB face again, then jump to the next face-row.
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+            {
+                const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_6 : ADDR_MOD_7;
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
             }
         }
 

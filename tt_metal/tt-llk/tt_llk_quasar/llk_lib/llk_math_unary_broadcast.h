@@ -12,14 +12,6 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-// Row count moved per MOVB2D in this file's MOPs. The FPU moves ELTWISE_MATH_ROWS rows per MOV
-// (8 on Quasar, 4 on 4row_arch's 4-row FPU). A hardcoded MOV_8_ROWS on 4row_arch does NOT write 8
-// contiguous dest rows — it scatters a write-2-skip-2 pattern (the same 4-row-FPU signature seen
-// in matmul), leaving half the tile zeroed. Use the native width and let the MOP inner loop
-// (num_rows / ELTWISE_MATH_ROWS) emit twice as many MOVs on 4row_arch; the dest/srcB addr_mod
-// increments stay at ELTWISE_MATH_ROWS so writes are contiguous. Quasar is byte-identical.
-constexpr std::uint32_t MOVB2D_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
-
 /**
  * @file llk_math_unary_broadcast.h
  * @brief Math addrmods, MOP, and per-tile run for unary eltwise with scalar, row, or column broadcast.
@@ -93,9 +85,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
- * @tparam unpack_to_dest: When true, unpack filled dest; MOVB2D reads srcB only, so @ref _llk_math_eltwise_unary_broadcast_ runs MOVD2B (dest->srcB) first,
- *         then programs this MOVB2D MOP. ROW uses the fixed replay below; COL/SCALAR use the same outer/inner template as the non-unpack_to_dest path with
- *         ADDR_MOD_3 from addrmod.
+ * @tparam unpack_to_dest: When true, record MOVD2B reads from dest followed by MOVB2D broadcast writes in the replay buffer.
  * @param tensor_shape: Tile shape for loop counts and row dimensions
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
@@ -105,31 +95,37 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     if constexpr (unpack_to_dest)
     {
+        constexpr std::uint32_t MOVS_PER_FACE = FACE_R_DIM / ELTWISE_MATH_ROWS;
+        // Row/scalar broadcast caches eight source rows, independently of the FPU width.
+        constexpr std::uint32_t SOURCE_ROWS = 8;
+        constexpr std::uint32_t READ_MOVS   = 2 * SOURCE_ROWS / ELTWISE_MATH_ROWS;
+
         if constexpr (BROADCAST_TYPE == BroadcastType::COL)
         {
-            constexpr std::uint32_t replay_buf_len = 12;
+            constexpr std::uint32_t replay_buf_len = 6 * MOVS_PER_FACE;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // Read F0/F2 hi16 from DEST → SrcB[0:15]
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+            // Cache F0/F2 hi16 in SrcB[0:15] and lo16 in SrcB[16:31].
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                    // Read F0/F2 lo16 from DEST → SrcB[16:31]
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+                // Broadcast both planes to F0,F1/F2,F3 after all source rows are cached.
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
 
-                    // Write hi16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
-
-                    // Write lo16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24); // dst += 2* face_r_dim, F0 → F2
+                        // Advance from F0 to F2 after the final MOV.
+                        const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
+                    }
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -138,117 +134,59 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         }
         else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
-            if constexpr (ELTWISE_MATH_ROWS == 8)
-            {
-                constexpr std::uint32_t replay_buf_len = 10;
-                load_replay_buf<0, replay_buf_len>(
-                    []
+            constexpr std::uint32_t replay_buf_len = READ_MOVS + 4 * MOVS_PER_FACE;
+            load_replay_buf<0, replay_buf_len>(
+                []
+                {
+            // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15].
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<SOURCE_ROWS>())
                     {
-                        // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                        // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
-
-                        // Write lo16 to DEST F0,F2/F1,F3 from SrcB[8:15] (row broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                        TTI_MOVB2D(
-                            p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1); // dst += face_r_dim, F0 → F1
-                    });
-
-                ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
-                temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-                temp.program_bank0_sw_cntl(instrn_buffer);
-            }
-            else if constexpr (ELTWISE_MATH_ROWS == 4)
-            {
-                constexpr std::uint32_t replay_buf_len = 20;
-                load_replay_buf<0, replay_buf_len>(
-                    []
+                // Broadcast the cached hi16/lo16 source rows to F0,F2/F1,F3.
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
                     {
-                        // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:7]
-                        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_NORM, 4, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 4);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 12, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 4);
+                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
+                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
 
-                        // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 4 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 36 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 44 + 1);
+                        // Advance from F0 to F1 after the final MOV.
+                        const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
+                    }
+                });
 
-                        // Write lo16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 4 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 36 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
-                        TTI_MOVB2D(
-                            p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 44 + 1); // dst += face_r_dim, F0 → F1
-                    });
-
-                ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
-                temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-                temp.program_bank0_sw_cntl(instrn_buffer);
-            }
+            ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
         }
         else // BroadcastType::SCALAR
         {
-            if constexpr (ELTWISE_MATH_ROWS == 8)
-            {
-                constexpr std::uint32_t replay_buf_len = 4;
-                load_replay_buf<0, replay_buf_len>(
-                    []
+            constexpr std::uint32_t replay_buf_len = READ_MOVS + 2;
+            load_replay_buf<0, replay_buf_len>(
+                []
+                {
+            // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15].
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<SOURCE_ROWS>())
                     {
-                        // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                        // Write hi16 and lo16 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1); // dst += 8
-                    });
+                    // The MOP replays only these two writes after caching the source once.
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_3, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                });
 
-                ckernel_template temp(1 /* mop_outer_loop */, 8 /* mop_inner_loop */, TT_OP_REPLAY(2, 2, 0, 0, 0, 0));
-                temp.set_start_op(TT_OP_REPLAY(0, 2, 0, 0, 0, 0));
-                temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-                temp.program_bank0_sw_cntl(instrn_buffer);
-            }
-            else if constexpr (ELTWISE_MATH_ROWS == 4)
-            {
-                constexpr std::uint32_t replay_buf_len = 6;
-                load_replay_buf<0, replay_buf_len>(
-                    []
-                    {
-                        // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:7]
-                        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_NORM, 4, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 4);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, 12, ADDR_MOD_4, p_movd2b::MOV_4_ROWS, p_movd2b::TRANSPOSE_OFF, 4);
-
-                        // Write hi16 and lo16 to DEST from SrcB[0:7] (row and column broadcast ON)
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_ON, 0 + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_ON, 0 + 1); // dst += 4
-                    });
-
-                ckernel_template temp(1 /* mop_outer_loop */, 16 /* mop_inner_loop */, TT_OP_REPLAY(4, 2, 0, 0, 0, 0));
-                temp.set_start_op(TT_OP_REPLAY(0, 4, 0, 0, 0, 0));
-                temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-                temp.program_bank0_sw_cntl(instrn_buffer);
-            }
+            ckernel_template temp(1 /* mop_outer_loop */, NUM_FACES * MOVS_PER_FACE /* mop_inner_loop */, TT_OP_REPLAY(READ_MOVS, 2, 0, 0, 0, 0));
+            temp.set_start_op(TT_OP_REPLAY(0, READ_MOVS, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
         }
     }
     else
@@ -281,7 +219,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             constexpr std::uint32_t bcast_row = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
             constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
             const auto movb2d                 = [bcast_col, bcast_row](std::uint8_t addr_mod)
-            { return TT_OP_MOVB2D(0, 0, addr_mod, MOVB2D_MOV_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
+            { return TT_OP_MOVB2D(0, 0, addr_mod, FPU_MOV_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
 
             ckernel_template temp(outer, inner, movb2d(ADDR_MOD_0));
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
