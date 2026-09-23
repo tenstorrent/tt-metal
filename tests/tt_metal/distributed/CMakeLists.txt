@@ -129,6 +129,46 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+# Its own target for the same reason as d2h_leg_benchmark: both files carry a main, so they
+# cannot share one. Fold them together once the h2h leg lands and there are three of these.
+add_executable(h2d_leg_benchmark)
+target_sources(
+    h2d_leg_benchmark
+    PRIVATE
+        benchmark_h2d_leg.cpp
+        hd_socket_test_utils.cpp
+)
+
+target_link_libraries(
+    h2d_leg_benchmark
+    PRIVATE
+        tt_metal
+        test_common_libs
+        benchmark::benchmark
+)
+
+target_compile_definitions(
+    h2d_leg_benchmark
+    PRIVATE
+        TT_METAL_HOST_BRIDGE=1
+        TT_DIRECT_KERNEL_DIR="${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/d2h2h2d_socket"
+)
+
+target_include_directories(
+    h2d_leg_benchmark
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+)
+
+set_target_properties(
+    h2d_leg_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
 add_executable(multiproc_loopback_test)
 target_sources(multiproc_loopback_test PRIVATE test_multiproc_loopback.cpp)
 
