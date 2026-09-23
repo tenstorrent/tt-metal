@@ -485,8 +485,8 @@ function historyChart(S, stage) {
   if (goal != null) legend += `<span><i style="background:#f87171"></i>goal (${esc(m.name || "target")})</span>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
-    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">run 1</text>
-    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">run ${n}</text>
+    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">attempt 1</text>
+    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">attempt ${n}</text>
     <text x="14" y="${H / 2}" fill="#8494ad" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">${esc(yLabel)}</text>
     </svg><div class="legend" style="margin:6px 0 14px">${legend}</div>`;
 }
@@ -557,8 +557,8 @@ function speedupChart(S) {
   }).join("");
 
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
-    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">run 1</text>
-    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">run ${n}</text>
+    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">attempt 1</text>
+    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">attempt ${n}</text>
     <text x="14" y="${H / 2}" fill="#8494ad" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">speedup vs first reading (higher is better)</text>
     </svg><div class="legend" style="margin:6px 0 14px">${legend}</div>`;
 }
