@@ -74,8 +74,9 @@ The test id is the Blackhole row of `GALAXY_RING` (`common.py:165-167`) crossed 
 parameters (`test_performance_minimax_h3.py:91-106`); it runs two iterations and profiles the second between the
 `start` / `stop` signposts. The node id is quoted twice because `python -m tracy` re-shells its argv
 (`tools/tracy/__main__.py:368`). `--dump` prints the per-op block table (measured / ideal / limiter / utilization /
-bound formula); `--figs all` writes `roofline_bh_M13664.png`, `block_stacked_bh_M13664.png`,
-`block_ops_bh_M13664.png`, `time_bars_M13664.png`, `stacked_M13664.png`, `nstar_links.png`. Record the block table
+bound formula, with the ops folded into "other (small ops)" listed as indented sub-rows); `--figs all` writes
+`roofline_bh_M13664.png`, `block_stacked_bh_M13664.png`, `block_ops_bh_M13664.png`, `block_other_bh_M13664.png` (the
+"other (small ops)" group broken out per op), `time_bars_M13664.png`, `stacked_M13664.png`, `nstar_links.png`. Record the block table
 and the three AGMM rows in the results doc. Op codes match Wormhole for the 4x8 row except ff2 (fused MM+RS here, see "How it was actually run"; the exp ring SDPA
 is a 4x32 feature, `attention_minimax_h3.py:211`).
 

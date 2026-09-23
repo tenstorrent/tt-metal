@@ -44,9 +44,12 @@ across the 32 devices like `project_block_perf.py`, and gives every op a rooflin
 judgement calls built on the models already in the repo (the ring-matmul analysis, `OpPerformanceModelGeneral`,
 `roofline_utils.py`, `estimate_fabric_transfer_cycles`) and are printed on every block figure:
   compute-bound (SDPA, matmuls): 2*FLOPs / (cores_of_the_op * 2048 FLOP/cycle * 1.0 GHz at HiFi2)
-  DRAM-bound (embeddings, RMSNorm, tilize/untilize, concat): bytes in + out of DRAM tensors / 288 GB/s
+  DRAM-bound (embeddings, RMSNorm, tilize/untilize, concat, elementwise, head reshapes, slice, typecast):
+      bytes in + out of DRAM tensors / 288 GB/s; under 10 us of bytes the op is at the kernel-launch floor and
+      stays measured only
   fabric-bound (all-gather, reduce-scatter, broadcast): (R-1) * shard / (2 * links) / 12.5 GB/s per link
-  ideal = max of the terms that apply; ops under ~1% of the block are grouped as "other" (measured only).
+  ideal = max of the terms that apply; ops under ~1% of the block are grouped as "other (small ops)" on the
+  block figures, and `block_other` breaks that group out on its own figure (measured, ideal where a bound applies).
 
 Per-hop fabric latency (~0.7 us on Wormhole 1D, `ccl_common.cpp`) is ~2 us over the 3-hop ring against
 ~1 ms of transfer at this M and is not modelled. Colours: resources use the dataviz reference
@@ -62,7 +65,7 @@ import math
 import os
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from minimax_h3_ops import (  # noqa: E402
@@ -920,6 +923,10 @@ DTYPE_BYTES = {
     "UINT8": 1,
 }
 OTHER_SHARE = 0.01  # ops below this share of the block are grouped as "other"
+# A DRAM-resident op whose bytes would take less than this to stream is at the kernel-launch floor, not a
+# bandwidth floor (a few-tile slice or typecast runs 3-8 us on Wormhole regardless of its bytes); it stays
+# "measured only" rather than getting a 1-2 us ideal it cannot approach.
+LAUNCH_FLOOR_S = 10e-6
 CLASS_COLOR = {
     "compute": RESOURCE_COLOR["compute"],
     "dram": RESOURCE_COLOR["dram"],
@@ -927,6 +934,22 @@ CLASS_COLOR = {
     "other": "#8a8983",
 }
 CLASS_LABEL = {"compute": "compute-bound", "dram": "DRAM-bound", "fabric": "fabric-bound", "other": "measured only"}
+# Op codes whose bound is one pass over their DRAM-resident bytes (`load_block_profile`), and their figure labels.
+DRAM_BOUND_NAMES = {
+    "EmbeddingsDeviceOperation": "Embeddings (adaLN tables)",
+    "DitFusedDistributedRmsnormDeviceOperation": "DistributedRMSNorm",
+    "UntilizeWithUnpaddingDeviceOperation": "UntilizeWithUnpadding",
+    "TilizeWithValPaddingDeviceOperation": "TilizeWithValPadding",
+    "ConcatDeviceOperation": "Concat",
+    "BinaryNgDeviceOperation": "BinaryNg (adaLN modulate)",
+    "TernaryDeviceOperation": "Ternary (adaLN gate+residual)",
+    "UnaryDeviceOperation": "Unary",
+    "TypecastDeviceOperation": "Typecast",
+    "NlpCreateHeadsDeviceOperation": "NlpCreateHeads (q/k/v split)",
+    "NLPConcatHeadsDeviceOperation": "NLPConcatHeads (heads merge)",
+    "SliceDeviceOperation": "Slice",
+    "ReshapeViewDeviceOperation": "ReshapeView",
+}
 
 
 def bound_note(arch: Arch, fidelity: str) -> str:
@@ -953,6 +976,7 @@ class BlockOp:
     t_dram: float = 0.0
     t_fabric: float = 0.0
     formula: str = ""
+    parts: list[BlockOp] = field(default_factory=list)  # the folded op groups of the "other (small ops)" row
 
     @property
     def ideal(self) -> float | None:
@@ -1097,23 +1121,14 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
             td = (b + n_out * b) / dram_bw
             name, klass = "AllBroadcast (FSDP)", "fabric"
             formula = f"(n_out−1)·B/(2·L): B={b / 1e6:.1f} MB, n_out={n_out}, L={L}"
-        elif code in (
-            "EmbeddingsDeviceOperation",
-            "DitFusedDistributedRmsnormDeviceOperation",
-            "UntilizeWithUnpaddingDeviceOperation",
-            "TilizeWithValPaddingDeviceOperation",
-            "ConcatDeviceOperation",
-        ):
+        elif code in DRAM_BOUND_NAMES:
+            # Layout / elementwise / data-movement ops on DRAM-resident tensors: one pass over the bytes. In the
+            # 15 s block these are the adaLN modulation (BinaryNg, Ternary), the head split/merge around SDPA
+            # (NlpCreateHeads, NLPConcatHeads) and the FSDP layout conversions (tilize / untilize / concat).
+            # Class and formula are settled per group after the loop (a group mixes call sizes, e.g. the adaLN
+            # BinaryNg has one 172 KB call and three 73 MB ones), against LAUNCH_FLOOR_S on the per-call average.
+            name, klass = DRAM_BOUND_NAMES[code], "dram"
             td = _bytes(ins + outs) / dram_bw
-            klass = "dram"
-            name = {
-                "EmbeddingsDeviceOperation": "Embeddings (adaLN tables)",
-                "DitFusedDistributedRmsnormDeviceOperation": "DistributedRMSNorm",
-                "UntilizeWithUnpaddingDeviceOperation": "UntilizeWithUnpadding",
-                "TilizeWithValPaddingDeviceOperation": "TilizeWithValPadding",
-                "ConcatDeviceOperation": "Concat",
-            }[code]
-            formula = f"{_bytes(ins + outs) / 1e6:.0f} MB in+out / {dram_bw / 1e9:.0f} GB/s"
         g = groups.get(name)
         if g is None:
             groups[name] = BlockOp(name, code, 1, dur, klass, tc, td, tf, formula)
@@ -1124,12 +1139,27 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
             g.t_dram += td
             g.t_fabric += tf
     ops = list(groups.values())
+    for o in ops:
+        if o.op_code in DRAM_BOUND_NAMES:
+            per_call_bytes = o.t_dram * dram_bw / o.calls
+            if o.t_dram / o.calls < LAUNCH_FLOOR_S:
+                o.klass, o.t_dram = "other", 0.0
+                o.formula = (
+                    f"below the launch-latency floor ({per_call_bytes / 1e3:.0f} KB per call), no bandwidth model"
+                )
+            else:
+                # the bound is the sum over the group's calls, so the formula quotes the summed bytes, not one call's
+                calls = f" over {o.calls} calls" if o.calls > 1 else ""
+                o.formula = f"{o.t_dram * dram_bw / 1e6:.1f} MB in+out{calls} / {dram_bw / 1e9:.0f} GB/s"
     total = sum(o.measured for o in ops)
     keep, other = [], BlockOp("other (small ops)", "", 0, 0.0, "other")
     for o in sorted(ops, key=lambda o: -o.measured):
         if o.measured < OTHER_SHARE * total:
             other.calls += o.calls
             other.measured += o.measured
+            if o.klass == "other" and not o.formula:
+                o.formula = "no bound model for this op code"
+            other.parts.append(o)
         else:
             if o.klass == "other" and not o.formula:
                 o.formula = "no bound model for this op code"
@@ -1152,6 +1182,14 @@ def dump_block_table(ops: list[BlockOp], title: str) -> str:
         tm += o.measured
         if o.ideal is None:
             out.append(f"| {o.name} | {o.calls} | {o.measured * 1e3:.2f} | — | measured only | — | — | {o.formula} |")
+            for q in o.parts:
+                ideal = "—" if q.ideal is None else f"{q.ideal * 1e3:.3f}"
+                util = "—" if q.ideal is None else f"{100 * q.ideal / q.measured:.0f}%"
+                head = "—" if q.ideal is None else f"{q.measured / q.ideal:.2f}x"
+                lim = "measured only" if q.ideal is None else q.limiter
+                out.append(
+                    f"| ↳ {q.name} | {q.calls} | {q.measured * 1e3:.3f} | {ideal} | {lim} | {util} | {head} | {q.formula} |"
+                )
             continue
         ti += o.ideal
         out.append(
@@ -1279,6 +1317,96 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     return fig
 
 
+def fig_block_other(other: BlockOp, block_total: float, arch: Arch, fidelity: str, title: str, source: str):
+    """The "other (small ops)" row of the block figures broken out: a composition column and per-op bars."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    parts = sorted(other.parts, key=lambda o: -o.measured)
+    n = len(parts)
+    fig, (ax_stack, ax_bars) = plt.subplots(
+        1, 2, figsize=(14, max(5.6, 0.5 * n + 3.4)), gridspec_kw={"width_ratios": [1, 3.2]}
+    )
+    bucket_ms = other.measured * 1e3
+
+    # left: one linear column, the bucket's composition; segments >= 9% of the bucket get a direct label, the
+    # thin ones are named on the right panel
+    _style(ax_stack, grid_axis="y")
+    top = _stack(ax_stack, 0.0, parts, "measured", 0.6, 0.09)
+    ax_stack.text(0.0, top, f"{top:,.2f} ms", ha="center", va="bottom", fontsize=9, color=INK, fontweight="bold")
+    ideal_sum = sum(o.ideal for o in parts if o.ideal is not None) * 1e3
+    modelled = sum(o.measured for o in parts if o.ideal is not None) * 1e3
+    ax_stack.hlines(ideal_sum, -0.3, 0.3, color=INK, lw=1.2, ls=(0, (3, 2)), zorder=5)
+    ax_stack.text(
+        0.32,
+        ideal_sum,
+        f"sum of ideals {ideal_sum:,.2f} ms\n({modelled / top * 100:.0f}% of the group has a bound)",
+        ha="left",
+        va="center",
+        fontsize=7.8,
+        color=INK_2,
+    )
+    ax_stack.set_xticks([0.0])
+    ax_stack.set_xticklabels(["measured\n(Tracy, per op)"], fontsize=9, color=INK)
+    ax_stack.tick_params(axis="x", length=0)
+    ax_stack.set_xlim(-0.55, 0.9)
+    ax_stack.set_ylim(0, top * 1.12)
+    ax_stack.set_ylabel("ms per transformer block, per device", fontsize=9, color=INK_2)
+    ax_stack.set_title(
+        f"composition — {bucket_ms:,.2f} ms, {100 * other.measured / block_total:.1f}% of the block, {n} op groups",
+        fontsize=10,
+        color=INK,
+        loc="left",
+    )
+
+    # right: per-op bars on a log axis (the bucket spans microseconds to milliseconds), ideal where a bound applies
+    rows = parts[::-1]
+    _style(ax_bars, grid_axis="x")
+    ax_bars.set_xscale("log")
+    ys = list(range(n))
+    for y, o in zip(ys, rows):
+        c = CLASS_COLOR[o.klass]
+        ax_bars.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        note = f"{o.measured * 1e3:,.3f} ms  ·  {100 * o.measured / other.measured:.0f}% of group, {100 * o.measured / block_total:.2f}% of block"
+        if o.ideal is not None:
+            ax_bars.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
+            note += f"  ·  ideal {o.ideal * 1e3:,.3f} ({100 * o.ideal / o.measured:.0f}%, {o.measured / o.ideal:.1f}x)"
+        ax_bars.text(o.measured * 1e3 * 1.08, y, note, va="center", fontsize=8, color=INK_2)
+    ax_bars.set_yticks(ys)
+    ax_bars.set_yticklabels([f"{o.name}  ×{o.calls}" if o.calls > 1 else o.name for o in rows], fontsize=8.5, color=INK)
+    ax_bars.set_xlabel("ms per block (log)", fontsize=9, color=INK_2)
+    xmin = min(o.measured for o in rows) * 1e3
+    xmax = max(o.measured for o in rows) * 1e3
+    ax_bars.set_xlim(xmin / 2, xmax * 250)
+    ax_bars.set_title(f"per op group — {other.calls} calls, largest first", fontsize=10, color=INK, loc="left")
+    present = {o.klass for o in parts}
+    handles = [
+        Patch(color=CLASS_COLOR[k], label=CLASS_LABEL[k] + " (ideal, solid)")
+        for k in ("compute", "dram", "fabric")
+        if k in present
+    ]
+    if "other" in present:
+        handles.append(Patch(color=CLASS_COLOR["other"], alpha=0.55, label="no bound model (measured only)"))
+    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+    handles.append(Line2D([], [], color=INK, ls=(0, (3, 2)), label="sum of ideals"))
+    fig.legend(
+        handles=handles,
+        loc="upper right",
+        bbox_to_anchor=(0.995, 0.935),
+        ncol=6,
+        frameon=False,
+        fontsize=8,
+        title="colour = bound class",
+        title_fontsize=8,
+    )
+    fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
+    fig.text(0.01, 0.945, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
+    fig.text(0.01, 0.005, bound_note(arch, fidelity), fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.9))
+    return fig
+
+
 # ----------------------------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------------------------
@@ -1291,7 +1419,7 @@ def main() -> None:
     p.add_argument(
         "--figs",
         default="all",
-        help="comma list of roofline,bars,stacked,nstar,block_stacked,block_ops or all (default) or none",
+        help="comma list of roofline,bars,stacked,nstar,block_stacked,block_ops,block_other or all (default) or none",
     )
     p.add_argument("--dump", action="store_true", help="print the constants and roofline tables (markdown) to stdout")
     p.add_argument(
@@ -1419,7 +1547,9 @@ def main() -> None:
 
     figs = set() if args.figs == "none" else set(args.figs.split(","))
     if "all" in figs:
-        figs = {"roofline", "bars", "stacked", "nstar"} | (set() if args.no_block else {"block_stacked", "block_ops"})
+        figs = {"roofline", "bars", "stacked", "nstar"} | (
+            set() if args.no_block else {"block_stacked", "block_ops", "block_other"}
+        )
     if not figs and not args.dump and not args.selftest:
         p.error("nothing to do: pass --dump, --selftest or --figs")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -1493,6 +1623,22 @@ def main() -> None:
             path = os.path.join(args.out_dir, f"block_ops_{main_arch.short.lower()}_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
+        if block_ops and "block_other" in figs:
+            other = next((o for o in block_ops if o.parts), None)
+            if other is None:
+                print("note: no op group sits under the 'other' share; block_other figure skipped")
+            else:
+                fig = fig_block_other(
+                    other,
+                    sum(o.measured for o in block_ops),
+                    main_arch,
+                    args.fidelity,
+                    f"The 'other (small ops)' group broken out — {shape_title}",
+                    os.path.basename(args.profile_csv),
+                )
+                path = os.path.join(args.out_dir, f"block_other_{main_arch.short.lower()}_{tag}.png")
+                fig.savefig(path, dpi=args.dpi)
+                written.append(path)
         if "nstar" in figs:
             fig = fig_nstar(
                 arches, ops, args.fidelity, "Regime crossover N* vs link count — Wormhole vs Blackhole Galaxy"
