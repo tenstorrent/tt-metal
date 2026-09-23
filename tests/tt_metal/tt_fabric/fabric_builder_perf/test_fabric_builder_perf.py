@@ -4,9 +4,12 @@
 
 """Host-side fabric builder timings for cold and hot kernel caches.
 
-Runs fabric_builder_benchmark under tracy-capture, extracts the fabric builder zones inside the
-cold and hot phase markers, and checks their durations against the golden CSV for this machine.
-Set FABRIC_BUILDER_PERF_UPDATE_GOLDEN=1 to write the measured durations to the golden instead.
+Runs fabric_builder_benchmark under tracy-capture several times, each in a fresh process with an
+empty kernel cache, and extracts the fabric builder zones inside the cold and hot phase markers.
+The median duration of each zone is checked against the golden CSV for this machine.
+
+FABRIC_BUILDER_PERF_ITERATIONS sets the number of benchmark runs (default 5).
+FABRIC_BUILDER_PERF_UPDATE_GOLDEN=1 writes the median durations to the golden instead of checking them.
 """
 
 import csv
@@ -14,6 +17,7 @@ import json
 import os
 import shutil
 import socket
+import statistics
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +34,7 @@ ZONES = [
 CACHES = ["cold", "hot"]
 PHASE_MARKER = "FabricBuilderBenchmark::{cache}"
 
+DEFAULT_ITERATIONS = 5
 DEFAULT_TOLERANCE_PERCENT = 10.0
 # Added to every row's relative tolerance so zones of a few ms don't fail on timer and scheduling jitter.
 ABS_TOLERANCE_MS = 0.5
@@ -39,11 +44,15 @@ TRACY_PORTS = range(8086, 8500)
 
 ZONE_CSV_COLUMNS = ["name", "ns_since_start", "exec_time_ns"]
 GOLDEN_HEADERS = ["fabric_config", "cache", "zone", "golden_ms", "tolerance_percent"]
+SAMPLES_HEADERS = ["fabric_config", "cache", "zone", "iteration", "measured_ms"]
 SUMMARY_HEADERS = [
     "fabric_config",
     "cache",
     "zone",
-    "measured_ms",
+    "median_ms",
+    "min_ms",
+    "max_ms",
+    "spread_percent",
     "golden_ms",
     "delta_ms",
     "delta_percent",
@@ -99,6 +108,12 @@ def should_update_golden() -> bool:
     return os.environ.get("FABRIC_BUILDER_PERF_UPDATE_GOLDEN", "").lower() in {"1", "true", "yes"}
 
 
+def get_iterations() -> int:
+    iterations = int(os.environ.get("FABRIC_BUILDER_PERF_ITERATIONS", DEFAULT_ITERATIONS))
+    assert iterations >= 1, f"FABRIC_BUILDER_PERF_ITERATIONS must be at least 1, got {iterations}"
+    return iterations
+
+
 def get_benchmark_env(cache_dir: Path, tracy_port: int) -> dict:
     env = dict(os.environ)
     env.update(
@@ -121,20 +136,20 @@ def find_free_tracy_port() -> int:
 
 
 # Connects to tracy and runs the benchmark binary
-def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, case_dir: Path) -> None:
+def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, run_dir: Path) -> None:
     capture_tool = get_tracy_tool(tt_metal_home, "tracy-capture")
     benchmark_binary = get_benchmark_binary(tt_metal_home)
     assert capture_tool.exists(), f"Tracy capture tool not found: {capture_tool}"
     assert benchmark_binary.exists(), f"Benchmark binary not found: {benchmark_binary}"
 
     port = find_free_tracy_port()
-    benchmark_log = case_dir / "benchmark.log"
-    capture_log = case_dir / "capture.log"
-    capture_command = [str(capture_tool), "-o", str(case_dir / "capture.tracy"), "-f", "-p", str(port)]
+    benchmark_log = run_dir / "benchmark.log"
+    capture_log = run_dir / "capture.log"
+    capture_command = [str(capture_tool), "-o", str(run_dir / "capture.tracy"), "-f", "-p", str(port)]
     benchmark_command = [
         str(benchmark_binary),
         "--output",
-        str(case_dir / "results.json"),
+        str(run_dir / "results.json"),
         "--fabric-config",
         fabric_config,
     ]
@@ -146,7 +161,7 @@ def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, case_dir:
             with benchmark_log.open("w") as benchmark_out:
                 benchmark = subprocess.run(
                     benchmark_command,
-                    env=get_benchmark_env(case_dir / "cache", port),
+                    env=get_benchmark_env(run_dir / "cache", port),
                     cwd=tt_metal_home,
                     stdout=benchmark_out,
                     stderr=subprocess.STDOUT,
@@ -164,13 +179,13 @@ def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, case_dir:
     assert capture.returncode == 0, f"tracy-capture failed with exit code {capture.returncode}; see {capture_log}"
 
 
-def export_zones(tt_metal_home: Path, case_dir: Path) -> Path:
+def export_zones(tt_metal_home: Path, run_dir: Path) -> Path:
     csvexport_tool = get_tracy_tool(tt_metal_home, "tracy-csvexport")
-    zones_csv = case_dir / "zones.csv"
-    export_log = case_dir / "export.log"
+    zones_csv = run_dir / "zones.csv"
+    export_log = run_dir / "export.log"
     with zones_csv.open("w") as zones_out, export_log.open("w") as log_out:
         completed = subprocess.run(
-            [str(csvexport_tool), "-u", str(case_dir / "capture.tracy")],
+            [str(csvexport_tool), "-u", str(run_dir / "capture.tracy")],
             stdout=zones_out,
             stderr=log_out,
             check=False,
@@ -214,6 +229,45 @@ def validate_cache_state(phases: dict) -> None:
     assert hot_after == hot_before, f"Hot phase compiled {hot_after - hot_before} new artifacts; the cache was not hot"
 
 
+# One benchmark process with its own empty kernel cache. Returns the benchmark context and the zone durations.
+def run_iteration(tt_metal_home: Path, fabric_config: str, run_dir: Path) -> tuple[dict, dict[tuple[str, str], float]]:
+    cache_dir = run_dir / "cache"
+    cache_dir.mkdir(parents=True)
+    run_benchmark_under_tracy(tt_metal_home, fabric_config, run_dir)
+    results = json.loads((run_dir / "results.json").read_text())
+    validate_cache_state(results["phases"])
+    durations = extract_durations_ms(read_zones(export_zones(tt_metal_home, run_dir)))
+    # Only needed while the benchmark runs
+    shutil.rmtree(cache_dir)
+    return results["context"], durations
+
+
+# Samples across iterations.
+def collect_samples(per_iteration: list[dict[tuple[str, str], float]]) -> dict[tuple[str, str], list[float]]:
+    return {key: [durations[key] for durations in per_iteration] for key in per_iteration[0]}
+
+
+def get_medians(samples: dict[tuple[str, str], list[float]]) -> dict[tuple[str, str], float]:
+    return {key: statistics.median(values) for key, values in samples.items()}
+
+
+def write_samples(case_dir: Path, fabric_config: str, samples: dict[tuple[str, str], list[float]]) -> None:
+    with (case_dir / "samples.csv").open("w", newline="") as samples_file:
+        writer = csv.DictWriter(samples_file, fieldnames=SAMPLES_HEADERS)
+        writer.writeheader()
+        for (cache, zone), values in samples.items():
+            for iteration, measured_ms in enumerate(values):
+                writer.writerow(
+                    {
+                        "fabric_config": fabric_config,
+                        "cache": cache,
+                        "zone": zone,
+                        "iteration": iteration,
+                        "measured_ms": f"{measured_ms:.3f}",
+                    }
+                )
+
+
 # Golden CSV.
 def read_golden_rows(golden_path: Path) -> list[dict]:
     assert (
@@ -252,25 +306,26 @@ def write_golden_rows(golden_path: Path, fabric_config: str, durations: dict[tup
         writer.writerows(other_rows + new_rows)
 
 
-# Golden comparison. A zone passes when |measured - golden| <= ABS_TOLERANCE_MS + golden * tolerance_percent / 100.
+# Golden comparison. A zone passes when |median - golden| <= ABS_TOLERANCE_MS + golden * tolerance_percent / 100.
 # Tolerance is two-sided, so a large speedup also fails and the golden gets refreshed.
 def compare_to_golden(
-    fabric_config: str, durations: dict[tuple[str, str], float], golden_rows: list[dict]
+    fabric_config: str, samples: dict[tuple[str, str], list[float]], golden_rows: list[dict]
 ) -> tuple[list[dict], list[str]]:
     goldens = {(row["cache"], row["zone"]): row for row in golden_rows if row["fabric_config"] == fabric_config}
     rows = []
     errors = []
 
-    for (cache, zone), measured_ms in durations.items():
+    for (cache, zone), values in samples.items():
         golden = goldens.pop((cache, zone), None)
         if golden is None:
-            rows.append(make_summary_row(fabric_config, cache, zone, measured_ms, status="missing-golden"))
+            rows.append(make_summary_row(fabric_config, cache, zone, values, status="missing-golden"))
             errors.append(f"{cache} {zone}: no golden row")
             continue
 
+        median_ms = statistics.median(values)
         golden_ms = float(golden["golden_ms"])
         tolerance_percent = float(golden["tolerance_percent"])
-        delta_ms = measured_ms - golden_ms
+        delta_ms = median_ms - golden_ms
         delta_percent = delta_ms / golden_ms * 100.0
         allowed_ms = ABS_TOLERANCE_MS + golden_ms * (tolerance_percent / 100.0)
         status = "pass" if abs(delta_ms) <= allowed_ms else "fail"
@@ -279,7 +334,7 @@ def compare_to_golden(
                 fabric_config,
                 cache,
                 zone,
-                measured_ms,
+                values,
                 golden_ms=golden["golden_ms"],
                 delta_ms=f"{delta_ms:+.3f}",
                 delta_percent=f"{delta_percent:+.1f}",
@@ -290,7 +345,7 @@ def compare_to_golden(
         )
         if status == "fail":
             errors.append(
-                f"{cache} {zone}: {measured_ms:.3f} ms vs golden {golden_ms:.3f} ms "
+                f"{cache} {zone}: median {median_ms:.3f} ms vs golden {golden_ms:.3f} ms "
                 f"({delta_ms:+.3f} ms, {delta_percent:+.1f}%; allowed +/-{allowed_ms:.3f} ms = "
                 f"{ABS_TOLERANCE_MS} ms + {tolerance_percent}%)"
             )
@@ -304,11 +359,17 @@ def compare_to_golden(
 
 
 # Summary output.
-def make_summary_row(fabric_config: str, cache: str, zone: str, measured_ms: float | None = None, **fields) -> dict:
+def make_summary_row(fabric_config: str, cache: str, zone: str, values: list[float] | None = None, **fields) -> dict:
     row = dict.fromkeys(SUMMARY_HEADERS, "")
     row.update(fabric_config=fabric_config, cache=cache, zone=zone, **fields)
-    if measured_ms is not None:
-        row["measured_ms"] = f"{measured_ms:.3f}"
+    if values:
+        median_ms = statistics.median(values)
+        row.update(
+            median_ms=f"{median_ms:.3f}",
+            min_ms=f"{min(values):.3f}",
+            max_ms=f"{max(values):.3f}",
+            spread_percent=f"{(max(values) - min(values)) / median_ms * 100.0:.1f}",
+        )
     return row
 
 
@@ -340,34 +401,48 @@ def test_fabric_builder_perf(fabric_config):
     # Setup
     tt_metal_home = get_tt_metal_home()
     case_dir = get_output_dir(tt_metal_home) / fabric_config
-    # Clean up the output directory, including wiping any existing cache
+    # Clean up the output directory, including any cache left behind by a failed run
     if case_dir.exists():
         shutil.rmtree(case_dir)
-    (case_dir / "cache").mkdir(parents=True)
+    case_dir.mkdir(parents=True)
 
-    # Measure
-    run_benchmark_under_tracy(tt_metal_home, fabric_config, case_dir)
-    results = json.loads((case_dir / "results.json").read_text())
-    validate_cache_state(results["phases"])
-    durations = extract_durations_ms(read_zones(export_zones(tt_metal_home, case_dir)))
+    # Measure, one fresh process and kernel cache per iteration
+    contexts = []
+    per_iteration = []
+    for iteration in range(get_iterations()):
+        context, durations = run_iteration(tt_metal_home, fabric_config, case_dir / f"iteration_{iteration}")
+        contexts.append(context)
+        per_iteration.append(durations)
+    context = contexts[0]
+    assert all(other == context for other in contexts), f"Benchmark context changed between iterations: {contexts}"
+    samples = collect_samples(per_iteration)
+    write_samples(case_dir, fabric_config, samples)
 
     # Report
-    context = results["context"]
     golden_path = get_golden_path(tt_metal_home, context["arch"], context["cluster_type"])
+    summary_name = f"summary_{context['arch']}_{context['cluster_type']}"
+
+    write_summary(
+        case_dir,
+        summary_name,
+        [
+            make_summary_row(fabric_config, cache, zone, values, status="measured")
+            for (cache, zone), values in samples.items()
+        ],
+    )
 
     # Refresh the golden values when requested, otherwise check against them
     if should_update_golden():
-        write_golden_rows(golden_path, fabric_config, durations)
+        write_golden_rows(golden_path, fabric_config, get_medians(samples))
         rows = [
-            make_summary_row(fabric_config, cache, zone, measured_ms, status="updated-golden")
-            for (cache, zone), measured_ms in durations.items()
+            make_summary_row(fabric_config, cache, zone, values, status="updated-golden")
+            for (cache, zone), values in samples.items()
         ]
         errors = []
     else:
-        rows, errors = compare_to_golden(fabric_config, durations, read_golden_rows(golden_path))
+        rows, errors = compare_to_golden(fabric_config, samples, read_golden_rows(golden_path))
 
-    # Write the summary before failing so it is available for every run
-    summary_text = write_summary(case_dir, f"summary_{context['arch']}_{context['cluster_type']}", rows)
+    summary_text = write_summary(case_dir, summary_name, rows)
     print(summary_text)
     print(f"\nResults: {case_dir}")
     print(f"Golden CSV: {golden_path}")

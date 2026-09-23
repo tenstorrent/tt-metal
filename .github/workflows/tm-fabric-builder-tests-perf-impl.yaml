@@ -143,7 +143,7 @@ jobs:
           prefix: fabric-builder-perf-${{ matrix.test-group.sku }}
           path: |
             /work/generated/fabric_builder_perf
-            !/work/generated/fabric_builder_perf/*/cache
+            !/work/generated/fabric_builder_perf/**/cache
             /work/tests/tt_metal/tt_fabric/fabric_builder_perf/golden_data
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
