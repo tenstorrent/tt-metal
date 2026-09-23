@@ -13,6 +13,9 @@
 #include "exp_fused_op_indexer.hpp"
 #include "metadata_scalar_read.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#ifdef SDPA_RECIPE_EXP_RING
+#include "ttnn/operations/transformer/sdpa/device/kernels/exp_ring_recipe_cbs.hpp"
+#endif
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -170,8 +173,14 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+#ifdef SDPA_RECIPE_EXP_RING
+    // Recipe CB layout owns 0-16 (c_14 is its exp_max_diff); the MUX-writer aliases move above it.
+    constexpr uint32_t cb_k_writer_in = ttnn::operations::transformer::sdpa::exp_ring::kRecipeKWriterAliasCb;
+    constexpr uint32_t cb_v_writer_in = ttnn::operations::transformer::sdpa::exp_ring::kRecipeVWriterAliasCb;
+#else
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
+#endif
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -483,9 +492,11 @@ void kernel_main() {
                 }
                 // Credit the NEXT K chunk now (reserve after push keeps the CB cursor correct),
                 // so the injector's next K mcast is released before this core reaches its wait.
+#ifndef SDPA_RECIPE_EXP_RING
                 if (k_mcast_receive) {
                     post_k_credit();
                 }
+#endif
 
                 // Download Q on the first processed K chunk — after K is downloaded and forwarded.
                 // First processed, not k_chunk == 0: a shard's leading spatial chunks past logical_n
@@ -516,6 +527,13 @@ void kernel_main() {
                     }
                     q_chunks_pushed++;
                 }
+#ifdef SDPA_RECIPE_EXP_RING
+                // Recipes C/D keep one K slot: the next K credit's reserve waits for compute to pop this
+                // chunk, and compute needs Q first, so the credit must follow the Q download.
+                if (k_mcast_receive) {
+                    post_k_credit();
+                }
+#endif
 
                 // V: get data into CB buffer — same ping-pong structure as K, on the second
                 // valid flag (receiver_semaphore_b_id).

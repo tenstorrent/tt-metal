@@ -116,6 +116,27 @@ qualified. Causal/balanced, indexed/paged/chunked-cache, sliding-window, sink,
 MLA and device-tensor logical lengths remain legacy-only and reject explicit recipes.
 The third returned tensor is internal scratch, **not a supported LSE result**.
 
+## Exp ring attention
+
+`exp_ring_joint_scaled_dot_product_attention` (fused K/V all-gather over the fabric MUX) accepts the
+same `precision` and `inputs_prepared` arguments. FAST (A) keeps the existing exp-ring compute with
+the recipe's HiFi2/approximate-exponential configuration. B/C/D/E replace it with the shared streaming
+recipe: each core keeps one recurrent state resident in L1 across every active ring iteration,
+releases Q and normalizes only on the last KV chunk of the last active iteration, and masks key tails
+(local shard padding, the global `logical_n` tail and the joint tail) from valid-row counts. The
+existing reader's chunk skipping, phase-alignment chunks and MUX forwarding are reused unchanged.
+The recipe owns CB indices 0-16; the MUX-writer K/V aliases move to 19/20 and Q is single-slot
+(each Q chunk is read once and stays resident), so B/E_bf16/C/D fit Q256/K512 in the pipeline's L1.
+
+Current exp-ring recipe scope is Blackhole, D128, Q128-Q320 (as L1 allows) with K512, scalar
+`logical_n`, the default scale and **one head-segment per core row** (a single pass). Several
+passes per row (and therefore the streamed-Q fallback) and a device-tensor `logical_n` are rejected:
+per-pass recipe state would need a pass-outer loop order or DRAM checkpoints. An L1 overflow is
+rejected with the required and usable sizes. Two connected devices (1x2 `FABRIC_1D_RING`, two links)
+are qualified: B/C/D/E equal dense recipe attention bit-for-bit on the chip's KV in ring visiting
+order whenever every visited segment but the last is a whole number of K512 chunks, and otherwise
+match its error level.
+
 `WanAttention` has opt-in `sdpa_precision` and `sdpa_kv_dtype` constructor
 arguments for self-attention. E preparation happens after norm/RoPE and before
 ring communication; ping-pong KV buffers use the selected storage dtype.

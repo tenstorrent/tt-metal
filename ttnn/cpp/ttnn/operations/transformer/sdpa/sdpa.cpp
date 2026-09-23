@@ -477,7 +477,33 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<SDPAPrecision> precision,
+    bool inputs_prepared) {
+    if (precision) {
+        // resolve_recipe_policy rejects an explicit compute_kernel_config, exp_approx_mode=False, a
+        // non-default scale and a preparation mismatch; the recipe owns those numerical decisions.
+        const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
+        TT_FATAL(
+            std::holds_alternative<std::size_t>(logical_n),
+            "Named exp ring recipes currently require a scalar logical_n");
+        TT_FATAL(
+            program_config.k_chunk_size == 512 && input_tensor_q.logical_shape()[3] == 128 &&
+                input_tensor_k.logical_shape()[3] == 128 && input_tensor_v.logical_shape()[3] == 128,
+            "Named exp ring recipes require K512/D128");
+        operations::transformer::sdpa::detail::recipe_q_tiles(program_config);
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named exp ring recipes require BF16 Q and matching KV types");
+        compute_kernel_config = BlackholeComputeKernelConfig{
+            .math_fidelity = policy.qk_fidelity,
+            .math_approx_mode = true,
+            .fp32_dest_acc_en = policy.fp32_destination,
+        };
+    } else {
+        TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -518,7 +544,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         compute_kernel_config,
         num_workers_per_link,
         num_buffers_per_channel,
-        logical_n_tensor);
+        logical_n_tensor,
+        precision);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

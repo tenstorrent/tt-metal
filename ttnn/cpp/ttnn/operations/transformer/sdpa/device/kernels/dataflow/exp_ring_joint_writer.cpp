@@ -11,6 +11,9 @@
 #include "dataflow_common.hpp"
 #include "metadata_scalar_read.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#ifdef SDPA_RECIPE_EXP_RING
+#include "ttnn/operations/transformer/sdpa/device/kernels/exp_ring_recipe_cbs.hpp"
+#endif
 #include "exp_fused_op_indexer.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -279,8 +282,13 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+#ifdef SDPA_RECIPE_EXP_RING
+    constexpr uint32_t cb_k_writer_in = ttnn::operations::transformer::sdpa::exp_ring::kRecipeKWriterAliasCb;
+    constexpr uint32_t cb_v_writer_in = ttnn::operations::transformer::sdpa::exp_ring::kRecipeVWriterAliasCb;
+#else
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
+#endif
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     CircularBuffer cb_k_w(cb_k_writer_in);
@@ -294,11 +302,20 @@ void kernel_main() {
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
+#ifdef SDPA_RECIPE_EXP_RING
+    // Recipe layout: 3 = reduce scaler, 4 = column identity (identity_scalar_packed = two BF16 1.0 =
+    // 0x3f803f80, exactly as the dense and ring_joint recipe dataflow generate them). The recipe folds
+    // the scale into its exponential, so no scale tile is produced.
+    constexpr uint32_t cb_col_identity = 4;
+    constexpr uint32_t cb_identity_scale_in = 3;
+    static_assert(identity_scalar_packed == 0x3f803f80, "Recipe column identity must be two BF16 ones");
+#else
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
+#endif
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
@@ -328,7 +345,13 @@ void kernel_main() {
     constexpr bool global_n_has_padding =
         has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+#ifdef SDPA_RECIPE_EXP_RING
+    // The recipe masks key tails from valid-row counts in the pack thread; no mask tiles (and no c_3,
+    // which is the recipe's reduce scaler).
+    constexpr bool needs_lightweight_mask = false;
+#else
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+#endif
     // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
     // indices. A present tile needs a non-zero template column (fall back to 1) so
     // generate_lightweight_mask_tiles allocates the slot; the stamped live column may still be 0, which
@@ -564,12 +587,14 @@ void kernel_main() {
                         }
                     }
 
+#ifndef SDPA_RECIPE_EXP_RING
                     if (KV_chunks_processed_in_iter % 2 == 0) {
                         cb_k_w.wait_front(k_chunk_tiles);
                         cb_v_w.wait_front(v_chunk_tiles);
                         cb_k_w.pop_front(k_chunk_tiles);
                         cb_v_w.pop_front(v_chunk_tiles);
                     }
+#endif
                 }
 #endif
 
@@ -587,6 +612,17 @@ void kernel_main() {
                         /*flush_trid=*/0);
                     noc.async_write_barrier();
                 }
+#if defined(USE_MUX) && defined(SDPA_RECIPE_EXP_RING)
+                // Drain the phase-alignment pair only after the output: with the FP32 recipes' single K/V
+                // slot, the reader can push it only once compute pops the last V, and on the last ring
+                // iteration compute first needs this writer to drain the normalized rows of cb_out.
+                if (mux_connection_valid && KV_chunks_processed_in_iter % 2 == 0) {
+                    cb_k_w.wait_front(k_chunk_tiles);
+                    cb_v_w.wait_front(v_chunk_tiles);
+                    cb_k_w.pop_front(k_chunk_tiles);
+                    cb_v_w.pop_front(v_chunk_tiles);
+                }
+#endif
             }
         }
     }

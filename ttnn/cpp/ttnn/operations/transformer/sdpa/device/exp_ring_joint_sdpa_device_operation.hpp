@@ -55,6 +55,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 8,
     // When set, logical_n above is the worst-case placeholder and the live value is read on-device.
-    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
+    // Opt-in named numerical recipe (see docs/sdpa_precision.md); nullopt keeps the legacy compute.
+    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim

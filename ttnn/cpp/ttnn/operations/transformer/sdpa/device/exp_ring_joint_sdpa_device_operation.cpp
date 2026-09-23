@@ -17,6 +17,9 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+
+#include <cmath>
 
 using namespace tt::tt_metal;
 
@@ -46,14 +49,48 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
+    if (args.precision) {
+        // Named recipes: BF16 Q; K/V (primary, joint, gathered) share the recipe's KV storage type.
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        const auto kv_dtype = tensor_args.input_k.dtype();
+        recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype));
         TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+            input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE, "Named exp ring recipes require Blackhole");
+        TT_FATAL(dtype == DataType::BFLOAT16, "Named exp ring recipes require BF16 Q, got {}", dtype);
+        TT_FATAL(
+            kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,
+            "Named exp ring recipes require BF16, BFP8 or BFP4 KV, got {}",
+            kv_dtype);
+        TT_FATAL(
+            tensor_args.input_v.dtype() == kv_dtype && tensor_args.gathered_k.dtype() == kv_dtype &&
+                tensor_args.gathered_v.dtype() == kv_dtype,
+            "Named exp ring recipe K/V and persistent buffers must share one KV type");
+        if (has_joint) {
+            TT_FATAL(
+                tensor_args.joint_q->dtype() == dtype && tensor_args.joint_k->dtype() == kv_dtype &&
+                    tensor_args.joint_v->dtype() == kv_dtype,
+                "Named exp ring recipe joint types must match their primary Q/K/V types");
+        }
+        TT_FATAL(
+            input_tensor_q.logical_shape()[3] == 128 && args.get_q_chunk_size() % 64 == 0 &&
+                args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 && args.get_k_chunk_size() == 512,
+            "Named exp ring recipes require D128, Q128/Q192/Q256/Q320 and K512 blocking");
+        TT_FATAL(
+            !tensor_args.has_logical_n_tensor(),
+            "Named exp ring recipes do not yet support a device-tensor logical_n; pass a scalar");
+        TT_FATAL(
+            !args.scale || *args.scale == 1.0f / std::sqrt(128.0f),
+            "Named exp ring recipes require the default D128 scale");
+    } else {
+        // Validate all tensors have the same dtype
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -351,6 +388,17 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         device_grid.y,
         kMaxPasses);
 
+    // Named recipes keep one resident recurrent state per core across every ring iteration; several
+    // head-passes per core row would need a pass-outer loop order or DRAM checkpoints (not yet
+    // implemented), and stream_q only ever applies to multi-pass programs.
+    TT_FATAL(
+        !args.precision || num_passes == 1,
+        "Named exp ring recipes currently support one head-segment per core row (single pass); got {} "
+        "head-segments on {} rows ({} passes). Use more grid rows, fewer heads per device, or omit precision.",
+        total_segments,
+        sdpa_grid_y,
+        num_passes);
+
     // Final sanity: total Q chunks must fit the cores across all passes.
     TT_FATAL(
         total_q_chunks <= num_passes * num_sdpa_cores,
@@ -477,7 +525,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -514,6 +563,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         cluster_axis,
         num_workers_per_link,
         num_buffers_per_channel);
+    operation_attributes.precision = precision;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

@@ -196,7 +196,9 @@ struct ExecuteExpRingJointAttention {
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         uint32_t num_workers_per_link = 1,
-        uint32_t num_buffers_per_channel = 8);
+        uint32_t num_buffers_per_channel = 8,
+        std::optional<SDPAPrecision> precision = std::nullopt,
+        bool inputs_prepared = false);
 };
 
 ttnn::Tensor flash_mla_prefill(
