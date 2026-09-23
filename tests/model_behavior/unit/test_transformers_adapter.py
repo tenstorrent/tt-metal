@@ -54,6 +54,54 @@ def test_architecture_and_sku_mismatches_fail_before_model_creation():
             select_sku(backend, arch, count, sku)
 
 
+@pytest.mark.parametrize(
+    "backend,sku,traced,restricted",
+    [
+        ("gemma-4-26b-a4b", "wh_llmbox_perf", True, True),
+        ("gemma-4-26b-a4b", "wh_llmbox_perf", False, False),
+        ("gemma-4-26b-a4b", "bh_quietbox_2", True, False),
+        ("llama3.1-8b", "wh_llmbox_perf", True, False),
+    ],
+)
+def test_gemma_short_trace_policy_preserves_full_eager_warmup(backend, sku, traced, restricted):
+    lengths = [128, 512, 1024, 2048, 4096]
+    args = SimpleNamespace(
+        trace_prefill_supported_seq_lens=list(lengths),
+        can_enable_trace=lambda prefill_seq_len, num_cached_tokens=0, batch_size=1: (
+            prefill_seq_len in lengths and num_cached_tokens == 0 and batch_size <= 32
+        ),
+    )
+    calls = []
+
+    def warmup(phase, enable_trace):
+        calls.append((phase, enable_trace, list(args.trace_prefill_supported_seq_lens)))
+
+    adapter = TransformersAdapter.__new__(TransformersAdapter)
+    adapter.profile, adapter.sku = PROFILES[backend], sku
+    adapter.enable_trace = traced
+    adapter.capacity = 32
+    adapter.supports_chunked_prefill = True
+    adapter.kv_cache = object()
+    adapter.page_table = torch.zeros(32, 128)
+    adapter.generator = SimpleNamespace(
+        model_args=[args],
+        model_capabilities={},
+        warmup_model_prefill=lambda cache, trace, **kw: warmup("prefill", trace),
+        warmup_model_decode=lambda cache, trace, *a, **kw: warmup("decode", trace),
+    )
+    adapter.warmup()
+
+    expected = [128, 1024] if restricted else lengths
+    assert calls[:2] == [("prefill", False, lengths), ("decode", False, lengths)]
+    assert calls[2:] == ([("prefill", True, expected), ("decode", True, expected)] if traced else [])
+    assert args.trace_prefill_supported_seq_lens == expected
+    assert args.can_enable_trace(128)
+    assert args.can_enable_trace(1024)
+    assert args.can_enable_trace(2048) is not restricted
+    assert not args.can_enable_trace(128, num_cached_tokens=64)
+    assert not args.can_enable_trace(128, batch_size=64)
+
+
 def test_vocab_oracle_preserves_tp_and_dp_domains():
     assert vocabulary_groups((1, 8), 0, 1) == [list(range(8))]
     assert vocabulary_groups((8, 4), 0, 1) == [[0, 4, 8, 12, 16, 20, 24, 28]]

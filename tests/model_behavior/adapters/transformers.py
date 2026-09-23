@@ -180,6 +180,23 @@ class TransformersAdapter(PagedAdapter):
             can_sample_on_device=True,
         )
         if self.enable_trace:
+            if self.profile.family == "gemma" and self.sku == "wh_llmbox_perf":
+                # Keep the two smallest distinct padded prefill buckets. Keep the
+                # full eager compile pass above before any trace is resident;
+                # longer requests still exercise prefill, but execute eagerly.
+                # Four resident prefill buckets need ~658 MB on Gemma 26B.
+                args = self.generator.model_args[0]
+                args.trace_prefill_supported_seq_lens = [
+                    length for length in args.trace_prefill_supported_seq_lens if length in (128, 1024)
+                ]
+                original_can_enable_trace = args.can_enable_trace
+
+                def can_enable_trace(prefill_seq_len, num_cached_tokens=0, batch_size=1):
+                    return prefill_seq_len in args.trace_prefill_supported_seq_lens and original_can_enable_trace(
+                        prefill_seq_len, num_cached_tokens=num_cached_tokens, batch_size=batch_size
+                    )
+
+                args.can_enable_trace = can_enable_trace
             self.generator.already_warmed_up_prefill = False
             self.generator.warmup_model_prefill(self.kv_cache, True, can_sample_on_device=True)
             self.generator.warmup_model_decode(
@@ -326,6 +343,9 @@ class TransformersAdapter(PagedAdapter):
         return result
 
     def describe(self):
+        import ttnn
+
+        trace_memory = ttnn.get_memory_view(self.generator.mesh_device, ttnn.BufferType.TRACE)
         return dict(
             backend=self.backend,
             hf_model=os.environ["HF_MODEL"],
@@ -333,6 +353,15 @@ class TransformersAdapter(PagedAdapter):
             mesh_shape=tuple(self.generator.mesh_device.shape),
             execution=self.execution_mode,
             prefill_execution=self.execution_mode,
+            prefill_trace_seq_lens=(
+                list(getattr(self.generator.model_args[0], "trace_prefill_supported_seq_lens", []))
+                if self.enable_trace
+                else []
+            ),
+            prefill_trace_keys=[
+                key for key, trace_id in getattr(self.generator, "trace_id_prefill", {}).items() if trace_id is not None
+            ],
+            trace_allocated_bytes=trace_memory.num_banks * trace_memory.total_bytes_allocated_per_bank,
             prefill_batching="sequential",
             stochastic_prefill=self.stochastic_prefill,
             duplicate_seed_policy=self.duplicate_seed_policy,

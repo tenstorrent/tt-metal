@@ -156,14 +156,26 @@ prefill. Decode uses the full configured slot layout. Qwen uses the production
 model-owned traced prefill chunks in both execution modes; `eager`/`traced`
 selects its decode mode. Models may also select eager prefill for lengths their
 normal trace policy does not support.
-Gemma uses eager prefill for nonzero cached-prefix continuations and input
-sequence lengths above 4096, including in traced mode; decode remains traced.
+On Wormhole T3K, Gemma 26B traces the 128- and 1024-token prefill buckets. This
+retains more coverage than the existing short-prompt serving CI's 128-token
+policy. Longer prefills and cached-prefix continuations run eagerly; decode
+remains traced. The full eager prefill/decode warmup runs before
+restricting trace capture, preserving compilation coverage for longer inputs.
+Other Gemma SKUs retain the model's normal trace policy (eager continuations and
+input lengths above 4096). Reports include the eligible prefill lengths,
+captured trace keys and allocated trace-region bytes per device, so a traced
+decode run does not imply every prefill was traced. The allocation metric counts
+the fixed trace region; dynamic traces allocated from ordinary DRAM are not
+included.
 
 Every slot owns stable, disjoint KV pages within its cache domain. Block zero is
 reserved for padding. Four boundary slots (one for batch size one) support 8192
 tokens; other slots support 1024, or 2048 for Qwen's masked prefill buckets.
-Gemma 26B on Wormhole reserves 1 GiB for its full prefill trace sweep plus
-decode/sampling traces; the four prefill traces alone total about 658 MB.
+Gemma 26B on Wormhole T3K reserves 160 MiB for traces. The two retained prefill
+buckets need 113,893,376 bytes, compared with approximately 658 MB for all four
+buckets. Measured allocated storage including decode/sampling is 140.16 MiB per
+device, leaving approximately 20 MiB spare. Sampling, penalty and logprob warmup
+coverage is retained.
 GPT-OSS's four Wormhole row groups have separate device caches: physical block
 IDs can repeat across those domains, never between requests in the same domain.
 The original Galaxy adapter retains its 8x4 layout and allocation scheme.

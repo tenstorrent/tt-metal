@@ -390,12 +390,9 @@ sizes:
       wh_n150:
         trace_region_size: 70000000
       wh_llmbox_perf:
-        # Four prefill traces measured 658,186,240 bytes. Round up to 1 GiB,
-        # leaving 415,555,584 bytes for decode/sampling traces and spare capacity.
-        # Full eager/traced behavior runs passed with this conservative reservation;
-        # the combined minimum was not measured. Power-of-two sizing is a choice,
-        # not an allocator requirement.
-        trace_region_size: 1073741824
+        # Behavior sweep retains 128/1024 prefill traces and full decode/sampling.
+        # Measured 146,964,480 bytes (140.16 MiB) per device; 160 MiB leaves ~20 MiB spare.
+        trace_region_size: 167772160
       bh_p150:
         trace_region_size: 70000000
       p300x2:
