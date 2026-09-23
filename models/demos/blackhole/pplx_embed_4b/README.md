@@ -546,6 +546,32 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Batched SDPA on all 120 workers with one K chunk (2026-09-23)
+
+Standalone at the model's exact SDPA config (LoFi, exp approx, Q/K/V bfp8, non-causal,
+q512/k256): grid 8×10 → 12×10 is −10.6% at B=32 (932 → 833 µs) and −11% at B=8;
+k-chunk 512 another −3% (806 / 262 µs). bs1 cannot take it — its activations are
+L1-resident and the k512 SDPA CBs clash with them (TT_THROW), and 32 work units
+cannot fill 120 cores — so `apply_workload_env` sets `QWEN_SDPA_GRID=12,10` and
+`QWEN_SDPA_K_CHUNK=512` for batch > 1 only (`QWEN_SDPA_BATCHED_WIDE=0` opts out).
+
+Same-chip sequential A/B (chips 4/6/7/8; chip-to-chip e2e variation is ≈1.5%, so
+only same-chip comparisons count from here on):
+
+| batch | H200 | before | **after** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 23.3  | **23.3**  | — | 4.29× |
+| bs8  | 33.081  | 126.7 | **126.2** | −0.4% | 3.81× |
+| bs16 | 67.225  | 239.6 | **239.6** | — | 3.56× |
+| bs32 | 139.150 | 455.1 | **450.6** | **−1.0%** | 3.24× |
+
+Two things tried in the same session that did *not* pay, both recorded in
+`perf_csv/NEGATIVE_RESULTS.md` (§24, §25): widening the bs1 legacy matmul grids
+(the DRAM width-sharded weights pin the kernel to 8 core columns — 10×8/12×8 return
+inf, and the decode-style DRAM-sharded matmul only supports M == 1 tile), and a
+DST-reuse rewrite of the fused head-split compute plus cos/sin caching (standalone
+−27%, in the model 0: the RoPE matrices already live in L1).
+
 ### generic_op launch cost: merged core ranges + fewest-cores split (2026-09-23)
 
 The three model-local `generic_op`s (head-split+norm+RoPE, concat heads, plain

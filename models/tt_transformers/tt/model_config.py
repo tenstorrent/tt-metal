@@ -2219,6 +2219,10 @@ class ModelArgs:
                     )
                 )
                 qkv_per_core_N = math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width)
+                if os.getenv("QWEN_QKV_GRID_X"):
+                    # A wider N-split must size per_core_N from the grid, not the DRAM shard
+                    # width (4B: 192 N-tiles on 12 columns -> 16 per core, 96 cores vs 64).
+                    qkv_per_core_N = math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / qkv_grid_x)
                 # in0_block_w: largest divisor of K-tiles-per-row (capped at 8).
                 k_tiles_per_row = max(1, (self.dim // ttnn.TILE_SIZE) // qkv_grid_y)
                 qkv_in0_block_w = self.find_largest_divisor(k_tiles_per_row)
