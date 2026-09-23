@@ -145,26 +145,20 @@ class TtEulerDiscreteScheduler(LightweightModule):
                 self.device,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
-        # Subtract the original FP32 sigmas before rounding once to BF16. Subtracting
-        # separately rounded sigmas loses precision in the Euler step size.
-        self.tt_sigma_deltas = [
-            ttnn.from_torch(val, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for val in array[1:] - array[:-1]
-        ]
-        if not hasattr(self, "tt_sigma_delta"):
-            sigma_delta = self.tt_sigma_deltas[0]
+        if not hasattr(self, "tt_sigma_next_step"):
+            sigma_next_step = self.tt_sigmas[1]
 
-            # Keep this address stable when rebuilding the schedule for trace replay.
-            self.tt_sigma_delta = ttnn.allocate_tensor_on_device(
-                sigma_delta.shape,
-                sigma_delta.dtype,
-                sigma_delta.layout,
+            self.tt_sigma_next_step = ttnn.allocate_tensor_on_device(
+                sigma_next_step.shape,
+                sigma_next_step.dtype,
+                sigma_next_step.layout,
                 self.device,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
     def update_device_sigmas(self):
         ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index], self.tt_sigma_step)
-        ttnn.copy_host_to_device_tensor(self.tt_sigma_deltas[self.step_index], self.tt_sigma_delta)
+        ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index + 1], self.tt_sigma_next_step)
 
     def create_ttnn_timesteps(self, timesteps):
         self.torch_timesteps = timesteps
@@ -391,7 +385,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
         model_output = ttnn.mul_(model_output, self.tt_sigma_step)
         model_output = ttnn.mul_(model_output, rec)
 
-        dt = self.tt_sigma_delta
+        dt = self.tt_sigma_next_step - self.tt_sigma_step
         model_output = ttnn.mul_(model_output, dt)
 
         prev_sample = ttnn.add_(sample, model_output)
