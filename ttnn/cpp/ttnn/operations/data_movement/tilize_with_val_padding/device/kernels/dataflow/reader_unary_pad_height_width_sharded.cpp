@@ -10,10 +10,10 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_input_rows = get_arg(args::num_input_rows);
     const uint32_t input_width_bytes = get_arg(args::input_width_bytes);
     const uint32_t input_block_size = get_arg(args::input_block_size);
     const uint32_t num_padded_tiles_per_batch = get_arg(args::num_padded_tiles_per_batch);
@@ -22,20 +22,18 @@ void kernel_main() {
     const uint32_t packed_pad_value = get_arg(args::packed_pad_value);
 
     Noc noc;
-    // dfb_in0 is the input shard itself (a DFB on borrowed memory) — read-only here.
+    // src_shard is a LocalTensorAccessor over this core's borrowed input shard (L1); read-only here.
     // dfb_in1 is the row-major staging DFB the compute kernel tilizes from.
     // pad holds one row of the pad value, reused for every padded row. It is reader-private with no
     // second party, so the former self-loop DFB (bound PRODUCER+CONSUMER) synchronized nothing;
-    // converted to a Scratchpad. (dfb_in0 stays a DFB: it is borrowed from the input shard, which a
-    // Scratchpad cannot represent.)
-    DataflowBuffer dfb_in0(dfb::in0);
+    // converted to a Scratchpad.
+    LocalTensorAccessor<uint32_t> src_shard(tensor::in0);
     DataflowBuffer dfb_in1(dfb::in1);
     Scratchpad<volatile uint32_t> pad(scratch::pad);
 
-    dfb_in0.reserve_back(num_input_rows);
     dfb_in1.reserve_back(num_padded_tiles_per_batch);
 
-    uint32_t read_addr = dfb_in0.get_read_ptr();
+    uint32_t read_addr = src_shard.get_bank_base_address();
     uint32_t write_addr = dfb_in1.get_write_ptr();
     uint32_t pad_addr = pad.get_base_address();
 
