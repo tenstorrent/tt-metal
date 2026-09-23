@@ -151,7 +151,6 @@ static std::vector<Tensor> run_recipe_segments(
         TT_FATAL(tensor->storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
         TT_FATAL(tensor->device() == q.device(), "SDPA recipe inputs must belong to the same device");
         TT_FATAL(tensor->device()->arch() == tt::ARCH::BLACKHOLE, "SDPA recipes currently support Blackhole only");
-        TT_FATAL(tensor->device()->num_devices() == 1, "SDPA recipes currently require a single-device mesh");
         TT_FATAL(tensor->layout() == Layout::TILE, "SDPA recipes require tiled inputs");
         TT_FATAL(tensor->memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipes require interleaved DRAM inputs");
         TT_FATAL(tensor->logical_shape().rank() == 4, "SDPA recipes require rank-four inputs");
@@ -172,11 +171,12 @@ static std::vector<Tensor> run_recipe_segments(
         const auto& qshape = sq.logical_shape();
         const auto& kshape = sk.logical_shape();
         TT_FATAL(
-            qshape[0] == 1 && qshape[1] > 0 && qshape[1] == qs[1] && qshape[3] == 128,
-            "SDPA recipe segments require Q [1,H,Q,128] with matching heads");
+            qshape[0] > 0 && qshape[0] == qs[0] && qshape[1] > 0 && qshape[1] == qs[1] && qshape[3] == 128,
+            "SDPA recipe segments require Q [B,H,Q,128] with matching positive batch/head counts");
         TT_FATAL(
-            kshape == sv.logical_shape() && kshape[0] == 1 && kshape[1] == qs[1] && kshape[3] == 128,
-            "SDPA recipes require matching K/V [1,H,K,128]; GQA is not supported yet");
+            kshape == sv.logical_shape() && kshape[0] == qs[0] && kshape[1] > 0 && kshape[1] == k.logical_shape()[1] &&
+                qs[1] % kshape[1] == 0 && kshape[3] == 128,
+            "SDPA recipes require matching K/V [B,Hkv,K,128] and Q heads divisible by KV heads");
         TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
         TT_FATAL(
             sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == kv_type,
@@ -200,12 +200,16 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const uint32_t jobs_per_head = (q_length + 255) / 256;
     const uint32_t k_chunks = (k_length + 511) / 512;
+    TT_FATAL(
+        qs[1] <= grid_size.x * grid_size.y && qs[0] <= grid_size.x * grid_size.y / qs[1],
+        "SDPA recipes require at least one compute core per batch/query head");
+    const uint32_t batch_heads = qs[0] * qs[1];
     const uint32_t chain = std::min<uint32_t>(
         {jobs_per_head,
-         static_cast<uint32_t>(grid_size.x * grid_size.y / qs[1]),
+         static_cast<uint32_t>(grid_size.x * grid_size.y / batch_heads),
          program_config ? program_config->max_cores_per_head_batch : 16u});
     TT_FATAL(chain > 0, "SDPA recipes require at least one compute core per head");
-    const uint32_t cores = chain * qs[1];
+    const uint32_t cores = chain * batch_heads;
     std::vector<CoreCoord> coordinates;
     std::set<CoreRange> ranges;
     for (uint32_t i = 0; i < cores; ++i) {
@@ -237,6 +241,9 @@ static std::vector<Tensor> run_recipe_segments(
         .config = ReaderConfigDescriptor{}};
     if (segments.size() == 2) {
         reader.defines.emplace_back("SDPA_JOINT", "1");
+    }
+    if (qs[1] != k.logical_shape()[1]) {
+        reader.defines.emplace_back("SDPA_RECIPE_Q_PER_KV_HEAD", std::to_string(qs[1] / k.logical_shape()[1]));
     }
     for (const auto& tensor : io) {
         TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);

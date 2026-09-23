@@ -152,7 +152,12 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(4), 0x3f803f80);
 
-    const uint32_t kvbase = head * k_chunks * kv_tiles;
+#ifdef SDPA_RECIPE_Q_PER_KV_HEAD
+    const uint32_t kv_head = head / SDPA_RECIPE_Q_PER_KV_HEAD;
+#else
+    const uint32_t kv_head = head;
+#endif
+    const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
     for (uint32_t qi = 0; qi < jobs; ++qi) {
         const uint32_t qbase = (first_job + qi) * q_tiles * 4;
         qcb.reserve_back(q_tiles * 4);
