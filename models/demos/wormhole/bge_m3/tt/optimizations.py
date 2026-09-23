@@ -36,6 +36,7 @@ class MLPOptimizations:
     wo_prg_config: object | None = None
     wi_minimal_config: object | None = None
     wo_minimal_config: object | None = None
+    wo_dtype: ttnn.DataType | None = None
 
 
 @dataclass
@@ -58,6 +59,8 @@ class AttentionOptimizations:
     qkv_minimal_config: object | None = None
     output_minimal_config: object | None = None
     qkv_nomask_memcfg: ttnn.MemoryConfig | None = None
+    output_proj_memcfg: ttnn.MemoryConfig | None = None
+    output_proj_dtype: ttnn.DataType | None = None
 
 
 @dataclass
@@ -172,17 +175,19 @@ def _build_mlp_optimizations(
         mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
     )
 
+    ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     return MLPOptimizations(
         wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
         wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
         wi_memcfg=_mlp_wi_output_memory_config(max_seq_len, max_batch, mesh_device),
-        wo_memcfg=_mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
+        wo_memcfg=ln_input_mem or _mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
         activation_memcfg=act_mem,
         core_grid=core_grid,
         wi_prg_config=wi_prg,
         wo_prg_config=None if wo_minimal is not None else wo_prg_tuned,
         wi_minimal_config=wi_minimal,
         wo_minimal_config=wo_minimal,
+        wo_dtype=ttnn.bfloat16 if ln_input_mem is not None else None,
     )
 
 
@@ -194,6 +199,7 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
     tuned_b8 = max_seq_len == 512 and max_batch == 8
     tuned_b16 = max_seq_len == 512 and max_batch == 16
     qkv_minimal = _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
+    ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     out_minimal = _attention_output_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
     return AttentionOptimizations(
         qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
@@ -206,6 +212,8 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
         create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
         score_memcfg=act_mem,
         output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
+        output_proj_memcfg=ln_input_mem,
+        output_proj_dtype=ttnn.bfloat16 if ln_input_mem is not None else None,
         core_grid=core_grid,
         qkv_prg_config=(
             None
@@ -299,6 +307,17 @@ def _qkv_nomask_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return None
+
+
+def _ln_input_sharded_memory_config(max_seq_len, max_batch_size, mesh_device):
+    # B1 on Blackhole: the attention output and MLP wo projections write bf16 in the
+    # LayerNorm block-shard layout (8x8, 64x128), so the LayerNorm input needs no
+    # interleaved-to-sharded op: 24 x 2 fewer ops, 3.801 ms to 3.715 ms. The sharded
+    # LayerNorm needs bf16 input; a bf8 input drops PCC.
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len != 512 or max_batch != 1 or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    return _layernorm_sharded_config(max_seq_len, max_batch)[1]
 
 
 def _layernorm_output_memory_config(max_seq_len, max_batch_size, mesh_device):
@@ -570,9 +589,15 @@ def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size
     hidden_tiles = hidden_size // 32
     m_tiles = 512 // 32
     intermediate_tiles = intermediate_size // 32
-    # Only use 12 wide when the device actually exposes >=12 columns (Galaxy
-    # Blackhole). On an 11-wide device fall back to the original 11x10 / sub 1x2.
-    if dev_gx >= 12:
+    # 13 wide when the device exposes 13 columns: in-model sweep 13x10 ibw16 2x2
+    # (per_core_N=10), B1 3.832 ms to 3.802 ms against 12x10. Narrower devices fall
+    # back to 12x10 / sub 2x1 or 11x10 / sub 1x2.
+    in0_block_w = 4
+    if dev_gx >= 13:
+        grid_x, grid_y = 13, 10
+        out_subblock_h, out_subblock_w = 2, 2
+        in0_block_w = 16
+    elif dev_gx >= 12:
         grid_x, grid_y = 12, 10
         out_subblock_h, out_subblock_w = 2, 1
     else:
@@ -580,7 +605,7 @@ def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size
         out_subblock_h, out_subblock_w = 1, 2
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=min(4, hidden_tiles),
+        in0_block_w=min(in0_block_w, hidden_tiles),
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         per_core_M=(m_tiles + grid_y - 1) // grid_y,
@@ -789,31 +814,40 @@ def _tuned_mm2d_program_config(
 
 
 def _tuned_attention_output_program_config(mesh_device, *, hidden_size):
+    # B1: in-model sweep 8x8 ibw16 2x4, 3.852 ms to 3.795 ms against 11x10 ibw8 2x1.
+    # The 8x8 output blocks (2x4 tiles) match the LayerNorm shards.
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
     return _tuned_mm2d_program_config(
         mesh_device,
-        grid_x=11,
-        grid_y=10,
+        grid_x=8,
+        grid_y=8,
         M=512,
         K=hidden_size,
         N=hidden_size,
-        in0_block_w=8,
+        in0_block_w=16,
         out_subblock_h=2,
-        out_subblock_w=1,
+        out_subblock_w=4,
         fused_activation=None,
     )
 
 
 def _tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size):
+    # B1: 8x8 ibw16 2x4, so the output blocks (2x4 tiles) match the LayerNorm shards.
+    # 11x10 ibw32 2x3 was 0.03 ms faster in-model with an interleaved output, but the
+    # sharded output removes a reshard op per layer.
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
     return _tuned_mm2d_program_config(
         mesh_device,
-        grid_x=11,
-        grid_y=10,
+        grid_x=8,
+        grid_y=8,
         M=512,
         K=intermediate_size,
         N=hidden_size,
-        in0_block_w=8,
+        in0_block_w=16,
         out_subblock_h=2,
-        out_subblock_w=1,
+        out_subblock_w=4,
         fused_activation=None,
     )
 

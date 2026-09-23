@@ -51,6 +51,9 @@ class BgeM3AttentionConfig:
     qkv_dtype: ttnn.DataType | None = None
     score_dtype: ttnn.DataType | None = None
     output_dtype: ttnn.DataType | None = None
+    # Output projection only (the concat keeps output_memcfg); None uses the defaults.
+    output_proj_memcfg: ttnn.MemoryConfig | None = None
+    output_proj_dtype: ttnn.DataType | None = None
     qkv_memcfg: ttnn.MemoryConfig | None = None
     # QKV output placement when SDPA takes no mask; None uses qkv_memcfg.
     qkv_nomask_memcfg: ttnn.MemoryConfig | None = None
@@ -265,8 +268,8 @@ class BgeM3Attention(LightweightModule):
         output = ttnn.linear(
             context,
             self.wo_weight,
-            memory_config=self.config.output_memcfg,
-            dtype=self.config.output_dtype,
+            memory_config=self.config.output_proj_memcfg or self.config.output_memcfg,
+            dtype=self.config.output_proj_dtype or self.config.output_dtype,
             bias=self.wo_bias,
             program_config=self.config.output_prg_config,
             compute_kernel_config=self.config.output_compute_kernel_cfg,
