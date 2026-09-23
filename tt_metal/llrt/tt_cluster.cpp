@@ -798,7 +798,7 @@ void Cluster::write_dram_vec(
     ChipId device_id,
     int dram_view,
     uint64_t addr,
-    tt::umd::IoOrdering ordering) const {
+    std::optional<tt::umd::IoOrdering> ordering) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -842,7 +842,11 @@ bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) cons
 }
 
 void Cluster::write_core(
-    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, tt::umd::IoOrdering ordering) const {
+    const void* mem_ptr,
+    uint32_t sz_in_bytes,
+    tt_cxy_pair core,
+    uint64_t addr,
+    std::optional<tt::umd::IoOrdering> ordering) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
@@ -865,7 +869,11 @@ void Cluster::write_core(
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
-        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, ordering);
+        // DRAM cores were never Strict before the static TLBs went away: Posted inside the
+        // window, Relaxed on the fallback above it. Everything else was Strict.
+        const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
+            core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
 
     if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
