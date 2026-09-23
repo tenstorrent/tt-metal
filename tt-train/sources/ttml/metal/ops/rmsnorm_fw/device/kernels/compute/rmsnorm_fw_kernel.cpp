@@ -355,8 +355,8 @@ void kernel_main() {
 
             copy_init(cb_rms_after_reduction_intermediate);
             copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
-            recip_tile_init();
-            recip_tile(temporary_register);
+            recip_tile_init<false>();
+            recip_tile<false>(temporary_register);
 
             tile_regs_wait();
             tile_regs_commit();

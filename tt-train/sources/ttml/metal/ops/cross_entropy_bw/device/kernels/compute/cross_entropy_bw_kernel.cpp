@@ -356,8 +356,8 @@ void reduce_sum_exp_x() {
     matmul_tiles(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
 
-    recip_tile_init();
-    recip_tile(reduction_register);  // DST[0] = 1/sum(exp(x))
+    recip_tile_init<false>();
+    recip_tile<false>(reduction_register);  // DST[0] = 1/sum(exp(x))
 
     tile_regs_commit();
 
