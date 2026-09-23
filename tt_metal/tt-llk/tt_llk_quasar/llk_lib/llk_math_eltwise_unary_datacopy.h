@@ -30,7 +30,7 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(const std::uint32_t num
     // width MUST match ELTWISE_MATH_ROWS (the dest addr_mod stride + inner-loop divisor), or each MOV
     // writes fewer rows than the stride advances and leaves periodic gaps.
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(ELTWISE_MATH_ROWS);
-    const std::uint32_t mov_rows_instn = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+    const std::uint32_t mov_rows_instn = FPU_MOV_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
 
