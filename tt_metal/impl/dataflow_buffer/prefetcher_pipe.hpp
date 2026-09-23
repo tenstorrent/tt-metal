@@ -192,6 +192,9 @@ public:
     uint32_t tensor_prefetcher_factory_num_pipes() const { return tensor_prefetcher_factory_num_pipes_; }
     uint32_t recv_index_base() const { return recv_index_base_; }
     DeviceAddr sender_state_drisc_l1_base() const;
+    // The DRISC L1 range that sender_state_drisc_l1_base() lies in. Shared with the space, which keeps
+    // it for the sender core after the pipe is gone. Null for a worker-sender pipe.
+    const std::shared_ptr<DriscL1Allocation>& sender_state_drisc_l1_allocation() const { return drisc_config_page_; }
 
 private:
     friend class PrefetcherPipeSpaceImpl;

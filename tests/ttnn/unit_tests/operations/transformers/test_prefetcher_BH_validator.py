@@ -818,6 +818,50 @@ def test_stop_drains_every_target_not_just_the_last(device):
     )
 
 
+def test_stop_skips_targets_freed_mid_session(device):
+    """Stop does not drain a target whose memory was freed while the prefetcher was running.
+
+    A pipe set is sent a tensor nobody consumes, so its credits stay outstanding, and then it and its
+    space are destroyed before stop. Its DRISC config pages go back to the arena, where anything may
+    reuse them, so stop must not read them as counters; draining them would spin forever on acks
+    that never come. A GCB queued afterwards on the same senders is still drained normally.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    pipe_recv_per_bank = 2
+    K = 448
+    N = num_dram_banks * pipe_recv_per_bank * 2 * ttnn.TILE_SIZE
+    tt_weight_pipe, pipes, _bank_to_receivers, _page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
+        device,
+        K,
+        N,
+        ttnn.bfloat8_b,
+        pipe_recv_per_bank,
+        num_entries=num_dram_banks * pipe_recv_per_bank,
+        return_space=True,
+    )
+    tt_weight_gcb, _addrs, gcb, _, _, gcb_ring_size = _setup_weight_and_gcb_dram_sender(
+        device,
+        K,
+        num_dram_banks * 2 * ttnn.TILE_SIZE,
+        ttnn.bfloat16,
+        recv_per_bank=1,
+        num_layers=1,
+        row_offset=_receiver_rows(num_dram_banks, pipe_recv_per_bank),
+    )
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_pipe, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_gcb, gcb_ring_size)], global_cb=gcb)
+        # The GCB's data arrives only after the pipe request is fully sent, so this also waits out
+        # the pipe's sends.
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_gcb, num_layers=1, print_stride=gcb_ring_size, global_cb=gcb
+        )
+        ttnn.synchronize_device(device)
+        del pipes, pipe_space
+        gc.collect()
+
+
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 @pytest.mark.parametrize("num_entries", [5, 7], ids=["ring_2.5_blocks", "ring_3.5_blocks"])
 def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, num_entries):

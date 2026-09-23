@@ -77,4 +77,8 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
 
 DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) { return pipe.impl().sender_state_drisc_l1_base(); }
 
+std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const PrefetcherPipe& pipe) {
+    return pipe.impl().sender_state_drisc_l1_allocation();
+}
+
 }  // namespace tt::tt_metal::experimental

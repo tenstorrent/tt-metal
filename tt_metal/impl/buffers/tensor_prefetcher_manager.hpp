@@ -31,6 +31,7 @@
 
 namespace tt::tt_metal {
 
+class DriscL1Allocation;
 class IDevice;
 class MeshTensor;
 class Program;
@@ -61,9 +62,9 @@ class MeshDevice;
 //     non-blocking try_write so one slow socket can't starve the others. The
 //     caller is responsible for keeping tensors and the GCB alive until stop()
 //     (see the public tensor_prefetcher.hpp note).
-//   * stop() pushes a zero-tensor request targeting the full mesh, joins the
-//     worker thread (the kernel exits on `num_entries == 0`), WaitProgramDone
-//     on each device, releases per-cycle resources.
+//   * stop() pushes DRAIN requests naming every target still in memory, then an
+//     all-zero STOP page to the full mesh, joins the worker thread, WaitProgramDone
+//     on each device, and releases per-cycle resources.
 //   * Destructor calls stop().
 class TensorPrefetcherManager {
 public:
@@ -178,6 +179,9 @@ private:
         // order. A GCB plants every sender's block at one uniform offset and so repeats it; the
         // pipes hold one address each.
         std::vector<uint32_t> state_addr_per_sender;
+        // The DRISC L1 range each of those addresses lies in, in mapping order. Weak, like the rest of
+        // this struct: it only tells stop whether that range still belongs to the target.
+        std::vector<std::weak_ptr<DriscL1Allocation>> state_alloc_per_sender;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
         // slot of that sender's page.
@@ -189,6 +193,11 @@ private:
     };
 
     void worker_loop();
+    // Add `word` to sender slot `sender`'s drain targets, dropping the ones whose memory is gone.
+    void record_drain_target(uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state);
+    // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
+    // of STOP.
+    std::vector<Request> build_drain_requests();
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
@@ -236,13 +245,19 @@ private:
     // apart, every slot but the first would be misaligned and its write would go nowhere,
     // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
     uint32_t cq_signal_slot_stride_ = 0;
-    // Base (local DRISC L1) of each sender kernel's target table, kMaxTargetsPerSender words; uniform
-    // across all sender cores. Carved right after the signal slots.
-    uint32_t target_table_l1_addr_ = 0;
-    // targets_per_sender_[s] holds the distinct target state addresses sender slot s has been queued
-    // since start, mirroring what that sender's kernel records in its target table, so a queue call
-    // that would overflow the table is rejected on the host.
-    std::vector<std::vector<uint32_t>> targets_per_sender_;
+    // A target stop must drain on one sender: its DRAIN word (state address | kDrainTargetPipeBit for a
+    // pipe) and the DRISC L1 range that address lies in. The range expiring means the target is gone
+    // and its memory may already hold something else, so stop skips it rather than read that memory
+    // as counters.
+    struct DrainTarget {
+        uint32_t word = 0;
+        std::weak_ptr<DriscL1Allocation> state;
+    };
+    // drain_targets_per_sender_[s]: every target sender slot s has been queued for since start.
+    std::vector<std::vector<DrainTarget>> drain_targets_per_sender_;
+    // The ranges stop is draining, held until the kernels have exited so none can be reused while a
+    // DRAIN reads it.
+    std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.
