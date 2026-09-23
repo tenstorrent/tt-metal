@@ -42,6 +42,9 @@ bool can_use_sharded_optimized_factory(
 
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    // TilizeWithValPaddingMultiCoreBlockInterleavedFactory is a Gen1 (ProgramDescriptor / DataMovementKernel)
+    // factory not ported to Quasar. Route its two selection sites to ported factories on Quasar (perf-only cost).
+    const bool is_quasar = input_tensor.device()->arch() == tt::ARCH::QUASAR;
     if (input_tensor.memory_config().is_sharded()) {
         if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
@@ -49,6 +52,11 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
+        // The row is too wide for Default's full-row CBs to fit L1; SingleCore is the ported low-perf
+        // fallback (it bounds num_tiles_per_block to fit L1), so use it on Quasar instead of Block.
+        if (is_quasar) {
+            return TilizeWithValPaddingSingleCoreFactory{};
+        }
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
@@ -74,7 +82,9 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
+        // enough_space_height is true here, so Default's CBs fit L1; on Quasar fall through to Default
+        // rather than the unported Block factory (perf heuristic, not a correctness gate).
+        if (ncores < ncores_wh.ncores && !is_quasar) {
             return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
         }
     }

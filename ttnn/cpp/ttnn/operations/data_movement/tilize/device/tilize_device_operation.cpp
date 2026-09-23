@@ -323,7 +323,19 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         }
         return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
     }
+    // TilizeMultiCoreBlockProgramFactory is the only tilize factory not ported to Quasar (it builds a
+    // Gen1 ProgramDescriptor with DataMovementKernels, which Quasar rejects). On Quasar route both of its
+    // selection sites to a ported factory instead — accepting lower perf. This is the single point where
+    // Block would be chosen for a Quasar input (the UINT8 site above is Blackhole-only).
+    const bool is_quasar = input_tensor_a.device()->arch() == tt::ARCH::QUASAR;
     if (!operation_attributes.enough_space_height) {
+        // The row is too wide for the Default factory's full-row CBs to fit L1 (that is what
+        // enough_space_height=false means), so Default is not a safe substitute here. SingleCore caps
+        // num_tiles_per_block to fit L1 by construction (tilize_single_core_program_factory.cpp), so it is
+        // the always-correct low-perf fallback for the wide-row case Block otherwise handles.
+        if (is_quasar) {
+            return ttnn::prim::TilizeSingleCoreProgramFactory{};
+        }
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
@@ -354,7 +366,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         uint32_t num_blocks_block =
             (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
+        // enough_space_height is true here, so the Default factory's CBs fit L1; on Quasar fall through to
+        // it rather than the unported Block factory (this is a perf heuristic, not a correctness gate).
+        if (ncores < ncores_wh.ncores && !is_quasar) {
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }

@@ -99,10 +99,22 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
-        compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
-    }
+    // Quasar (Gen2) rejects a ComputeGen1Config on a compute KernelSpec; emit the Gen2 equivalent
+    // there (same enable_32_bit_dest + per-DFB UnpackToDest). WH/BH keep the byte-identical Gen1 config.
+    ComputeHardwareConfig compute_cfg = [&]() -> ComputeHardwareConfig {
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+            if (fp32_dest_acc_en) {
+                cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+            }
+            return ComputeHardwareConfig{std::move(cfg)};
+        }
+        ComputeGen1Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        if (fp32_dest_acc_en) {
+            cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+        }
+        return ComputeHardwareConfig{std::move(cfg)};
+    }();
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.insert({"DST_ACCUM_MODE", "1"});

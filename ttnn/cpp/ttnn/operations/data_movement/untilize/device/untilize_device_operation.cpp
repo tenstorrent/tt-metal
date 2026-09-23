@@ -327,7 +327,10 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
                                  output_tensor.nd_shard_spec().has_value() &&
                                  input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
-        if (identical_shard_specs) {
+        // The ND-identical factory is a Gen1 (ProgramDescriptor / DataMovementKernel) zero-copy path not
+        // ported to Quasar; on Quasar fall through to the general ND-shard-input factory (ported, non
+        // zero-copy) selected below.
+        if (identical_shard_specs && input_tensor_a.device()->arch() != tt::ARCH::QUASAR) {
             return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }

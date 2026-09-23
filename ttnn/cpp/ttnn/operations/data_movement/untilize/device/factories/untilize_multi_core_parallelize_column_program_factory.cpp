@@ -134,10 +134,22 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     // One KernelSpec per legacy compute KernelDescriptor (full + cliff), preserving the per-group
     // block-count multiplicity across disjoint WorkUnitSpecs.
     auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
-            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
-        }
+        // Quasar (Gen2) rejects a ComputeGen1Config on a compute KernelSpec; emit the Gen2 equivalent
+        // there (same enable_32_bit_dest + per-DFB UnpackToDest). WH/BH keep the byte-identical Gen1 config.
+        ComputeHardwareConfig compute_cfg = [&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                ComputeGen2Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+                if (fp32_dest_acc_en) {
+                    cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+                }
+                return ComputeHardwareConfig{std::move(cfg)};
+            }
+            ComputeGen1Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+            if (fp32_dest_acc_en) {
+                cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+            }
+            return ComputeHardwareConfig{std::move(cfg)};
+        }();
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{COMPUTE_SRC},
