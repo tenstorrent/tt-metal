@@ -324,6 +324,10 @@ def add_shared_expert_weights(
 W0_W1_BLOCK_TILES_W = 4  # matches moe_ring_common.h:W0_W1_BLOCK_TILES_W
 W2_TILES_PER_A2A_ITER_W = 4  # matches moe_ring_common.h:W2_TILES_PER_A2A_ITER_W
 BLOCK_TILES_H = 7
+# Half block-column (the odd gate/up column of a ring core with an odd column count): 2 tiles wide
+# (W0 c, W1 c) x 14 K rows per 28-tile block. Matches moe_ring_common.h:W0_W1_HALF_BLOCK_TILES_{W,H}.
+W0_W1_HALF_BLOCK_TILES_W = 2
+W0_W1_HALF_BLOCK_TILES_H = 14
 
 # Historical model-specific shard constants — superseded by the generalized
 # _shard_tiles() / _w2_shard_tiles() formulas below.  Kept as commented-out
@@ -382,6 +386,45 @@ def _even_stride_at_least_a2a_width(tiles: int) -> int:
     return max(even_tiles, W2_TILES_PER_A2A_ITER_W)
 
 
+def _w0_w1_compact_layout(k_dram_tiles: int, Nt: int, num_cores: int, num_banks: int | None = None) -> dict:
+    """Geometry of the compact W0/W1 layout (mirrors ``MoeRingConfig`` in moe_ring_common.h).
+
+    ``k_dram_tiles`` is the stored K height in tiles (hidden tiles, plus one with bias). Ring core c stores only
+    its ``_shard_tiles(Nt, c, num_cores)`` gate/up columns: ``cols // 2`` block-columns of ``blocks_per_col``
+    blocks (4 tiles wide x 7 K rows: W0 c, W1 c, W0 c+1, W1 c+1) and, for an odd count, one half block-column of
+    ``blocks_per_half_col`` blocks (2 tiles wide x 14 K rows, two consecutive K rows per stored 4-tile row).
+    Every block is 28 tiles = 7 stored tile rows of 4 tiles. Per (layer, expert) the cores' slices are laid
+    back to back (``core_block_offsets``) and that stream is cut into ``num_banks`` equal pieces of
+    ``bank_blocks_per_expert`` blocks (zero-padded at the end); piece b is stored in bank b.
+    """
+    num_banks = num_cores if num_banks is None else num_banks
+    blocks_per_col = math.ceil(k_dram_tiles / BLOCK_TILES_H)
+    blocks_per_half_col = math.ceil(k_dram_tiles / W0_W1_HALF_BLOCK_TILES_H)
+    cols = [_shard_tiles(Nt, c, num_cores) for c in range(num_cores)]
+    core_blocks = [(n // 2) * blocks_per_col + (n % 2) * blocks_per_half_col for n in cols]
+    core_block_offsets = [sum(core_blocks[:c]) for c in range(num_cores)]
+    expert_blocks = sum(core_blocks)
+    return {
+        "blocks_per_col": blocks_per_col,
+        "blocks_per_half_col": blocks_per_half_col,
+        "cols": cols,
+        "core_blocks": core_blocks,
+        "core_block_offsets": core_block_offsets,
+        "expert_blocks": expert_blocks,
+        "num_banks": num_banks,
+        "bank_blocks_per_expert": math.ceil(expert_blocks / num_banks),
+        # Today's per-core stride tensor shape is kept where the compact layout is byte-identical to it:
+        # every core owns the same even column count and the ring is one core per bank.
+        "uniform": len(set(cols)) == 1 and cols[0] % 2 == 0 and num_banks == num_cores,
+    }
+
+
+def w0_w1_bank_rows_per_expert(k_dram_tiles: int, Nt: int, num_cores: int, num_banks: int | None = None) -> int:
+    """Rows (of the 4-tile-wide packed W0/W1 tensor) one DRAM bank holds per (layer, expert)."""
+    layout = _w0_w1_compact_layout(k_dram_tiles, Nt, num_cores, num_banks)
+    return layout["bank_blocks_per_expert"] * BLOCK_TILES_H * ttnn.TILE_SIZE
+
+
 def effective_matmul_ring_size(mesh_device, bh_ring_size: int = 8) -> int:
     """Matmul ring N used by ``moe_compute`` on this device.
 
@@ -429,6 +472,7 @@ def prepare_w0_w1_tensor_for_moe_compute(
     K: int,
     N: int,
     shard_map: list[int],
+    num_banks: int | None = None,
 ):
     """
     Prepare the w0_w1 tensor input for moe_compute by interleaving chunks of w0 and w1 width-wise.
@@ -441,15 +485,20 @@ def prepare_w0_w1_tensor_for_moe_compute(
         K: Input dimension
         N: Output dimension
         shard_map: List of logical shard sizes (one per ring core).
+        num_banks: DRAM banks the tensor is HEIGHT_SHARDED over (default: one per ring core, which is what
+            the op requires).
 
     Returns:
-        torch_w0_w1_paired: tensor of shape (num_cores, L, E, groups_per_core, ..., 4*ttnn.TILE_SIZE).
+        torch_w0_w1_paired: tensor of shape (num_banks, L, E, bank_blocks_per_expert, 7*TILE_SIZE, 4*TILE_SIZE);
+        where every core owns the same even column count (one core per bank) this is byte-identical to, and
+        keeps the shape of, the per-core stride layout (num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE).
 
-    Note on layout: The byte volume of the returned tensor equals num_cores * L * E *
-    groups_per_core * K_padded * 4*TILE. When the caller uses HEIGHT_SHARDED with num_banks
-    physical shards (where num_banks may differ from num_cores), ttnn.from_torch treats the
-    torch buffer as a flat byte stream and applies the shard config. Each ring core's
-    contiguous slice of the flat layout is what the kernel walks via its bank-run loop.
+    Compact layout (see ``_w0_w1_compact_layout``): ring core c stores only its ``shard_map[c]`` columns --
+    full 4-wide block-columns (W0 c, W1 c, W0 c+1, W1 c+1) over K padded to 7-tile blocks, then, for an odd
+    count, the last column as a 2-wide half block-column over K padded to 14-tile blocks with two consecutive
+    K tile rows side by side per stored tile row. Per (layer, expert) the cores' slices are laid back to back
+    and cut into num_banks equal pieces (zero-padded); piece b is the per-(layer, expert) unit of bank b's
+    shard. ttnn.from_torch with HEIGHT_SHARDED over num_banks shards then puts piece b in bank b.
     """
     import torch
 
@@ -460,14 +509,19 @@ def prepare_w0_w1_tensor_for_moe_compute(
         raise ValueError(f"N dimension ({N}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
 
     Nt = N // ttnn.TILE_SIZE
-    # in general, pad K up to a factor of transaction size (32*7)
-    Kp = math.ceil(K // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
     num_cores = len(shard_map)
     if num_cores == 0:
         raise ValueError("shard_map must contain one entry per ring core")
     expected_shard_map = [_shard_tiles(Nt, core_id, num_cores) for core_id in range(num_cores)]
     if shard_map != expected_shard_map:
         raise RuntimeError(f"W0W1 shard map must match the kernel distribution {expected_shard_map}, got: {shard_map}")
+
+    layout = _w0_w1_compact_layout(K // ttnn.TILE_SIZE, Nt, num_cores, num_banks)
+    num_banks = layout["num_banks"]
+    # K padded to whole 7-row blocks (block-columns) and to whole 14-row blocks (the half block-column).
+    Kp_full = layout["blocks_per_col"] * BLOCK_TILES_H * ttnn.TILE_SIZE
+    Kp_half = layout["blocks_per_half_col"] * W0_W1_HALF_BLOCK_TILES_H * ttnn.TILE_SIZE
+    Kp = max(Kp_full, Kp_half)
 
     if K < Kp:
         padding = torch.zeros((L, E, Kp - K, N), dtype=torch_w0.dtype)
@@ -492,31 +546,39 @@ def prepare_w0_w1_tensor_for_moe_compute(
     # Permute to move Nt before K: (L, E, K, Nt, 2*TILE) -> (L, E, Nt, K, 2*TILE)
     torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
 
-    each_shard = []
-    max_shard_size = _even_stride_at_least_a2a_width(max(shard_map))
-
-    # Pick appropriate number of column tiles for each core based on the ring position.
+    # Each core's compact slice as stored 4-tile rows: (L, E, rows, 4*TILE).
+    each_slice = []
     start_tile = 0
     for num_tiles in shard_map:
-        each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
-
-        # Pad to the physical per-core stride expected by the kernel.
-        pad_tiles = max_shard_size - num_tiles
-        if pad_tiles > 0:
-            each_shard.append(torch.zeros(L, E, pad_tiles, Kp, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
+        pairs = num_tiles // 2
+        if pairs > 0:
+            # (L, E, 2*pairs, Kp_full, 2*TILE) -> (L, E, pairs, Kp_full, 4*TILE): row k = W0 c, W1 c, W0 c+1, W1 c+1
+            pair_cols = torch_w0_w1_permuted[:, :, start_tile : start_tile + 2 * pairs, :Kp_full, :]
+            pair_cols = pair_cols.reshape(L, E, pairs, 2, Kp_full, 2 * ttnn.TILE_SIZE).permute(0, 1, 2, 4, 3, 5)
+            each_slice.append(pair_cols.reshape(L, E, pairs * Kp_full, 4 * ttnn.TILE_SIZE))
+        if num_tiles % 2:
+            # (L, E, Kp_half, 2*TILE) -> (L, E, Kp_half / 2, 4*TILE): tile row j = K tile rows 2j and 2j+1 side by side
+            half_col = torch_w0_w1_permuted[:, :, start_tile + 2 * pairs, :Kp_half, :]
+            half_col = half_col.reshape(L, E, Kp_half // (2 * ttnn.TILE_SIZE), 2, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
+            each_slice.append(half_col.permute(0, 1, 2, 4, 3, 5).reshape(L, E, Kp_half // 2, 4 * ttnn.TILE_SIZE))
         start_tile += num_tiles
 
-    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
-    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, -1, Kp, 2 * ttnn.TILE_SIZE)
-    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
+    block_rows = BLOCK_TILES_H * ttnn.TILE_SIZE  # every block (full or half) is 7 stored tile rows
+    bank_blocks = layout["bank_blocks_per_expert"]
+    stream_pad_blocks = num_banks * bank_blocks - layout["expert_blocks"]
+    if stream_pad_blocks > 0:
+        each_slice.append(
+            torch.zeros(L, E, stream_pad_blocks * block_rows, 4 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype)
+        )
+    stream = torch.cat(each_slice, dim=2)
 
-    groups_per_core = max_shard_size // 2
-
-    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, -1, Kp, 2 * ttnn.TILE_SIZE)
-    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
-    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, -1, 4 * ttnn.TILE_SIZE)
-
-    return torch_w0_w1_paired
+    # (L, E, num_banks * bank_blocks * block_rows, 4*TILE) -> (num_banks, L, E, bank_blocks, block_rows, 4*TILE)
+    torch_w0_w1_paired = stream.view(L, E, num_banks, bank_blocks, block_rows, 4 * ttnn.TILE_SIZE)
+    torch_w0_w1_paired = torch_w0_w1_paired.permute(2, 0, 1, 3, 4, 5)
+    if layout["uniform"]:
+        groups_per_core = shard_map[0] // 2
+        return torch_w0_w1_paired.reshape(num_cores, L, E, groups_per_core, Kp_full, 4 * ttnn.TILE_SIZE)
+    return torch_w0_w1_paired.contiguous()
 
 
 def prepare_w2_tensor_for_moe_compute(
@@ -910,15 +972,10 @@ def get_weight_mem_configs(
             f"intermediate_size ({intermediate_size}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})"
         )
 
-    # Calculate K dimension for W0/W1
-    if has_bias:
-        K_tiles = hidden_size // ttnn.TILE_SIZE
-        K_tiles_with_bias = K_tiles + 1  # Add 1 tile for bias
-        K_tiles_padded = math.ceil(K_tiles_with_bias / BLOCK_TILES_H) * BLOCK_TILES_H
-        K_for_shard = K_tiles_padded * ttnn.TILE_SIZE
-    else:
-        # Without bias, just pad to BLOCK_TILES_H
-        K_for_shard = math.ceil(hidden_size // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
+    # Calculate K dimension for W0/W1 (stored K tiles: hidden, plus one bias tile row)
+    k_dram_tiles = hidden_size // ttnn.TILE_SIZE + (1 if has_bias else 0)
+    # K padded to whole 7-row blocks (the height of a 4-wide block-column)
+    K_for_shard = math.ceil(k_dram_tiles / BLOCK_TILES_H) * BLOCK_TILES_H * ttnn.TILE_SIZE
 
     # Calculate N dimension for W2
     Nt = intermediate_size // ttnn.TILE_SIZE
@@ -941,18 +998,13 @@ def get_weight_mem_configs(
     num_cores = len(w0_w1_shard_map)
     num_banks = dram_core_range_set.num_cores()
 
-    # W0/W1 memory config. Use ceiling div to handle odd shard counts (PR #43932 generalization).
-    max_w0_w1 = max(w0_w1_shard_map)
-    w1_w0_groups_per_core = _even_stride_at_least_a2a_width(max_w0_w1) // 2
-    # Total flat rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard
-    # Per-bank shard height = total_rows / num_banks.
-    w0_w1_total_rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard
-    if w0_w1_total_rows % num_banks != 0:
-        raise RuntimeError(
-            f"get_weight_mem_configs: w0_w1 total rows {w0_w1_total_rows} not divisible by num_banks {num_banks} "
-            f"(num_cores={num_cores}, groups_per_core={w1_w0_groups_per_core}, K_for_shard={K_for_shard})"
-        )
-    w0_w1_shard_height = w0_w1_total_rows // num_banks
+    # W0/W1 memory config: the compact layout (prepare_w0_w1_tensor_for_moe_compute) gives every bank the same
+    # rows per (layer, expert), so the shard height is that times layers * experts.
+    if w0_w1_shard_map != [_shard_tiles(Nt, c, num_cores) for c in range(num_cores)]:
+        raise RuntimeError(f"get_weight_mem_configs: w0_w1 shard map {w0_w1_shard_map} does not match the kernel's")
+    w0_w1_shard_height = (
+        num_layers * experts_per_device * w0_w1_bank_rows_per_expert(k_dram_tiles, Nt, num_cores, num_banks)
+    )
     w0_w1_shard_width = W0_W1_BLOCK_TILES_W * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(

@@ -28,6 +28,13 @@ constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
 constexpr uint32_t W0_W1_BLOCK_TILES_H =
     (W0_W1_TXNS_PER_BLOCK * W0_W1_TILES_PER_TXN) / W0_W1_BLOCK_TILES_W;  // = (2 * 14) / 4 = 7
 
+// Half block-column: the odd gate/up column of a ring core that owns an odd column count is stored as
+// (W0 c, W1 c) only. A block is still 2 transactions (28 tiles) but 2 tiles wide and 14 K rows high; each
+// stored 4-tile row holds two consecutive K rows (W0 k, W1 k, W0 k+1, W1 k+1).
+constexpr uint32_t W0_W1_HALF_BLOCK_TILES_W = W0_W1_BLOCK_TILES_W / 2;
+constexpr uint32_t W0_W1_HALF_BLOCK_TILES_H =
+    (W0_W1_TXNS_PER_BLOCK * W0_W1_TILES_PER_TXN) / W0_W1_HALF_BLOCK_TILES_W;  // = (2 * 14) / 2 = 14
+
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W2_TILES_PER_TXN = 14;
 
@@ -83,6 +90,17 @@ constexpr uint32_t even_stride_at_least_a2a_width(uint32_t tiles) {
     return even_tiles < W2_TILES_PER_A2A_ITER_W ? W2_TILES_PER_A2A_ITER_W : even_tiles;
 }
 
+// Entry c = block offset of ring core c's compact W0/W1 slice in one (layer, expert) stream; entry n_cores = the
+// stream's total blocks. Cfg is a MoeRingConfig.
+template <typename Cfg, uint32_t n_cores>
+constexpr ShardLUT<n_cores + 1> make_w0_w1_block_offset_lut() {
+    ShardLUT<n_cores + 1> lut{};
+    for (uint32_t c = 0; c <= n_cores; ++c) {
+        lut.data[c] = Cfg::w0_w1_core_block_offset(c);
+    }
+    return lut;
+}
+
 template <uint32_t Ht, uint32_t Nt, uint32_t n_cores>
 constexpr ShardLUT<n_cores> make_w2_shard_lut() {
     ShardLUT<n_cores> lut{};
@@ -101,6 +119,32 @@ constexpr ShardLUT<n_cores> make_w2_offset_lut() {
         offset += w2_shard_tiles(Ht, c, Nt, n_cores);
     }
     return lut;
+}
+
+// Compact W0/W1 layout helpers (see MoeRingConfig): blocks for `cols` gate/up columns, and the block offset of
+// ring core `core_id`'s slice when all cores' slices of one (layer, expert) are laid back to back.
+constexpr uint32_t w0_w1_blocks_for_cols(uint32_t cols, uint32_t blocks_per_col, uint32_t blocks_per_half_col) {
+    return (cols / 2) * blocks_per_col + (cols % 2) * blocks_per_half_col;
+}
+
+constexpr uint32_t w0_w1_core_block_offset(
+    uint32_t Nt, uint32_t core_id, uint32_t n_cores, uint32_t blocks_per_col, uint32_t blocks_per_half_col) {
+    uint32_t offset = 0;
+    for (uint32_t c = 0; c < core_id; ++c) {
+        offset += w0_w1_blocks_for_cols(shard_tiles(Nt, c, n_cores), blocks_per_col, blocks_per_half_col);
+    }
+    return offset;
+}
+
+// Blocks one DRAM bank holds per (layer, expert) in the compact W0/W1 layout, for a stored K height of
+// k_dram_tiles (hidden tiles, plus one with bias): the cores' slices back to back, cut into num_banks equal
+// pieces of whole blocks. Runtime form of MoeRingConfig::w0_w1_bank_blocks_per_expert (host side).
+constexpr uint32_t w0_w1_bank_blocks_per_expert(
+    uint32_t k_dram_tiles, uint32_t Nt, uint32_t n_cores, uint32_t num_banks) {
+    const uint32_t blocks_per_col = (k_dram_tiles + W0_W1_BLOCK_TILES_H - 1) / W0_W1_BLOCK_TILES_H;
+    const uint32_t blocks_per_half_col = (k_dram_tiles + W0_W1_HALF_BLOCK_TILES_H - 1) / W0_W1_HALF_BLOCK_TILES_H;
+    const uint32_t expert_blocks = w0_w1_core_block_offset(Nt, n_cores, n_cores, blocks_per_col, blocks_per_half_col);
+    return (expert_blocks + num_banks - 1) / num_banks;
 }
 
 template <uint32_t Nt, bool has_bias, uint32_t W2TilesPerExpertW, uint32_t SharedExpertTp = 1>
@@ -125,6 +169,30 @@ struct MoeRingConfig {
     static constexpr uint32_t in2_tiles_per_step = even_stride_at_least_a2a_width((Nt + num_cores - 1) / num_cores);
     static constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
 
+    // Compact W0/W1 layout: ring core c stores only its shard_tiles(Nt, c) logical columns -- floor(cols / 2)
+    // block-columns of w0_w1_blocks_per_col blocks (4 wide x 7 high) and, for an odd count, one half
+    // block-column of w0_w1_blocks_per_half_col blocks (2 wide x 14 high), in that order. The in2 slice it
+    // hands to the a2a ring keeps the physical in2_tiles_per_step width (tail zero-filled by compute).
+    static constexpr uint32_t w0_w1_blocks_per_half_col =
+        (w0_w1_dram_tiles_h + W0_W1_HALF_BLOCK_TILES_H - 1) / W0_W1_HALF_BLOCK_TILES_H;
+    static constexpr uint32_t w0_w1_core_blocks(uint32_t core_id) {
+        return moe_ring::w0_w1_blocks_for_cols(
+            shard_tiles(Nt, core_id, num_cores), w0_w1_blocks_per_col, w0_w1_blocks_per_half_col);
+    }
+    // Block offset of core c's slice inside one (layer, expert) stream (the cores' slices back to back).
+    static constexpr uint32_t w0_w1_core_block_offset(uint32_t core_id) {
+        return moe_ring::w0_w1_core_block_offset(
+            Nt, core_id, num_cores, w0_w1_blocks_per_col, w0_w1_blocks_per_half_col);
+    }
+    static constexpr uint32_t w0_w1_expert_blocks =
+        moe_ring::w0_w1_core_block_offset(Nt, num_cores, num_cores, w0_w1_blocks_per_col, w0_w1_blocks_per_half_col);
+    // The (layer, expert) stream is cut into num_banks equal pieces of whole blocks (zero-padded at the end);
+    // piece b is stored in bank b, so every bank holds the same bytes per expert and core c reads its slice
+    // from its own bank plus, where its slice crosses a piece boundary, the next one.
+    static constexpr uint32_t w0_w1_bank_blocks_per_expert(uint32_t num_banks) {
+        return moe_ring::w0_w1_bank_blocks_per_expert(w0_w1_dram_tiles_h, Nt, num_cores, num_banks);
+    }
+
     // Shared-expert (TpNt) variants: the intermediate dim is TP-split to TpNt = ceil(Nt/tp).
     // After add_shared_expert_weights front-packs each core's real TpNt slice to the front of its
     // full-Nt shard, the kernel reads/produces only the real prefix (in2_tiles_per_step_shared per
@@ -134,6 +202,12 @@ struct MoeRingConfig {
     static constexpr uint32_t in2_tiles_per_step_shared =
         even_stride_at_least_a2a_width((TpNt + num_cores - 1) / num_cores);
     static constexpr uint32_t w0_w1_blocks_per_shared_expert = w0_w1_blocks_per_col * in2_tiles_per_step_shared / 2;
+    // Columns core c produces for an expert: all of its columns for a routed expert; for a shared expert the
+    // front-packed prefix, capped at the columns it stores (an even prefix shorter than cols reads pairs only).
+    static constexpr uint32_t w0_w1_prod_cols(uint32_t core_id, bool is_shared_expert) {
+        const uint32_t cols = shard_tiles(Nt, core_id, num_cores);
+        return (is_shared_expert && in2_tiles_per_step_shared < cols) ? in2_tiles_per_step_shared : cols;
+    }
 
     // W2
     static constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;

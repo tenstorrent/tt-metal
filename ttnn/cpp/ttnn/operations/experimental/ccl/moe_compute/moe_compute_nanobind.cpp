@@ -413,10 +413,12 @@ void bind_moe_compute_utils(nb::module_& mod) {
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
-        Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel
-        reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
-        contract. Output local shape:
-        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+        Pack W0/W1 into the interleaved, compact per-core layout the MoE kernel
+        reads (each ring core stores only its own gate/up columns). See
+        ``ttnn.experimental.moe_compute_utils`` for the layout contract. Output
+        local shape: ``(num_banks, L, E, bank_blocks_per_expert, 7*TILE_SIZE,
+        4*TILE_SIZE)`` in TILE_LAYOUT, or, when every core owns the same even
+        column count, ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
 
         The per-core shard map is derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.

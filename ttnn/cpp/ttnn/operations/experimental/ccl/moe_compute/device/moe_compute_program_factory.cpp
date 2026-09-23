@@ -1178,18 +1178,35 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Ring size equals the live bank count: 12 on WH (no DRAM-bank harvesting), 7/8 on BH.
     // Ring cores and banks are 1:1, so no cross-bank walk is needed.
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each
-    // ring core "owns" in the FLAT layout of the HEIGHT_SHARDED weight tensor. The flat
-    // layout is core-major (ring_core_0's tiles for all (layer, expert), then ring_core_1's,
-    // etc.), so this value equals total_pages / num_cores. The kernel uses it to derive the
-    // global page offset for each (ring_core, layer, expert).
+    // w2_pages_per_ring_core_total: number of tile-pages each ring core "owns" in the FLAT
+    // layout of the HEIGHT_SHARDED W2 tensor. The flat layout is core-major (ring_core_0's
+    // tiles for all (layer, expert), then ring_core_1's, etc.), so this value equals
+    // total_pages / num_cores. The kernel uses it to derive the global page offset for each
+    // (ring_core, layer, expert).
+    //
+    // W0/W1 uses the compact per-expert bank-balanced layout (moe_ring_common.h): every bank
+    // holds w0_w1_bank_blocks_per_expert whole blocks per (layer, expert). dm0 derives the
+    // geometry from the shape compile args; check here that the tensor was packed that way
+    // (a tensor packed with the old per-core stride has a different page count).
     const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
     const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
-    TT_FATAL(
-        w0_w1_total_pages_buf % matmul_num_cores == 0,
-        "moe_compute: w0_w1 total pages ({}) not divisible by num_cores ({})",
-        w0_w1_total_pages_buf,
-        matmul_num_cores);
+    {
+        const uint32_t w0_w1_layers = matmul_w0_w1_tensor.logical_shape()[1];
+        const uint32_t w0_w1_bank_blocks = moe_ring::w0_w1_bank_blocks_per_expert(
+            args.has_bias ? hidden_tiles + 1 : hidden_tiles, intermediate_tiles, matmul_num_cores, num_dram_banks);
+        const uint32_t w0_w1_expected_pages = num_dram_banks * w0_w1_layers * experts_per_device * w0_w1_bank_blocks *
+                                              moe_ring::W0_W1_TXNS_PER_BLOCK * moe_ring::W0_W1_TILES_PER_TXN;
+        TT_FATAL(
+            w0_w1_total_pages_buf == w0_w1_expected_pages,
+            "moe_compute: w0_w1 tensor has {} tile pages, the compact layout for {} layers x {} experts over {} banks "
+            "needs {} ({} blocks per bank per expert); pack it with prepare_w0_w1_tensor_for_moe_compute",
+            w0_w1_total_pages_buf,
+            w0_w1_layers,
+            experts_per_device,
+            num_dram_banks,
+            w0_w1_expected_pages,
+            w0_w1_bank_blocks);
+    }
     TT_FATAL(
         w2_total_pages_buf % matmul_num_cores == 0,
         "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
@@ -1205,7 +1222,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         const auto& mesh_shape = mesh_device->get_view().shape();
         shared_expert_tp_factor = mesh_shape[1 - args.cluster_axis().value()];
     }
-    const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
     const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
@@ -1215,7 +1231,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
         {"num_banks", num_dram_banks},
-        {"w0_w1_pages_per_ring_core_total", w0_w1_pages_per_ring_core_total},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
@@ -1380,11 +1395,6 @@ MoEComputeMeshWorkloadFactory::create_at(
             "moe_compute: w2 total pages ({}) must be divisible by num_banks ({})",
             w2_total_pages,
             num_dram_banks);
-        TT_FATAL(
-            w0_w1_total_pages % matmul_num_cores == 0,
-            "moe_compute: w0_w1 total pages ({}) must be divisible by num_cores ({})",
-            w0_w1_total_pages,
-            matmul_num_cores);
         TT_FATAL(
             w2_total_pages % matmul_num_cores == 0,
             "moe_compute: w2 total pages ({}) must be divisible by num_cores ({})",
