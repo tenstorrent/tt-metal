@@ -6,6 +6,12 @@ import ttnn
 
 
 def describe_program(loop, program):
+    def runtime_words(kernel, core):
+        try:
+            return len(kernel.runtime_args[core.x][core.y])
+        except IndexError:
+            return 0
+
     core_records = {}
     cb_records, kernel_records = [], []
     for cb in program.cbs:
@@ -13,7 +19,7 @@ def describe_program(loop, program):
         pinned = cb.has_buffer()
         record = {"cores": [[c.x, c.y] for c in cores], "bytes_per_core": cb.total_size,
                   "pinned_tensor": pinned, "formats": [
-                      {"index": f.buffer_index, "page_bytes": f.page_size, "dtype": str(f.data_format)}
+                      {"index": f.buffer_index, "page_bytes": f.page_size}
                       for f in cb.format_descriptors]}
         cb_records.append(record)
         for c in cores:
@@ -27,7 +33,7 @@ def describe_program(loop, program):
             "roles": [name for name in ("READER", "WRITER", "COMPUTE", "PROJECTION", "SWIGLU", "QUERY", "KEY", "VALUE") if definitions.get(name) == "1"],
             "cores": [[c.x, c.y] for c in cores],
             "compile_time_words": len(kernel.compile_time_args),
-            "max_runtime_words": max(len(kernel.runtime_args[c.x][c.y]) for c in cores)})
+            "max_runtime_words": max(runtime_words(kernel, c) for c in cores)})
     body = loop.body
     roles = {"o_gate_up_down": body.projection_cores, "swiglu": body.sfpu_cores,
              "collectives": body.communication_cores, "mlp_norm": body.norm_cores,
