@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from typing import Optional
 
 from loguru import logger
 
@@ -11,6 +12,7 @@ from infra.data_collection.github.utils import (
     get_data_pipeline_datetime_from_datetime,
     get_datetime_from_github_datetime,
     get_job_rows_from_github_info,
+    get_jobs_that_started_,
     get_pipeline_row_from_github_info,
 )
 from infra.data_collection.github.workflows import (
@@ -35,12 +37,26 @@ def create_cicd_json_for_data_analysis(
     github_runner_environment,
     github_pipeline_json_filename,
     github_jobs_json_filename,
-):
+) -> Optional[pydantic_models.Pipeline]:
+    """
+    Returns None when the analysed run has nothing to report, so the caller can skip the upload
+    instead of writing a pipeline row with no jobs behind it.
+    """
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
         github_pipeline_json = json.load(github_pipeline_json_file)
 
     with open(github_jobs_json_filename) as github_jobs_json_file:
         github_jobs_json = json.load(github_jobs_json_file)
+
+    # A run that its concurrency group cancelled before any job started has no job logs, no test
+    # reports and no job rows, so every timing and log lookup below would fail on it. That is a
+    # normal shape for a cancelled run, not a data error, so report it and stop here.
+    if not get_jobs_that_started_(github_pipeline_json, github_jobs_json):
+        logger.info(
+            f"Pipeline {github_pipeline_json['id']} (conclusion: {github_pipeline_json['conclusion']}) has no jobs "
+            f"that started after it was submitted, so there is nothing to analyse. Skipping this pipeline."
+        )
+        return None
 
     raw_pipeline = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
 
