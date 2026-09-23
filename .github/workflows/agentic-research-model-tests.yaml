@@ -113,3 +113,4 @@ jobs:
       enabled-skus: ""
       tier: ""
       summary-scope: agentic-research
+      run-tt-check: true
