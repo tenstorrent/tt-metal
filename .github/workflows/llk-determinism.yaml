@@ -1,4 +1,4 @@
-name: "LLK bit-exact"
+name: "LLK determinism"
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       architecture:
-        description: "Architecture to run bit-exactness tests on"
+        description: "Architecture to run determinism tests on"
         required: true
         default: all
         type: choice
@@ -32,23 +32,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  llk-bit-exact-tests:
-    name: "LLK bit-exact tests"
-    uses: ./.github/workflows/llk-bit-exact-impl.yaml
+  llk-determinism-tests:
+    name: "LLK determinism tests"
+    uses: ./.github/workflows/llk-determinism-impl.yaml
     with:
       # Scheduled runs have no dispatch inputs, so fall back to the defaults.
       architecture: ${{ inputs.architecture || 'all' }}
       bit-exact-runs: ${{ inputs.bit-exact-runs || '500' }}
     secrets: inherit
 
-  llk-bit-exact-summary:
-    name: "LLK bit-exact summary"
+  llk-determinism-summary:
+    name: "LLK determinism summary"
     if: always()
     needs:
-      - llk-bit-exact-tests
+      - llk-determinism-tests
     runs-on: ubuntu-slim
     steps:
-      - name: Check bit-exactness test results
+      - name: Check determinism test results
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
@@ -57,7 +57,7 @@ jobs:
     name: "Report status"
     runs-on: ubuntu-slim
     if: always()
-    needs: llk-bit-exact-summary
+    needs: llk-determinism-summary
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,7 +67,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "LLK bit-exact tests"
+          test_name: "LLK determinism tests"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-bit-exact-summary.result }}
+          status: ${{ needs.llk-determinism-summary.result }}

@@ -322,13 +322,13 @@ llk:
     bh_p150: 40
     bh_p150b_civ2_viommu: 110
     bh_p100: 40
-  e2e:
+  nightly:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
-  bit_exact:
+  determinism:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
   ttnop:
