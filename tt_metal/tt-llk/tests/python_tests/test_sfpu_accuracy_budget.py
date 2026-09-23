@@ -500,6 +500,9 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 19, sorted(
+        op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
+    )
     saw_ulp = set()
     for op in enrolled_ops():
         for fmt, contract in _every_variant(op):
@@ -514,6 +517,9 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     assert set(enrolled_ops()) - saw_ulp == ONLY_EVER_TOLERANCE, sorted(
         op.name for op in set(enrolled_ops()) - saw_ulp
     )
+    # And specifically the input-keyed ones: the loop that left `input_format` unset
+    # sent exactly these to TOLERANCE_CONTRACT, so they are the regression's witnesses.
+    assert _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT <= saw_ulp
 
 
 def test_enrolled_ops_is_sorted_and_stable():
@@ -786,6 +792,7 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
     "field, bogus",
     [
         ("approx_mode", True),
+        ("input_format", "Float32"),
         ("output_format", "Float32"),
         ("dest_acc", True),
         ("dest_acc", False),
@@ -794,7 +801,7 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
     ids=lambda v: str(v),
 )
 def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bogus):
-    """The same rule as ``AccuracyContract.metric``, on the four dimensions that had no
+    """The same rule as ``AccuracyContract.metric``, on the five dimensions that had no
     check. All of them are bare ``Enum``s, so ``DestAccumulation.No.value is False`` and
     ``ChipArchitecture.WORMHOLE.value == "wormhole"`` never compare equal to their
     members -- and the failure mode is silence, not an exception: such a key is counted
