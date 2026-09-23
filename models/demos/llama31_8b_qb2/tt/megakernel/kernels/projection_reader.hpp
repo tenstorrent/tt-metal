@@ -37,8 +37,26 @@ void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, 
             weight.get_noc_addr((half * 128 + k) * 8 * N + bank * N),
             destination, KBlock * N * WeightBytes, noc_index, vc);
     } else if constexpr (Workers == 8 && PROJECTION_READER != 3) {
-        noc_async_read<KBlock * N * WeightBytes>(
-            weight.get_noc_addr(k * Workers * N + worker * N), destination, KBlock * N * WeightBytes, noc_index, vc);
+        const uint64_t source = weight.get_noc_addr(k * Workers * N + worker * N);
+#if CUSTOM_DOWN && ALIAS_PROJECTION_CBS
+        if constexpr (KBlock == 7 && WeightBytes == 1088) {
+            // Watcher checks the first CB view containing a transfer's start.
+            // The inactive GU view is shorter than padded down storage. Split
+            // at that logical end so each DMA is valid in both views; the
+            // complete transfer remains inside the physical down allocation.
+            const auto& gu = get_local_cb_interface(1);
+            const uint32_t start = gu.fifo_limit - gu.fifo_size;
+            if (destination >= start && destination < gu.fifo_limit &&
+                destination + KBlock * N * WeightBytes > gu.fifo_limit) {
+                const uint32_t first = gu.fifo_limit - destination;
+                noc_async_read(source, destination, first, noc_index, vc);
+                noc_async_read(source + first, destination + first,
+                    KBlock * N * WeightBytes - first, noc_index, vc);
+                return;
+            }
+        }
+#endif
+        noc_async_read<KBlock * N * WeightBytes>(source, destination, KBlock * N * WeightBytes, noc_index, vc);
     } else {
         static_assert(Workers == 8 || Workers == 16);
         for (uint32_t row = 0; row < KBlock; ++row) {
