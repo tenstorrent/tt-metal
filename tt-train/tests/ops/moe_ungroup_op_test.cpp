@@ -134,6 +134,27 @@ TEST_F(MoeUngroupTest, Basic) {
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
+TEST_F(MoeUngroupTest, OutOfRangePlanRowsAreIgnored) {
+    constexpr uint32_t D = 1U, B = 1U, S = 32U, H = 32U;
+    constexpr uint32_t E_local = 1U, T_cap = 32U;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const auto expert_out = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(T_cap * H, 1.0F), ttnn::Shape({1U, 1U, T_cap, H}), device, ttnn::Layout::TILE);
+
+    std::vector<uint32_t> plan_host(T_cap, kSentinel);
+    plan_host[0] = D * B * S;  // Exact first out-of-range dense row.
+    const auto plan = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        plan_host, ttnn::Shape({1U, 1U, 1U, T_cap}), device, ttnn::Layout::ROW_MAJOR);
+    const auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        {0U, T_cap}, ttnn::Shape({1U, 1U, 1U, E_local + 1U}), device, ttnn::Layout::ROW_MAJOR);
+    const auto grouped_scores = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(T_cap, 1.0F), ttnn::Shape({1U, 1U, 1U, T_cap}), device, ttnn::Layout::ROW_MAJOR);
+
+    const auto output = ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, E_local, D, B, S);
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(output), 0.0F)));
+}
+
 TEST_F(MoeUngroupTest, LargerH) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 256;
     constexpr uint32_t E = 4, K = 2;
