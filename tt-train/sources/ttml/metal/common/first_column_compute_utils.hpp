@@ -40,7 +40,7 @@ inline void calculate_sqrt_first_column() {
             tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = tmp;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg += 2; // Skip right part of face; face stride is 2 vFloat
     }
 }
 
