@@ -14,14 +14,16 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_lut.hpp"
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
 // weight was tile-pair interleaved on the host). Each pair emits one output tile = silu(gate)*up,
 // so the block shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / DRAM
-// round-trip. N_block_tiles must be even (enforced host-side). silu and mul_binary are distinct
-// SFPU programs, so each is re-initialised right before use.
+// round-trip. N_block_tiles must be even (enforced host-side). In the exact build silu and mul_binary are
+// distinct SFPU programs, so each is re-initialised right before use; the opt-in -DSWIGLU_LUT_SILU build does both in
+// one LUT-sigmoid pass (swiglu_lut.hpp).
 //
 // With FUSE_BIAS: bias is interleaved identically (tile 2p = gate bias, 2p+1 = up bias)
 // and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
@@ -35,6 +37,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
+    static_assert(UP_DST == GATE_DST + 1, "swiglu_lut_tile reads the up tile at GATE_DST + 1");
     const uint32_t out_N_block_tiles = N_block_tiles >> 1;
 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -55,10 +58,17 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
-            silu_tile_init();
-            silu_tile<false>(GATE_DST);  // bf16-grade exp + 1 NR step: the output is packed to bf16 anyway
-            mul_binary_tile_init();
-            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            if constexpr (kSwigluLutSilu) {
+                // Opt-in (-DSWIGLU_LUT_SILU): sigmoid from a 6-segment SFPLUTFP32 table, fused with the up multiply
+                // into one SFPU pass (swiglu_lut.hpp). Reads the up tile at GATE_DST + 1. Off by default.
+                swiglu_lut_tile_init();
+                swiglu_lut_tile(GATE_DST);
+            } else {
+                silu_tile_init();
+                silu_tile<false>(GATE_DST);  // bf16-grade exp + 1 NR step: the output is packed to bf16 anyway
+                mul_binary_tile_init();
+                mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
