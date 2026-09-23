@@ -77,7 +77,7 @@ void queue_tensor_prefetcher_request(
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, prefetcher_pipes, device_subset, inputs, trace_cq);
+            *mesh_device, prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
     } else {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, *global_cb, device_subset, inputs, trace_cq);
@@ -88,7 +88,25 @@ std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_
     metal_exp::PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards) {
-    return metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
+    std::vector<metal_exp::PrefetcherPipe> pipes =
+        metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
+    std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> shared;
+    shared.reserve(pipes.size());
+    for (auto& pipe : pipes) {
+        shared.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
+    }
+    return shared;
+}
+
+std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> prefetcher_pipe_refs(
+    const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes) {
+    std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> refs;
+    refs.reserve(prefetcher_pipes.size());
+    for (const auto& pipe : prefetcher_pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", refs.size());
+        refs.emplace_back(*pipe);
+    }
+    return refs;
 }
 
 void wait_for_cq_on_tensor_prefetcher(

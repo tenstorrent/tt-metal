@@ -4,6 +4,8 @@
 
 #include "dram_prefetcher_consumer.hpp"
 
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
+
 #include <filesystem>
 
 #include <tt_stl/assert.hpp>
@@ -42,7 +44,7 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
     } else {
         TT_FATAL(
-            metal_exp::prefetcher_pipe_receiver_cores(attrs.prefetcher_pipes).num_cores() > 0,
+            metal_exp::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(attrs.prefetcher_pipes)).num_cores() > 0,
             "The PrefetcherPipes have no receiver cores");
     }
 }
@@ -90,7 +92,7 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
 
     if (!operation_attributes.prefetcher_pipes.empty()) {
         const auto& pipes = operation_attributes.prefetcher_pipes;
-        const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(pipes);
+        const CoreRangeSet receiver_cores = metal_exp::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(pipes));
         std::vector<metal_exp::PrefetcherPipeParamName> names;
         std::vector<metal_exp::PrefetcherPipeParameter> parameters;
         metal_exp::ProgramRunArgs run_args;

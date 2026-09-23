@@ -23,6 +23,7 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
@@ -492,7 +493,7 @@ public:
         experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
         // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
         // pipe's address can be reused by a new pipe, but its identity never is.
-        uint64_t bound_pipe_identity = 0;
+        experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
     };
     void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
     const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;

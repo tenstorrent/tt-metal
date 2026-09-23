@@ -536,7 +536,7 @@ PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
 PrefetcherPipeImpl::PrefetcherPipeImpl(
     PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores) :
     space_(&space),
-    identity_(next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)),
+    identity_(PrefetcherPipeIdentity{next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)}),
     sender_core_(sender_core),
     receiver_cores_(receiver_cores),
     claimed_(true) {
@@ -563,7 +563,7 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     uint64_t tensor_prefetcher_factory_id,
     uint32_t tensor_prefetcher_factory_num_pipes) :
     space_(&space),
-    identity_(next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)),
+    identity_(PrefetcherPipeIdentity{next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)}),
     sender_core_(dram_sender),
     receiver_cores_(receiver_cores),
     all_cores_(receiver_cores),
@@ -831,7 +831,7 @@ const distributed::MeshDevice* PrefetcherPipe::get_device() const { return pimpl
 
 SenderCoreType PrefetcherPipe::sender_core_type() const { return pimpl_->sender_core_type(); }
 
-uint64_t PrefetcherPipe::identity() const { return pimpl_->identity(); }
+PrefetcherPipeIdentity PrefetcherPipe::identity() const { return pimpl_->identity(); }
 
 uint32_t PrefetcherPipe::initial_entry_size() const { return pimpl_->initial_entry_size(); }
 
@@ -896,22 +896,20 @@ PrefetcherPipe create_dram_sender_pipe(
         dram_sender, receivers, recv_index_base, tensor_prefetcher_factory_id, tensor_prefetcher_factory_num_pipes);
 }
 
-std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+std::vector<std::pair<CoreCoord, CoreRangeSet>> GetPrefetcherPipeSenderReceiverMapping(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes) {
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve(pipes.size());
-    for (const auto& pipe : pipes) {
-        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", mapping.size());
-        mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+    for (const PrefetcherPipe& pipe : pipes) {
+        mapping.emplace_back(pipe.sender_core(), pipe.receiver_cores());
     }
     return mapping;
 }
 
-CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+CoreRangeSet GetPrefetcherPipeReceiverCores(const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes) {
     std::vector<CoreRange> ranges;
-    for (const auto& pipe : pipes) {
-        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe");
-        const auto& receiver_ranges = pipe->receiver_cores().ranges();
+    for (const PrefetcherPipe& pipe : pipes) {
+        const auto& receiver_ranges = pipe.receiver_cores().ranges();
         ranges.insert(ranges.end(), receiver_ranges.begin(), receiver_ranges.end());
     }
     return CoreRangeSet().merge(ranges);
