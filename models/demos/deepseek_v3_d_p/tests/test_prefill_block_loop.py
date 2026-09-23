@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for iterative PCC divergence of a single TtPrefillBlock layer, run chunked.
+Test for iterative PCC divergence of a single TtPrefillBlock layer.
 
 Feeds the output of one layer back as input for N iterations (using pretrained
 weights and real tokenized input), measuring PCC between torch reference and
@@ -470,10 +470,8 @@ def test_prefill_block_loop(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_chunked=True,
-        layer_num=1,
     )
-    block_kwargs["is_balanced"] = False  # chunked MLA + indexed RoPE both reject the balanced layout
+    block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
         if not skip_reference:
@@ -489,8 +487,8 @@ def test_prefill_block_loop(
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
-    rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=isl_total, chunk_size_global=isl_total)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
+    rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
     # Shard initial input to device
     h_tt = ttnn.from_torch(
@@ -519,8 +517,8 @@ def test_prefill_block_loop(
     if layer_idx in (-5, -6) and not is_dense:
         original_moe_path = block._moe_path
 
-        def _capturing_moe_path(ffn_norm_out, **kwargs):
-            result = original_moe_path(ffn_norm_out, **kwargs)
+        def _capturing_moe_path(ffn_norm_out):
+            result = original_moe_path(ffn_norm_out)
             # Read back FFN output to host for inspection
             ffn_host = ttnn.to_torch(
                 result,
@@ -568,7 +566,7 @@ def test_prefill_block_loop(
                 h_torch_next = layer_out[0]
 
         # --- TT forward ---
-        h_tt_next, _ = block(h_tt, rope_tensors, tt_kvpe_cache, actual_start=0, actual_end=isl_total, cache_user_id=0)
+        h_tt_next, _ = block(h_tt, rope_tensors, tt_kvpe_cache)
         ttnn.synchronize_device(mesh_device)
 
         if skip_reference:
