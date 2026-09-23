@@ -718,7 +718,8 @@ void track_mesh_workload_execution(
 
         std::optional<uint8_t> sub_device_id_value;
         if (placement.sub_device_id.has_value()) {
-            sub_device_id_value = **placement.sub_device_id;
+            // optional<SubDeviceId> -> SubDeviceId -> its underlying uint8_t.
+            sub_device_id_value = *placement.sub_device_id.value();
         }
         const auto& worker_core_ranges =
             sub_device_id_value.has_value() ? tensix_cores_by_sub_device[*sub_device_id_value] : kNoWorkerCores;
@@ -1114,6 +1115,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     buffer_id_to_counter.clear();
     captured_device_info.clear();
     captured_sub_device_managers.clear();
+    warned_unresolved_placement = false;
     captured_mesh_devices.clear();
     per_op_buffers_.clear();
     buffer_pages_by_address_.clear();

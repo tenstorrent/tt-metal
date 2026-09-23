@@ -31,6 +31,8 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
+from loguru import logger as loguru_logger
+
 from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
@@ -328,6 +330,82 @@ class TestSubDeviceExecutionImport:
             assert {physical_device_id for _, physical_device_id in rows} == {17, 18}, rows
         finally:
             conn.close()
+
+    def test_execution_index_overflow_drops_remainder_with_warning(self, tmp_path):
+        """One operation with more executions than the stride allows keeps exactly a stride of them.
+
+        execution_id is operation_id * stride + index, so the index must stay below the stride or
+        the next operation's ids would be reused. The importer drops the remainder instead; this
+        pins that boundary, which the stride-collision test above does not reach.
+        """
+        stride = graph_report._EXECUTION_ID_STRIDE_PER_OPERATION
+        overflow = 5
+
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "input_tensors": [],
+                "arguments": [],
+            },
+        ]
+        for index in range(stride + overflow):
+            graph.append(
+                {
+                    "counter": 2 + index,
+                    "node_type": "program_execution",
+                    "params": {
+                        "device_id": 5,
+                        "physical_device_id": index,
+                        "sub_device_manager_id": 7,
+                        "sub_device_id": 0,
+                        "worker_core_ranges": "[]",
+                        "runtime_id": 3,
+                        "global_call_count": (3 << 10) | index,
+                        "command_queue_id": 0,
+                    },
+                    "connections": [],
+                }
+            )
+        graph.append(
+            {
+                "counter": 2 + stride + overflow,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "duration_ns": 1000,
+            }
+        )
+        graph.append({"counter": 3 + stride + overflow, "node_type": "capture_end", "params": {}, "connections": []})
+
+        # graph_report logs through loguru, which does not propagate to pytest's caplog.
+        messages = []
+        sink_id = loguru_logger.add(messages.append, level="WARNING")
+        try:
+            conn, cursor = _import_to_db(_make_report(graph, devices=[{"device_id": 5}]), tmp_path)
+        finally:
+            loguru_logger.remove(sink_id)
+
+        try:
+            rows = cursor.execute(
+                "SELECT execution_id, operation_id FROM operation_executions ORDER BY execution_id"
+            ).fetchall()
+            assert len(rows) == stride, f"expected the remainder to be dropped, kept {len(rows)}"
+            operation_id = rows[0][1]
+            # The kept ids fill the operation's band exactly and stop short of the next one's.
+            assert [execution_id for execution_id, _ in rows] == [
+                operation_id * stride + index for index in range(stride)
+            ]
+            assert cursor.execute("SELECT COUNT(*) FROM execution_sub_devices").fetchone()[0] == stride
+        finally:
+            conn.close()
+
+        assert any(
+            f"has more than {stride} program executions" in message for message in messages
+        ), f"the drop must be logged, got: {messages}"
 
     def test_old_report_without_execution_nodes_creates_empty_compatible_tables(self, tmp_path):
         report = _make_report([{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}])
@@ -3207,6 +3285,86 @@ class TestGraphCaptureToFile:
         assert [sub_device_id for sub_device_id, _ in topology] == [0, 1]
         assert json.loads(topology[0][1]) == [{"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 3}}]
         assert json.loads(topology[1][1]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+    @skip_for_slow_dispatch()
+    def test_unplaced_execution_from_a_real_program_is_still_recorded(self, device, tmp_report_dir):
+        """A real program the resolver cannot place still gets its row, with no sub-device link.
+
+        resolve_program_placement uses circular buffers as a proxy for kernel groups, so a program
+        that allocates none cannot be placed. The import-path tests feed synthetic nodes with
+        sub_device_id already omitted; this drives the C++ resolver itself with a real program and
+        checks the contract it promises -- record the execution, drop only the placement.
+
+        The other unresolved branch, an eth-only program (a CCL op), needs more than one chip and
+        so is not reachable here.
+        """
+        report_path = tmp_report_dir / "unplaced_report.json"
+        db_dir = tmp_report_dir / "db"
+        sub_device_0_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        sub_device_1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
+        manager = device.create_sub_device_manager(
+            [ttnn.SubDevice([sub_device_0_cores]), ttnn.SubDevice([sub_device_1_cores])],
+            3200,
+        )
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+
+        try:
+            torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+            operand = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                try:
+                    # ttnn.clone allocates no circular buffers, so the proxy has nothing to match.
+                    _ = ttnn.clone(operand)
+                    ttnn.synchronize_device(device)
+                finally:
+                    captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+        finally:
+            device.reset_sub_device_stall_group()
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert execution_nodes, "the operation must still produce a program_execution node"
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1
+        manager_params = manager_nodes[0]["params"]
+        unplaced = [node for node in execution_nodes if "sub_device_id" not in node["params"]]
+        if not unplaced:
+            # Premise guard rather than a failure: if clone starts allocating circular buffers the
+            # resolver can place it, and this test needs repointing at another CB-less program.
+            pytest.skip("ttnn.clone now resolves to a sub-device, so it no longer covers this branch")
+
+        for node in unplaced:
+            params = node["params"]
+            # Everything except the placement is still recorded.
+            assert params["device_id"] == device.id()
+            assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+            # Placement is dropped whole: no sub-device, and no worker cores standing in for one.
+            assert "worker_core_ranges" not in params
+            # The manager the program ran under is still known, only the sub-device within it is not.
+            assert params["sub_device_manager_id"] == manager_params["sub_device_manager_id"]
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            recorded = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "WHERE x.execution_id IS NULL"
+            ).fetchone()[0]
+            dangling = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+            # The manager snapshot is independent of placement, so the partition is still described.
+            topology = conn.execute("SELECT sub_device_id FROM sub_devices ORDER BY sub_device_id").fetchall()
+
+        assert recorded == len(unplaced), "an unplaced execution must keep its operation_executions row"
+        assert dangling == 0
+        assert [sub_device_id for (sub_device_id,) in topology] == [0, 1]
 
     def test_report_contains_device_info(self, device, tmp_report_dir):
         """Test that report contains device information."""
