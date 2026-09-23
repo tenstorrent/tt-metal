@@ -63,6 +63,7 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [64, 15])
 @pytest.mark.parametrize("w", [64, 22])
 @pytest.mark.parametrize("dim", [-2, -1, 0, 1])
