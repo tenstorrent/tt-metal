@@ -56,36 +56,33 @@ def _same(a, b):
 
 
 @pytest.mark.parametrize("shape, dtype, layout, memory_config", CASES)
-def test_from_torch_with_mesh_mapper_matches_host_build_plus_write(shape, dtype, layout, memory_config):
-    with ttnn.manage_device(device_id=0) as device:
-        mc = memory_config()
-        x = _torch_input(shape, dtype)
-        kwargs = dict(dtype=dtype, layout=layout, device=device, memory_config=mc)
-        if hasattr(ttnn, "ReplicateTensorToMesh"):
-            kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
-        on_device = ttnn.from_torch(x, **kwargs)
-        with host_side_tensor_construction():
-            via_host = ttnn.from_torch(x, **kwargs)
-        _same(on_device, via_host)
+def test_from_torch_with_mesh_mapper_matches_host_build_plus_write(device, shape, dtype, layout, memory_config):
+    mc = memory_config()
+    x = _torch_input(shape, dtype)
+    kwargs = dict(dtype=dtype, layout=layout, device=device, memory_config=mc)
+    if hasattr(ttnn, "ReplicateTensorToMesh"):
+        kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+    on_device = ttnn.from_torch(x, **kwargs)
+    with host_side_tensor_construction():
+        via_host = ttnn.from_torch(x, **kwargs)
+    _same(on_device, via_host)
 
 
 @pytest.mark.parametrize("shape, dtype, layout, memory_config", CASES[3:])
-def test_reshard_from_dram_matches_host_round_trip(shape, dtype, layout, memory_config):
+def test_reshard_from_dram_matches_host_round_trip(device, shape, dtype, layout, memory_config):
     # The mesh helpers build DRAM-interleaved first and reshard, so logical shape survives a
     # shard taller than the tensor; the host route must preserve that too.
-    with ttnn.manage_device(device_id=0) as device:
-        x = _torch_input(shape, dtype)
-        dram = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        on_device = ttnn.to_memory_config(dram, memory_config())
-        with host_side_tensor_construction():
-            via_host = ttnn.to_memory_config(dram, memory_config())
-        assert via_host.shape == dram.shape and via_host.padded_shape == on_device.padded_shape
-        _same(on_device, via_host)
+    x = _torch_input(shape, dtype)
+    dram = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    on_device = ttnn.to_memory_config(dram, memory_config())
+    with host_side_tensor_construction():
+        via_host = ttnn.to_memory_config(dram, memory_config())
+    assert via_host.shape == dram.shape and via_host.padded_shape == on_device.padded_shape
+    _same(on_device, via_host)
 
 
-def test_cq_id_is_forwarded_as_queue_id():
-    with ttnn.manage_device(device_id=0) as device:
-        x = _torch_input((1, 1, 32, 32), ttnn.bfloat16)
-        with host_side_tensor_construction():
-            t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, cq_id=0)
-        assert torch.equal(ttnn.to_torch(t), x)
+def test_cq_id_is_forwarded_as_queue_id(device):
+    x = _torch_input((1, 1, 32, 32), ttnn.bfloat16)
+    with host_side_tensor_construction():
+        t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, cq_id=0)
+    assert torch.equal(ttnn.to_torch(t), x)
