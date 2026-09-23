@@ -70,20 +70,13 @@ jobs:
         run: pip3 install PyYAML
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          set -euo pipefail
-          allowlist_args=()
-          allowlist='${{ inputs.sku-allowlist }}'
-          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
-          if [ "$allowlist" != '*' ]; then
-            allowlist_args+=(--sku-allowlist "$allowlist")
-          fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}" \
-            "${allowlist_args[@]}"
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+          sku-allowlist: ${{ inputs.sku-allowlist }}
 
   llk-unit-tests:
     needs: load-test-matrix

@@ -2699,7 +2699,7 @@ public:
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
         this->device_ = this->mesh_device_->get_devices()[0];
-        if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
+        if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
 
@@ -2756,9 +2756,9 @@ public:
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
         const auto& memmap = Common::sd_dispatch_mem_map();
-        const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
-        const CoreCoord prefetch_logical = Common::sd_prefetch_core(this->device_);
-        const CoreCoord dispatch_logical = Common::dispatch_core(this->device_);
+        const tt::CoreType cq_core_type = detail::resolve_sd_cq_kernel_core_type(*this->mesh_device_);
+        const CoreCoord prefetch_logical = detail::sd_cq_prefetch_core(*this->mesh_device_);
+        const CoreCoord dispatch_logical = detail::sd_cq_dispatch_core(*this->mesh_device_);
         // CQ0: this is a slow-dispatch (SD) test with no real command queue.
         constexpr uint8_t cq_id = 0;
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
@@ -2806,8 +2806,8 @@ public:
         }
 
         // Physical cores
-        const CoreCoord phys_prefetch = Common::sd_virtual_core(this->device_, prefetch_logical);
-        const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, dispatch_logical);
+        const CoreCoord phys_prefetch = detail::sd_cq_virtual_core(*this->mesh_device_, prefetch_logical);
+        const CoreCoord phys_disp = detail::sd_cq_virtual_core(*this->mesh_device_, dispatch_logical);
         const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
@@ -2970,10 +2970,10 @@ public:
             phys_disp);
         const tt_metal::KernelHandle prefetch_kernel = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
             prefetch_logical,
-            Common::prefetch_dm(),
+            detail::prefetch_dm_processor(),
             prefetch_defines);
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, prefetch_logical, {0u, 0u, 0u});
 
@@ -2992,10 +2992,10 @@ public:
             this->sd_completion_queue_size());
         const tt_metal::KernelHandle dispatch_kernel = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_logical,
-            Common::dispatch_dm(),
+            detail::dispatch_dm_processor(),
             dispatch_defines);
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, dispatch_logical, {0u, 0u, 0u});
 
@@ -3090,7 +3090,8 @@ public:
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
             // sees the correct data.
             const auto& memmap = Common::sd_dispatch_mem_map();
-            const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, Common::dispatch_core(this->device_));
+            const CoreCoord phys_disp =
+                detail::sd_cq_virtual_core(*this->mesh_device_, detail::sd_cq_dispatch_core(*this->mesh_device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
             // CQ0: this is a slow-dispatch (SD) test with no real command queue.
             const uint32_t completion_q_wr_l1 =
