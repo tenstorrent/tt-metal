@@ -163,18 +163,19 @@ class TtMhaCore:
             k_chunk_size=32,
             exp_approx_mode=True,
         )
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        # Wormhole and Blackhole need different compute kernel configs; the
+        # WH config raises on BH (and vice versa), so pick by host arch.
+        from models.common.utility_functions import is_blackhole
+
+        compute_kernel_config_cls = (
+            ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
+        )
+        compute_kernel_config = compute_kernel_config_cls(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        # compute_kernel_config = ttnn.types.BlackholeComputeKernelConfig(
-        #     math_fidelity=ttnn.MathFidelity.HiFi2,
-        #     math_approx_mode=False,
-        #     fp32_dest_acc_en=False,
-        #     packer_l1_acc=False,
-        # )
 
         ctx = ttnn.transformer.scaled_dot_product_attention(
             q,
