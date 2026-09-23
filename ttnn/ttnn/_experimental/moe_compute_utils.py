@@ -393,6 +393,22 @@ def _even_stride_at_least_a2a_width(tiles: int) -> int:
     return max(even_tiles, W2_TILES_PER_A2A_ITER_W)
 
 
+def _w0_w1_compact_for_shape(Nt: int, num_cores: int) -> bool:
+    """Compact W0/W1 layout (each core stores only its own columns) when the busiest core owns fewer columns than the
+    uniform even stride (1-3 columns, or an odd count); else the uniform stride layout (moe_ring_common.h
+    w0_w1_compact_for_shape)."""
+    max_cols = math.ceil(Nt / num_cores)
+    return max_cols < _even_stride_at_least_a2a_width(max_cols)
+
+
+def _w0_w1_stored_cols(Nt: int, core_id: int, num_cores: int) -> int:
+    """Gate/up columns ring core c stores: its own columns when compact, else the uniform stride (its own columns
+    followed by zero columns) (moe_ring_common.h w0_w1_stored_cols)."""
+    if _w0_w1_compact_for_shape(Nt, num_cores):
+        return _shard_tiles(Nt, core_id, num_cores)
+    return _even_stride_at_least_a2a_width(math.ceil(Nt / num_cores))
+
+
 def _block_tiles_h(tiles_per_txn: int) -> int:
     """K rows of a 4-wide block (W0/W1 block-column, W2 a2a iteration): 7 for 14-tile transactions, 10 for 20."""
     return W0_W1_TXNS_PER_BLOCK * tiles_per_txn // W0_W1_BLOCK_TILES_W
@@ -452,7 +468,8 @@ def _w0_w1_compact_layout(
     blocks_per_col = math.ceil(k_dram_tiles / _block_tiles_h(tiles_per_txn))
     blocks_per_half_col = math.ceil(k_dram_tiles / _half_block_tiles_h(tiles_per_txn))
     cols = [_shard_tiles(Nt, c, num_cores) for c in range(num_cores)]
-    core_blocks = [(n // 2) * blocks_per_col + (n % 2) * blocks_per_half_col for n in cols]
+    stored_cols = [_w0_w1_stored_cols(Nt, c, num_cores) for c in range(num_cores)]
+    core_blocks = [(n // 2) * blocks_per_col + (n % 2) * blocks_per_half_col for n in stored_cols]
     core_block_offsets = [sum(core_blocks[:c]) for c in range(num_cores)]
     expert_blocks = sum(core_blocks)
     return {
@@ -461,6 +478,8 @@ def _w0_w1_compact_layout(
         "blocks_per_col": blocks_per_col,
         "blocks_per_half_col": blocks_per_half_col,
         "cols": cols,
+        "stored_cols": stored_cols,
+        "compact": _w0_w1_compact_for_shape(Nt, num_cores),
         "core_blocks": core_blocks,
         "core_block_offsets": core_block_offsets,
         "expert_blocks": expert_blocks,
@@ -469,8 +488,8 @@ def _w0_w1_compact_layout(
         # Today's per-core stride tensor shape is kept where the compact layout is byte-identical to it:
         # 14-tile transactions, every core owning the same even column count, one core per bank.
         "uniform": tiles_per_txn == DEFAULT_TILES_PER_TXN
-        and len(set(cols)) == 1
-        and cols[0] % 2 == 0
+        and len(set(stored_cols)) == 1
+        and stored_cols[0] % 2 == 0
         and num_banks == num_cores,
     }
 
@@ -655,19 +674,26 @@ def prepare_w0_w1_tensor_for_moe_compute(
     # Permute to move Nt before K: (L, E, K, Nt, 2*TILE) -> (L, E, Nt, K, 2*TILE)
     torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
 
-    # Each core's compact slice as stored 4-tile rows: (L, E, rows, 4*TILE).
+    # Each core's slice as stored 4-tile rows: (L, E, rows, 4*TILE). A core stores layout["stored_cols"][c] columns:
+    # its own columns, followed by zero columns up to the uniform stride for a non-compact shape.
     each_slice = []
     start_tile = 0
-    for num_tiles in shard_map:
-        pairs = num_tiles // 2
+    for core_id, num_tiles in enumerate(shard_map):
+        stored = layout["stored_cols"][core_id]
+        core_cols = torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
+        if stored > num_tiles:
+            core_cols = torch.cat(
+                [core_cols, torch.zeros(L, E, stored - num_tiles, Kp, 2 * ttnn.TILE_SIZE, dtype=core_cols.dtype)], dim=2
+            )
+        pairs = stored // 2
         if pairs > 0:
             # (L, E, 2*pairs, Kp_full, 2*TILE) -> (L, E, pairs, Kp_full, 4*TILE): row k = W0 c, W1 c, W0 c+1, W1 c+1
-            pair_cols = torch_w0_w1_permuted[:, :, start_tile : start_tile + 2 * pairs, :Kp_full, :]
+            pair_cols = core_cols[:, :, : 2 * pairs, :Kp_full, :]
             pair_cols = pair_cols.reshape(L, E, pairs, 2, Kp_full, 2 * ttnn.TILE_SIZE).permute(0, 1, 2, 4, 3, 5)
             each_slice.append(pair_cols.reshape(L, E, pairs * Kp_full, 4 * ttnn.TILE_SIZE))
-        if num_tiles % 2:
+        if stored % 2:
             # (L, E, Kp_half, 2*TILE) -> (L, E, Kp_half / 2, 4*TILE): tile row j = K tile rows 2j and 2j+1 side by side
-            half_col = torch_w0_w1_permuted[:, :, start_tile + 2 * pairs, :Kp_half, :]
+            half_col = core_cols[:, :, 2 * pairs, :Kp_half, :]
             half_col = half_col.reshape(L, E, Kp_half // (2 * ttnn.TILE_SIZE), 2, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
             each_slice.append(half_col.permute(0, 1, 2, 4, 3, 5).reshape(L, E, Kp_half // 2, 4 * ttnn.TILE_SIZE))
         start_tile += num_tiles
@@ -685,7 +711,7 @@ def prepare_w0_w1_tensor_for_moe_compute(
     torch_w0_w1_paired = stream.view(L, E, num_banks, bank_blocks, block_rows, 4 * ttnn.TILE_SIZE)
     torch_w0_w1_paired = torch_w0_w1_paired.permute(2, 0, 1, 3, 4, 5)
     if layout["uniform"]:
-        groups_per_core = shard_map[0] // 2
+        groups_per_core = layout["stored_cols"][0] // 2
         return torch_w0_w1_paired.reshape(num_cores, L, E, groups_per_core, Kp_full, 4 * ttnn.TILE_SIZE)
     return torch_w0_w1_paired.contiguous()
 

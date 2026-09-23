@@ -352,10 +352,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
-    // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
-    // and at least the W2 A2A matmul width.
-    // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
-    // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
+    // a2a_cb_pages = IN2_TILES_PER_STEP = moe_ring::a2a_exchange_tiles: the largest per-core gate/up column count
+    // (at least 2) for a compact shape, else the uniform even stride (at least the W2 A2A matmul width).
+    // The ring size is the live DRAM-bank count, so each ring core maps 1:1 to a DRAM bank.
     const uint32_t expected_matmul_n =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     TT_FATAL(
@@ -363,8 +362,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: expected matmul_num_cores={}, got {}",
         expected_matmul_n,
         matmul_num_cores);
-    const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
+    const uint32_t a2a_cb_pages = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
 
     // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 10
     // for the 2560/640 expert), passed to the kernels as the "tiles_per_txn" compile arg.

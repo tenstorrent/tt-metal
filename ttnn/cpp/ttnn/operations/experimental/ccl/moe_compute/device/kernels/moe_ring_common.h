@@ -90,6 +90,33 @@ constexpr uint32_t even_stride_at_least_a2a_width(uint32_t tiles) {
     return even_tiles < W2_TILES_PER_A2A_ITER_W ? W2_TILES_PER_A2A_ITER_W : even_tiles;
 }
 
+// Per-shape choice of the W0/W1 column layout. Compact (each ring core stores only its own shard_tiles(Nt, c)
+// columns) when that shortens the critical path: the busiest core owns fewer columns than the uniform even stride
+// (1-3 columns, or an odd count). Otherwise (e.g. 6/5 or 8/7 columns) the busiest core does the same work either way
+// and every core keeps the uniform stride, byte-identical to the per-core stride layout: compacting such shapes only
+// added cross-bank reads and half-width passes (GLM-4.5-Air 4096/1408, Nemotron-3-Nano 2688/1856 measured ~1 % slower).
+constexpr bool w0_w1_compact_for_shape(uint32_t Nt, uint32_t n_cores) {
+    const uint32_t max_cols = (Nt + n_cores - 1) / n_cores;
+    return max_cols < even_stride_at_least_a2a_width(max_cols);
+}
+
+// Gate/up columns ring core c stores (and produces for a routed expert): its own columns when compact, else the
+// uniform stride (its own columns followed by zero columns).
+constexpr uint32_t w0_w1_stored_cols(uint32_t Nt, uint32_t core_id, uint32_t n_cores) {
+    return w0_w1_compact_for_shape(Nt, n_cores) ? shard_tiles(Nt, core_id, n_cores)
+                                                : even_stride_at_least_a2a_width((Nt + n_cores - 1) / n_cores);
+}
+
+// Width in tiles of the in2 slice every ring core hands to the a2a ring: with the compact layout the largest per-core
+// column count (at least 2), else the uniform stride.
+constexpr uint32_t a2a_exchange_tiles(uint32_t Nt, uint32_t n_cores) {
+    const uint32_t max_cols = (Nt + n_cores - 1) / n_cores;
+    if (!w0_w1_compact_for_shape(Nt, n_cores)) {
+        return even_stride_at_least_a2a_width(max_cols);
+    }
+    return max_cols < 2 ? 2 : max_cols;
+}
+
 // Entry c = block offset of ring core c's compact W0/W1 slice in one (layer, expert) stream; entry n_cores = the
 // stream's total blocks. Cfg is a MoeRingConfig.
 template <typename Cfg, uint32_t n_cores>
@@ -131,7 +158,7 @@ constexpr uint32_t w0_w1_core_block_offset(
     uint32_t Nt, uint32_t core_id, uint32_t n_cores, uint32_t blocks_per_col, uint32_t blocks_per_half_col) {
     uint32_t offset = 0;
     for (uint32_t c = 0; c < core_id; ++c) {
-        offset += w0_w1_blocks_for_cols(shard_tiles(Nt, c, n_cores), blocks_per_col, blocks_per_half_col);
+        offset += w0_w1_blocks_for_cols(w0_w1_stored_cols(Nt, c, n_cores), blocks_per_col, blocks_per_half_col);
     }
     return offset;
 }
@@ -220,13 +247,14 @@ struct MoeRingConfig {
     // W0/W1
     static constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
     static constexpr uint32_t w0_w1_blocks_per_col = (w0_w1_dram_tiles_h + block_tiles_h - 1) / block_tiles_h;
-    static constexpr uint32_t in2_tiles_per_step = even_stride_at_least_a2a_width((Nt + num_cores - 1) / num_cores);
+    static constexpr uint32_t in2_tiles_per_step = a2a_exchange_tiles(Nt, num_cores);
 
-    // Compact W0/W1 layout: ring core c stores only its shard_tiles(Nt, c) logical columns -- floor(cols / 2)
-    // block-columns of w0_w1_blocks_per_col blocks (4 wide x block_tiles_h high) and, for an odd count, one
-    // half block-column of w0_w1_blocks_per_half_col blocks (2 wide x half_block_tiles_h high), in that order.
-    // The in2 slice it hands to the a2a ring keeps the physical in2_tiles_per_step width; the tail past its
-    // columns is never read (the W2 walk takes shard_tiles(src) tiles from each source's slice).
+    // W0/W1 layout: ring core c stores w0_w1_stored_cols(Nt, c) columns (its own shard_tiles(Nt, c) columns for a
+    // compact shape, else the uniform stride) -- floor(cols / 2) block-columns of w0_w1_blocks_per_col blocks
+    // (4 wide x block_tiles_h high) and, for an odd count, one half block-column of w0_w1_blocks_per_half_col blocks
+    // (2 wide x half_block_tiles_h high), in that order. The in2 slice it hands to the a2a ring is in2_tiles_per_step
+    // (a2a_exchange_tiles) wide; tiles past its own columns are never read (the W2 walk takes shard_tiles(src) tiles
+    // from each source's slice).
     static constexpr uint32_t w0_w1_blocks_per_half_col =
         (w0_w1_dram_tiles_h + half_block_tiles_h - 1) / half_block_tiles_h;
     // Block offset of core c's slice inside one (layer, expert) stream (the cores' slices back to back).
@@ -252,7 +280,7 @@ struct MoeRingConfig {
     // Columns core c produces for an expert: all of its columns for a routed expert; for a shared expert the
     // front-packed prefix, capped at the columns it stores (an even prefix shorter than cols reads pairs only).
     static constexpr uint32_t w0_w1_prod_cols(uint32_t core_id, bool is_shared_expert) {
-        const uint32_t cols = shard_tiles(Nt, core_id, num_cores);
+        const uint32_t cols = w0_w1_stored_cols(Nt, core_id, num_cores);
         return (is_shared_expert && in2_tiles_per_step_shared < cols) ? in2_tiles_per_step_shared : cols;
     }
 

@@ -191,15 +191,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
-    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step matches
-    // the round-up formula used in MoeRingConfig::in2_tiles_per_step.
+    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step (the a2a
+    // exchange width, MoeRingConfig::in2_tiles_per_step) holds every core's columns.
     const uint32_t tiles_per_step_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t tiles_per_step = moe_ring::even_stride_at_least_a2a_width(tiles_per_step_raw);
+    const uint32_t tiles_per_step = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
     TT_FATAL(
-        tiles_per_step >= moe_ring::W2_TILES_PER_A2A_ITER_W && tiles_per_step % 2 == 0,
-        "tiles_per_step ({}) must be even and >= W2_TILES_PER_A2A_ITER_W ({})",
+        tiles_per_step >= tiles_per_step_raw && tiles_per_step >= 2,
+        "a2a exchange width ({}) must hold the largest per-core column count ({}) and be >= 2",
         tiles_per_step,
-        moe_ring::W2_TILES_PER_A2A_ITER_W);
+        tiles_per_step_raw);
 
     const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     TT_FATAL(
