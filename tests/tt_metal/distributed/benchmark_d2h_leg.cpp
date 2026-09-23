@@ -144,7 +144,11 @@ public:
         }
         try {
             region.provision(
-                mesh_, /*chip=*/0, cores_, HostTopology{0, 1, 1}, HostRegion::Grid{grid_width_, grid_height_});
+                mesh_,
+                /*chip=*/0,
+                cores_,
+                experimental::HostTopology{0, 1, 1},
+                HostRegion::Grid{grid_width_, grid_height_});
         } catch (const std::exception& ex) {
             fail(state, std::string("host region unavailable: ") + ex.what());
             return;
