@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Multi-device (CCL) verification topology matrix — consumed by
+# scripts/run_multidevice_sim_pytest.py and by the op-gen eval pipeline
+# (tt_ops_code_gen: eval/run_eval.py, prompts/verifier.txt).
+#
+# Each entry pins the mesh a CCL op is verified on. A CCL acceptance/golden test
+# MUST open EXACTLY this entry's mesh_shape with this fabric_config, or fabric init
+# hangs ("Fabric Router Sync: Timeout"); on a box with too few chips it fails with
+# "system_mesh.cpp: requested_size <= system_size".
+#
+# runtime: "sim"      -> craq-sim multichip simulator (the default; needs the
+#                        descriptor triple below, resolved by the runner).
+# runtime: "hardware" -> real multi-chip silicon (no sim env; runs pytest directly).
+#
+# For sim entries the runner resolves the craq-sim files as:
+#   libttsim       : $TTSIM_LIB_<ARCH> | $TTSIM_LIB |
+#                    $CRAQ_SIM_DIR/src/_out/release_<wh|bh>/libttsim.so
+#   cluster_desc   : absolute, else $CRAQ_SIM_DATA_DIR/<wh|bh>/<cluster_desc>
+#   mesh_graph_desc: absolute, else $CRAQ_SIM_DATA_DIR/<wh|bh>/<mesh_graph_desc>
+#   (CRAQ_SIM_DIR default /localdev/wransom/craq-sim; a soc_descriptor.yaml for the
+#    arch must be staged beside libttsim.so — see docs/ccl craq-sim setup.)
+# The descriptor files are large generated artifacts staged per-box, NOT committed here.
+
+topologies:
+  # ---- Wormhole T3K, 1x8 line (the proven CCL reduction-collective mesh) ----
+  - name: wh_t3k_1x8_line_sim
+    runtime: sim
+    arch: wormhole
+    mesh_shape: [1, 8]
+    fabric_config: FABRIC_1D
+    grade_primary: true            # the ONE sim topology run_eval grades for the dashboard
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
+    cluster_desc: wormhole_t3k_1x8.yaml
+    mesh_graph_desc: wormhole_t3k_1x8_mesh_graph_descriptor.textproto
+    cq_wait_clocks: 200
+    hang_watchdog_clocks: 500000000
+
+  - name: wh_t3k_1x8_line_hw
+    runtime: hardware
+    arch: wormhole
+    mesh_shape: [1, 8]
+    fabric_config: FABRIC_1D
+    grade_primary: true            # the ONE hardware topology run_eval grades
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
