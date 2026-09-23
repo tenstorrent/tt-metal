@@ -203,7 +203,7 @@ int main(int argc, char** argv) {
     // needs no rewrite and the timed loop carries no host memcpy.
     for (uint32_t c = 0; c < o.cores; ++c) {
         for (uint32_t s = 0; s < o.ring; ++s) {
-            uint8_t* const slot = region_base + rx_slot_offset(c, s, page);
+            uint8_t* const slot = region_base + rx_slot_offset(c, s, page, h2d->data_offset(c));
             std::memset(slot, 0, page);
             FrameTrailer* const t = reinterpret_cast<FrameTrailer*>(slot + o.payload);
             t->guard = tt_uva_frame_guard(kFrameVersion);
@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
                 DeliverTask t;
                 t.core = c;
                 t.slot = static_cast<uint32_t>(state[c].published % o.ring);
-                t.page_offset = rx_slot_offset(c, t.slot, page);
+                t.page_offset = rx_slot_offset(c, t.slot, page, h2d->data_offset(c));
                 t.page_bytes = page;
                 t.length = o.payload;
                 // publish() only advances bytes_sent -- the bytes are already in the ring,
