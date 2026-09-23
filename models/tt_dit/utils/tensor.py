@@ -822,7 +822,15 @@ def arange(
         memory_config=memory_config,
     )
 
-    return ttnn.cumsum(x, 0) + (start - step)
+    result = ttnn.cumsum(x, 0)
+    offset = start - step
+    if offset == 0:
+        return result
+    if offset < 0:
+        # A negative scalar cannot be encoded against an unsigned tensor (the binary op rejects it),
+        # and the running sum is at least one step, so subtract the magnitude instead.
+        return ttnn.subtract(result, -offset)
+    return result + offset
 
 
 _tril_cache: dict[tuple, ttnn.Tensor] = {}

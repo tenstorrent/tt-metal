@@ -46,7 +46,10 @@ class KimiK27Adapter(MLAPrefillAdapter):
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"
     default_local_path = Path("/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized")
-    shared_path = None
+    # Config-only fallback for hosts without the yyz4 weights mount (e.g. bh_loudbox, which
+    # mounts /mnt/MLPerf instead). Holds no safetensors index, so get_or_download_model and
+    # _resolve_state_dict both skip it -- it feeds the config/tokenizer lookups only.
+    shared_path = Path("models/demos/deepseek_v3_d_p/reference/kimi_k2_7")
     num_layers_to_download = 24
     ref_cache_env = "TT_KIMI_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_MLA_REF_CACHE"
