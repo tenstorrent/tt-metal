@@ -267,8 +267,6 @@ TEST(SlidingWindowWorkPlan, PinnedDevice0Geometry) {
     EXPECT_EQ(unbounded.source_ranges[1].first_global_k_chunk, 32u);
 }
 
-}  // namespace
-
 TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
     for (uint32_t ring : {4u, 8u}) {
         for (uint32_t local : {8u, 32u, 64u}) {
@@ -350,3 +348,5 @@ TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
         }
     }
 }
+
+}  // namespace
