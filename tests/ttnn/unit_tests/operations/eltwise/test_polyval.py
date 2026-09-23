@@ -67,7 +67,10 @@ def test_polyval_honours_memory_config(device, shape, coeff):
 
 # The empty-coefficients check was a TT_ASSERT, compiled out in Release, so polyval(x, []) read
 # coeffs[0] out of bounds and looped until the process died (#57356).
-def test_polyval_rejects_empty_coeffs(device, expect_error):
+@pytest.mark.parametrize(
+    "polyval", [lambda: ttnn.polyval, lambda: ttnn.experimental.quasar.polyval], ids=["ttnn", "quasar"]
+)
+def test_polyval_rejects_empty_coeffs(device, polyval, expect_error):
     x = ttnn.from_torch(torch.rand(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "polyval requires at least one coefficient"):
-        ttnn.polyval(x, [])
+        polyval()(x, [])

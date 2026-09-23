@@ -232,3 +232,14 @@ def test_bw_concat_negative_dim(device, dim, positive_dim):
     expect_a, expect_b = torch.split(gq, shape[positive_dim], dim=positive_dim)
     assert torch.equal(ttnn.to_torch(got_a).float(), expect_a)
     assert torch.equal(ttnn.to_torch(got_b).float(), expect_b)
+
+
+# The slicing indexes all four dims of grad and input and writes into an output shaped like other, so
+# every operand must be rank 4, not only grad.
+@pytest.mark.parametrize("which", ["input", "other"])
+def test_bw_concat_rejects_lower_rank_operand(device, which, expect_error):
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    full, low = torch.rand(1, 1, 32, 32), torch.rand(32, 32)
+    a, b = (low, full) if which == "input" else (full, low)
+    with expect_error(RuntimeError, "concat_bw expects rank-4 tensors"):
+        ttnn.concat_bw(to_tt(torch.rand(1, 1, 32, 64)), to_tt(a), to_tt(b), 3)

@@ -536,9 +536,12 @@ std::vector<std::optional<Tensor>> concat_bw(
     std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
 
     TT_FATAL(
-        grad_tensor_arg.logical_shape().rank() == 4,
-        "concat_bw expects rank-4 tensors, got grad rank {}",
-        grad_tensor_arg.logical_shape().rank());
+        grad_tensor_arg.logical_shape().rank() == 4 && input_tensor_a_arg.logical_shape().rank() == 4 &&
+            other.logical_shape().rank() == 4,
+        "concat_bw expects rank-4 tensors, got grad rank {}, input rank {}, other rank {}",
+        grad_tensor_arg.logical_shape().rank(),
+        input_tensor_a_arg.logical_shape().rank(),
+        other.logical_shape().rank());
     // Accept negative dims like the forward concat does.
     dim = grad_tensor_arg.logical_shape().get_normalized_index(dim);
 
