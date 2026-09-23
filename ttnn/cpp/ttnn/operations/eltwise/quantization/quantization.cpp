@@ -189,14 +189,19 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
-// Narrow composite's fp result to the output dtype. int8 goes through quantize instead of typecast for
-// saturation since the QUANT kernel clamps to [-128, 127] while typecast wraps modulo 256 (callers here
-// pass unbounded floats).
+// Narrow composite's fp result to the output dtype. typecast wraps modulo 256 for the narrow types, and
+// callers here pass unbounded floats, so both saturate first. int8 goes through quantize, whose QUANT
+// kernel clamps to [-128, 127]. uint8 is clamped to [0, 255] in float instead: the QUANT kernel maps a
+// negative uint8 value to its magnitude rather than to 0.
 ttnn::Tensor narrow_composite_result(
     const ttnn::Tensor& shifted,
     ttnn::DataType c_dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::Tensor> optional_output_tensor) {
+    if (c_dtype == ttnn::DataType::UINT8) {
+        ttnn::Tensor saturated = ttnn::clamp_tss(shifted, 0.0f, 255.0f, memory_config);
+        return ttnn::typecast(saturated, c_dtype, memory_config, optional_output_tensor);
+    }
     if (c_dtype != ttnn::DataType::INT8) {
         return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
     }

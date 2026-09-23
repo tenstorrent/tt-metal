@@ -1252,3 +1252,27 @@ def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scal
     assert (
         quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
     ), f"expected L1 output, got {quantized_tt.memory_config()}"
+
+
+# With a tensor zero point, quantize takes the composite path, which narrowed to uint8 with a bare
+# typecast that wraps modulo 256 (300 -> 44, -1 -> 255) instead of saturating (#57356).
+@pytest.mark.parametrize("op", ["quantize", "requantize"])
+def test_uint8_composite_saturates(device, op):
+    row = [30.0, -0.1, 10.0, 5.0, 25.5, 25.6, -30.0, 0.0]
+    x = torch.tensor([row] * 32, dtype=torch.float32).repeat(1, 4)
+    scale = 0.1
+    expected = torch.clamp(torch.round(x / scale), 0, 255).to(torch.uint8)
+
+    zero_point = ttnn.from_torch(
+        torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tx = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if op == "quantize":
+        out = ttnn.quantize(tx, scale, zero_point, dtype=ttnn.uint8)
+    else:
+        q = ttnn.quantize(tx, 1.0, 0, dtype=ttnn.int32)
+        out = ttnn.requantize(q, 1.0, 0, scale, zero_point, dtype=ttnn.uint8)
+        expected = torch.clamp(torch.round(torch.round(x) / scale), 0, 255).to(torch.uint8)
+    assert out.dtype == ttnn.uint8
+    result = ttnn.to_torch(out)
+    assert torch.equal(result, expected), f"got {result[0, :8].tolist()} expected {expected[0, :8].tolist()}"
