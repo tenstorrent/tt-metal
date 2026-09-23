@@ -497,13 +497,14 @@ firmware ("Device 0 init: failed to initialize FW"). Recovery notes:
   `TT_UMD_LOCK.*`, including `CHIP_IN_USE_<n>_PCIe`) is left behind by killed
   runs and can block later runs on a lock. Safe to delete only once no
   tt-metal process is running under any user.
-- If after `-r` the chips report `HARVESTING_STATE 0x0` while the working
-  config is a 12x10 grid (one column harvested of a nominal 13x10), the board
-  has not fully re-initialised and ttnn fails with
-  `IndexError: unordered_map::at` on any device open. tt-smi warns that `-r`
-  needs CPLD FW v1.16+ on Galaxy systems; escalate to a system administrator
-  for the CPLD update or a host-level reset rather than reaching for
-  `-glx_reset`.
+- If after `-r` `tt-smi -ls` is healthy but every ttnn device open fails with
+  `IndexError: unordered_map::at` (thrown after "Starting devices in cluster
+  completed", before any tt-metal device-init log), the board is fine — the
+  failure is in tt-metal's cluster construction over **all 32 chips**. Restrict
+  to the chip you use: `TT_VISIBLE_DEVICES=0` opens it at the expected 12x10
+  grid. The demos now set this by default. Do not read tt-smi's
+  `HARVESTING_STATE 0x0` as evidence of a bad re-init; it is not the tensix
+  harvesting tt-metal uses (chip 0 reports 12x10 with it set to 0x0).
 
 **Second lesson:** benchmark the op in the *rank and batching* the model uses.
 A `[1,1,M,K]` sweep of the MLP matmul showed 34% -> 57% "efficiency scaling"
