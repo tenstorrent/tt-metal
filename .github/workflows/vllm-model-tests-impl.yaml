@@ -73,7 +73,7 @@ jobs:
         # vLLM entries have no `cmd` — the impl builds the command from structured
         # fields — so opt into the allow-missing-cmd relaxation. Other pipelines keep
         # the strict "every leg has a non-empty cmd" contract.
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"

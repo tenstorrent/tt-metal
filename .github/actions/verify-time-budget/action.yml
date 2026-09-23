@@ -1,9 +1,11 @@
 name: "Verify time budget"
 description: >-
   Runs .github/scripts/utils/verify_time_budget.py in place, pinned to
-  whatever ref the caller's own @ref resolves to (callers pin @main), so
-  budget verification always runs the current script rather than whatever
-  copy (or lack of one) the calling branch carries.
+  whatever ref the caller's own @ref resolves to. The caller currently uses a
+  local path (./...) since this action does not exist on main yet; once this
+  PR merges, it should switch to @main so budget verification always runs
+  the current script rather than whatever copy (or lack of one) the calling
+  branch carries.
 
 inputs:
   args:

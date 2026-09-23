@@ -96,7 +96,7 @@ jobs:
           head -n 20 "${{ env.TESTS_YAML_PATH }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
