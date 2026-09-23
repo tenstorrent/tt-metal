@@ -1549,6 +1549,74 @@ def test_full_causal_attention_exact_boundaries(mesh_device):
                 tensor.deallocate(True)
 
 
+# Attend over a cache holding more than the default two sequences. The gather selects a plane by
+# batch = slot * NUM_LAYERS + layer, so a slot above the old fixed pair is the only thing that
+# exercises that arithmetic past its first two values. A wrong stride there would return a
+# NEIGHBOURING slot's KV rather than fail, so every slot is filled with a different prompt before any
+# of them is read, and each is graded against its own reference.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
+def test_full_causal_attention_reads_extra_user_slots(mesh_device, expect_error):
+    mesh_config = MeshConfig(MESH_SHAPE, TP)
+    slots, cache_dtype = 4, ttnn.bfloat16
+    # Layers chosen so the batch index is not a multiple of the layer count for any slot.
+    cases = [(0, 0), (1, 13), (2, 31), (3, 7)]
+    attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=cache_dtype, num_users=slots)
+    cache = allocate_kv_cache(mesh_device, mesh_config, cache_dtype=cache_dtype, num_users=slots)
+    assert (attention.num_users, cache.num_users) == (slots, slots)
+    _assert_attention_readiness(mesh_device, attention, cache, cache_dtype)
+
+    start, end = 224, 257
+    prefix_inputs = []
+    for slot, layer in cases:
+        prefix_inputs.extend(_write_prefix(mesh_device, cache, slot=slot, layer=layer, end=end, prompt=slot))
+    ttnn.synchronize_device(mesh_device)
+
+    per_slot = {}
+    for slot, layer in cases:
+        per_slot[slot] = _run_attention_case(
+            mesh_device,
+            attention,
+            cache,
+            slot=slot,
+            layer=layer,
+            start=start,
+            end=end,
+            prompt=slot,
+            cache_dtype=cache_dtype,
+            label=f"extra-slot-{slot}-layer-{layer}",
+        )
+    # Distinct prompts must give distinct outputs; equality would mean two slots read one plane.
+    # SP ranks owning no position below `end` return no rows for this range, and two empty tensors
+    # compare equal, so those chips carry no signal and are skipped rather than counted as matches.
+    for slot in range(1, slots):
+        compared = [
+            device_idx
+            for device_idx, output in per_slot[slot].items()
+            if output.numel() and not torch.equal(output, per_slot[0][device_idx])
+        ]
+        populated = [index for index, output in per_slot[slot].items() if output.numel()]
+        assert populated, f"slot {slot} produced no rows to compare"
+        assert compared == populated, f"slot {slot} matched slot 0 on chips {sorted(set(populated) - set(compared))}"
+
+    valid_q = _to_q(mesh_device, _physical_fixture("q", 0, NUM_Q_HEADS, start))
+    with expect_error(ValueError, f"slot_idx {slots} out of range"):
+        attention(valid_q, cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
+    with expect_error(ValueError, f"slot_idx {slots} out of range"):
+        attention.validate_request(cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
+    # An attention built for the default pair must refuse this cache instead of addressing 2 of its 4
+    # slots: the two disagree about the packed batch extent the gather indexes into.
+    default_attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=cache_dtype)
+    with expect_error(ValueError, "cache metadata must be"):
+        default_attention.validate_request(cache, slot_idx=0, layer_idx=0, actual_start=start, actual_end=end)
+
+    valid_q.deallocate(True)
+    for tensor in prefix_inputs:
+        tensor.deallocate(True)
+    cache.k.deallocate(True)
+    cache.v.deallocate(True)
+
+
 # The periodic raw fixture is retained as precision characterization against its independent source
 # oracle. This separate functional gate compares production only with stock full-causal FP32 SDPA on
 # the exact same BF16 Q and exact stored-cache K/V, using limits selected before the run.

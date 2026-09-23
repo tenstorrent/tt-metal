@@ -186,6 +186,49 @@ class PrefillCapacityHostTests(unittest.TestCase):
             PrefillGeometry(4096).gather_block_order, (0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15)
         )
 
+    # A prefix gather moves only the populated chunks but does NOT compact its destination: each rank
+    # keeps its full-capacity output slot. So a prefix order must index the SAME rank-major buffer as
+    # the full order, and must still reconstruct exactly the prefix's tokens, once each, in order.
+    def test_prefix_gather_reconstructs_the_prefix_of_natural_order(self):
+        for capacity in (2048, 4096, 131072):
+            geometry = PrefillGeometry(capacity)
+            natural_blocks = list(range(capacity // 256))
+            rank_major = [block for rank in range(4) for block in natural_blocks if block % 4 == rank]
+            for populated in (1, 32, 1024, 1025, 2048, capacity - 1, capacity):
+                with self.subTest(capacity=capacity, populated=populated):
+                    extent = geometry.gathered_prefix_extent(populated)
+                    self.assertEqual(extent % 1024, 0)
+                    self.assertTrue(populated <= extent <= capacity)
+                    self.assertLess(extent - populated, 1024)
+                    restored = [rank_major[index] for index in geometry.prefix_gather_block_order(extent)]
+                    self.assertEqual(restored, natural_blocks[: extent // 256])
+            self.assertEqual(geometry.prefix_gather_block_order(capacity), geometry.gather_block_order)
+
+    # A prefix outside the allocation, or one that is not a whole number of 256-token blocks, is a
+    # caller bug: it would gather from unwritten cache rows or split a rank's block.
+    def test_prefix_gather_rejects_unrepresentable_extents(self):
+        geometry = PrefillGeometry(4096)
+        for populated in (-1, 4097, 2048.0, True, None):
+            with self.subTest(populated=populated), self.assertRaises((TypeError, ValueError)):
+                geometry.gathered_prefix_extent(populated)
+        for extent in (255, 1000):
+            with self.subTest(extent=extent), self.assertRaises(ValueError):
+                geometry.prefix_gather_block_order(extent)
+
+    # The slot count scales only the packed cache's batch extent; every other dimension is per-slot.
+    def test_slot_count_scales_only_the_packed_batch_extent(self):
+        for num_users in (1, 2, 8):
+            with self.subTest(num_users=num_users):
+                geometry = PrefillGeometry(4096, num_users)
+                self.assertEqual(geometry.cache_shape, (num_users * 32, 1, 1024, 128))
+                self.assertEqual(geometry.gather_block_order, PrefillGeometry(4096).gather_block_order)
+                geometry.validate_cache_metadata(
+                    SimpleNamespace(num_users=num_users, num_layers=32, max_seq_len=4096, sp=4)
+                )
+        for num_users in (0, -1, 2.0, True, None):
+            with self.subTest(num_users=num_users), self.assertRaises((TypeError, ValueError)):
+                PrefillGeometry(4096, num_users)
+
     # A cache from another capacity or packed layout must fail before a model can write its planes.
     def test_cache_metadata_must_match_owning_geometry(self):
         geometry = PrefillGeometry(4096)
