@@ -2152,6 +2152,7 @@
 - name: Llama 3.3-70B request behavior (Galaxy)
   cmd: |
     mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
@@ -2172,6 +2173,7 @@
 - name: Llama 3.1-8B request behavior
   cmd: |
     mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
@@ -2274,6 +2276,7 @@
 - name: GPT-OSS 120B request behavior
   cmd: |
     mkdir -p generated/test_reports/model_behavior
+    export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=openai/gpt-oss-120b
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     export TT_MM_THROTTLE_PERF=2
