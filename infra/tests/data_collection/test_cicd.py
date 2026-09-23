@@ -710,9 +710,6 @@ def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path
                 # Older format: no "(unit)", unit suffixed on each value.
                 "2026-09-03 18:49:41.712 | info | BuildKernels | JIT telemetry [jit_build]: "
                 "count=79, total=368533.488ms, min=1004.938ms, max=6393.632ms, mean=4664.981ms",
-                # Duplicate of an earlier metric: the last occurrence must win.
-                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [JitBuildState::compile] (ms): "
-                "count=5660, total=6211228.000, min=438.541, max=2617.981, mean=1097.400 (build_cache_telemetry.cpp:356)",
             ]
         )
     )
@@ -724,9 +721,9 @@ def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path
     compile_metric = metrics["JitBuildState::compile"]
     assert compile_metric["unit"] == "ms"
     assert compile_metric["sample_count"] == 5660
-    # Last occurrence wins.
-    assert compile_metric["total_value"] == pytest.approx(6211228.000)
-    assert compile_metric["mean_value"] == pytest.approx(1097.400)
+    assert compile_metric["total_value"] == pytest.approx(6211227.967)
+    # A metric seen once keeps its reported mean.
+    assert compile_metric["mean_value"] == pytest.approx(1097.390)
 
     elf_metric = metrics["kernel_elf_size.brisc"]
     assert elf_metric["unit"] == "B"
@@ -737,6 +734,29 @@ def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path
     assert build_metric["unit"] == "ms"
     assert build_metric["sample_count"] == 79
     assert build_metric["max_value"] == pytest.approx(6393.632)
+
+
+def test_search_for_jit_telemetry_aggregates_across_process_blocks(tmp_path):
+    # A job that runs multiple processes emits one telemetry block per process, each
+    # cumulative for its own process. The same metric across blocks must be summed
+    # (not overwritten), with min/max reduced and mean recomputed as total/count.
+    log_file = tmp_path / "789.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=100, total=200.0, min=1.0, max=5.0, mean=2.0",
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=300, total=900.0, min=0.5, max=9.0, mean=3.0",
+            ]
+        )
+    )
+
+    (metric,) = workflows.search_for_jit_telemetry_in_log_file_(log_file)
+    assert metric["metric_name"] == "JitBuildState::compile"
+    assert metric["sample_count"] == 400  # 100 + 300
+    assert metric["total_value"] == pytest.approx(1100.0)  # 200 + 900
+    assert metric["min_value"] == pytest.approx(0.5)  # min(1.0, 0.5)
+    assert metric["max_value"] == pytest.approx(9.0)  # max(5.0, 9.0)
+    assert metric["mean_value"] == pytest.approx(1100.0 / 400)  # total / count
 
 
 def test_search_for_jit_telemetry_returns_empty_when_absent(tmp_path):

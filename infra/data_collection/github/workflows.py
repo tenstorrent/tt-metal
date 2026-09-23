@@ -203,10 +203,14 @@ def search_for_jit_telemetry_in_log_file_(log_file):
     cross-line state and no heuristics: a line either is a well-formed metric record
     or it is ignored. A log with no telemetry returns an empty list.
 
-    When a metric appears more than once (an intermediate print plus the end-of-job
-    summary) the last occurrence wins, since the final block holds the cumulative
-    totals. Returns a list of dicts with keys: metric_name, unit, sample_count,
-    total_value, min_value, max_value, mean_value.
+    ``BuildCacheTelemetry`` is process-wide and emits its block from the process
+    destructor, so a job that runs multiple processes contributes several
+    independent blocks, each cumulative for its own process only. Occurrences of the
+    same metric are therefore aggregated across blocks (counts and totals summed,
+    min/max reduced, mean recomputed as total/count) to give a job-level figure. A
+    metric seen once is passed through with its reported mean. Returns a list of
+    dicts with keys: metric_name, unit, sample_count, total_value, min_value,
+    max_value, mean_value.
     """
     # Defense-in-depth: resolve and confirm this is a real file before opening.
     log_file = pathlib.Path(log_file).resolve()
@@ -225,15 +229,35 @@ def search_for_jit_telemetry_in_log_file_(log_file):
                 continue
 
             unit = match.group("unit_paren") or match.group("unit_suffix")
-            metrics_by_name[metric_name] = {
-                "metric_name": metric_name,
-                "unit": unit.strip() if unit else None,
-                "sample_count": int(match.group("sample_count")),
-                "total_value": float(match.group("total_value")),
-                "min_value": float(match.group("min_value")),
-                "max_value": float(match.group("max_value")),
-                "mean_value": float(match.group("mean_value")),
-            }
+            sample_count = int(match.group("sample_count"))
+            total_value = float(match.group("total_value"))
+            min_value = float(match.group("min_value"))
+            max_value = float(match.group("max_value"))
+            mean_value = float(match.group("mean_value"))
+
+            existing = metrics_by_name.get(metric_name)
+            if existing is None:
+                metrics_by_name[metric_name] = {
+                    "metric_name": metric_name,
+                    "unit": unit.strip() if unit else None,
+                    "sample_count": sample_count,
+                    "total_value": total_value,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "mean_value": mean_value,
+                }
+                continue
+
+            # Second or later block for this metric: fold it into the running total.
+            existing["sample_count"] += sample_count
+            existing["total_value"] += total_value
+            existing["min_value"] = min(existing["min_value"], min_value)
+            existing["max_value"] = max(existing["max_value"], max_value)
+            # Recompute from the aggregate rather than averaging per-block means,
+            # which would be wrong when blocks have different sample counts.
+            existing["mean_value"] = (
+                existing["total_value"] / existing["sample_count"] if existing["sample_count"] else 0.0
+            )
 
     return list(metrics_by_name.values())
 
