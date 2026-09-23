@@ -254,7 +254,21 @@ class DecoderLoop:
             + (self.head.tensors() if self.head is not None else [])
         )
 
+    def reserve_invocations(self, count=1):
+        """Reserve direct/captured invocations before enqueueing any device work.
+
+        LlamaGenerator calls this for trace replays. A caller that directly uses
+        ttnn.execute_trace must reserve its replay count here first. Never reset
+        this host count while the body's collective semaphores remain alive.
+        """
+        if not isinstance(count, int) or count < 1:
+            raise ValueError("Reserve a positive integer invocation count")
+        self.body.reduction.reserve_phases(
+            2 * self.count * count, bounded_layer_barrier=self.body.tuning.bounded_barrier
+        )
+
     def __call__(self, residual, position, page_table, rotary_position=None, tokens=None):
+        self.reserve_invocations()
         # Both residual phases share one TensorAccessor specification. Match
         # the native layer's input conversion before substituting the L1
         # reduction output on the second phase and subsequent layers.

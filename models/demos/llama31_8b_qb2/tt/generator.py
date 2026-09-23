@@ -431,6 +431,9 @@ class LlamaGenerator:
             self.prepare_traces(kv_cache=self._pending_prefill["cache"])
         if self.model_trace is None or (sample and self.sampling_mode not in self.sampling_traces):
             raise RuntimeError("Prepare model and sampling traces before replay")
+        loop = getattr(self.model, "fused_decode_loop", None)
+        if loop is not None:
+            loop.reserve_invocations()
         ttnn.execute_trace(self.mesh_device, self.model_trace, cq_id=0, blocking=False)
         self.stats["model_trace_replays"] += 1
         if sample:

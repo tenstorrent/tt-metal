@@ -196,3 +196,9 @@ Long-running replay limit: the current global barrier accumulates32-bit arrivals
 780,000 full-token invocations of one loop instance, including warmup. This was
 identified by source review, not stress-tested. A bounded or safely resettable
 barrier is required before indefinite serving; this prototype makes no such claim.
+
+## Experiment2 counter lifetime
+
+The optional bounded layer barrier resets its arrival count before publishing a toggled sense; it does not grow across replays. Native collective counters remain monotonic. The resident loop now accounts for direct invocations, warmup/capture, and `LlamaGenerator.replay_decode` before enqueue. A body may reserve at most2^26 collective phases with bounded layer barriers (1,048,576 full32-layer invocations), or2^25 with the legacy barrier (524,288 full invocations). Eight gather arrivals per phase is the largest collective increment: the bounded limit gives2^29 arrivals, eight times below uint32 wrap. The legacy barrier has at most110 arrivals per phase, so2^25*110 also stays below2^32. Accounting belongs to the same reduction object as the global semaphores and survives loop reconstruction.
+
+Callers bypassing `LlamaGenerator` with raw `ttnn.execute_trace` must call `loop.reserve_invocations(replay_count)` before enqueueing their batch of replays. This is a bounded experiment API, not an indefinitely replayable service. At exhaustion, synchronize, release all traces and rebuild the body/global semaphores; never reset the host count alone. Host reservation is conservative if enqueue/capture fails after reservation.

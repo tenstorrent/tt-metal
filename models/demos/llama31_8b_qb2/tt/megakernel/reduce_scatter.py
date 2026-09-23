@@ -19,6 +19,9 @@ class CompactReduceScatter:
         if tuple(mesh.shape) != (1, 4) or ttnn.get_fabric_config() != ttnn.FabricConfig.FABRIC_1D_RING:
             raise ValueError("Compact reduction requires the four-chip QB2 1D ring")
         self.mesh = mesh
+        # Host accounting shares the exact lifetime of these global counters.
+        # Eight gather arrivals per collective phase is the largest increment.
+        self.reserved_phases = 0
         self.cores = [ttnn.CoreCoord(x, 4) for x in range(2)]
         self.grid = _grid(self.cores)
         # Receive staging is a program-local CB. The native all-peer start
@@ -46,6 +49,18 @@ class CompactReduceScatter:
         self.semaphores = [ttnn.create_global_semaphore(mesh, self.grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(9)]
         self.addresses = [ttnn.get_global_semaphore_address(s) for s in self.semaphores]
         ttnn.synchronize_device(mesh)
+
+    def reserve_phases(self, phases, *, bounded_layer_barrier=True):
+        # 2^26 phases -> at most2^29 gather arrivals, below uint32 wrap by8x.
+        # Legacy loop barriers collect up to110 worker arrivals per phase;
+        # 2^25 *110 is still below2^32. This bound includes capture/warmup.
+        limit = 1 << (26 if bounded_layer_barrier else 25)
+        if phases < 1 or self.reserved_phases + phases > limit:
+            raise RuntimeError(
+                "Resident decode counter lifetime exhausted; synchronize, release all traces "
+                "and rebuild the body/global semaphores before more invocations"
+            )
+        self.reserved_phases += phases
 
     def append(
         self,
