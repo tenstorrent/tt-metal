@@ -68,41 +68,39 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     };
 }
 
-tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
-    const uint32_t num_full_size_channels,
-    const uint32_t num_header_only_channels,
-    uint8_t num_buffers_full_size_channels,
-    uint8_t num_buffers_header_only_channels,
-    const size_t buffer_size_bytes_full_size_channel,
+// Fabric Mux V2 memory map fit: shrink the per-channel buffer count until the mux L1 map ends below the lowest
+// globally allocated L1 tensor (the fused moe_compute path has L1 tensors whose address range is the same on the
+// mux cores). Mirrors the V1 recursion, with the single V2 buffer count.
+std::pair<tt::tt_fabric::FabricMuxV2Config, uint8_t> get_fabric_mux_config(
+    const uint8_t num_channels,
+    uint8_t num_buffers_per_channel,
+    const size_t channel_buffer_size_bytes,
     const uint32_t l1_unreserved_base_address,
     const std::optional<uint32_t>& occupied_l1_tensor_addr) {
     TT_FATAL(
-        num_buffers_full_size_channels > 0 && num_buffers_header_only_channels > 0,
+        num_buffers_per_channel > 0,
         "Not enough L1 space for mux core memory requirements given current occupancy. Likely too many experts per "
         "device");
 
-    const auto config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        num_buffers_header_only_channels,
-        buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
+    const tt::tt_fabric::FabricMuxV2Config config(
+        num_channels, num_buffers_per_channel, channel_buffer_size_bytes, l1_unreserved_base_address);
 
     if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
         return get_fabric_mux_config(
-            num_full_size_channels,
-            num_header_only_channels,
-            --num_buffers_full_size_channels,
-            --num_buffers_header_only_channels,
-            buffer_size_bytes_full_size_channel,
+            num_channels,
+            --num_buffers_per_channel,
+            channel_buffer_size_bytes,
             l1_unreserved_base_address,
             occupied_l1_tensor_addr);
     }
 
-    return config;
+    return {config, num_buffers_per_channel};
 }
 
+// Transient Fabric Mux V2: one mux core per (link, neighbor), serving one logical channel per worker of that link.
+// The V2 mux auto-terminates once all of its `num_channels` clients have closed, so every channel must be claimed
+// by exactly one worker: num_channels == num_workers / num_links (validate requires the division to be exact).
+// Returns the config (for the client rt args) and, per link, the neighbor -> mux virtual core map.
 auto launch_mux_workers(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
@@ -111,26 +109,45 @@ auto launch_mux_workers(
     const uint32_t num_links,
     const uint32_t num_workers,
     Program& program) {
-    const auto num_header_only_channels = tt::div_up(num_workers, num_links);
-    const auto num_full_size_channels = tt::div_up(num_workers, num_links);
+    TT_FATAL(
+        num_links > 0 && num_workers % num_links == 0,
+        "num_workers ({}) must be divisible by num_links ({})",
+        num_workers,
+        num_links);
+    const uint32_t num_workers_per_link = num_workers / num_links;
+    // One stream register per V2 logical channel; the FabricMuxV2Config ctor enforces the same bound.
+    TT_FATAL(
+        num_workers_per_link > 0 && num_workers_per_link <= 64,
+        "Fabric Mux V2 supports 1..64 clients per mux core, got {} workers per link",
+        num_workers_per_link);
 
-    constexpr uint8_t num_buffers_full_size_channels = 15;
-    constexpr uint8_t num_buffers_header_only_channels = 15;
+    constexpr uint8_t initial_num_buffers_per_channel = 15;
 
-    const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
 
-    auto mux_kernel_config = get_fabric_mux_config(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        num_buffers_header_only_channels,
-        buffer_size_bytes_full_size_channel,
+    const auto [mux_config, num_buffers_per_channel] = get_fabric_mux_config(
+        static_cast<uint8_t>(num_workers_per_link),
+        initial_num_buffers_per_channel,
+        channel_buffer_size_bytes,
         l1_unreserved_base_address,
         occupied_l1_tensor_addr);
+    log_debug(
+        tt::LogOp,
+        "selective_reduce_combine fabric mux v2: {} channels x {} buffers x {} B, memory map [{}, {}) under lowest "
+        "occupied L1 address {}, {} mux cores (num_links={} x neighbors={})",
+        num_workers_per_link,
+        num_buffers_per_channel,
+        channel_buffer_size_bytes,
+        l1_unreserved_base_address,
+        mux_config.get_memory_map_end_address(),
+        occupied_l1_tensor_addr.has_value() ? std::to_string(*occupied_l1_tensor_addr) : std::string("none"),
+        num_links * neighbors.size(),
+        num_links,
+        neighbors.size());
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();
@@ -149,16 +166,6 @@ auto launch_mux_workers(
 
     const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
 
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        needed_mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
 
@@ -170,27 +177,27 @@ auto launch_mux_workers(
             auto mux_logical_core = *(mux_core_iter++);
             const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
 
-            std::vector<uint32_t> mux_rt_args = {};
+            // Forwarder (RISCV_0) + manager (RISCV_1) kernels on this core, forwarding toward `neighbor_coord`.
+            // The forwarder runs on NoC 1, the NoC the V1 mux kernel used, and the manager on NoC 0. With the API
+            // default (forwarder on NoC 0) the forwarder's posted VC-1 stream shared the read-request path of the
+            // expert cores' DRAM weight reads on the Wormhole Galaxy and was the trigger of the dm0 phantom-trid
+            // stall (see moe_compute dm0.cpp); the clients write into the mux L1 channels on their own NoC.
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
-            mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_logical_core});
+            tt::tt_fabric::add_fabric_mux_v2_to_program(
+                program,
+                mux_config,
+                mux_logical_core,
+                src_node_id,
+                dst_node_id,
+                link,
+                /*forwarder_noc=*/tt::tt_metal::NOC::RISCV_1_default);
 
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
         }
         mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
     }
 
-    return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
-}
-
-void add_termination_master_rt_args(
-    const std::map<ttnn::MeshCoordinate, CoreCoord>& mux_neigbor_core_map, std::vector<uint32_t>& writer_runtime_args) {
-    for (const auto& c : mux_neigbor_core_map) {
-        const auto& mux_virtual_core = c.second;
-        writer_runtime_args.push_back(mux_virtual_core.x);
-        writer_runtime_args.push_back(mux_virtual_core.y);
-    }
+    return std::make_tuple(mux_config, mux_neigbor_core_maps);
 }
 
 }  // namespace detail
@@ -640,8 +647,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [neighbors, directions] =
         operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
-    // launch mux
-    const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
+    // launch mux (Fabric Mux V2: forwarder + manager per mux core, auto-terminating)
+    const auto [mux_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
     // launch writer kernel
@@ -679,17 +686,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_mux_workers_per_link", neighbors.size()},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
         {"compute_cores_per_combine_core", compute_cores_per_combine_core},
         {"double_buffer_source", compute_cores_by_ring_id.has_value()}};
 
+    // Positional CT args: TensorAccessorArgs only. The V2 fabric mux client (FabricMuxV2Sender) is built entirely
+    // from runtime args, so there are no worker-side mux compile-time args.
     std::vector<uint32_t> writer_compile_time_args;
-    ttnn::ccl::fabric_mux_connection_ct_args(
-        num_data_parallel_cores * num_token_parallel_cores,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        writer_compile_time_args);
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     using operations::ccl::common::stringify;
@@ -714,16 +717,23 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         needed_worker_core_range_set,
         writer_config);
 
-    const auto termination_master_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
+    // Intra-link barrier: worker 0 of each link is the link sync core. The other workers of the link increment its
+    // semaphore once their mux channel has drained, and only then does the sync core send the final barrier atomic
+    // inc (so it queues behind every worker's data on the mux). With Mux V2 there is no termination master: the mux
+    // terminates by itself after its last client closes.
+    const auto link_sync_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
 
-    const auto idx = std::views::iota(std::size_t{0}, sender_cores.size());
-    auto termination_master_cores = idx |
-                                    std::views::filter([=](std::size_t i) { return i % num_workers_per_link == 0; }) |
-                                    std::views::transform([&](std::size_t i) { return sender_cores[i]; });
+    // V2 client semaphores (flow control + teardown), one pair per direction, shared ids across all worker cores.
+    std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
+    client_semaphores.reserve(neighbors.size());
+    for (std::size_t d = 0; d < neighbors.size(); ++d) {
+        client_semaphores.push_back(tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
+            .flow_control_sem_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0),
+            .teardown_sem_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0),
+        });
+    }
 
-    auto termination_master_core_iter = termination_master_cores.begin();
-
-    uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
+    uint32_t link_idx = 0, link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
     auto compute_cores_by_ring_iter =
@@ -761,27 +771,22 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
         }
 
-        const bool is_termination_master = (sender_core == *termination_master_core_iter);
-        for (const auto& neighbor_coordinate : neighbors) {
-            const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
+        // Link sync args: is_link_sync_core, link_sync_semaphore_id, sync core virtual x, y.
+        const bool is_link_sync_core = (link_worker_idx == 0);
+        const auto link_sync_virtual_core =
+            mesh_device->worker_core_from_logical_core(sender_cores.at(link_idx * num_workers_per_link));
+        writer_runtime_args.push_back(is_link_sync_core);
+        writer_runtime_args.push_back(link_sync_semaphore_id);
+        writer_runtime_args.push_back(link_sync_virtual_core.x);
+        writer_runtime_args.push_back(link_sync_virtual_core.y);
 
-            ttnn::ccl::fabric_mux_connection_rt_args(
-                true,
-                is_termination_master,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core,
-                link_worker_idx,
-                sender_core,
-                mux_kernel_config,
-                program,
-                mesh_device->worker_core_from_logical_core(*termination_master_core_iter),
-                writer_runtime_args,
-                termination_master_semaphore_id);
-        }
-
-        // termination master is responsible for tearing down mux workers for given link, needs their coordinates
-        if (is_termination_master) {
-            detail::add_termination_master_rt_args(*core_map_iter, writer_runtime_args);
+        // V2 mux client connection per neighbor (same order as the true entries of `directions`): this worker is
+        // logical channel `link_worker_idx` on each mux of its link. append_client_connection_rt_args serializes
+        // exactly the 11 args FabricMuxV2Sender::build_from_args consumes.
+        for (std::size_t d = 0; d < neighbors.size(); ++d) {
+            const auto& mux_virtual_core = core_map_iter->at(neighbors[d]);
+            mux_config.append_client_connection_rt_args(
+                mux_virtual_core, static_cast<uint8_t>(link_worker_idx), client_semaphores[d], writer_runtime_args);
         }
 
         SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
@@ -805,7 +810,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         if (++link_worker_idx == num_workers_per_link) {
             link_worker_idx = 0;
             ++core_map_iter;
-            ++termination_master_core_iter;
+            ++link_idx;
         }
     }
 

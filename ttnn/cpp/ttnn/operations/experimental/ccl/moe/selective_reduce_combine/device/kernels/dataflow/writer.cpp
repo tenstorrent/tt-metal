@@ -13,12 +13,15 @@
 #ifndef LOCAL_COMBINE
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
-using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
+
+// Fabric Mux V2 client: blocking open (no eager staging), buffer count from the runtime args.
+using MuxSender = tt::tt_fabric::FabricMuxV2Sender<>;
 #endif
 
 // packet size bytes 4352
@@ -120,13 +123,58 @@ public:
 };
 
 #ifndef LOCAL_COMBINE
-template <uint8_t NumBuffers, uint8_t NumDirections>
-void mux_channel_writes_flushed(
+// Build one V2 mux client per open direction from the trailing runtime args (11 args each, in `directions` index
+// order, which is the host's `neighbors` order). rt_arg_idx is advanced past the consumed args.
+template <uint8_t NumDirections>
+inline void build_mux_connections(
     const std::array<bool, NumDirections>& directions,
-    const std::array<WorkerToFabricMuxSender<NumBuffers>, NumDirections>& connections) {
+    std::array<MuxSender, NumDirections>& connections,
+    size_t& rt_arg_idx) {
     for (uint8_t d = 0; d < NumDirections; ++d) {
         if (directions[d]) {
-            while (connections[d].get_num_free_write_slots() != NumBuffers) {
+            connections[d] = MuxSender::build_from_args(rt_arg_idx);
+        }
+    }
+}
+
+// Blocking open of every direction's V2 connection (waits for the mux's READY status, publishes this worker's
+// location, requests the channel). Returns each channel's free-slot capacity, sampled right after the open (all
+// slots free): the reference value mux_channel_writes_flushed spins for, without a compile-time buffer count.
+template <uint8_t NumDirections>
+inline std::array<uint32_t, NumDirections> open_mux_connections(
+    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
+    std::array<uint32_t, NumDirections> capacity{};
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            connections[d].open();
+            capacity[d] = connections[d].get_num_free_write_slots();
+        }
+    }
+    return capacity;
+}
+
+// Close request + wait for the manager's teardown ack, per open direction. The V2 mux terminates on its own once
+// all of its clients have closed: no termination master, no terminate signal.
+template <uint8_t NumDirections>
+inline void close_mux_connections(
+    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            connections[d].close();
+        }
+    }
+}
+
+// Spin until every packet this worker handed to the mux has been forwarded downstream: the manager republishes
+// its read counter as the forwarder's writes are sent, so free slots return to the capacity sampled at open.
+template <uint8_t NumDirections>
+inline void mux_channel_writes_flushed(
+    const std::array<bool, NumDirections>& directions,
+    const std::array<MuxSender, NumDirections>& connections,
+    const std::array<uint32_t, NumDirections>& capacity) {
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            while (connections[d].get_num_free_write_slots() != capacity[d]) {
             };
         }
     }
@@ -176,14 +224,9 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-    constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
 
-    constexpr auto output_ta_args = TensorAccessorArgs<5>();
+    // No worker-side mux compile-time args: the V2 mux client is built entirely from runtime args.
+    constexpr auto output_ta_args = TensorAccessorArgs<0>();
 
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
     constexpr uint32_t replicate_factor = (replicate_axis == ReplicateGroup::COLS) ? mesh_cols : mesh_rows;
@@ -226,17 +269,16 @@ void kernel_main() {
 #ifndef LOCAL_COMBINE
     CircularBuffer cb_packet_header(packet_header_cb_id);
 
-    // rt_arg_count does not get incremented
-    MuxSyncCoreArgs sync_args(rt_arg_count);
+    // Intra-link barrier args: worker 0 of each link is the link sync core (it sends the final barrier atomic inc
+    // once every worker of the link has drained its mux channel).
+    const bool is_link_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t link_sync_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(rt_arg_count++));
+    const uint32_t link_sync_core_noc_x = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t link_sync_core_noc_y = get_arg_val<uint32_t>(rt_arg_count++);
 
-    std::array<WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, Num_Directions> fabric_connections;
-
-    // rt_arg_count does not get incremented
-    open_direction_connections_async<
-        Num_Directions,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
+    // One V2 mux client per open direction; the trailing runtime args are consumed here.
+    std::array<MuxSender, Num_Directions> fabric_connections;
+    detail::build_mux_connections<Num_Directions>(directions, fabric_connections, rt_arg_count);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
@@ -246,9 +288,8 @@ void kernel_main() {
         cb_packet_header.push_back(1);
     }
 
-    // mux_rt_arg_count does not get incremented
-    open_direction_connections_barrier<Num_Directions, fabric_mux_num_buffers_per_channel, fabric_mux_status_address>(
-        directions, fabric_connections, rt_arg_count);
+    // Blocking open: waits for each mux to be READY, then requests the connection.
+    const auto mux_channel_capacity = detail::open_mux_connections<Num_Directions>(directions, fabric_connections);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
     if (is_init_sync_core && use_init_semaphore) {
@@ -398,17 +439,14 @@ void kernel_main() {
 #ifndef LOCAL_COMBINE
     // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
     // cores to send off all of their transactions to the EDM.
-    detail::mux_channel_writes_flushed<fabric_mux_num_buffers_per_channel, Num_Directions>(
-        directions, fabric_connections);
+    detail::mux_channel_writes_flushed<Num_Directions>(directions, fabric_connections, mux_channel_capacity);
 
-    if (sync_args.is_sync_core) {
-        auto* termination_sync_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
+    if (is_link_sync_core) {
+        auto* link_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_sync_semaphore_addr);
 
-        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a
-        // fabric-mux sync address (not a get_semaphore<>(id) address).
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
-        noc_semaphore_set(termination_sync_semaphore_ptr, 0);
+        // Every other worker of this link has drained its mux channel (and closed its connection).
+        noc_semaphore_wait(link_sync_semaphore_ptr, num_workers_per_link - 1);
+        noc_semaphore_set(link_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
@@ -430,11 +468,10 @@ void kernel_main() {
         noc1_obj.async_write_barrier();
         noc1_obj.async_atomic_barrier();
 
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address,
-            num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
+        // The barrier packets have left the mux before this last client of the link closes; the V2 mux then
+        // terminates on its own (no termination signal).
+        detail::mux_channel_writes_flushed<Num_Directions>(directions, fabric_connections, mux_channel_capacity);
+        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
 
         // Ring + DoubleAntipodalAtomicInc=true: each device receives `replicate_group_devices` inc's
         //   (the antipodal device is incremented from both directions, summing to N senders).
@@ -445,20 +482,15 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
-        // get sync core semaphore noc address
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address>(directions, fabric_connections, false);
+        // Close this worker's connections (close request + manager ack), then tell the link sync core that this
+        // worker's data has left the mux.
+        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
 
-        const uint64_t safe_termination_sync_address = safe_get_noc_addr(
-            sync_args.termination_master_noc_x,
-            sync_args.termination_master_noc_y,
-            sync_args.termination_sync_address,
-            /*noc=*/1);
-        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a
-        // fabric-mux sync address (not a get_semaphore<>(id) address)
-        noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
+        const uint64_t link_sync_noc_addr =
+            safe_get_noc_addr(link_sync_core_noc_x, link_sync_core_noc_y, link_sync_semaphore_addr, /*noc=*/1);
+        // Device 2.0 migration: legacy primitive retained: link_sync_semaphore_addr is a get_semaphore(id) address on
+        // a remote core.
+        noc_semaphore_inc(link_sync_noc_addr, 1, /*noc=*/1);
 
         noc1_obj.async_write_barrier();
         noc1_obj.async_atomic_barrier();
