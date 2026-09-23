@@ -86,6 +86,8 @@ DispatchMemMap::DispatchMemMap(
         CommandQueueDeviceAddrType dev_addr_type = enchantum::cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
         if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_rd_ptr_size_;
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::UNUSED_1) {
+            device_cq_addr_sizes_[dev_addr_idx] = 0;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
