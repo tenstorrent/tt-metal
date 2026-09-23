@@ -41,12 +41,24 @@ void layer_barrier() {
         const uint32_t cores = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 12);
         const uint32_t index = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 13);
         auto* epoch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(epoch_address);
+#if BOUNDED_LAYER_BARRIER
+        const uint32_t generation = *epoch ^ 1u;
+#else
         const uint32_t generation = *epoch + 1;
+#endif
         *epoch = generation;
         noc_semaphore_inc(get_noc_addr(coordinator_x, coordinator_y, arrivals), 1);
         noc_async_atomic_barrier();
         if (index == 0) {
+#if BOUNDED_LAYER_BARRIER
+            // Every contributor has flushed its atomic and cannot enter the
+            // next generation before release. Reset before publishing release;
+            // arrivals stay in [0, cores], and the sense bit cannot overflow.
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), cores);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), 0);
+#else
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), generation * cores);
+#endif
             for (uint32_t i = 0; i < cores; ++i) {
                 noc_async_write(epoch_address,
                     get_noc_addr(get_arg_val<uint32_t>(LOOP_RT_OFFSET + 14 + 2 * i),
@@ -54,7 +66,11 @@ void layer_barrier() {
             }
             noc_async_write_barrier();
         }
+#if BOUNDED_LAYER_BARRIER
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(release), generation);
+#else
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(release), generation);
+#endif
     }
 #if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
     auto* state = reinterpret_cast<uint32_t tt_l1_ptr*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET));

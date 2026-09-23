@@ -217,6 +217,7 @@ class DecoderLoop:
                 *kernel.defines,
                 ("LOOP_SOURCE", '"' + original + '"'),
                 ("LOOP_PATCH", str(patch)),
+                ("BOUNDED_LAYER_BARRIER", str(int(self.body.tuning.bounded_barrier))),
                 ("LOOP_RT_OFFSET", str(offset)),
                 ("LOOP_CT_OFFSET", str(len(kernel.compile_time_args))),
                 ("LOOP_CACHE_COLUMN", "5" if "VALUE" in defines else "4"),

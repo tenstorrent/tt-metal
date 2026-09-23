@@ -109,7 +109,7 @@ class FusedPreparation:
                     core_ranges=_grid(cores),
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=list(defines),
+                    defines=[*defines, *self.body.tuning.defines],
                     config=config,
                 )
             )
@@ -141,8 +141,8 @@ class FusedPreparation:
         ):
             kernel("qkv.cpp", self.projection_cores, config, ct, rt, [(role, "1")])
         for index, count, dtype in (
-            (0, 32, ttnn.bfloat16),
-            (1, 192, ttnn.bfloat8_b),
+            (0, 16 * self.body.tuning.buffers, ttnn.bfloat16),
+            (1, 96 * self.body.tuning.buffers, ttnn.bfloat8_b),
             (24, 6, ttnn.bfloat16),
             (31, 1, ttnn.uint32),
         ):

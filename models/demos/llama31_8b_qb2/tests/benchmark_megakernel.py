@@ -16,6 +16,7 @@ It does not report host latency as a serving or device-latency measurement.
 
 import argparse
 from copy import deepcopy
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,10 @@ def parse_args():
         help="Optional HF accuracy gate; otherwise report BF16-reference drift separately from matched TT checks",
     )
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined"), default="original")
+    parser.add_argument("--projection-buffers", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--wide-subblocks", action="store_true")
+    parser.add_argument("--bounded-layer-barrier", action="store_true")
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
     parser.add_argument("--reuse-mlp-scratch", action="store_true")
     args = parser.parse_args()
@@ -99,9 +104,13 @@ def run(args):
     from models.demos.llama31_8b_qb2.tt.generator import LlamaGenerator
     from models.demos.llama31_8b_qb2.tt.megakernel.decoder import enable_experimental_decode
     from models.demos.llama31_8b_qb2.tt.model import REVISION
+    from models.demos.llama31_8b_qb2.tt.megakernel.tuning import ProjectionTuning
     from models.demos.llama31_8b_qb2.tt.generator_vllm import LlamaForCausalLM
     from models.demos.utils.trace_region_sizes import build_trace_device_params
 
+    tuning = ProjectionTuning(args.projection_reader, args.wide_subblocks, args.bounded_layer_barrier, args.projection_buffers)
+    if args.mode == "baseline" and tuning != ProjectionTuning():
+        raise ValueError("Projection tuning applies only to experimental kernels")
     torch.set_num_threads(8)
     args.output.mkdir(parents=True, exist_ok=True)
     hf_reference = torch.load(args.hf_reference, map_location="cpu", weights_only=True) if args.hf_reference else None
@@ -111,6 +120,7 @@ def run(args):
         assert reference["context"] == args.context and reference["tokens"] == args.tokens
     result = {
         "mode": args.mode,
+        "projection_tuning": asdict(tuning),
         "reuse_mlp_scratch": args.reuse_mlp_scratch,
         "gu_workers": args.gu_workers,
         "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -147,6 +157,7 @@ def run(args):
                 reuse_scratch=args.reuse_mlp_scratch,
                 gu_workers=args.gu_workers,
                 kv_cache=generator.kv_cache,
+                tuning=tuning,
             )
         assert generator.model.num_layers == 32
         result["precision"] = generator.model.precision_policy

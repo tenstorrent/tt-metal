@@ -14,6 +14,7 @@ from pathlib import Path
 
 import torch
 import ttnn
+from .tuning import ProjectionTuning
 
 
 def _grid(cores):
@@ -47,11 +48,15 @@ class FusedMLP:
         fuse_output=False,
         fuse_attention=False,
         fuse_prepare=False,
+        tuning=None,
     ):
         if not layers or len(layers) > 32:
             raise ValueError("Provide one to 32 decoder layers")
         if gu_workers not in (8, 16):
             raise ValueError("gu_workers must be 8 or 16")
+        self.tuning = tuning or ProjectionTuning()
+        if reuse_scratch and self.tuning.reader != "original":
+            raise ValueError("Tuned readers require independent projection buffers")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch
@@ -282,7 +287,7 @@ class FusedMLP:
                         core_ranges=grid,
                         compile_time_args=ct,
                         runtime_args=rt,
-                        defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers))]
+                        defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers)), *self.tuning.defines]
                         + ([("FUSE_REDUCE", "1")] if self.fuse_reduce else [])
                         + ([("FUSE_NORM", "1")] if self.fuse_norm else [])
                         + ([("FUSE_OUTPUT", "1")] if self.fuse_output else [])
@@ -308,18 +313,18 @@ class FusedMLP:
             cbs.append(descriptor)
 
         for index, tiles, dtype in (
-            (0, 16, ttnn.bfloat16),
-            (1, (224 if self.reuse_scratch else 448) * 8 // self.gu_workers, ttnn.bfloat4_b),
-            (3, 112 if self.reuse_scratch else 224, ttnn.bfloat8_b),
-            (4, 14, ttnn.bfloat16),
+            (0, 8 * self.tuning.buffers, ttnn.bfloat16),
+            (1, (224 if self.reuse_scratch else 224 * self.tuning.buffers) * 8 // self.gu_workers, ttnn.bfloat4_b),
+            (3, 112 if self.reuse_scratch else 112 * self.tuning.buffers, ttnn.bfloat8_b),
+            (4, 7 * self.tuning.buffers, ttnn.bfloat16),
             (17, 16, ttnn.bfloat16),
             (24, 224 // self.gu_workers, ttnn.bfloat16),
             (25, 16, ttnn.bfloat16),
         ):
             cb(index, tiles, dtype, self.projection_grid)
         if self.fuse_output:
-            cb(6, 8, ttnn.bfloat16, self.projection_grid)
-            cb(7, 128, ttnn.bfloat8_b, self.projection_grid)
+            cb(6, 4 * self.tuning.buffers, ttnn.bfloat16, self.projection_grid)
+            cb(7, 64 * self.tuning.buffers, ttnn.bfloat8_b, self.projection_grid)
         cb(31, 1, ttnn.uint32, self.projection_grid)
         for index in (0, 1, 2):
             cb(index, 4, ttnn.bfloat16, self.sfpu_grid)

@@ -6,10 +6,12 @@ from pathlib import Path
 import ttnn
 from .mlp import _grid
 from .norm import FusedNorm
+from .tuning import ProjectionTuning
 
 
 class FusedHead:
-    def __init__(self, model, *, cores=None, norm_cores=None, norm_output=None):
+    def __init__(self, model, *, cores=None, norm_cores=None, norm_output=None, tuning=None):
+        self.tuning = tuning or ProjectionTuning()
         self.mesh = model.mesh_device
         if model.max_batch_size != 1 or model.padded_vocab_size != 131072:
             raise ValueError("Fused head requires the batch-one Llama3.1 vocabulary")
@@ -89,14 +91,14 @@ class FusedHead:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1")],
+                    defines=[(role, "1"), *self.tuning.defines],
                     config=config,
                 )
             )
         cbs = []
         for index, count, dtype in (
-            (0, 8, ttnn.bfloat16),
-            (1, 512, ttnn.bfloat8_b),
+            (0, 4 * self.tuning.buffers, ttnn.bfloat16),
+            (1, 256 * self.tuning.buffers, ttnn.bfloat8_b),
             (16, 64, ttnn.bfloat16),
             (24, 64, ttnn.bfloat16),
         ):

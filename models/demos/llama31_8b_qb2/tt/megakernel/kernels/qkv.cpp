@@ -6,6 +6,9 @@
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#ifdef READER
+#include "projection_reader.hpp"
+#endif
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto table_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
@@ -28,6 +31,9 @@ void QB2_ENTRY() {
     DeviceZoneScopedN("QKV-READ");
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(1), 2048);
     const auto weight = TensorAccessor(weight_args, weight_address, 1088);
+#if PROJECTION_READER > 0
+    tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank);
+#else
     for (uint32_t block = 0; block < 128; block += 16) {
         cb_reserve_back(0, 16);
         cb_reserve_back(1, 96);
@@ -39,6 +45,7 @@ void QB2_ENTRY() {
         cb_push_back(0, 16);
         cb_push_back(1, 96);
     }
+#endif
 #else
     cb_wait_front(16, 6);
     noc_semaphore_inc(peer(0, get_semaphore(0)), 1);

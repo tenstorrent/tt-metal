@@ -8,6 +8,7 @@ not replace complete decoder/model accuracy and paged-KV tests.
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 
 @pytest.mark.parametrize("gu_workers", [8, 16])
 @pytest.mark.parametrize("reuse_scratch", [False, True], ids=["separate", "shared"])
-def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers):
+def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers, tuning=None, measure=False):
     mesh = qb2_mesh
     torch.set_num_threads(8)
     folder = checkpoint_path()
@@ -48,9 +49,10 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers):
         workspace = layer.prepare_decode(1, workspace=workspace)
         layers.append(layer)
     assert layers[0].decode_weights["gate_up"].buffer_address() != layers[1].decode_weights["gate_up"].buffer_address()
-    body = FusedMLP(layers, reuse_scratch=reuse_scratch, gu_workers=gu_workers)
+    body = FusedMLP(layers, reuse_scratch=reuse_scratch, gu_workers=gu_workers, tuning=tuning)
     embedding = checkpoint.load(["model.embed_tokens.weight"])["model.embed_tokens.weight"]
     results = []
+    timing = []
     destination = (
         Path(os.environ["QB2_MEGAKERNEL_ARTIFACT_DIR"]) if os.environ.get("QB2_MEGAKERNEL_ARTIFACT_DIR") else None
     )
@@ -112,6 +114,15 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers):
                 for _ in range(5):
                     ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
                     torch.testing.assert_close(to_host(body.output), saved, rtol=0, atol=0)
+                if measure:
+                    for repeat in range(5):
+                        ttnn.synchronize_device(mesh)
+                        start = time.perf_counter()
+                        for _ in range(100):
+                            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
+                        ttnn.synchronize_device(mesh)
+                        timing.append({"layer": (0, 31)[row], "token": token, "repeat": repeat,
+                                       "replays": 100, "us": (time.perf_counter() - start) * 1e4})
             finally:
                 ttnn.release_trace(mesh, trace)
     if destination:
@@ -119,3 +130,5 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers):
             json.dumps(results, indent=2)
         )
     print(json.dumps(results, indent=2), flush=True)
+
+    return {"checks": results, "component_trace_timing": timing}

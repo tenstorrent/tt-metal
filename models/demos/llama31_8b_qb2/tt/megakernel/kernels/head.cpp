@@ -3,6 +3,9 @@
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#ifdef READER
+#include "projection_reader.hpp"
+#endif
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
@@ -23,6 +26,9 @@ void kernel_main() {
     DeviceZoneScopedN("LM-HEAD-READ");
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(1), 2048);
     const auto weight = TensorAccessor(weight_args, get_arg_val<uint32_t>(2), 1088);
+#if PROJECTION_READER > 0
+    tuned_stream_projection<0, 1, 4, 64, 128, 16, 1088>(input, weight, worker);
+#else
     for (uint32_t block = 0; block < 128; block += 4) {
         cb_reserve_back(0, 4);
         cb_reserve_back(1, 256);
@@ -39,6 +45,7 @@ void kernel_main() {
         cb_push_back(0, 4);
         cb_push_back(1, 256);
     }
+#endif
 #else
     DeviceZoneScopedN("LM-HEAD-WRITE");
     cb_wait_front(16, 64);

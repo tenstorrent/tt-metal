@@ -127,7 +127,7 @@ class ExperimentalDecoder(LlamaDecoder):
         return ttnn.typecast(result, self.residual_dtype) if result.dtype != self.residual_dtype else result
 
 
-def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8):
+def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8, tuning=None):
     """Share original weights, KV ownership and workspace, with explicit opt-in.
 
     Construct before warming or capturing any trace. The caller owns the
@@ -168,6 +168,7 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
             fuse_attention=mode in ("attention_tail", "decoder"),
             fuse_prepare=mode == "decoder",
             gu_workers=gu_workers,
+            tuning=tuning,
         )
         if mode != "swiglu"
         else None
@@ -228,7 +229,7 @@ class ExperimentalModel(LlamaModel):
         return ttnn.reshape(logits, shape, shape, skip_padding_fill=True)
 
 
-def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8, kv_cache=None):
+def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8, kv_cache=None, tuning=None):
     """Install the same body across all 32 layers before generator trace setup.
 
     Mode "decode_token" composes embedding, all layers and terminal logits in
@@ -245,6 +246,7 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
         mode="decoder" if is_loop else mode,
         reuse_scratch=reuse_scratch,
         gu_workers=gu_workers,
+        tuning=tuning,
     )
     if is_loop:
         from .loop import DecoderLoop
@@ -274,7 +276,7 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
             if len(free) < 24:
                 raise ValueError("The integrated terminal boundary requires24 free workers on the QB2 grid")
             integrated_head = FusedHead(
-                model, cores=free[:16], norm_cores=free[16:24], norm_output=body.normalizer.output
+                model, cores=free[:16], norm_cores=free[16:24], norm_output=body.normalizer.output, tuning=tuning
             )
         model.fused_decode_loop = DecoderLoop(
             body,
@@ -282,6 +284,6 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
             embedding_weight=model.embedding_weight if mode != "decoder_loop" else None,
             head=integrated_head,
         )
-        model.fused_head = FusedHead(model) if mode == "decoder_loop_head" else None
+        model.fused_head = FusedHead(model, tuning=tuning) if mode == "decoder_loop_head" else None
         model.__class__ = ExperimentalModel
     model.decode_families[1] = model.layers

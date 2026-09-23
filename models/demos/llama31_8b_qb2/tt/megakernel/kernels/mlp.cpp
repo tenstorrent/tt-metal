@@ -11,6 +11,9 @@
 #define GU_WORKERS 8
 #endif
 constexpr unsigned gu_width = 224 / GU_WORKERS;
+#ifndef PROJECTION_WIDE
+#define PROJECTION_WIDE 0
+#endif
 
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
@@ -51,8 +54,12 @@ void release_workers(uint32_t id, uint32_t begin, uint32_t end) {
 }
 
 #if defined(PROJECTION) && defined(READER)
+#include "projection_reader.hpp"
 template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Workers, typename Input, typename Weight>
 void stream_projection(const Input& input, const Weight& weight, uint32_t bank) {
+#if PROJECTION_READER > 0
+    tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(input, weight, bank);
+#else
     for (uint32_t k = 0; k < K; k += KBlock) {
         cb_reserve_back(A, KBlock);
         cb_reserve_back(B, KBlock * N);
@@ -69,6 +76,7 @@ void stream_projection(const Input& input, const Weight& weight, uint32_t bank) 
         cb_push_back(A, KBlock);
         cb_push_back(B, KBlock * N);
     }
+#endif
 }
 
 void QB2_ENTRY() {
@@ -228,19 +236,19 @@ void QB2_ENTRY() {
     if (get_arg_val<uint32_t>(0) < 8) {
         DeviceZoneScopedN("MLP-O-MATH");
         compute_kernel_hw_startup<SrcOrder::Reverse>(6, 7, 25);
-        projection<6, 7, 17, 25, 4, 16, 32>();
+        projection<6, 7, 17, 25, 4, 16, 32, PROJECTION_WIDE ? 8 : 4>();
     }
 #endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 24);
     {
         DeviceZoneScopedN("MLP-GU-MATH");
-        projection<0, 1, 16, 24, 8, gu_width, 128, GU_WORKERS == 16 ? 2 : 4>();
+        projection<0, 1, 16, 24, 8, gu_width, 128, PROJECTION_WIDE ? 7 : (GU_WORKERS == 16 ? 2 : 4)>();
     }
     if (get_arg_val<uint32_t>(0) >= 8) { return; }
     reconfig_data_format(1, 3, 0, 4);
     {
         DeviceZoneScopedN("MLP-DOWN-MATH");
-        projection<4, 3, 17, 25, 7, 16, 112>();
+        projection<4, 3, 17, 25, 7, 16, 112, PROJECTION_WIDE ? 8 : 4>();
     }
 }
 #elif defined(SWIGLU)
