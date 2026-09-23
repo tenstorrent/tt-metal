@@ -28,6 +28,8 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     compact_activations: str = "off"
+    attention_workers: int = 32
+    attention_chunk: int = 256
     projection_full_dst: str = "off"
     norm_full_dst: bool = False
     norm_tile_height: int = 32
@@ -40,6 +42,8 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.attention_workers not in (8, 16, 32) or self.attention_chunk not in (64, 128, 256):
+            raise ValueError("Attention requires8/16/32 workers and64/128/256-token chunks")
         if self.norm_tile_height not in (16, 32):
             raise ValueError("Norm tile height must be sixteen or thirty-two")
         if self.projection_full_dst not in ("off", "mlp", "head", "all"):
@@ -104,6 +108,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("ATTENTION_WORKERS", str(self.attention_workers)),
             ("FULL_DST_MLP", str(int(self.projection_full_dst in ("mlp", "all")))),
             ("FULL_DST_HEAD", str(int(self.projection_full_dst in ("head", "all")))),
             ("TINY_PROJECTION_M", str(int(self.projection_tile_height == 16))),

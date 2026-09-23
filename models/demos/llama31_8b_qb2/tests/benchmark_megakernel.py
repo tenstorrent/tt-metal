@@ -82,6 +82,7 @@ def parse_args():
     )
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--profiler-phase", choices=("main", "o", "gu", "down"), default="main")
+    parser.add_argument("--require-numerical-agreement", action="store_true", help="Secondary reassociation track: every teacher step/KV PCC>=0.9999,relL2<0.01 and exact greedy/teacher top1")
     parser.add_argument("--require-exact", action="store_true", help="Require exact teacher logits, touched KV and greedy output against reference")
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
@@ -90,6 +91,8 @@ def parse_args():
     parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6), default=0)
     parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
     parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
+    parser.add_argument("--attention-workers", type=int, choices=(8, 16, 32), default=32)
+    parser.add_argument("--attention-chunk", type=int, choices=(64, 128, 256), default=256)
     parser.add_argument("--projection-full-dst", choices=("off", "mlp", "head", "all"), default="off")
     parser.add_argument("--norm-full-dst", action="store_true")
     parser.add_argument("--norm-tile-height", type=int, choices=(16, 32), default=32)
@@ -114,6 +117,8 @@ def parse_args():
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
     parser.add_argument("--reuse-mlp-scratch", action="store_true")
     args = parser.parse_args()
+    if args.require_exact and args.require_numerical_agreement:
+        parser.error("Select the exact or numerical agreement gate explicitly")
     if args.reuse_mlp_scratch and args.mode != "mlp":
         parser.error("--reuse-mlp-scratch requires --mode mlp")
     if args.context < 1 or args.tokens < 3 or args.repeats < 1:
@@ -141,6 +146,7 @@ def run(args):
         compact_activations=args.compact_activations,
         head_placement=args.head_placement,
         qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
+        attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
@@ -335,6 +341,7 @@ def run(args):
         result["teacher_positions"] = positions
         if reference is not None:
             result["teacher_logits"] = metrics(logits, reference["teacher_logits"])
+            result["teacher_top1_agreement"] = (logits.argmax(-1) == reference["teacher_logits"].argmax(-1)).float().mean().item()
             result["teacher_step_metrics"] = [metrics(a, b) for a, b in zip(logits, reference["teacher_logits"])]
             assert result["teacher_logits"]["pcc"] >= 0.999
             assert result["teacher_logits"]["relative_l2"] < 0.03
@@ -383,12 +390,21 @@ def run(args):
                 ]
                 for pair, expected in zip(cache_evidence, hf_reference["teacher_cache"])
             ]
+        torch.save(evidence, args.output / "evidence.pt")
+        result["agreement_policy"] = "exact" if args.require_exact else "numerical_09999_l2_001_exact_top1" if args.require_numerical_agreement else "legacy_matched_metrics"
+        if args.require_numerical_agreement:
+            assert reference is not None, "Numerical agreement requires --reference"
+            checked = [result["teacher_logits"], *result["teacher_step_metrics"],
+                       *[m for pair in result["teacher_cache_metrics"] for m in pair]]
+            assert all(m["pcc"] >= 0.9999 and m["relative_l2"] < 0.01 for m in checked), "Secondary numerical threshold failed"
+            assert result["teacher_top1_agreement"] == 1.0, "Teacher top1 differs"
+            assert output == reference["generated_tokens"], "Greedy outputs differ"
+            result["numerical_agreement_passed"] = True
         if args.require_exact:
             assert reference is not None, "--require-exact requires --reference"
             assert result["teacher_logits"]["exact"], "Teacher logits differ from reference"
             assert all(m["exact"] for pair in result["teacher_cache_metrics"] for m in pair), "Touched KV differs"
             assert output == reference["generated_tokens"], "Greedy outputs differ"
-        torch.save(evidence, args.output / "evidence.pt")
         result["comparison_checks_passed"] = True
         if args.require_hf_pcc is not None:
             assert hf_reference is not None, "--require-hf-pcc needs --hf-reference"

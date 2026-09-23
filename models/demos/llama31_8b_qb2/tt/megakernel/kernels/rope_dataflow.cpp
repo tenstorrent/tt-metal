@@ -3,6 +3,9 @@
 #ifndef QB2_ENTRY
 #define QB2_ENTRY kernel_main
 #endif
+#ifndef ATTENTION_WORKERS
+#define ATTENTION_WORKERS 32
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "zero_l1.hpp"
@@ -70,7 +73,7 @@ void QB2_ENTRY() {
     noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5), get_semaphore(1)), 1);
     noc_async_atomic_barrier();
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1)), 3);
-    for (uint32_t i = 0; i < 32; ++i) {
+    for (uint32_t i = 0; i < ATTENTION_WORKERS; ++i) {
         noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(6 + 2 * i), get_arg_val<uint32_t>(7 + 2 * i), get_semaphore(4)), 1);
     }
 #else

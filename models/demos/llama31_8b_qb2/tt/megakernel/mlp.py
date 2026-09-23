@@ -177,7 +177,7 @@ class FusedMLP:
             from .attention import FusedAttention
 
             self.attention_stage = FusedAttention(layers[0], output=workspace["o"] if fuse_prepare else None,
-                cores=self.placement.map([ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)], row_major=True), compact_output=self.tuning.compact_activations == "all")
+                cores=self.placement.map([ttnn.CoreCoord(x, y) for y in range(6, 6 + self.tuning.attention_workers // 8) for x in range(8)], row_major=True), k_chunk_size=self.tuning.attention_chunk, compact_output=self.tuning.compact_activations == "all")
         self.preparation = None
         if fuse_prepare:
             from .prepare import FusedPreparation

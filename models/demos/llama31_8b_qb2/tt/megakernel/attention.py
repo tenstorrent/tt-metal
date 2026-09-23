@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Compose native paged SDPA with a BF16 head concatenation and ready flag.
 
-Attention retains the native 32-core grouping and HiFi4/FP32 compute policy.
-Its workers occupy rows 6..9, disjoint from projection, norm and fabric workers.
+Attention retains the native HiFi4/FP32 compute policy. Worker count and chunk
+size are explicit experiments that can change numerical reduction order.
 """
 
 from pathlib import Path
@@ -14,21 +14,21 @@ from .mlp import _grid
 
 
 class FusedAttention:
-    def __init__(self, layer, *, output=None, cores=None, compact_output=False):
+    def __init__(self, layer, *, output=None, cores=None, compact_output=False, k_chunk_size=256):
         self.compact_output = compact_output
         self.mesh = layer.mesh_device
         if self.mesh.compute_with_storage_grid_size().y < 10:
             raise ValueError("Attention composition requires ten worker rows")
         self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)]
-        if len(self.cores) != 32 or self.cores != sorted(self.cores, key=lambda c: (c.y, c.x)):
-            raise ValueError("Attention requires32 workers in row-major native grouping order")
+        if len(self.cores) not in (8, 16, 32) or self.cores != sorted(self.cores, key=lambda c: (c.y, c.x)):
+            raise ValueError("Attention requires8/16/32 workers in row-major native grouping order")
         self.grid = _grid(self.cores)
         self.compute = layer.decode_sdpa_compute
         self.config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
+            compute_with_storage_grid_size=[8, len(self.cores) // 8],
             sub_core_grids=self.grid,
             q_chunk_size=32,
-            k_chunk_size=256,
+            k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
         )
         self.heads = ttnn.empty(

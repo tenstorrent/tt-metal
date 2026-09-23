@@ -21,7 +21,7 @@ from .test_megakernel import compare, copy_to
 
 
 @pytest.mark.parametrize("count", [1, 2])
-def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
+def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None, require_exact=True):
     torch.set_num_threads(8)
     mesh = qb2_mesh
     checkpoint = Checkpoint(checkpoint_path())
@@ -134,14 +134,17 @@ def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
                 record = {"position": pos, "output": compare(actual, expected), "cache": []}
                 for native, fused in zip(baseline_cache, loop_cache):
                     record["cache"].append([compare(to_host(b), to_host(a)) for a, b in zip(native, fused)])
+                if require_exact:
+                    assert record["output"]["exact"] and all(m["exact"] for pair in record["cache"] for m in pair)
+                replay_cache = [[to_host(t).clone() for t in pair] for pair in loop_cache]
                 loop.reserve_invocations(8)
                 for _ in range(8):
                     ttnn.execute_trace(mesh, traces[1], cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh)
                 record["replay"] = compare(to_host(outputs[1]), actual)
-                for native, fused in zip(baseline_cache, loop_cache):
-                    for a, b in zip(native, fused):
-                        assert torch.equal(to_host(a), to_host(b)), "Repeated loop replay changed the cache"
+                for before, fused in zip(replay_cache, loop_cache):
+                    for a, b in zip(before, fused):
+                        assert torch.equal(a, to_host(b)), "Repeated loop replay changed the cache"
                 results.append(record)
             except Exception:
                 torch.save(

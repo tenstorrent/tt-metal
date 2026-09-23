@@ -193,3 +193,10 @@ Next unqualifiedsource experiments: fullDST synchronization allows14-wideGU and1
 ## 2026-09-23 13:02 UTC — wide projection correctness failure
 
 Source77a81d2f fullDST MLP14/16 subblocks withprojectionTile16 producednonfiniteoutput inreal0/31 loopWatcher atposition127. NoWatcherboundsfault/hang; processclosednormally. ThisvariantisNOTqualified. Savedoriginal /tmp focusedfailuredata underartifacts/full-dst-loop-watcher-evidence beforeothertests. Runnernowassignsunique QB2_MEGAKERNEL_ARTIFACT_DIR forfocusedtests. Norm-only gatescontinueindependently. NeedisolatefullDST32geometry versus16geometrybeforeacceptinganywideprojectionmode.
+
+## 2026-09-23 13:11 UTC — tiny norm win and broader qualification
+
+Source03e3807a (samekernels77a81d2f) full128five-trial medians: Tiny16projections+headselect+normTile16=7.939418936; +normfullDST8wide=7.957743162 (loss); norm32+bankVC=7.973184422 (noimprovement over7.971908control). Both tiny/widenormloopWatcherpassedexactreal0/31,page/inactive/replay. FullDST MLP32-row componentalso FAILED (gate/upfinitebutPCC0, hugeincorrectvalues); geometry16isnotsolecause. Evidenceuniqueartifacts/full-dst-mlp32-watcher-evidence. No wideprojectionheadaccepted. Qualifyingtiny16projections+tiny16norm+headselect (QKVdefault3/prefix2,bankVCoff,wideDSToff,compactoff) at2048/8192/long viaartifacts/commands/tiny-qualification.sh.
+
+## 13:24 UTC — attention reassociation gate
+Tiny16 projection+norm, headselect qualified exact at2048=8.363490485,8192=9.032629291,128/256=7.976935169ms (five warmed trials each), versus128=7.939418936. Still~0.30–0.35ms behind native. Explicit attention worker/chunk knobs preserve native HiFi4/FP32 and full causal/KV work. Secondary policy declared BEFORE tests: per-step/aggregate teacher and all64 KV PCC>=0.9999, relativeL2<0.01, exact teacher top1 and greedy, stable replay.32workers/chunk128 FAILED focused PCC0.999891698; reject under unchanged policy.16workers/chunk256 passed focused WorkerWatcher, full128/8192 screening nowrunning via attention16-screen.sh. Partial/failure evidence retained.
