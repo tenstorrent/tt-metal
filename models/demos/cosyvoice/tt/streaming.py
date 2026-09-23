@@ -112,13 +112,11 @@ class TtStreamingSynthesizer:
     def __init__(self, device, flow, hift, config: StreamConfig | None = None, dtype=ttnn.bfloat16):
         self.device, self.flow, self.hift, self.dtype = device, flow, hift, dtype
         self.cfg = config or StreamConfig()
-        # Deliberately does NOT turn on the vocoder's trace cache, even though every
-        # middle chunk decodes the same geometry. Capturing a fresh geometry costs about
-        # a second against the ~34 ms per chunk a replay saves, so the crossover is near
-        # 30 chunks -- a minute of audio. Below that, enabling it makes a stream slower;
-        # a 12-chunk stream measured 2.2x worse. Long-form callers can opt in with
-        # `hift.enable_trace(True)` or `COSYVOICE_HIFT_TRACE=1`. See
-        # TtHiFTGenerator.enable_trace for the numbers.
+        # The vocoder's trace cache stays off, although every middle chunk decodes the
+        # same geometry: capturing a new geometry costs more than replays save until a
+        # stream reaches about 30 chunks (`TtHiFTGenerator.enable_trace` has the
+        # figures). Long-form callers can opt in with `hift.enable_trace(True)` or
+        # `COSYVOICE_HIFT_TRACE=1`.
         n = self.cfg.mel_overlap_len
         # Split windows uploaded once: fade_in_out multiplies the head of the new
         # signal by the window's first half and the tail of the old by its second.
@@ -279,8 +277,8 @@ class TtStreamingSynthesizer:
         `(phase, noise_unit)`.
 
         Implemented by pushing the finished list through `StreamSession` one token
-        at a time, so this and the pipelined path share **one** chunk scheduler
-        rather than two that have to be kept in agreement. Chunk boundaries are a
+        at a time, so this and the pipelined path share one chunk scheduler rather
+        than two that have to be kept in agreement. Chunk boundaries are a
         pure function of the token count, so feeding a completed list token by token
         produces exactly the chunks the original loop did -- which is what lets the
         pipelined path inherit `test_device_streamed_matches_non_streamed`'s content
@@ -310,28 +308,28 @@ class TtStreamingSynthesizer:
 class StreamSession:
     """The chunk scheduler, driven one token at a time.
 
-    **This is the difference between chunked vocoding and streaming.** The batch
-    form -- hand it a finished token list and let it cut that list into chunks --
-    can only ever measure whether chunked synthesis reconstructs the same audio. It
-    cannot start the flow decoder before the LLM has produced its last token,
-    because it is given the list only once the list exists.
+    This is the difference between chunked vocoding and streaming. The batch form --
+    hand it a finished token list and let it cut that list into chunks -- can only
+    measure whether chunked synthesis reconstructs the same audio. It cannot start the
+    flow decoder before the LLM has produced its last token, because it is given the
+    list only once the list exists.
 
     Driving the same scheduler from a callback inverts that. `push` is called by the
     AR decode loop as each token is sampled (`TtTransformerLM.generate`'s `on_token`);
     the moment `hop + overlap` tokens have accumulated, the flow decoder and the
     vocoder run on them and hand back audio, and generation resumes. So the first
     waveform chunk exists after roughly `token_hop_len + token_overlap_len` tokens
-    rather than after the whole utterance -- **time to first audio stops growing with
-    utterance length**, which is the property that makes a TTS pipeline streamable.
+    rather than after the whole utterance: time to first audio stops growing with
+    utterance length, which is what makes a TTS pipeline streamable.
 
     The three stages still run one after another on one device and one command queue.
-    There is no overlap of *compute*, and a chunk's flow/vocoder work does pause token
+    There is no overlap of compute, and a chunk's flow/vocoder work pauses token
     generation while it runs, so the total gets slightly worse. What changes is when
-    the first sample can be handed to a caller, and that is the number the streaming
+    the first sample can be handed to a caller, which is what the streaming
     requirement is about. `tests/perf/test_streaming_perf.py` measures both.
 
-    The schedule itself is unchanged from the batch loop it replaces, deliberately:
-    same `hop`, same growth by `stream_scale_factor`, same overlap, same finalize.
+    The schedule is the batch loop's: same `hop`, same growth by
+    `stream_scale_factor`, same overlap, same finalize.
     """
 
     def __init__(self, synth: TtStreamingSynthesizer, ctx, rng_for_chunk):

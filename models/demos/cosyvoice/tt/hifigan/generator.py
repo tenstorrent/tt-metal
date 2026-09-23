@@ -138,7 +138,7 @@ class TtHiFTGenerator:
     def __init__(self, device, bag, dtype=ttnn.bfloat16, upsample_rates=(8, 8), resblock_dilations=(1, 3, 5)):
         """Built from a `WeightBag` -- the flat .npz `scripts/export_weights.py`
         emits -- so nothing here imports the CosyVoice package. See tt/weights.py
-        for why that boundary is load-bearing."""
+        for why that boundary matters."""
         from ..weights import build_conv1d, build_conv_transpose1d, build_resblock
         from .conv import prepare_weights_default
 
@@ -243,7 +243,7 @@ class TtHiFTGenerator:
         self.istft = TtIStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
 
     def _verify_weight_preparation(self) -> int:
-        """Arm the prepared-weight check on every `TtConv1d` this generator owns.
+        """Turn on the prepared-weight check for every `TtConv1d` this generator owns.
 
         A walk rather than a constructor argument: the convolutions are two and three
         levels down (ResBlocks hold six each, the f0 predictor holds four) and threading a
@@ -398,29 +398,23 @@ class TtHiFTGenerator:
         self._release_trace()
 
     def enable_trace(self, on: bool = True):
-        """Opt into trace capture for `decode`. **Off by default, and deliberately.**
+        """Opt into trace capture for `decode`. Off by default.
 
-        Replaying is worth having: `43.3 -> 9.3 ms` per chunk on Blackhole at a streaming
-        geometry, `53 -> 19 ms` on n300. **Capturing is what makes it a trade.** Taking a
-        trace for a geometry the process has not captured before costs about `980 ms` on
-        both parts, against the `~34 ms` a replay saves -- so the crossover is near
-        **30 chunks**, roughly a minute of audio. Below that, enabling this makes the
-        stream slower; a 12-chunk stream measured `519 -> 1151 ms`.
+        A replay is faster than an untraced decode: `43.3 -> 9.3 ms` per chunk on
+        Blackhole at a streaming geometry, `53 -> 19 ms` on n300. Capturing a geometry for
+        the first time costs about `980 ms` on both, against the `~34 ms` a replay saves,
+        so the crossover is near 30 chunks, roughly a minute of audio; below that,
+        tracing makes a stream slower (a 12-chunk stream: `519 -> 1151 ms`).
 
-        Two things about that `980 ms` are worth writing down, because both were guessed
-        wrong first. It is **not** kernel compilation -- warming twice instead of once
-        moved it from `933` to `970 ms`. And it is **not** the first capture in the
-        process -- priming with a one-op trace first costs `0.4 ms` and changes nothing.
-        It is the first capture *of a given geometry*; a second capture of one already
-        seen costs about `110 ms`, which is why an in-session measurement flatters it.
+        The `980 ms` is the first capture of a given geometry. It is not kernel
+        compilation (a second warm-up pass leaves it unchanged) and not the first
+        capture in the process (priming with a one-op trace changes nothing); capturing
+        an already-seen geometry again costs about `110 ms`.
 
-        No sighting-count heuristic can decide this, because it is a guess about the
-        future. The first attempt captured on a geometry's second sighting and the
-        end-to-end RTF gate caught it: that harness warms once and times the second call,
-        so it paid the capture and took one replay back, moving the vocoder stage from
-        `0.080 s` to `0.172 s` and RTF from `0.414` to `0.429`.
-
-        So it is off, including for `TtStreamingSynthesizer`, and a caller that knows its
+        Whether a stream will run long enough is not knowable from sighting counts:
+        capturing on a geometry's second sighting slows the end-to-end RTF benchmark,
+        which warms once and times the second call (vocoder `0.080 -> 0.172 s`). So it
+        is off, including for `TtStreamingSynthesizer`, and a caller that knows its
         stream is long asks for it. `COSYVOICE_HIFT_TRACE=1` or `=0` overrides.
         """
         if self._trace_forced is not None:
@@ -436,14 +430,10 @@ class TtHiFTGenerator:
             self._trace_mel = ttnn.clone(mel)
             self._trace_s = ttnn.clone(s)
             # Warm twice. The program cache and every convolution's prepared-weight cache
-            # have to be populated before recording -- a JIT compile or a weight tilize
+            # have to be populated before recording: a JIT compile or a weight tilize
             # during capture is host work a trace cannot contain, and it does not fail,
-            # it just lands inside the capture.
-            #
-            # Two passes rather than one follows the Informer bring-up's finding, but be
-            # aware it is not what dominates here: measured on a streamed geometry, one
-            # warm-up gave a 933 ms capture and two gave 970 ms. The cost is the first
-            # trace capture in the process, not kernel compilation.
+            # it ends up inside the capture. The capture's own cost is separate; see
+            # `enable_trace`.
             for _ in range(2):
                 ttnn.deallocate(self._decode_impl(self._trace_mel, self._trace_s, mel_frames, batch_size))
             ttnn.synchronize_device(self.device)
@@ -477,9 +467,9 @@ class TtHiFTGenerator:
         ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
         # The clone is what the caller owns; `_trace_out` stays put because the trace
         # writes through it on every replay. TTNN warns that allocating while a trace
-        # is alive can collide with addresses the trace recorded -- one clone per
-        # replay is the same shape of risk the CFM already carries, and
-        # `test_hift_trace_is_bit_identical` replays repeatedly to keep it honest.
+        # is alive can collide with addresses the trace recorded; the CFM takes the
+        # same risk with one clone per replay, and `test_hift_trace_is_bit_identical`
+        # replays repeatedly to check it.
         return ttnn.clone(self._trace_out)
 
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
@@ -489,20 +479,19 @@ class TtHiFTGenerator:
         the 282-frame utterance: `46.7 -> 14.3 ms` on Blackhole `p150b` and
         `47.4 -> 29.7 ms` on n300, bit-identical (`max|d| 0.000e+00`).
 
-        **Only when a caller has opted in with `enable_trace()`**, and then only from a
-        geometry's second sighting -- capture costs more than one untraced run, so it
-        has to be asked for by something that knows the geometry will repeat. See
-        `enable_trace` for the measurement behind that.
+        Only when a caller has opted in with `enable_trace()`, and then only from a
+        geometry's second sighting: capture costs more than one untraced run, so it is
+        for callers that know the geometry will repeat (see `enable_trace`).
 
-        Every shape here is a function of `mel_frames`, so the trace is bound to one
-        length -- hence the key, and hence the release when the length changes.
+        Every shape here is a function of `mel_frames`, so a trace fits exactly one
+        length -- hence the key, and the release when the length changes.
 
-        **One trace is kept, not one per geometry.** A streamed utterance is
+        One trace is kept, not one per geometry. A streamed utterance is
         `A, B, B, ... B, C`: a first chunk without mel context, a run of identical middle
-        chunks, and a final chunk that skips the overlap trim. Only `B` ever repeats, so
-        one slot is the whole win, and the first-sighting rule means `A` and `C` never
-        evict it. A workload that alternated two *repeating* geometries would thrash at
-        one capture each -- if that ever shows up, this is the line to change.
+        chunks, and a final chunk that skips the overlap trim. Only `B` repeats, so one
+        slot is the whole win, and the second-sighting rule means `A` and `C` never
+        evict it. A workload alternating two repeating geometries would recapture on
+        every switch.
         """
         key = (mel_frames, batch_size)
         if self._trace_enabled and not self._trace_off:
@@ -583,9 +572,9 @@ class TtHiFTGenerator:
 
         mag = ttnn.exp(mag_lin)
         ttnn.deallocate(mag_lin)
-        # The reference clips magnitude at 1e2. exp() is non-negative, so a lower
-        # bound of 0 makes this the same operation as torch.clip(max=1e2) without
-        # depending on clamp accepting a None bound.
+        # The reference clips magnitude at 1e2. exp() is non-negative, so a minimum of
+        # 0 makes this the same operation as torch.clip(max=1e2) without depending on
+        # clamp accepting None for the minimum.
         mag_c = ttnn.clamp(mag, 0.0, 1e2)
         ttnn.deallocate(mag)
 

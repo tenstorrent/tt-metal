@@ -26,9 +26,9 @@ implies:
 
 Both facts are carried in the exported metadata rather than hardcoded here.
 
-Generation length is bounded by the *text* length: `min_len = 2 * text_len` and
+Generation length is set by the *text* length: `min_len = 2 * text_len` and
 `max_len = 20 * text_len`, with the EOS token masked out until `min_len`. Those
-bounds are what stop the sampler ending an utterance after one token.
+limits are what stop the sampler ending an utterance after one token.
 """
 from __future__ import annotations
 
@@ -50,11 +50,10 @@ class TtTransformerLM:
 
     def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, weights_dtype=None):
         """`weights_dtype=ttnn.bfloat8_b` stores the AR decoder's matrices at half
-        the width of the activations.
+        the width of the activations, halving their memory (PERF.md §6: a memory
+        option, not a speed one).
 
-        It applies to the **AR decoder only**, which is the stage that reads every
-        weight from DRAM to produce one token -- at batch 1 that is a bandwidth
-        problem, not an arithmetic one. The text encoder runs once per utterance
+        It applies to the AR decoder only. The text encoder runs once per utterance
         and the output head is a single matmul, so neither is worth the accuracy.
         """
         self.device, self.dtype, self.meta = device, dtype, meta
@@ -156,25 +155,20 @@ class TtTransformerLM:
     def logits_for_last(self, ys):
         """`llm_decoder(y[:, -1])` -> `[B, 4097]` on the host, ready for sampling.
 
-        Batch 1 -- every published figure -- returns a flat `[4097]`, unchanged; a
-        batched decode returns one row per sequence.
+        At batch 1 it returns a flat `[4097]`; a batched decode returns one row per
+        sequence.
 
         The head is the one place a host round trip is unavoidable: RAS needs the
-        full 4097-way distribution *and* the history of emitted tokens, and its
-        repetition branch rewrites a score before resampling.
-
-        Moving it to `ttnn.sampling` was measured and rejected -- the whole
-        per-token tail is 0.352 ms, 2.7 % of a token, and on-device sampling could
-        remove at most 0.217 ms of it while giving up exact agreement with the
-        reference. See the note in `sampling.py` and `scripts/profile_token_tail.py`.
+        full 4097-way distribution and the history of emitted tokens, and its
+        repetition branch rewrites a score before resampling. `ttnn.sampling` would
+        save a small share of the per-token tail and give up exact agreement with the
+        reference (PERF.md Part II §1.6; `scripts/profile_token_tail.py`).
         """
         t = ys.shape[1]
-        # A single-row `ys` needs no slice, and taking one anyway is actively
-        # harmful: `ttnn.slice` over the full extent returns an **alias of the
-        # input**, so the `deallocate` below would free the caller's tensor. That
-        # is invisible while `ys` is a fresh per-step allocation the caller frees
-        # regardless -- and fatal once it is the trace's persistent output buffer,
-        # where it surfaces as "Input Tensor is not allocated" on the *next* step.
+        # A single-row `ys` takes no slice: `ttnn.slice` over the full extent returns
+        # an alias of the input, so the `deallocate` below would free the caller's
+        # tensor. When `ys` is the trace's persistent output buffer, that surfaces as
+        # "Input Tensor is not allocated" on the next step.
         b = ys.shape[0]
         owned = t > 1
         last = ttnn.slice(ys, [0, t - 1, 0], [b, t, ys.shape[2]]) if owned else ys
@@ -237,7 +231,7 @@ class TtTransformerLM:
 
         `positional()` and `causal_mask()` memoise by size, which is right within
         one utterance and wrong across a sweep: every utterance has its own prefix
-        length and its own bucket, so the tables grow without bound and the
+        length and its own bucket, so the tables grow without limit and the
         allocator runs out somewhere in the middle. The weights are untouched.
         """
         for cache in (self._causal, self.decoder._pos_cache):
@@ -264,7 +258,7 @@ class TtTransformerLM:
         `sampler='greedy'` makes the stream deterministic, which is what the device
         tests use; `'ras'` reproduces the reference's stochastic policy.
 
-        **`on_token(token, index)` is called as each token is sampled**, before the
+        `on_token(token, index)` is called as each token is sampled, before the
         next decode step is issued. It is what makes the pipeline streamable: a caller
         can run the flow decoder and the vocoder on a completed chunk while this loop
         is still decoding later tokens, instead of waiting for the return value.
@@ -302,27 +296,24 @@ class TtTransformerLM:
         ttnn.deallocate(ys)
         ys = None
 
-        # Trace capture is worth ~2.2x on the decode step, verified bit-exact
-        # against the untraced path; PERF.md carries the current figures and is
-        # the one place they are maintained. Only the decode step is
-        # traced -- prefill runs once per utterance with a different shape, so
-        # tracing it would buy one dispatch saving for a second capture. Capture
-        # costs two warm-up passes, so it is skipped for very short generations.
+        # Trace capture speeds up the decode step and is bit-exact against the
+        # untraced path (PERF.md §6). Only the decode step is traced -- prefill runs
+        # once per utterance with a different shape, so tracing it would buy one
+        # dispatch saving for a second capture. Capture costs two warm-up passes, so
+        # it is skipped for very short generations.
         traced = None
         if use_trace and cap > 8:
             from .decoder import TracedDecodeStep, TracedDecodeStepInPlace, kv_inplace_default
 
             # `COSYVOICE_KV_INPLACE` writes the KV cache in place instead of rebuilding
             # it; unset, `kv_inplace_default` follows the architecture (on for
-            # Wormhole, off for Blackhole -- see its docstring for the numbers). It
-            # costs two things the moving cache does not: 65 captured traces instead
-            # of one, so it needs a much larger trace region (384 MB observed to work;
-            # 64 MB fails); and it is not bit-exact against the moving cache (worst
-            # PCC 0.9986 over 72 steps, non-accumulating). The fallback below turns a
-            # too-small trace region into a warning and an untraced decode (2.2x
-            # slower than either traced path) rather than a crash, which is what makes
-            # defaulting it on for Wormhole safe for a caller that has not resized its
-            # device: it degrades audibly, it does not fail.
+            # Wormhole, off for Blackhole). It costs two things the moving cache does
+            # not: 65 captured traces instead of one, so a much larger trace region
+            # (`TracedDecodeStepInPlace`), and it is not bit-exact against the moving
+            # cache (PERF.md §6). The fallback below turns a too-small trace region into
+            # a warning and an untraced decode rather than a crash, which is what makes
+            # the Wormhole default safe for a caller that has not sized its trace
+            # region: it runs slower, it does not fail.
             _kv_env = os.environ.get("COSYVOICE_KV_INPLACE")
             use_inplace = (_kv_env == "1") if _kv_env is not None else kv_inplace_default(self.decoder.device)
             kls = TracedDecodeStepInPlace if use_inplace else TracedDecodeStep
@@ -335,8 +326,8 @@ class TtTransformerLM:
                 # Capture needs the device opened with a `trace_region_size`, which
                 # not every caller does. Tracing is an optimisation, so a failure
                 # here degrades to the untraced path rather than failing the
-                # generation -- but it says so, because silently running 2.2x slower
-                # is exactly the kind of regression that hides for months.
+                # generation -- but it says so, because nothing else would report a
+                # decode that silently runs untraced.
                 logger.warning(f"trace capture unavailable, falling back to untraced decode: {e}")
                 if traced is not None:
                     traced.release()
@@ -350,14 +341,11 @@ class TtTransformerLM:
             win_size=cfg.get("win_size", 10),
             tau_r=cfg.get("tau_r", 0.1),
         )
-        # **`try`/`finally`, because a leaked trace does not just leak.** If
-        # anything in this loop raises -- a sampler edge case, an `on_token`
-        # callback, a device error -- an unreleased trace stays live on the device
-        # for whatever runs next. This port has measured what that costs twice
-        # over: work that allocates beside a live trace can have its buffers
-        # silently corrupted, and at whole-utterance scale it hangs the board
-        # outright on Wormhole. So the release is unconditional, and the caches
-        # are freed on the same terms.
+        # `try`/`finally`: if anything in this loop raises -- a sampler edge case, an
+        # `on_token` callback, a device error -- an unreleased trace would stay live
+        # for whatever runs next, and work that allocates beside a live trace can be
+        # corrupted or hang the board (`docs/VALIDATION.md`). So the release is
+        # unconditional, and the caches are freed on the same terms.
         try:
             for i in range(cap):
                 logp = torch.log_softmax(logits, dim=-1)
@@ -408,28 +396,23 @@ class TtTransformerLM:
         and optionally `spk_emb`, `prompt_speech_tokens`, `text_len`. One list of
         token IDs comes back per request, in order.
 
-        **Why this exists.** A decode step at one row is bound by reading the AR
-        decoder's 14 blocks of weights out of DRAM: every matmul is a matrix against
-        a single row, so there is no reuse to amortise the read against. That is what
-        `test_device_decode_bfloat8_weights` measures from the other side -- halving
-        the weight *width* moves the step, because the step is the read. Batching
-        attacks the same bottleneck from the numerator: the same weight read serves
-        `B` rows, so the per-utterance cost falls without any kernel changing.
+        At one row, each decode matmul multiplies a weight matrix by a single row, and
+        each op serves one utterance. A batched step serves `B` rows with the same
+        ops and the same weight reads, so the per-utterance cost falls without any
+        kernel changing (PERF.md §4).
 
-        **Why the batch can be ragged.** Utterances have different prompt lengths and
-        stop at different tokens. Both are absorbed by the cache being *right*
-        aligned: each row's live history ends at the last slot and differs only in
-        where it begins, which is exactly one number per row in the mask
-        (`right_aligned_bias` takes a list). Nothing gathers, nothing re-packs.
+        The batch can be ragged. Utterances have different prompt lengths and stop at
+        different tokens; both are absorbed by the cache being right-aligned: each
+        row's live history ends at the last slot and differs only in where it
+        begins, which is one number per row in the mask (`right_aligned_bias` takes
+        a list). Nothing gathers, nothing re-packs.
 
-        **What it costs.** Rows that hit EOS early keep stepping until the longest
-        row finishes -- their outputs are discarded. So the wall clock is set by the
-        longest utterance in the batch and the useful fraction is
-        `mean(length) / max(length)`; a batch of similar-length utterances is worth
-        much more than a mixed one. The alternative -- compacting the batch when a
-        row retires -- would rebuild the KV cache at a new batch size, and so pay a
-        fresh trace capture, several times per batch. Reported rather than hidden:
-        the perf test prints the padding waste alongside the throughput.
+        Rows that hit EOS early keep stepping until the longest row finishes, and
+        their outputs are discarded, so the wall clock is set by the longest
+        utterance and the useful fraction is `mean(length) / max(length)`. Compacting
+        the batch when a row retires would rebuild the KV cache at a new batch size
+        and pay a fresh trace capture each time. The perf test prints the padding
+        waste alongside the throughput.
 
         Prefill stays per-utterance and untraced. Each prompt is a different length,
         so batching prefill would mean padding every prompt to the longest and

@@ -6,10 +6,10 @@
 `scripts/export_weights.py` runs once in the reference venv and emits a flat
 `.npz` with weight_norm already folded. This module turns that into TTNN modules.
 
-The point is the boundary: **tt-metal's environment never imports cosyvoice,
-hyperpyyaml, or the reference's torch pin.** That is the same rule the demo README
-states and the Docker image enforces the hard way -- installing whisper into
-tt-metal's `python_env` pulled a triton that broke `import torch` outright.
+The point is the boundary: tt-metal's environment never imports cosyvoice,
+hyperpyyaml or the reference's torch pin. Installing the reference's dependencies
+into tt-metal's `python_env` pulls in a triton (via whisper) that breaks
+`import torch`.
 
 Everything a conv needs beyond its tensors -- stride, padding, dilation -- is
 either derivable from the weight shape or an architectural constant in

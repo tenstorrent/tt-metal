@@ -42,12 +42,11 @@ import ttnn
 class TtSnake:
     """Per-channel Snake.
 
-    `alpha` is [C]. Activations are **channels-last `[B, T, C]`**, matching
-    conv.py's convention for the whole vocoder, so alpha broadcasts over the LAST
-    axis. The reference works in `[B, C, T]` and broadcasts over the middle axis;
-    getting that backwards does not produce a wrong answer, it produces a
-    TT_FATAL broadcasting-rule violation -- which is the good outcome, and is how
-    this was caught.
+    `alpha` is [C]. Activations are channels-last `[B, T, C]`, matching conv.py's
+    convention for the whole vocoder, so alpha broadcasts over the last axis. The
+    reference works in `[B, C, T]` and broadcasts over the middle axis; getting that
+    backwards does not produce a wrong answer, it produces a TT_FATAL
+    broadcasting-rule violation.
     """
 
     EPS = 1e-9  # matches the reference's alpha.reciprocal() guard
@@ -68,8 +67,7 @@ class TtSnake:
         """x: ttnn [B, T, C] (channels-last) -> ttnn [B, T, C].
 
         Intermediates are deallocated as they die; at 512 channels and audio-rate
-        length these are not small, and L1 pressure is the constraint that decides
-        whether the vocoder fits (CLAUDE.md Stage 5 sec.4).
+        length they are not small, and L1 pressure decides whether the vocoder fits.
         """
         t = ttnn.multiply(x, self.alpha)
         s = ttnn.sin(t)

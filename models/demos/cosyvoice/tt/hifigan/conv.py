@@ -31,21 +31,15 @@ import ttnn
 def accurate_compute_config(device):
     """High-fidelity compute config for the vocoder's convolutions.
 
-    TTNN defaults to `MathFidelity.LoFi` with `fp32_dest_acc_en=False`. That is the
-    right trade for most models, but HiFT is ~40 convolutions deep with a residual
-    accumulating through all of them, and the errors compound: the full vocoder
-    scored **PCC 0.98954** at the defaults, just under the 0.99 gate, with a
-    provably correct graph.
+    TTNN defaults to `MathFidelity.LoFi` with `fp32_dest_acc_en=False`. HiFT is ~40
+    convolutions deep with a residual accumulating through all of them, and at those
+    defaults the full vocoder scores PCC 0.98954, under the 0.99 threshold, from
+    depth-accumulated bfloat16 drift rather than a wrong computation. HiFi4 with fp32
+    destination accumulation removes it.
 
-    HiFi4 plus fp32 destination accumulation is the standard lever for exactly
-    this -- depth-accumulated bfloat16 drift, not a wrong computation.
-
-    `COSYVOICE_FIDELITY` overrides it (`LoFi`/`HiFi2`/`HiFi3`/`HiFi4`) and
+    `COSYVOICE_FIDELITY` overrides the fidelity (`LoFi`/`HiFi2`/`HiFi3`/`HiFi4`) and
     `COSYVOICE_FP32_ACC=0` drops fp32 accumulation, so the accuracy/throughput trade can
-    be measured rather than assumed. Fidelity is a *compute* lever: HiFi4 runs four
-    passes where LoFi runs one, so it should matter on a compute-bound stage and not on
-    a dispatch-bound one. Those two live in the same model here, which makes it a clean
-    test -- see PERF.md for what it measured.
+    be measured.
     """
     name = os.environ.get("COSYVOICE_FIDELITY", "HiFi4")
     fidelity = getattr(ttnn.MathFidelity, name, ttnn.MathFidelity.HiFi4)
@@ -62,24 +56,20 @@ def prepare_weights_default(device) -> bool:
     """Whether to hoist conv weight preparation out of the op. Off on Wormhole.
 
     `ttnn.prepare_conv_weights` disagrees with the op's own preparation on Wormhole at
-    some input lengths -- see `TtConv1d._prepared` for the measurements and
-    `scripts/repro_conv1d_wormhole.py` for a standalone case. The disagreement reaches
-    `1e37`, which is what breaks the streamed vocoder there.
+    some input lengths, by up to `1e37` (`docs/VALIDATION.md`;
+    `scripts/repro_conv1d_wormhole.py` is a standalone case). Defaulted by architecture
+    rather than left to the caller because the failure is silent: the wrong answer is a
+    number, not an exception, and only at some lengths. `COSYVOICE_CONV_PREPARE`
+    overrides in either direction, so the default can go in one line once upstream is
+    fixed.
 
-    Defaulted by architecture rather than left to the caller because the failure is
-    silent: the wrong answer is a number, not an exception, and it only appears at some
-    lengths. `COSYVOICE_CONV_PREPARE` overrides in either direction so the A/B stays
-    measurable -- and so the default can be dropped in one line once upstream is fixed.
-
-    Applied to the **vocoder only**. The flow estimator uses the same `TtConv1d` and is
-    captured in a trace, which unprepared weights make impossible; disabling it there took
-    the flow stage from 0.683 to 1.723 s on n300.
-
-    The vocoder is now traced too (`TtHiFTGenerator.decode`), which would have been a
-    problem if this returned False outright -- but on Wormhole the generator arms
-    `_verify_prepared` instead of dropping preparation, so the weights stay prepared and
-    the geometry check is a one-off host read. Capture waits for a geometry's *second*
-    sighting, by which time that read has already happened, so the two never overlap.
+    Applies to the vocoder only. The flow estimator uses the same `TtConv1d` inside a
+    captured trace, which unprepared weights make impossible (PERF.md Part II §3.2).
+    The vocoder is traced too (`TtHiFTGenerator.decode`), so on Wormhole the generator
+    keeps preparation and turns on `_verify_prepared` rather than dropping it: the
+    weights stay prepared, and the geometry check is a one-off host read. Capture waits
+    for a geometry's second sighting, by which time that read has happened, so the two
+    never overlap.
     """
     override = os.environ.get("COSYVOICE_CONV_PREPARE")
     if override is not None:
@@ -154,12 +144,10 @@ class TtConv1d:
         self.compute_config = accurate_compute_config(device) if high_fidelity else None
         self._verify = False  # set by the vocoder on Wormhole; see _verify_prepared
         self._verified: set = set()
-        # On by default. The vocoder turns it off on Wormhole -- see
-        # `prepare_weights_default` and `TtHiFTGenerator.__init__`. Deliberately *not*
-        # defaulted by architecture here: this class is also the flow estimator's
-        # convolution, and those run inside a captured trace, which is the one thing
-        # unprepared weights make impossible. Setting the default here cost the flow
-        # stage 0.683 -> 1.723 s on n300 before that was noticed.
+        # On by default on every architecture: this class is also the flow estimator's
+        # convolution, which runs inside a captured trace, and unprepared weights cannot
+        # be traced. On Wormhole the vocoder verifies each geometry instead -- see
+        # `prepare_weights_default` and `TtHiFTGenerator.__init__`.
         self._prepare = True
 
     @classmethod
@@ -180,39 +168,27 @@ class TtConv1d:
     def _prepared(self, x, input_length: int, batch_size: int):
         """Pre-tilized, device-resident weights, cached per input geometry.
 
-        `ttnn.conv1d` will happily take a PyTorch-layout weight and sort it out
-        internally -- but it does that **on every call**, and the preparation is a
-        host-side layout transform, so it moves data across the command queue every
-        time. Two consequences:
+        `ttnn.conv1d` accepts a PyTorch-layout weight and prepares it internally on
+        every call. The preparation is a host-side layout transform, so it is per-call
+        overhead on a constant weight, and it makes the op impossible to trace: a trace
+        forbids host traffic in either direction, so capture fails with
+        `Writes are not supported during trace capture` for a host weight, or
+        `Reads are not supported` for a device one, which the op reads back to prepare.
 
-        * it is pure per-call overhead on a weight that never changes;
-        * **it makes the op impossible to trace.** A trace records device commands
-          and forbids host traffic in either direction, so capture fails with
-          `Writes are not supported during trace capture` for a host weight, or
-          `Reads are not supported` for a device one -- the op reads it back to
-          prepare it. Measured both ways; device residency alone does not help.
+        `prepare_conv_weights` hoists the transform out, and the op then has nothing to
+        transfer; a conv1d with prepared weights captures cleanly. The prepared layout
+        depends on the input geometry -- the sharding scheme follows `input_length` --
+        so the cache is keyed on it.
 
-        `prepare_conv_weights` hoists the transform out, and the op then has nothing
-        to transfer. Output is bit-identical (`max|d| 0.000e+00`), and a bare conv1d
-        captures cleanly once its weights are prepared this way.
-
-        The prepared layout depends on the input geometry -- the sharding scheme
-        follows `input_length` -- so the cache is keyed on it.
-
-        **`bit-identical` is true on Blackhole and false on Wormhole.** At some input
-        lengths the two paths disagree -- by a few percent at `input_length` 8321 and by
-        `1e37` at 8193, for the vocoder's `Conv1d(128 -> 128, k=11, pad=5)`. The `1e37`
-        is what breaks streaming there: `sin()` of it is `inf`, the vocoder's magnitude
-        spectrum rails at its `1e2` clip, and the waveform saturates. Blackhole agrees
-        exactly at every length tested.
-
-        `COSYVOICE_CONV_PREPARE=0` takes the op's own preparation instead, which measured
-        correct at every length on both parts, at ~1 ms per call. That is now a genuine
-        trade rather than a free one: the vocoder is traced, so turning preparation off
-        makes `TtHiFTGenerator.decode` uncapturable and costs the 3.2x that tracing is
-        worth. Wormhole keeps preparation and verifies each geometry once instead --
-        see `prepare_weights_default`. Revisit when the upstream defect is fixed;
-        `scripts/probe_prepared_weights.py` is the check.
+        On Blackhole the output is bit-identical at every length tested. On Wormhole
+        the two paths disagree at some lengths, by up to `1e37` for the vocoder's
+        `Conv1d(128 -> 128, k=11, pad=5)`: `sin()` of that is `inf`, the magnitude
+        spectrum rails at its `1e2` clip, and the waveform saturates. Wormhole keeps
+        preparation and verifies each geometry once (`_verify_prepared`).
+        `COSYVOICE_CONV_PREPARE=0` takes the op's own preparation instead, correct at
+        every length on both parts at ~1 ms per call, but it makes
+        `TtHiFTGenerator.decode` uncapturable. `docs/VALIDATION.md` has the upstream
+        status; `scripts/probe_prepared_weights.py` is the check once it is fixed.
         """
         if not self._prepare:
             return self.weight, self.bias
@@ -257,12 +233,10 @@ class TtConv1d:
     def _verify_prepared(self, x, out, input_length: int, batch_size: int):
         """Check this geometry's prepared weight against the op's own, once.
 
-        Disabling preparation everywhere on Wormhole is correct and costs the vocoder
-        `0.084 -> 0.181 s` -- but only some geometries are affected, so most of that is
-        paid for nothing. Running the convolution both ways the first time a geometry is
-        seen, and keeping the prepared weight only where the two agree, is precise instead:
-        one extra call per (length, batch) per conv, amortised to nothing over an
-        utterance, against ~1 ms on every call thereafter.
+        Disabling preparation everywhere on Wormhole is correct but slows every geometry
+        when only some are affected. Running the convolution both ways the first time a
+        geometry is seen, and keeping the prepared weight only where the two agree, costs
+        one extra call per (length, batch) per conv, against ~1 ms on every call.
 
         The comparison is `max|out|` rather than a full PCC because the failure is not
         subtle where it matters -- the observed disagreements run from 6x to 1e37 -- and a

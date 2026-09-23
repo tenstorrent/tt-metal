@@ -9,7 +9,7 @@ Ten forward-Euler steps on a cosine-spaced grid, each evaluating
     dphi_dt = (1 + w) * conditioned - w * unconditioned      w = 0.7
     x       = x + dt * dphi_dt
 
-Two details that are easy to get wrong and produce plausible-but-wrong audio:
+Three details that are easy to get wrong and produce plausible-but-wrong audio:
 
 **The grid is cosine, not linear.** `t_span = 1 - cos(linspace(0,1,11) * pi/2)`,
 so the steps start dense near t=0 and widen. A linear grid still integrates to
@@ -77,38 +77,28 @@ class TtConditionalCFM:
     ):
         self.device, self.dtype = device, dtype
         self.cfg_rate = inference_cfg_rate
-        # `COSYVOICE_FLOW_STEPS` overrides the checkpoint's solver depth. This is the
-        # one knob in the port that trades **accuracy for time by construction** rather
-        # than by numerical accident, so it is an explicit environment variable and not
-        # a default: 10 is what the checkpoint ships with and what every accuracy figure
-        # in PERF.md is measured at.
-        #
-        # It exists because the flow decoder is the largest single stage after the LLM
-        # and its cost is linear in this number, and because the issue asks for exactly
-        # this experiment -- "optimize iterative refinement process / consider
-        # approximations for faster inference". Whether the approximation is acceptable
-        # is a measured question, not a matter of taste; `probe_flow_steps.py` measures
-        # it against the shipped 10-step result.
+        # `COSYVOICE_FLOW_STEPS` overrides the checkpoint's solver depth. It trades
+        # accuracy for time by construction, so it is an explicit environment variable
+        # rather than a default: 10 is what the checkpoint ships with and what PERF.md's
+        # accuracy figures are measured at. The flow decoder is the largest stage after
+        # the LLM and its cost is linear in this number; `scripts/probe_flow_steps.py`
+        # measures the trade (PERF.md Part II §2.2).
         self.n_timesteps = int(os.environ.get("COSYVOICE_FLOW_STEPS", n_timesteps))
         self.t_scheduler = t_scheduler
         self.estimator = TtConditionalDecoder(device, bag.sub("estimator"), dtype=dtype)
-        # **Keep the captured trace across utterances of the same mel length.**
+        # Keep the captured trace across utterances of the same mel length: captured
+        # per call, the capture is almost half the stage (PERF.md Part II §2.2).
         #
-        # `solve_euler` captured and released on every call, so a stage measured at
-        # 0.675 s spent 0.314 s of it -- 46.6 % -- recording a graph it then threw
-        # away. That is why cutting `n_timesteps` from 10 to 5 buys 1.43x and not 2x:
-        # half the stage is not the ODE.
-        #
-        # Reuse needs one thing to be true: everything the trace bakes an address for
-        # must be refillable in place. `_x_buf` already is. `_packed_const` is the
-        # utterance's conditioning, so it changes per call -- but its *shape* depends
-        # only on the mel length, so the trace stays valid if the contents are copied
-        # in rather than reallocated. That is the whole mechanism, and the mel length
-        # is therefore the cache key.
+        # Reuse needs everything the trace bakes an address for to be refillable in
+        # place. `_x_buf` is. `_packed_const` is the utterance's conditioning, so it
+        # changes per call, but its shape depends only on the mel length, so the trace
+        # stays valid when the contents are copied in rather than reallocated. The mel
+        # length is therefore the cache key.
         #
         # One slot, not a dict: each entry pins a trace region allocation plus its
         # buffers, and TTS lengths vary continuously, so an unbounded cache would grow
-        # for the length of a session and hit twice by luck.
+        # for the length of a session and hit rarely. `synthesize_batch` needs this off
+        # (`docs/VALIDATION.md`).
         self._cache_trace = os.environ.get("COSYVOICE_CFM_TRACE_CACHE", "1") != "0"
         self._trace_key = None
 
@@ -132,9 +122,8 @@ class TtConditionalCFM:
         The conditioning is copied into `_packed_const` rather than reassigned,
         because the trace holds that buffer's *address*. Reassigning the attribute
         would leave the replay reading the previous utterance's conditioning and
-        produce fluent audio in the wrong voice -- a failure with no exception and no
-        shape mismatch, which is the reason this is one method with one comment
-        rather than three lines inlined at the call site.
+        produce fluent audio in the wrong voice, with no exception and no shape
+        mismatch.
         """
         if not self._cache_trace or self._trace_key != (t_len, int(x.shape[2])):
             return False
@@ -149,54 +138,32 @@ class TtConditionalCFM:
     def _capture(self, x, mu2, spks2, cond2, t0, dt0):
         """Trace one estimator evaluation and replay it for every Euler step.
 
-        The solver calls the *same graph* ten times -- only `x` and `t` change,
-        while `mu`, `spks` and `cond` are fixed for the utterance. That makes it a
-        better trace candidate than the AR decoder, which at least has a growing
-        cache to work around: here there is no state at all between steps.
+        The solver calls the same graph ten times -- only `x` and `t` change, while
+        `mu`, `spks` and `cond` are fixed for the utterance -- and there is no state
+        between steps, so the whole step is traced: the estimator's 16 resnet and 64
+        transformer blocks, the CFG split and the Euler update.
 
-        The CFG split and the Euler update stay outside the trace. They are a
-        handful of elementwise ops on `[1, T, 80]`, and keeping them out means the
-        traced region is exactly the 16 resnet + 64 transformer blocks that cost
-        something.
+        Tracing needs the convolutions' weights prepared ahead of time. `ttnn.conv1d`
+        and `ttnn.conv_transpose2d` otherwise prepare their weights on every call --
+        tilize, pad to the sharding scheme, move to device -- which is host work a
+        trace cannot contain: a host-resident weight fails capture on the write, a
+        device-resident one on the read-back. `ttnn.prepare_conv_weights` and
+        `prepare_conv_transpose2d_weights` hoist the transform out of the op, and both
+        conv wrappers cache the prepared weights per input geometry, since the sharding
+        scheme follows the input length. Output is bit-identical.
 
-        **Getting here took removing a host->device write the convolutions were
-        issuing on every call.** Capture originally failed with
-        `!trace_id_.has_value()` at `fd_mesh_command_queue.cpp:762`, and it was
-        tempting to read that as "conv is not trace-compatible on this stack". It is
-        not a silicon limit. `ttnn.conv1d` and `ttnn.conv_transpose2d` prepare their
-        weights -- tilize, pad to the sharding scheme, move to device -- *on every
-        call*, and that is host work a trace cannot contain. A host-resident weight
-        fails on the write; a device-resident one fails on the **read back** at
-        `:809`. Weight residency is therefore not the fix.
-
-        `ttnn.prepare_conv_weights` / `prepare_conv_transpose2d_weights` hoist the
-        transform out of the op, and both conv wrappers now cache the prepared
-        weights per input geometry (the sharding scheme follows the input length, so
-        geometry is the cache key). Output is bit-identical, `max|d| 0.000e+00`.
-
-        One trap on the transpose side: `prepare_conv_transpose2d_weights` asserts
-        `conv_config.weights_dtype.has_value()`, while the bare `conv_transpose2d`
-        call is happy with no config at all. Omitting it makes preparation throw,
-        the wrapper falls back to the unprepared path, and the only symptom is a
-        trace that still fails -- several ops downstream, for no visible reason.
-        That is why the fallback logs.
+        `prepare_conv_transpose2d_weights` asserts `conv_config.weights_dtype.has_value()`,
+        while a bare `conv_transpose2d` needs no config. Without it preparation throws,
+        the wrapper falls back to the unprepared path, and capture fails several ops
+        downstream; that is why the fallback logs.
         """
         _, t_len, ch = x.shape
-        # The buffer holds a single row and the CFG doubling happens *inside* the
-        # traced body. That ordering is not cosmetic. The first working version kept
-        # a `[2, T, 80]` buffer and refreshed it with
-        # `ttnn.copy(ttnn.concat([x, x], dim=0), buf)`; capture succeeded and replay
-        # scored **PCC 0.077**. `scripts/probe_cfm_trace.py` pinned it down: with a
-        # plain device tensor as the source, replay is bit-exact (PCC 1.00000000,
-        # for both the `x` and the `t` refresh); with a dim-0 `concat` output as the
-        # source, the same copy lands at **PCC 0.768**. So `ttnn.copy` does not
-        # faithfully transfer out of a dim-0 concat here.
-        #
-        # Moving the concat inside the trace sidesteps it entirely -- it becomes a
-        # device op the trace records -- and the refresh source is then the solver's
-        # own `x`, which is the case the probe proves exact. Both inputs are also
-        # allocated explicitly in DRAM rather than inheriting a memory config from
-        # whatever op produced them, since a trace bakes in addresses.
+        # The buffer holds a single row and the CFG doubling happens inside the traced
+        # body, because refreshing a `[2, T, 80]` buffer with `ttnn.copy` from a dim-0
+        # `concat` output does not transfer faithfully (`docs/VALIDATION.md`), while a
+        # copy from a plain device tensor -- the solver's own `x` -- is bit-exact. Both
+        # inputs are allocated explicitly in DRAM rather than inheriting a memory
+        # config from whatever op produced them, since a trace bakes in addresses.
         self._x_buf = ttnn.from_torch(
             torch.zeros(1, t_len, ch),
             dtype=self.dtype,
@@ -255,17 +222,11 @@ class TtConditionalCFM:
 
         self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         try:
-            # The output is allocated *inside* the capture, so its address is baked
-            # into the trace and every replay writes to this exact tensor.
-            #
-            # The first attempt instead pre-allocated a `[2, T, 80]` DRAM buffer and
-            # ended the body with `ttnn.copy(d, buf)`. That captured cleanly and
-            # replayed to **PCC 0.0017**: the copy never landed, so the solver read
-            # back zeros, `x` never advanced, and the "mel" it returned was the
-            # initial noise. Silent because the same copy is in the warm-up, so
-            # nothing failed loudly at capture time -- the only signal was an output
-            # that scored like noise, which is exactly what it was. Letting the trace
-            # own its output removes the copy and the question with it.
+            # The output is allocated inside the capture, so its address is baked into
+            # the trace and every replay writes to this exact tensor. Ending the body
+            # with a `ttnn.copy` into a buffer allocated before capture does not take
+            # effect on replay here: the solver reads back zeros and returns its initial noise,
+            # with nothing raised (`docs/VALIDATION.md`).
             self._next_x = body()
         finally:
             ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
@@ -344,12 +305,9 @@ class TtConditionalCFM:
                 self._release()
 
         if traced:
-            # The traced body is a *whole* Euler step, so the loop allocates
-            # nothing. That is the point, not a tidiness win: the earlier version
-            # kept the guidance and the update on the host, and a dozen allocate /
-            # free pairs per step let the allocator hand back addresses the replay
-            # had already baked in. It scored PCC ~0.07 with a graph the probe
-            # showed to be bit-exact.
+            # The traced body is a whole Euler step, so the loop allocates nothing
+            # between replays: an allocation under the live trace can be handed an
+            # address the replay has baked in (`docs/VALIDATION.md`).
             ttnn.deallocate(x)
             for t_dev, dt_dev in zip(ts, dts):
                 ttnn.copy(t_dev, self._t_buf)
@@ -359,8 +317,8 @@ class TtConditionalCFM:
             if self._cache_trace:
                 # The trace is being kept, so `_x_buf` must be kept too -- it is the
                 # buffer the replay writes through. Copy the result out instead of
-                # handing the buffer over, which is the one place caching costs
-                # something: a full-tensor copy against the 0.31 s it saves.
+                # handing the buffer over: one full-tensor copy, against the capture
+                # that caching saves.
                 x = ttnn.clone(self._x_buf)
             else:
                 # Hand the buffer to the caller instead of copying out of it, and keep

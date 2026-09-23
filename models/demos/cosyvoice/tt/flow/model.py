@@ -107,9 +107,8 @@ class TtMaskedDiffWithXvec:
             # `sft` and `instruct` synthesise from a speaker id with no prompt audio,
             # so there is no first segment and no seam to protect. Taking the general
             # path anyway would slice a zero-length tensor and concat it, which
-            # **segfaults inside `ttnn::concat`** rather than raising -- a crash the
-            # caller's try/except cannot catch, several frames from the empty tensor
-            # that caused it.
+            # segfaults inside `ttnn::concat` instead of raising, so no caller's
+            # try/except can catch it (`docs/VALIDATION.md`).
             cat = self.length_regulator.resample_split(h, total, mel_len2, self.input_frame_rate)
         else:
             x1 = ttnn.slice(h, [0, 0, 0], [1, token_len1, c])
@@ -161,12 +160,11 @@ class TtMaskedDiffWithXvec:
         total = mel_len1 + mel_len2
         if mel_len1 == 0:
             # Nothing to trim: with no prompt mel the whole solve is the output. The
-            # slice below would be full-extent, and **a full-extent `ttnn.slice` is an
-            # alias, not a copy** -- so the `deallocate` after it would free the tensor
-            # being returned, and the caller would fault on "Tensor is not allocated"
-            # one stage later. That aliasing is the same behaviour trace integration
-            # ran into; here it only shows up in `sft` and `instruct`, the two modes
-            # with no prompt audio.
+            # slice below would be full-extent, and a full-extent `ttnn.slice` is an
+            # alias, not a copy, so the `deallocate` after it would free the tensor
+            # being returned and the caller would fault on "Tensor is not allocated"
+            # one stage later. Only `sft` and `instruct`, the modes without prompt
+            # audio, reach this.
             return feat
         out = ttnn.slice(feat, [0, mel_len1, 0], [1, total, self.output_size])
         ttnn.deallocate(feat)

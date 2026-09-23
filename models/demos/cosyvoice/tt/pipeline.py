@@ -21,12 +21,11 @@ of the prefix are populated:
 | `cross_lingual` | -- | yes | from the prompt audio |
 | `instruct` | the instruction, as a *style description* | -- | from the speaker table |
 
-`instruct` is worth a warning. `frontend_instruct` places the instruction in the
-LLM's **`prompt_text` slot**, concatenated in front of the sentence -- so the model
-reads it the way it reads any prefix. CosyVoice-1 wants a character or style
-*description* ("A cheerful young woman"); CosyVoice-2's `instruct2` directive
-phrasing ("Speak cheerfully") makes this model **read the instruction aloud**. That
-mistake took zh CER from 9.09% to 42.42% in the WER sweep.
+`frontend_instruct` places the instruction in the LLM's `prompt_text` slot,
+concatenated in front of the sentence, so the model reads it the way it reads any
+prefix. CosyVoice-1 wants a character or style *description* ("A cheerful young
+woman"); CosyVoice-2's `instruct2` directive phrasing ("Speak cheerfully") makes this
+model read the instruction aloud.
 
 **Randomness is injected, never drawn here.** Three places in this model sample:
 the CFM's initial noise `z`, and the vocoder's `phase_vec` and `noise` in `SineGen`
@@ -160,7 +159,7 @@ class PromptContext:
     """
 
     text_tokens: torch.Tensor  # [1, T_text] int
-    n_text: int  # text length excluding the prompt, for the length bounds
+    n_text: int  # text length excluding the prompt, for the length limits
     flow_embedding: torch.Tensor  # [1, 1, 192] speaker x-vector; always present
     llm_embedding: torch.Tensor | None = None  # [1, 1, 192]; None in instruct mode
     llm_prompt_speech_tokens: torch.Tensor | None = None  # [1, T_prompt] int, LLM's prefix
@@ -256,10 +255,8 @@ class CosyVoiceTTNN:
         has_llm_prompt = ctx.llm_prompt_speech_tokens is not None and ctx.llm_prompt_speech_tokens.shape[1] > 0
         prompt = self._ids(ctx.llm_prompt_speech_tokens) if has_llm_prompt else None
         # `**kw` rather than a copy of `generate`'s signature: `sampler`, `max_tokens`,
-        # `seed`, `use_trace` and `on_token` all belong to the decode loop, and
-        # restating them here is how `on_token` came to be silently unsupported --
-        # `synthesize_streaming` passed it, this method did not accept it, and nothing
-        # noticed until a test drove the public API rather than its parts.
+        # `seed`, `use_trace` and `on_token` all belong to the decode loop, and a
+        # restated signature silently drops whichever of them it leaves out.
         tokens = self.llm.generate(
             self._ids(ctx.text_tokens),
             spk_emb=spk,
@@ -298,15 +295,14 @@ class CosyVoiceTTNN:
     def synthesize_batch(self, ctxs: list[PromptContext], rngs=None, **kw):
         """Several utterances end to end. Returns `[(waveform, tokens), ...]`.
 
-        **Only Stage 1 is batched, and that is a measurement, not a shortcut.** The
-        LLM runs once per *token* and is 76 % of an utterance at default settings;
-        the flow decoder and the vocoder each run once per *utterance* and are 21 %
-        and 4 %. Batching the LLM therefore reaches almost all of the available win,
-        while batching the other two would mean padding every utterance in the batch
-        to the longest mel -- the flow decoder's cost is linear in mel length, so the
-        padding is paid in full and the batch does not amortise anything the single
-        call was not already amortising. The numbers behind that split are in
-        `PERF.md`; the split itself is why this method looks asymmetric.
+        Only Stage 1 is batched. The LLM runs once per token and is most of an
+        utterance (PERF.md §3.1); the flow decoder and the vocoder run once per
+        utterance, and batching them would pad every utterance to the longest mel, a
+        cost the flow decoder pays in full because it is linear in mel length.
+
+        Set `COSYVOICE_CFM_TRACE_CACHE=0` before building the pipeline: with the cache
+        on, this hangs the device once an earlier utterance has captured the flow
+        decoder's estimator trace (`docs/VALIDATION.md`).
         """
         rngs = rngs or [RandomSources() for _ in ctxs]
         token_lists = self.text_to_tokens_batch(ctxs, **kw)
@@ -479,30 +475,19 @@ class CosyVoiceTTNN:
         synth = TtStreamingSynthesizer(self.device, self.flow, self.hift, stream_config, self.dtype)
         stream_ctx, rng_for_chunk = self._stream_ctx(ctx, generator)
 
-        # **Warm the chunk geometry before `generate` captures its decode trace.**
-        # This is not an optimisation, it is a correctness requirement, and TTNN says
-        # so: "Allocating device buffers is unsafe due to the existence of an active
-        # trace." The whole point of this method is that the flow decoder and the
-        # vocoder run *from inside* the decode loop -- so they allocate while the trace
-        # is live, for shapes the allocator may never have seen. Doing it in that order
-        # hangs the device outright (log frozen, JIT cache flat, 100 % CPU), reproducibly
-        # and on a freshly reset board.
+        # Push one throwaway chunk before `generate` captures its decode trace. It
+        # allocates the synthesizer's carry buffers with no trace live, which correct
+        # audio depends on (`TtStreamingSynthesizer._carry_store`), and it runs the
+        # mid-utterance chunk geometry -- every such chunk is exactly
+        # `token_hop_len + token_overlap_len` tokens -- so the flow decoder and the
+        # vocoder, which run from inside the decode loop, meet shapes that are already
+        # compiled and allocated. The cost is one chunk's work per call. The final
+        # chunk's length depends on how many tokens are generated, so it is not warmed.
         #
-        # One throwaway chunk fixes it: every mid-utterance chunk is exactly
-        # `token_hop_len + token_overlap_len` tokens, so allocating and freeing that
-        # geometry here means the callback later finds shapes the allocator already
-        # knows. The filler tokens are arbitrary -- nothing reads the audio, only the
-        # shapes matter -- and the cost is one chunk's work, once per call.
-        #
-        # The *final* chunk's length still depends on how many tokens get generated and
-        # cannot be warmed in advance. It is also the last thing to run, by which point
-        # the trace has served its purpose; if that turns out to matter, releasing the
-        # trace before the final chunk is the next step.
-        # Speech token 0, not a text token: `flow_chunk` feeds these to the flow
-        # decoder's *speech* embedding, whose vocabulary is unrelated to the text
-        # tokenizer's. An out-of-range id there is an out-of-bounds gather, not a
-        # harmless one -- and this pass exists only to allocate shapes, so the safest
-        # in-vocabulary id is the right filler.
+        # The filler is speech token 0: `flow_chunk` feeds these to the flow decoder's
+        # speech embedding, whose vocabulary is unrelated to the text tokenizer's, and
+        # an id outside it would make the embedding gather read out of range. Nothing
+        # reads the audio; only the shapes matter.
         warm_tokens = [0] * synth.cfg.chunk_size()
         with synth.session(stream_ctx, rng_for_chunk) as warm:
             for wav, _n in warm.push_all(warm_tokens):

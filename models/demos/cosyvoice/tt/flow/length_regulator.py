@@ -113,7 +113,7 @@ class TtInterpolateRegulator:
         """Head/mid/tail resample, matching the reference's streaming seam.
 
         Segments longer than 2*OVERLAP get their first and last 20 tokens
-        resampled independently so a streaming chunk boundary lands cleanly.
+        resampled independently so a streaming chunk boundary falls cleanly.
         """
         edge = int(self.OVERLAP / frame_rate * 22050 / 256)
         if t_in <= 2 * self.OVERLAP:
