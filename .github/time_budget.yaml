@@ -361,6 +361,8 @@ models:
     bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
+  # Request-behavior additions below reserve declared job timeouts, not measured
+  # usage. See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
   e2e_tier1:
     wh_n150: 73
     wh_galaxy_perf: 365

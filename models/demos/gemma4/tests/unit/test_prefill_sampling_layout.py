@@ -64,6 +64,26 @@ def test_nested_host_warmup_restores_sampling_layout(monkeypatch, prefill_projec
     assert model._prefill_keep_logits_sharded is False
 
 
+def test_deferred_prefill_projection_keeps_sampling_layout_until_consumed(monkeypatch, prefill_projection):
+    generator, model, hidden, shard, gathered = prefill_projection
+    model._tail_slice_start, model._tail_slice_end = object(), object()
+    model._replicate_to_mesh_mapper = lambda: None
+    model._flush_deferred_bounded_fills_if_needed = lambda: None
+    monkeypatch.setattr(model_module.ttnn, "from_torch", lambda tensor, **kw: tensor)
+    monkeypatch.setattr(model_module.ttnn, "copy_host_to_device_tensor", lambda *a: None)
+    monkeypatch.setattr(model_module.ttnn, "slice", lambda **kw: hidden)
+
+    def forward(self, *args, **kwargs):
+        # The shared prefill coordinator consumes the trace's hidden states
+        # before it returns. Exercise Gemma's real deferred consumer + lm_head.
+        return model.process_logits_after_prefill_trace(hidden, last_token_idx=17)
+
+    monkeypatch.setattr(Generator, "_prefill_forward_text_impl", forward)
+    assert generator._prefill_forward_text_impl(sampling_params=object()) is shard
+    assert model._prefill_keep_logits_sharded is False
+    assert generator._prefill_forward_text_impl(sampling_params=None) is gathered
+
+
 def test_failed_sampling_prefill_restores_host_layout(monkeypatch, prefill_projection):
     generator, model, hidden, shard, gathered = prefill_projection
 

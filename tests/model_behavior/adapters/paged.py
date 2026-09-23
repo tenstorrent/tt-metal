@@ -38,11 +38,9 @@ class PagedAdapter:
         return self.sampling_params_type(**{f.name: [getattr(p, f.name) for p in params] for f in fields(Sampling)})
 
     def release_request(self, slot):
-        # The serving runner calls this optional public hook at completion,
-        # while its request-to-state-slot mapping is still available.
-        release = getattr(self.generator, "release_request", None)
-        if callable(release):
-            release(slot)
+        # Every generator used by this adapter must implement completion;
+        # silently skipping it would leave finished requests' seed state live.
+        self.generator.release_request(slot)
 
     def _history(self, states, attribute):
         width = max(1, max(len(getattr(state, attribute)) for state in states))

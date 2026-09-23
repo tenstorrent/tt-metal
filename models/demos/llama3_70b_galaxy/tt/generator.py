@@ -234,6 +234,14 @@ class Generator(WarmupForwardMixin):
         # None means programs are warm, but L1 inputs must be recreated after prefill.
         self._prepared_decode_traces: dict = {}
 
+    def release_request(self, slot):
+        """Release a completed request before another prefill can reuse its slot."""
+        slot = int(slot)
+        if not 0 <= slot < self.model_args.max_batch_size:
+            raise ValueError(f"Request slot {slot} is out of range")
+        if self.model.sampling is not None:
+            self.model.sampling.seed_manager.release_slot(slot)
+
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
         # Model-level CCL references may differ from layer-level ones (e.g. after the
@@ -856,7 +864,6 @@ class Generator(WarmupForwardMixin):
                 # canonical row-0 view while advancing the real slot's seed
                 # counter, so decode continues from the correct per-slot state.
                 sampled_values = []
-                log_prob_values = []
                 slot_output_tokens = torch.full((max_batch, 1), -1, dtype=torch.int32)
                 for request_idx, slot in enumerate(empty_slots):
                     slot = int(slot)
@@ -893,13 +900,15 @@ class Generator(WarmupForwardMixin):
 
                     if tt_log_probs is not None:
                         log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
-                        log_prob_values.append(log_probs_torch.reshape(-1)[0])
+                        if prefill_log_probs is None:
+                            # Match output_toks' request order even when some requests
+                            # disable reporting. NaN marks rows with no reported value.
+                            prefill_log_probs = torch.full((batch,), torch.nan, dtype=log_probs_torch.dtype)
+                        prefill_log_probs[request_idx] = log_probs_torch.reshape(-1)[0]
 
                     ttnn.deallocate(single_logits_batch)
 
                 output_toks = torch.stack(sampled_values).to(torch.int32)
-                if log_prob_values:
-                    prefill_log_probs = torch.stack(log_prob_values)
 
                 slot_sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
                 sampling_module.reset_sampling_params(slot_sampling_params)

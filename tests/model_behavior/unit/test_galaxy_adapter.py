@@ -121,6 +121,20 @@ def test_compacted_logprob_rows_are_rejected():
         )
 
 
+def test_completion_calls_public_generator_hook():
+    adapter = make_adapter()
+    released = []
+    adapter.generator.release_request = released.append
+    adapter.release_request(31)
+    assert released == [31]
+
+
+def test_missing_completion_hook_is_rejected():
+    adapter = make_adapter()
+    with pytest.raises(AttributeError, match="release_request"):  # allow-pytest.raises: host-only isolated suite
+        adapter.release_request(31)
+
+
 def test_sampled_logprob_cannot_be_attached_to_a_different_token():
     adapter = make_adapter()
     state = RequestState(Request("a", "x", Sampling(seed=0, enable_log_probs=True)), 31, (1,))

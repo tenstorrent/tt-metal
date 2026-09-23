@@ -14,7 +14,9 @@ that mapping and the matching workflow selectors. Request behavior runs in the
 existing tier 1 or tier 2 workflows, with its own allowance in each tier's time
 budget. The new jobs remain `release_ready: false`.
 The 45/60/90-minute job limits are provisioning estimates; Gemma 26B on Wormhole
-uses 120 minutes based on its measured eager/traced runtime.
+uses a conservative 120 minutes based on local eager/traced runtime. These are
+provisional until representative runs on each physical CI SKU establish the
+policy's measured runtime plus approximately 15% allowance.
 
 | Backend option | Checkpoint | CI SKUs | Physical request slots |
 | --- | --- | --- | --- |
@@ -32,6 +34,38 @@ isolation cases explicitly skip when the configured capacity is insufficient.
 Penalty and top-p sensitivity still exercise all eight prompts/draws in waves
 on single-user configurations.
 
+### CI runtime accounting
+
+`verify_time_budget.py` sums declared timeouts across **all** pipeline YAMLs by
+`(team, budget_type + tier, SKU)`. Each behavior job includes both execution modes,
+model construction and warmup. The additions below reserve the job limits, not
+measured accelerator usage; tier 3 receives no additional jobs or budget.
+
+| Models budget bucket | SKU | Prior minutes | New job contributions (minutes) | Total minutes |
+| --- | --- | ---: | --- | ---: |
+| `e2e_tier1` | `wh_n150` | 28 | Llama 8B: 45 | 73 |
+| `e2e_tier1` | `bh_p150` | 27 | Llama 8B: 45 | 72 |
+| `e2e_tier1` | `wh_galaxy_perf` | 215 | Llama 70B: 60; GPT-OSS: 90 | 365 |
+| `e2e_tier1` | `bh_quietbox_2` | 434 | Gemma 26B: 90; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 794 |
+| `e2e_tier1` | `bh_galaxy` | 78 | GPT-OSS: 90 | 168 |
+| `e2e_tier2` | `wh_llmbox_perf` | 270 | Llama 8B: 45; Gemma 26B: 120 | 435 |
+| `e2e_tier2` | `bh_quietbox_2` | 186 | Llama 8B: 45 | 231 |
+
+Available local measurements (2026-09-22) are 283.5 seconds for Llama 8B's
+full eager/traced sweep on a one-chip Wormhole Galaxy submesh, and approximately
+43.3 minutes eager plus 47.3 minutes traced for Gemma 26B on an eight-chip Galaxy
+submesh. These establish functional coverage and a provisioning starting point;
+they are not timings from physical N150 or T3K CI runners. GPT-OSS's Galaxy runs
+required a partial rerun after an intermittent failure and do not establish a
+clean full-sweep timing. No local Blackhole/Qwen timings are available.
+
+Per-SKU measurements are still pending in
+[the PR validation run](https://github.com/tenstorrent/tt-metal/actions/runs/35842732749).
+After successful representative runs, record the model/SKU, cache conditions,
+both-mode wall time, run link and margin here; size each timeout to approximately
+`ceil(measured_minutes * 1.15)` and adjust its pooled bucket by the same delta.
+Do not use failed/partial runs or submesh timings to mark this requirement met.
+
 ## Running
 
 Use a built checkout and its Python environment. Set the normal HF and TT weight
@@ -42,6 +76,7 @@ explicit `HF_MODEL`.
 ```bash
 export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
 export TT_CACHE_PATH=/path/to/writable/tt-weight-cache
+mkdir -p generated/test_reports/model_behavior
 python -m pytest --confcutdir=tests/model_behavior tests/model_behavior \
   --model-behavior-backend=llama3.1-8b \
   --model-behavior-execution=both \
@@ -142,8 +177,8 @@ not its selection or generation of an analysis channel.
 
 Token budgets drive completion, even after EOS. Blocking readback keeps scheduler
 and asynchronous execution outside this suite. Layout changes pass complete
-surviving histories. Completion calls the generator's optional public
-`release_request(slot)` hook, as serving does; tests do not reset private KV or
+surviving histories. Paged adapters require the generator's public
+`release_request(slot)` hook at completion, as serving does; tests do not reset private KV or
 sampler state between requests. Traced decode must create a model trace. Unseeded decode also requires
 a sampler trace unless the model explicitly disables that path in production
 (e.g. Gemma's trace policy); stale explicit request seeds are still rejected.

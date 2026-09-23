@@ -177,6 +177,7 @@ class GalaxyLlamaAdapter(PagedAdapter):
 def open_adapter(execution_mode):
     import ttnn
     from models.demos.llama3_70b_galaxy.tt import prefetcher_common
+    from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 
     if not os.environ.get("HF_MODEL"):
         raise ValueError("Set HF_MODEL to the Llama-3.3-70B-Instruct checkpoint before running this adapter")
@@ -193,7 +194,9 @@ def open_adapter(execution_mode):
             mesh_shape=ttnn.MeshShape(8, 4),
             dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL),
             worker_l1_size=1344544,
-            trace_region_size=220000000 if execution_mode == "traced" else 0,
+            trace_region_size=(
+                resolve_trace_region_size("llama3.3-70b-galaxy", "wh_galaxy_perf") if execution_mode == "traced" else 0
+            ),
         )
         mesh.enable_program_cache()
         adapter = GalaxyLlamaAdapter(mesh, execution_mode)

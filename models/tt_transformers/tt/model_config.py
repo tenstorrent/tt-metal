@@ -983,7 +983,7 @@ class ModelArgs:
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
             # Mixtral prefill program configs
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
@@ -1451,9 +1451,11 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                # Long Llama 8B prefill on N150 needs a smaller K staging
-                # block so its static circular buffers fit alongside resident
-                # trace buffers.
+                # N150/Llama 8B: default K block 8 exceeded available L1 by
+                # 60,256 bytes with trace-owned tensors live. Four 32-wide tiles
+                # still divide K=4096 and halve the input CB staging vs. 8.
+                # Validated at 512/1024/2048 tokens (MLP PCC > 0.9996); this is
+                # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
                     if self.device_name == "N150"
