@@ -300,3 +300,49 @@
   Four guards run identical kernels at both settings because the gate does not select the coalesced path for them: wide DRAM [1,1,8192,256] (43851 / 45058), sharded accessor (16031 / 16519), wide 2 KiB sticks (45955 / 46231) and retile. Their spread is run-to-run noise. No regression.
 - **Issues encountered**: the new path's `static_assert` first sat inside a discarded `if constexpr` branch of the non-template `kernel_main`, where it is still evaluated. It fired on split-reader configs; I hoisted it as a conditional assert. Pytest `-k` is case-insensitive, so `not INT` also deselects "interleaved".
 - **Tests added**: `test_tilize_knobs.py` gains 6 coalesce configs (42 cases, including `coalesce_off`, which keeps StickProducer covered on the narrow DRAM shapes the coalesced path now takes by default). `test_tilize_r3_perf.py`: the guard test takes `TILIZE_R3_VARIANTS` and gains the 2-D split, `low_l1`, W=32 and 2 KiB-stick guards.
+
+## Refinement 7 — Numerical formats: fp32 / fp8 / integer inputs, block-float and integer outputs
+- **Date**: 2026-09-23
+- **What was done**:
+  - `SUPPORTED["dtype"]` gains `float32`, `fp8_e4m3`, `uint32`, `int32`, `uint16` and `uint8`. `SUPPORTED["output_dtype"]` gains `float32`, `bfloat8_b`, `bfloat4_b`, `uint32`, `int32`, `uint16` and `uint8`. fp8_e4m3 is declared unconditionally (Blackhole-only, per the feature spec) and is not verified on this Wormhole box.
+  - `cb_input_sticks` carries the input dtype and `cb_output_tiles` the output dtype, as before. The value-preserving cast happens at pack.
+  - New `tilize_program_descriptor.NumericConfig` is the one source of the compute config for a dtype pair:
+    - `fp32_dest_acc_en = True` whenever either page is Float32, Int32, UInt32 or UInt8. Measured: UInt8 through a 16-bit DEST packs every datum as 0.
+    - `fp32_dest_acc_en` is never set for UInt16. Measured: fp32 DEST scrambles UInt16, PCC ~0.
+    - A 32-bit input tags the compute input CBs (`cb_input_sticks`, plus `cb_input_sticks_odd` under the split reader) `UnpackToDestFp32`, and compute CT arg 5 selects `Fp32Mode::Lossless`. Tilize is the final consumer, so the fast path's fp32 → tf32 truncation would corrupt the output.
+    - bf16 → bf16 (the perf-focus path) keeps `fp32_dest_acc_en=False`, fast tilize and the default unpack modes.
+  - `compute_kernel_config` (optional `ttnn.ComputeKernelConfig`) is exposed on `tilize()` and threaded to the descriptor. It can only add fp32 DEST. math_fidelity / math_approx_mode pass through and have no effect (test-pinned).
+  - The pad fill gains an fp8_e4m3 encoding. Integer fills already bit_cast signed → unsigned at the element width.
+  - Nothing else changed: `col_align_tiles` (uint8 → 32-byte tile-columns), `per_col_tile_bytes` and the `block_width` cap (fp32 → fp32: 32 tiles) already derive from the element and tile sizes.
+  - `BFP_PACK_PRECISE` (bfp8_pack_precise for block-float outputs) was built, measured and parked off. It makes fp32 → bfp8 bit-identical to host quantization on randn. But a rank-0 datum that bfp8 represents exactly came back off by 0.0078, and a bfp4 pad cell fell to PCC 0.9799.
+  - **Reused / added.** Reused: every kernel, CB, regime and knob; the one tilize helper call (now with an explicit `Fp32Mode` template argument); `_fill_bits`; `validate()`. Added: `NumericConfig` (plus the `WIDE_DTYPES` / `FP32_DEST_DTYPES` / `FP32_DEST_FORBIDDEN_DTYPES` / `BFP_PACK_PRECISE` constants), compute CT arg 5, the `compute_kernel_config` kwarg, and 6 EXCLUSIONS.
+- **EXCLUSIONS (each measured on WH B0, with its category)**:
+  - Packer / LLK: block-float output at tile [16, 32] (`{output_dtype: bfloat8_b | bfloat4_b, tile_height: 16}`). Each mantissa row comes back paired with the next row's exponent (PCC ~0). Tile heights 32 / 8 / 4 / 2 / 1 match host quantization. bfp8_pack_precise and fp32 DEST do not change it, and bf16 at [16, 32] is exact.
+  - Precision (format): `{output_dtype: bfloat4_b, rank: 0 | 1}`. The packer truncates to bfp4, giving PCC ~0.984 on randn versus ~0.993 with the host's rounding. A single mostly-pad tile lands at or below the 0.98 floor, and rank 0 is a single datum with no PCC.
+  - Oracle (unrepresentable): `{dtype: uint16 | uint8, pad_value: negative}`.
+    - uint16: the device writes the bit_cast (65536 − n), but uint16 reads back zero-extended into int32.
+    - uint8: `F.pad` raises on a negative fill for a uint8 tensor.
+- **Accuracy achieved**:
+  - Bit-exact (`torch.equal`) for every same-dtype pair (fp32, bf16, uint32, int32, uint16, uint8), for bf16 → fp32 and for int32 ↔ uint32.
+  - fp32 → bf16 is also bit-exact (lossless tilize, then round at pack).
+  - bf16 / fp32 → bfp8: PCC ≥ 0.99994.
+  - bf16 / fp32 → bfp4: PCC ≥ 0.9818.
+  - Shapes: the 8 precision-matrix shapes (32x32 … 256x2048, plus W / H / both non-aligned with pad), randint over the full bit-pattern space for the integers, and every golden scenario.
+- **Golden test progress**:
+  - Every non-bf16→bf16 `test_op` cell: 3025 selected → 717 passed, 18 xfailed (the new EXCLUSIONS), 2290 skipped as INVALID / fp8-on-WH, 0 failed, 0 XPASS.
+  - `test_op_loose` + `test_program_cache_reuse`: all pass.
+  - bf16 → bf16 `test_op` (55): all pass.
+  - `test_regression.py`: 10/10 (were the 10 tracked failures: integer passthrough, extreme magnitudes, pad-value extremes).
+- **Perf** (WH B0, 64 Tensix cores, device-kernel ns, 3 fresh runs, median):
+  - bf16 perf focus [1,1,16384,64]: 23644 (23206 / 23703 / 23644). Refinement 6 recorded 23303, so this is within the ~2 % noise band. The compiled bf16 kernels are unchanged apart from one unused compute CT arg.
+  - fp32 LOOSE reference [1,1,8192,32]: 14055, against the 15064 reference.
+  - fp32 [1,1,16384,64]: 47474, 2.0× the bf16 time for 2× the bytes, so DRAM-bound as before.
+  - int32 [1,1,16384,64]: 48275.
+  - bf16 → bfp8 [1,1,16384,64]: 19126 (fewer output bytes).
+  - uint8 [1,1,16384,64]: 13937.
+- **Issues encountered**:
+  - uint8 needed fp32 DEST.
+  - uint16 must not have fp32 DEST (found by the precision matrix's requested-fp32-acc axis).
+  - The tiny-tile block-float packer mismatch (above).
+  - The harness's up-front-collect precompile pass prints fake-device metrics before the real run. Only the second half of a `-s` log is real.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_formats.py` (604 cases: `test_tilize_precision_matrix`, `test_tilize_fidelity_is_noop`, `test_tilize_integer_extremes`, `test_tilize_numeric_pad_fill`, `test_tilize_numeric_perf_shape`). Also `precision_matrix_results.md`.

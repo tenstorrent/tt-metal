@@ -269,6 +269,68 @@ BANK_COALESCE_MAX_STICK_BYTES = 256
 BANK_COALESCE_SCATTER_WRITE = False
 
 
+# ---- Numeric formats (Refinement 7). cb_input_sticks carries the input dtype and cb_output_tiles
+# the output dtype; the value-preserving cast happens at pack. A 32-bit page (Float32 / Int32 /
+# UInt32) on either side needs fp32 DEST (a 16-bit DEST would round it); a 32-bit INPUT also
+# needs the lossless tilize path: its CB is tagged UnpackToDestFp32 (unpacked straight into
+# DEST, bypassing SrcA's tf32) and the helper runs Fp32Mode::Lossless. Everything else (the
+# bf16 -> bf16 perf path included) keeps 16-bit DEST + fast tilize.
+WIDE_DTYPES = (ttnn.float32, ttnn.int32, ttnn.uint32)
+# DTYPES whose pages need fp32 DEST: the 32-bit ones, plus UInt8 (measured on WH: through a 16-bit
+# DEST every uint8 datum packs as 0; through fp32 DEST it is bit-exact). UInt16 is exact on 16-bit DEST.
+FP32_DEST_DTYPES = WIDE_DTYPES + (ttnn.uint8,)
+# DTYPES whose pages must NOT meet fp32 DEST: UInt16 (measured on WH: fp32_dest_acc_en=True scrambles
+# every datum, PCC ~0). A caller's fp32_dest_acc_en request is ignored for them.
+FP32_DEST_FORBIDDEN_DTYPES = (ttnn.uint16,)
+# Block-float outputs: bfp8_pack_precise (the packer converts straight from the DEST format instead
+# of through a Bfp8 pack-source format). Measured on WH, golden suite: fp32 -> bfloat8_b on randn
+# becomes bit-identical to the host's quantization (default: max |diff| 0.0625), but a rank-0
+# datum that bfp8 represents exactly comes back off by 0.0078 and a bfloat4_b pad cell drops to
+# PCC 0.9799 (< 0.98). bfloat4_b is truncated by the packer either way. Parked off.
+BFP_PACK_PRECISE = False
+BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+# unpack_to_dest_mode is indexed by CB id; sized for the largest CB count of any arch.
+MAX_CIRCULAR_BUFFERS = 64
+
+
+class NumericConfig:
+    """The single source of the compute-side numeric configuration for one (in, out) dtype pair.
+
+    `compute_kernel_config` (optional, ttnn.ComputeKernelConfig): tilize does no arithmetic, so
+    math_fidelity / math_approx_mode are passed through without effect; fp32_dest_acc_en can
+    only be turned ON by the caller (the page formats force it where a 32-bit / uint8 page exists)
+    and is ignored where a page format forbids it (uint16);
+    dst_full_sync_en disables fast tilize (correct, slower).
+    """
+
+    def __init__(self, in_dtype, out_dtype, compute_kernel_config=None):
+        ckc = compute_kernel_config
+        self.lossless = in_dtype in WIDE_DTYPES
+        requested = bool(ckc is not None and ckc.fp32_dest_acc_en)
+        forbidden = in_dtype in FP32_DEST_FORBIDDEN_DTYPES or out_dtype in FP32_DEST_FORBIDDEN_DTYPES
+        self.fp32_dest_acc_en = (
+            in_dtype in FP32_DEST_DTYPES or out_dtype in FP32_DEST_DTYPES or (requested and not forbidden)
+        )
+        self.dst_full_sync_en = bool(ckc is not None and ckc.dst_full_sync_en)
+        self.bfp_pack_precise = BFP_PACK_PRECISE and out_dtype in BLOCK_FLOAT_DTYPES
+        self.math_fidelity = ckc.math_fidelity if ckc is not None else None
+        self.math_approx_mode = bool(ckc.math_approx_mode) if ckc is not None else None
+
+    def compute_config(self, input_cbs):
+        kwargs = dict(fp32_dest_acc_en=self.fp32_dest_acc_en, dst_full_sync_en=self.dst_full_sync_en)
+        if self.math_fidelity is not None:
+            kwargs["math_fidelity"] = self.math_fidelity
+            kwargs["math_approx_mode"] = self.math_approx_mode
+        config = ttnn.ComputeConfigDescriptor(**kwargs)
+        config.bfp8_pack_precise = self.bfp_pack_precise
+        if self.lossless:
+            modes = [ttnn.UnpackToDestMode.Default] * MAX_CIRCULAR_BUFFERS
+            for cb in input_cbs:
+                modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
+            config.unpack_to_dest_mode = modes
+        return config
+
+
 def _div_up(a, b):
     return (a + b - 1) // b
 
@@ -471,6 +533,7 @@ def create_program_descriptor(
     in_tile_h: int | None = None,
     low_l1: bool = False,
     pad: PadSpec | None = None,
+    compute_kernel_config=None,
 ) -> ttnn.ProgramDescriptor:
     """`output_tensor` is allocated at the PADDED shape (the input's shape when nothing is padded);
     the output tile grid, and so the whole schedule, is that shape's. `pad` describes the fill."""
@@ -909,7 +972,15 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    compute_ct_args = [CB_INPUT_STICKS, CB_OUTPUT_TILES, block_width, int(split_reader), CB_INPUT_STICKS_ODD]
+    numeric = NumericConfig(input_tensor.dtype, output_tensor.dtype, compute_kernel_config)
+    compute_ct_args = [
+        CB_INPUT_STICKS,
+        CB_OUTPUT_TILES,
+        block_width,
+        int(split_reader),
+        CB_INPUT_STICKS_ODD,
+        int(numeric.lossless),
+    ]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -983,8 +1054,10 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
-        # 16-bit DEST matches Float16_b pages; half-sync DEST is a fast-tilize requirement.
-        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False, dst_full_sync_en=False),
+        # 16-bit DEST for 16-bit pages (the fast-tilize path); fp32 DEST + UnpackToDestFp32 on the
+        # compute input CBs wherever a 32-bit page exists (NumericConfig). Half-sync DEST is a
+        # fast-tilize requirement.
+        config=numeric.compute_config([CB_INPUT_STICKS] + ([CB_INPUT_STICKS_ODD] if split_reader else [])),
     )
 
     return ttnn.ProgramDescriptor(

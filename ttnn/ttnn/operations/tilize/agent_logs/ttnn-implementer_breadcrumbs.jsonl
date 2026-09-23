@@ -11,3 +11,8 @@
 {"event":"test_run","status":"pass","test":"test_tilize_grid_2d.py","detail":"28 passed; short_wide/square_large 64/64 Tensix cores","ts":"2026-09-23T19:08:10+00:00"}
 {"event":"test_run","status":"pass","test":"unit tilize dir 413 + test_golden 74/0/0","detail":"R5 grid_2d_split + low_l1 landed","ts":"2026-09-23T19:19:16+00:00"}
 {"event":"test_run","refinement":6,"result":"pass","perf_ns":{"1x1x16384x64":{"off":25967,"on":23303},"1x1x16384x32":{"off":18170,"on":13347}},"bottleneck":"aggregate DRAM read+write mix; writes-only 17.8us flat 32 vs 64 cores","ts":"2026-09-23T19:36:41+00:00"}
+{"event":"test_run","refinement":7,"what":"probe all dtype pairs 1x1x64x128","result":"all pass except uint8 (all zeros)","ts":"2026-09-23T20:01:59+00:00"}
+{"event":"fix_applied","refinement":7,"what":"uint8 -> fp32 DEST (FP32_DEST_DTYPES)","result":"bit-exact","ts":"2026-09-23T20:01:59+00:00"}
+{"event":"device_print_observation","refinement":7,"what":"bfp output tile 16x32: row r mantissa paired with row r+1 exponent; tile_h 8/4/2/1/32 fine; precise pack + fp32 dest no change","decision":"EXCLUSIONS (packer/LLK)","ts":"2026-09-23T20:01:59+00:00"}
+{"event":"fix_applied","refinement":7,"what":"uint16 forbids fp32 DEST (caller request ignored)","why":"precision matrix fp32_acc axis: PCC ~0","ts":"2026-09-23T20:01:59+00:00"}
+{"event":"test_run","refinement":7,"what":"golden non-bf16 test_op + loose + cache","result":"717 pass, 18 xfail, 0 fail, 0 xpass","ts":"2026-09-23T20:01:59+00:00"}

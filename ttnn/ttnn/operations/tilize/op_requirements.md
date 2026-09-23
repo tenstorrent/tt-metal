@@ -212,7 +212,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Writer twin.** Measured and not built: one 4 KiB bank-contiguous write per tile-row made writes-only slower, 17.0 → 28.3 µs.
 - **Next.** Try raising DRAM write efficiency, e.g. read/write phase grouping to cut DRAM bus turnarounds. I did not try it here because it is outside this refinement's read-coalescing scope.
 
-### [ ] Refinement 7 — Numerical formats: fp32 / fp8 / integer inputs, block-float and integer outputs
+### [x] Refinement 7 — Numerical formats: fp32 / fp8 / integer inputs, block-float and integer outputs
 
 **Goal**: add to SUPPORTED:
 - `dtype`: `float32`, `fp8_e4m3`, `uint32`, `int32`, `uint16`, `uint8`
@@ -237,6 +237,8 @@ Also:
 - **Reference timing.** The fp32 LOOSE_CASE [1,1,8192,32] (WH 15064 ns) is the device-ns reference for the fp32 datapath.
 
 **Done when**: every golden cell whose only unsupported axes are `dtype` / `output_dtype` passes at its golden tolerance (`exact` for fp32 → fp32 and same-width integers, per `helpers._transition_tolerance` for block-float casts), or is listed in EXCLUSIONS with its failure category. The 10 `test_regression.py` failures pass. Zero loud categories.
+
+**Outcome**: landed on WH B0. Every legal dtype pair is in SUPPORTED. The golden non-bf16 cells give 717 pass, 18 xfail on 6 categorized EXCLUSIONS (packer: block-float at tile 16×32; precision: bfp4 at rank 0 / 1; oracle: negative fill on uint16 / uint8) and 0 fail. `test_regression.py` passes 10/10. bf16 perf focus measured 23644 ns (R6: 23303, noise band); fp32 [1,1,8192,32] measured 14055 ns (reference 15064). fp8_e4m3 is declared but unverified: it needs a Blackhole run.
 
 ### [ ] Refinement 8 — Speed up the perf-flagged profile (post-generality re-tune)
 

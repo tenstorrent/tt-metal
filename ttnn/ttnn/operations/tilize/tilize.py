@@ -206,8 +206,22 @@ _LEGACY_SCHEMES = (
 )
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.bfloat16],
+    # Numeric formats (Refinement 7): cb_input_sticks carries the input dtype, cb_output_tiles the
+    # output dtype, and the value-preserving cast happens at pack. 32-bit pages run on fp32 DEST, a
+    # 32-bit input through the lossless tilize path (UnpackToDestFp32 + Fp32Mode::Lossless;
+    # tilize_program_descriptor.NumericConfig). Cross-family / width-changing casts are INVALID in
+    # the feature spec. fp8_e4m3 is constructible only on Blackhole; declared unconditionally.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8],
+    "output_dtype": [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.uint16,
+        ttnn.uint8,
+    ],
     "low_l1": [False, True],
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": ["interleaved", *_LEGACY_SCHEMES, "nd"],
@@ -249,7 +263,26 @@ def _retile_pad_exclusions():
     return cells
 
 
-EXCLUSIONS = _retile_pad_exclusions()
+# Numeric formats (Refinement 7), each measured on WH B0 and categorized:
+#  * packer (LLK): a block-float OUTPUT at tile [16, 32] comes back with every mantissa row paired
+#    with the next row's exponent (PCC ~0). Tile heights 32 / 8 / 4 / 2 / 1 match the host's
+#    quantization, bfp8_pack_precise and fp32 DEST do not change it, bf16 at [16, 32] is exact.
+#  * precision (format): bfloat4_b from a rank-0 / rank-1 input. The packer truncates to bfp4
+#    (PCC ~0.984 on randn vs the host's rounding ~0.993), and a single mostly-pad tile of a few
+#    datums lands at or below the 0.98 floor (rank 0 is a single datum: no PCC at all).
+#  * oracle (unrepresentable): a negative fill on uint16 / uint8. The device writes the signed ->
+#    unsigned bit_cast (65536 - n for uint16), but uint16 reads back zero-extended into int32 and
+#    F.pad refuses a negative fill on a uint8 tensor, so no output can match the expected tensor.
+_NUMERIC_EXCLUSIONS = [
+    {"output_dtype": ttnn.bfloat8_b, "tile_height": 16},
+    {"output_dtype": ttnn.bfloat4_b, "tile_height": 16},
+    {"output_dtype": ttnn.bfloat4_b, "rank": 0},
+    {"output_dtype": ttnn.bfloat4_b, "rank": 1},
+    {"dtype": ttnn.uint16, "pad_value": "negative"},
+    {"dtype": ttnn.uint8, "pad_value": "negative"},
+]
+
+EXCLUSIONS = _retile_pad_exclusions() + _NUMERIC_EXCLUSIONS
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +520,9 @@ def _fill_bits(pad_value, dtype):
         return int(torch.tensor([float(v)], dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
     if dtype == ttnn.float32:
         return int(torch.tensor([float(v)], dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
+    if dtype == ttnn.fp8_e4m3:
+        return int(torch.tensor([float(v)], dtype=torch.float32).to(torch.float8_e4m3fn).view(torch.uint8).item())
+    # Integers: a negative fill is bit_cast signed -> unsigned at the element width.
     if dtype in (ttnn.uint32, ttnn.int32):
         return int(v) & 0xFFFFFFFF
     if dtype == ttnn.uint16:
@@ -590,8 +626,13 @@ def tilize(
     output_padded_shape=None,
     pad_value=None,
     tile: ttnn.Tile | None = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
-    """Re-lay `input_tensor` (Layout::ROW_MAJOR) into Layout::TILE; values and logical shape unchanged."""
+    """Re-lay `input_tensor` (Layout::ROW_MAJOR) into Layout::TILE; values and logical shape unchanged.
+
+    `dtype` casts value-preservingly at pack. `compute_kernel_config` (ttnn.ComputeKernelConfig)
+    is optional: tilize does no arithmetic, and fp32 DEST is forced wherever a 32-bit page needs it.
+    """
     _check_well_formed(input_tensor, output_padded_shape=output_padded_shape, pad_value=pad_value, tile=tile)
     validate(
         input_tensor,
@@ -628,6 +669,7 @@ def tilize(
         in_tile_h=_input_tile_height(input_tensor),
         low_l1=low_l1,
         pad=pad,
+        compute_kernel_config=compute_kernel_config,
     )
     # Output tensor MUST be last in the list.
     output_tensor = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
