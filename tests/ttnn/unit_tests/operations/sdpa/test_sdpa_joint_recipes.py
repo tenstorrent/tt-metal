@@ -26,8 +26,10 @@ def options(variant, grid):
     )
 
 
-def upload(device, host, variant):
-    return prepare([ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host], variant)
+def upload(device, host, variant, pad_value=None):
+    return prepare(
+        [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, pad_value=pad_value) for x in host], variant
+    )
 
 
 def joint(inputs, variant, grid):
@@ -220,11 +222,11 @@ def test_joint_recipe_chunk_tails(device, variant, q_lengths, k_lengths, heads, 
     assert hashes == [digest(ttnn.to_torch(x)) for segment in inputs for x in segment]
 
 
-@pytest.mark.parametrize("invalid", ["padding", "joint_heads", "joint_dtype", "strategy", "unprepared", "compute"])
+@pytest.mark.parametrize("invalid", ["joint_heads", "joint_dtype", "strategy", "unprepared", "compute"])
 def test_joint_recipe_rejects_unsupported(device, invalid):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
-    n, j = (383, 129) if invalid == "padding" else (384, 128)
+    n, j = 384, 128
     segments = [make_inputs(length, "normal", q_length=length) for length in (n, j)]
     if invalid == "joint_heads":
         segments[1] = [x.repeat(1, 2, 1, 1) for x in segments[1]]

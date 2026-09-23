@@ -21,21 +21,24 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE,
         "SDPA preparation requires original tiled BF16 inputs");
-    TT_FATAL(
-        input.memory_config() == DRAM_MEMORY_CONFIG && input.logical_shape() == input.padded_shape(),
-        "SDPA preparation requires unpadded, interleaved DRAM inputs");
+    TT_FATAL(input.memory_config() == DRAM_MEMORY_CONFIG, "SDPA preparation requires interleaved DRAM inputs");
     TT_FATAL(
         input.logical_shape().rank() == 4 && input.logical_shape()[3] == 128 && input.logical_volume() > 0,
         "SDPA preparation currently requires nonempty rank-four D128 inputs");
+    const auto& shape = input.logical_shape();
+    const auto& padded = input.padded_shape();
+    TT_FATAL(
+        padded[0] == shape[0] && padded[1] == shape[1] && padded[3] == shape[3] &&
+            padded[2] == ((shape[2] + 31) / 32) * 32,
+        "SDPA preparation only supports minimal sequence-axis tile padding");
     TT_FATAL(
         dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B,
         "SDPA preparation output must be BF16, BFP8, or BFP4");
     TT_FATAL(!is_query || dtype == DataType::BFLOAT16, "Prepared Q must retain BF16 storage");
     constexpr uint32_t batch = 4;
     TT_FATAL(
-        input.logical_volume() / 1024 <= std::numeric_limits<uint32_t>::max(),
-        "SDPA preparation tile count overflows uint32");
-    const uint32_t tiles = input.logical_volume() / 1024;
+        padded.volume() / 1024 <= std::numeric_limits<uint32_t>::max(), "SDPA preparation tile count overflows uint32");
+    const uint32_t tiles = padded.volume() / 1024;
     TT_FATAL(tiles > 0 && tiles % batch == 0, "SDPA preparation requires a multiple of four full tiles");
     const auto hardware = input.device()->compute_with_storage_grid_size();
     const uint32_t cores = std::min<uint32_t>(tiles / batch, hardware.x * hardware.y);
@@ -66,6 +69,9 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
         .compile_time_args = {batch},
         .config = ReaderConfigDescriptor{}};
     TensorAccessorArgs(input.buffer()).append_to(reader.compile_time_args);
+    if (shape[2] % 32 != 0) {
+        reader.defines.emplace_back("SDPA_PREPARE_ROWS", std::to_string(shape[2]));
+    }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_prepare.cpp",
         .core_ranges = grid,

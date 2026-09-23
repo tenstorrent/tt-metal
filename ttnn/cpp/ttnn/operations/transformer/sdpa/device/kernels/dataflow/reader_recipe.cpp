@@ -4,7 +4,7 @@
 // Private noncausal, per-head KV unicast-chain reader. Compute and writer are
 // unchanged. Every core reads its own Q; only rank zero reads K/V from DRAM.
 //
-// CTA: [q_tiles, k_chunks, q_chunks_per_head, Q accessor..., K accessor..., V accessor...]
+// CTA: [q_tiles, k_chunks, q_chunks_per_head, primary/joint Q rows, primary/joint KV rows, accessors...]
 // Runtime args:
 //   0 Q address, 1 K address, 2 V address, 3 first_flat_Q_job, 4 local_Q_jobs,
 //   5 chain_rank, 6 chain_length, 7 upstream_physical_x, 8 upstream_physical_y,
@@ -31,6 +31,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp"
 #include "sequence_accessor.hpp"
+#include "tile_padding.hpp"
 
 #ifndef SDPA_READER_BARRIER_TILES
 #define SDPA_READER_BARRIER_TILES 2
@@ -59,6 +60,15 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
 #endif
     }
     noc.async_read_barrier();
+    if constexpr (Accessor::has_partial_rows) {
+        for (uint32_t p = 0; p < kv_tiles; ++p) {
+            const uint32_t rows = tensor.valid_rows(first_page + p);
+            if (rows > 0 && rows < 32) {
+                const uint32_t dst_tile = transpose ? (p % 4) * SDPA_K_CHUNK_TILES + p / 4 : p;
+                zero_tile_padding<tile_bytes>(write_ptr + dst_tile * tile_bytes, rows);
+            }
+        }
+    }
 }
 
 void kernel_main() {
@@ -67,31 +77,29 @@ void kernel_main() {
     constexpr uint32_t queries_per_head = get_compile_time_arg_val(2);
     static_assert(q_tiles > 0 && q_tiles % 2 == 0);
     static_assert(k_chunks > 0 && queries_per_head > 0);
-#ifdef SDPA_JOINT
-    constexpr uint32_t q_primary_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t q_joint_pages = get_compile_time_arg_val(4);
-    constexpr uint32_t kv_primary_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t kv_joint_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t q_primary_rows = get_compile_time_arg_val(3);
+    constexpr uint32_t q_joint_rows = get_compile_time_arg_val(4);
+    constexpr uint32_t kv_primary_rows = get_compile_time_arg_val(5);
+    constexpr uint32_t kv_joint_rows = get_compile_time_arg_val(6);
     constexpr auto qa = TensorAccessorArgs<7>();
-#else
-    constexpr auto qa = TensorAccessorArgs<3>();
-#endif
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
 #ifdef SDPA_JOINT
     constexpr auto jqa = TensorAccessorArgs<va.next_compile_time_args_offset()>();
     constexpr auto jka = TensorAccessorArgs<jqa.next_compile_time_args_offset()>();
     constexpr auto jva = TensorAccessorArgs<jka.next_compile_time_args_offset()>();
-    const auto q = sequence_accessor<q_primary_pages, q_joint_pages, queries_per_head * q_tiles * 4>(
+    const auto q = sequence_accessor<q_primary_rows, q_joint_rows, q_tiles * 32>(
         TensorAccessor(qa, get_arg_val<uint32_t>(0)), TensorAccessor(jqa, get_arg_val<uint32_t>(12)));
-    const auto k = sequence_accessor<kv_primary_pages, kv_joint_pages, k_chunks * kv_tiles>(
+    const auto k = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32>(
         TensorAccessor(ka, get_arg_val<uint32_t>(1)), TensorAccessor(jka, get_arg_val<uint32_t>(13)));
-    const auto v = sequence_accessor<kv_primary_pages, kv_joint_pages, k_chunks * kv_tiles>(
+    const auto v = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32>(
         TensorAccessor(va, get_arg_val<uint32_t>(2)), TensorAccessor(jva, get_arg_val<uint32_t>(14)));
 #else
-    const auto q = sequence_accessor(TensorAccessor(qa, get_arg_val<uint32_t>(0)));
-    const auto k = sequence_accessor(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
-    const auto v = sequence_accessor(TensorAccessor(va, get_arg_val<uint32_t>(2)));
+    const auto q = sequence_accessor<q_primary_rows, q_tiles * 32>(TensorAccessor(qa, get_arg_val<uint32_t>(0)));
+    const auto k =
+        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32>(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
+    const auto v =
+        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32>(TensorAccessor(va, get_arg_val<uint32_t>(2)));
 #endif
     const uint32_t first_job = get_arg_val<uint32_t>(3);
     const uint32_t jobs = get_arg_val<uint32_t>(4);
@@ -158,6 +166,14 @@ void kernel_main() {
             }
         }
         noc.async_read_barrier();
+        if constexpr (decltype(q)::has_partial_rows) {
+            for (uint32_t p = 0; p < q_tiles * 4; ++p) {
+                const uint32_t rows = q.valid_rows(qbase + p);
+                if (rows > 0 && rows < 32) {
+                    zero_tile_padding<qbytes>(qptr + p * qbytes, rows);
+                }
+            }
+        }
         qcb.push_back(q_tiles * 4);
 
         const bool receive = link.should_receive(head);

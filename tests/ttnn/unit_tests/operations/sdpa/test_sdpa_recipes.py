@@ -102,7 +102,6 @@ def test_sdpa_recipe_state_cache_trace(device, variant, distribution, record_pro
         "unprepared_e",
         "kv_type",
         "dimension",
-        "length",
         "output_l1",
     ],
 )
@@ -112,8 +111,6 @@ def test_sdpa_recipe_rejects_unsupported(device, invalid):
     host = make_inputs(512, "normal")
     if invalid == "dimension":
         host = [x[..., :64].contiguous() for x in host]
-    elif invalid == "length":
-        host[0] = host[0][..., :128, :].contiguous()
     inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host]
     kwargs = dict(is_causal=False, precision=ttnn.SDPAPrecision.ACCURATE)
     if invalid == "causal":
