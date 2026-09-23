@@ -113,36 +113,52 @@ execute_step_write_initial_run_json
 Stop on an input rejection. Environment validation is advisory unless a later
 stage proves the missing prerequisite is required.
 
-## 2. Analyze and Research
+## 2. Solve: analyse, research and apply the fix in one session
 
-Spawn `issue-analyzer.md` once. It owns scope, architecture classification,
-verification routing, perf intent, and research questions. Then run:
+Measured on this corpus: run duration tracks the number of agent stages at
+roughly half an hour each, and analysis, architecture research and the initial
+fix shared almost all of their discovery while paying that cost three times
+over. They now run as **one** agent session.
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_solve
+```
+
+Spawn a single agent with both contracts, in this order, in one session:
+
+```text
+Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-analyzer.md
+to produce the analysis artifact. Then, in this same session, read and follow
+{WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-worker.md
+in initial-fix mode to apply the fix it calls for.
+WORKTREE_DIR={WORKTREE_DIR}
+```
+
+Both playbooks keep their own contracts, artifacts and result markers. What
+goes away is the boundary between them: one orientation instead of three, no
+analysis artifact written only to be re-read and re-derived by the next agent,
+and no separate spawn for architecture research.
+
+Handle the analyzer half's outcome before the fix half's:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_refine_perf_goal
 ```
 
-Read `in_scope` from the analysis artifact. If false, run:
+Read `in_scope` from the analysis artifact. If false, run
+`execute_step_finalize_out_of_scope` and stop. Do not enter any later stage.
+The session must decide scope before it edits, so an out-of-scope issue still
+costs only the analysis.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_finalize_out_of_scope
-```
+`needs_arch_research: true` is answered inside the same session, against the
+repository and the architecture references, and recorded in the analysis
+artifact exactly as `arch-lookup.md` would. Spawn `arch-lookup.md` separately
+only when the session returns `BLOCKED` with a hardware question it could not
+settle from the repository; that is an escalation, not a routine stage.
 
-Then stop. Do not spawn another agent or enter any later pipeline stage.
-
-If `needs_arch_research: true`, run `execute_step_advance_arch_lookup`, then
-spawn `arch-lookup.md` once. Otherwise leave `PREVIOUS_AGENT=analyzer`.
-
-## 3. Apply the Fix
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_writer
-```
-
-Spawn `issue-worker.md` in initial-fix mode.
+Then take the fix half's marker.
 
 - `FIX_APPLIED`: continue.
 - `BLOCKED`: store the reported reason in `OBSTACLE`, mark the run failed, and

@@ -968,6 +968,23 @@ execute_step_advance_arch_lookup() {
 # ===========================================================================
 # Step 3 — advance to the writer (fix). Uses PREVIOUS_AGENT (analyzer|arch_lookup).
 # ===========================================================================
+# Analysis, architecture research and the initial fix as one stage. Duration on
+# this corpus tracks stage count at roughly half an hour each, and these three
+# shared nearly all their discovery while paying for it three times.
+execute_step_advance_solve() {
+    local _L; _L="$(_LOG)"
+    local num mode; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
+    if [ "$(sg STATUS)" = "skipped" ]; then
+        echo "cannot advance a skipped run to solve" >&2
+        return 1
+    fi
+    local msg="Analysing and fixing issue #${num}"
+    [ "$mode" = multi ] && msg="Analysing and fixing issue #${num} across $(sg TARGET_ARCHES_JSON)"
+    rj advance --new-step "solve" --new-message "$msg" \
+        --prev-result "success" --prev-message "Run set up" --agent "orchestrator"
+    ss PREVIOUS_AGENT "solve"
+}
+
 execute_step_advance_writer() {
     local _L; _L="$(_LOG)"
     local num mode prev; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"; prev="$(sg PREVIOUS_AGENT)"
