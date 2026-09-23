@@ -119,6 +119,15 @@ class TtDFlashDrafter:
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
+        # Scratch for the non-first tap's matmul. Both this and _reduced_accum are allocated ONCE (on the
+        # first tap, which happens during the runtime's pre-capture warmup) and then written in place, so a
+        # trace capture of the verifier forward records no allocation, no deallocate and no shape change.
+        self._tap_scratch: Optional[ttnn.Tensor] = None
+        # The lowest target layer this rank owns. Taps fire in ascending layer order within a forward, so
+        # this one OVERWRITES the accumulator and the rest add into it: that removes the per-chunk reset
+        # (nothing to zero) and makes the op sequence identical on every chunk, which is what a captured
+        # program requires. Constant per rank, so the branch below is decided at build time, not per call.
+        self._first_owned_id: Optional[int] = min(self._owned_set) if self._owned_set else None
         # Partial forwarded from upstream pipeline ranks (import_partial), already reduce_scattered to
         # [1,1,seq,H/tp]; summed into this rank's finalized partial. None on rank 0 / single-rank.
         self._running_sharded: Optional[ttnn.Tensor] = None
@@ -217,9 +226,9 @@ class TtDFlashDrafter:
     def reset(self):
         """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
         sequence/chunk."""
-        if self._reduced_accum is not None:
-            ttnn.deallocate(self._reduced_accum)
-        self._reduced_accum = None
+        # _reduced_accum is deliberately NOT freed or nulled: it is the persistent tap accumulator, and
+        # the next chunk's first owned tap overwrites it wholesale. Freeing it here would reintroduce a
+        # per-chunk allocation, which is exactly what a trace capture of the verifier forward cannot have.
         if self._running_sharded is not None:
             ttnn.deallocate(self._running_sharded)
         self._running_sharded = None
@@ -239,20 +248,44 @@ class TtDFlashDrafter:
         another pipeline rank)."""
         if global_layer_idx not in self._owned_set:
             return
-        partial = ttnn.linear(
-            hidden_states,
-            self.fc_slices[global_layer_idx],
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # TODO: add a tuned program_config.
-        )
+        first = global_layer_idx == self._first_owned_id
         if self._reduced_accum is None:
-            self._reduced_accum = partial
+            # First tap ever: let ttnn size the buffer, then keep it forever. This runs during the
+            # runtime's warmup forward, BEFORE any trace capture, so the allocation is never recorded.
+            self._reduced_accum = ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # TODO: add a tuned program_config.
+            )
+            return
+        if first:
+            # Overwrite: this is chunk N's first contribution, so the previous chunk's sum must not leak in.
+            ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                optional_output_tensor=self._reduced_accum,
+            )
+            return
+        if self._tap_scratch is None:
+            self._tap_scratch = ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
-            summed = ttnn.add(self._reduced_accum, partial)
-            ttnn.deallocate(self._reduced_accum)
-            ttnn.deallocate(partial)
-            self._reduced_accum = summed
+            ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                optional_output_tensor=self._tap_scratch,
+            )
+        ttnn.add(self._reduced_accum, self._tap_scratch, output_tensor=self._reduced_accum)
 
     def import_partial(self, sharded: ttnn.Tensor) -> None:
         """Seed the running partial with the upstream rank's finalized sharded partial [1,1,seq,H/tp]
@@ -272,8 +305,10 @@ class TtDFlashDrafter:
             out = self._running_sharded
             self._running_sharded = None
             return out
+        # PERSISTENT: _reduced_accum is allocated once and rewritten in place by tap(), so it is neither
+        # nulled nor deallocated here. The next chunk's first owned tap overwrites it, which is what
+        # replaces the old per-chunk reset -- and what lets the verifier forward be trace-captured.
         reduced_partial = self._reduced_accum
-        self._reduced_accum = None
         # reduce_scatter SUMS the row-parallel partials across TP AND scatters on hidden in ONE op → the
         # [1,1,seq,H/tp] shard the distributed hidden_norm wants. Matches MLA o_proj/q_a_proj + MoE tt_reduce.
         if self.tp_factor > 1:
@@ -284,9 +319,11 @@ class TtDFlashDrafter:
                 num_links=self.num_links,
                 topology=self.topology,
             )  # [1,1,seq,H/tp] — summed FC output, TP-sharded on hidden
-            ttnn.deallocate(reduced_partial)
+            # NOT deallocated: reduced_partial is the persistent accumulator, not a per-chunk temporary.
         else:
-            reduced = reduced_partial  # tp==1: the partial IS the full sum; hidden_norm handles full H
+            # tp==1: the partial IS the full sum, but hand the caller its OWN buffer -- returning the
+            # persistent accumulator would let a downstream deallocate free the buffer tap() reuses.
+            reduced = ttnn.clone(reduced_partial)
         if self._running_sharded is not None:
             summed = ttnn.add(reduced, self._running_sharded)  # += upstream ranks' partial (same layout)
             ttnn.deallocate(reduced)
