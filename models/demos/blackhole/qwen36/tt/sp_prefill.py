@@ -331,6 +331,8 @@ class SPPrefill:
             self._sin_buf = [None] * n_spans
             self._sel_buf = None  # persistent one-hot last-position selector (last die's tail only)
             self._traced_logits = None  # persistent device tensor the trace writes logits into (last die)
+            self._traced_tok = None  # persistent device tensor holding the on-device argmax token
+            self.last_first_token = None  # set by prefill_traced(): the device-computed first token
         except Exception:
             self.close()
             raise
@@ -495,8 +497,19 @@ class SPPrefill:
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = model.norm(x_last, mode=Mode.PREFILL)
         logits = model._lm_head(x_last)
+        # On-device argmax (ported from atupe/qwen35-sp-prefill). The full logits are
+        # [1, 1, 32, vocab] gathered across the vocab-sharded mesh -- ~9.7 MB -- and reading
+        # them to host purely to call torch.argmax cost 26 ms on top of a 37 ms wavefront
+        # (measured: wavefront 37.43 ms vs total 63.58 ms). Doing the argmax on device makes
+        # the timed readback a single token. Run unconditionally, not just when traced, so the
+        # untraced warm-up compiles these programs into the cache: trace capture cannot load
+        # new binaries (TT_FATAL !is_capturing_trace).
+        logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        tok = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+        ttnn.deallocate(logits_rm)
         if traced:
-            return logits
+            return logits, tok
+        ttnn.deallocate(tok)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.device, dim=0))
         return lt[0].reshape(-1)[: model.args.vocab_size]
 
@@ -716,7 +729,7 @@ class SPPrefill:
                 ttnn.end_trace_capture(self.subs[d], opened[d], cq_id=0)
                 self._trace_ids[d] = opened[d]
             if last in dies:
-                self._traced_logits = out
+                self._traced_logits, self._traced_tok = out
         except Exception:
             self._safe_end_traces(opened)
             raise
@@ -734,7 +747,10 @@ class SPPrefill:
         """Replay the captured per-die traces on a new prompt. capture() must have run first.
 
         Returns (logits, wavefront_s, total_s): wavefront_s is device time (all 4 traces launched
-        + synchronized); total_s additionally includes the host readback + argmax-ready logits.
+        + synchronized); total_s additionally includes the readback of the ON-DEVICE argmax
+        token -- i.e. true time-to-first-token. The full [1,1,32,vocab] logits readback used for
+        the return value and PCC happens AFTER total_s is stamped and is not counted; it also
+        asserts the device argmax matches the host one.
         """
         assert all(t is not None for t in self._trace_ids), "capture() must run before prefill_traced()"
         assert tokens.shape[0] == 1, "SPPrefill is B=1 only (batch_idx=0/user_id=0 throughout)"
@@ -757,10 +773,19 @@ class SPPrefill:
         for d in range(self.n_spans):
             ttnn.synchronize_device(self.subs[d])
         t1 = time.perf_counter()
+        tok_t = ttnn.to_torch(self._traced_tok, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
+        first_token = int(tok_t.reshape(-1)[0])
+        t2 = time.perf_counter()
+
+        # OUTSIDE the timed window: the full-logits readback, kept only for PCC checks and to
+        # cross-check the on-device argmax. Production reads just the token above.
         lt = ttnn.to_torch(self._traced_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
         logits = lt[0].reshape(-1)[: self.args_list[-1].vocab_size].float()
-        _ = int(torch.argmax(logits))
-        t2 = time.perf_counter()
+        host_argmax = int(torch.argmax(logits))
+        assert (
+            host_argmax == first_token
+        ), f"[SPPrefill] traced ttft: device argmax {first_token} != host argmax {host_argmax}"
+        self.last_first_token = first_token
         return logits, (t1 - t0), (t2 - t0)
 
     def export_state_host(self):

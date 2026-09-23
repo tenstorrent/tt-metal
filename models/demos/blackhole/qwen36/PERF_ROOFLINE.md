@@ -517,6 +517,78 @@ never clear, and the chain sat deadlocked on itself for 35 min. The replacement 
 open `/dev/tenstorrent` file descriptors, which is the actual busy signal and is what revealed
 the device was free.
 
+## E2E with overheads, stated explicitly (2026-09-23)
+
+Every number previously quoted was the **device wavefront**. This section adds what sits on
+top, because those overheads are not optional parts of the flow.
+
+### Prefill, ISL 4096, SP=4 x TP=8 on 32 chips
+
+| component | ms | in the wavefront figure? |
+|---|---|---|
+| die-0 own work (24 layers) | 33.66 | yes |
+| **socket wavefront tail** (3 SP hops: GDN state + KV prefix to the last die) | **3.89** | **yes** |
+| = **wavefront** | **37.55** | |
+| first-token readback (on-device argmax -> 1 token) | 0.70 | no -- added below |
+| = **true TTFT** | **38.25** | |
+| full [1,1,32,vocab] logits readback | *not counted* | PCC/debug only |
+
+**The socket overhead is already inside our number** and always has been -- it is the
+`d3 - d0` spread. Per-die finish: `d0=33.66  d1=34.57  d2=35.62  d3=37.56`. It is **3.89 ms on
+32 chips**, matching Aniruddha's 4-5 ms at 4 dies, because it is set by **SP depth (3 hops),
+not chip count** -- SP=4 either way. The hops are not equal (0.91 / 1.05 / 1.94 ms): the last
+is the largest because die 3 receives three spans' worth of KV prefix. At SP=8 it would be 7
+hops, which is why SP=8 x TP=4 measured worse (43.58 ms) despite a better MLP floor.
+
+### The readback overhead that was hiding: 26 ms
+
+The TTFT test reports both `wavefront` and `total`, and until now only the first was quoted:
+
+    before (host argmax):   wavefront 37.43 ms | total 63.58 ms   <- +26.15 ms
+    after  (device argmax): wavefront 37.55 ms | total 38.25 ms   <- +0.70 ms
+
+The full logits are `[1, 1, 32, vocab]` gathered across the vocab-sharded mesh -- ~9.7 MB --
+and were being read to host purely to call `torch.argmax`. Porting the on-device argmax from
+`atupe/qwen35-sp-prefill` (which this port had originally skipped as "not affecting the
+wavefront" -- true, but it dominated true TTFT) cuts **25.33 ms**. `prefill_traced` now asserts
+the device argmax equals the host one.
+
+### Prefill -> decode handoff: NOT measured, and structurally large
+
+`sp_handoff.py` migrates state to the decode model **through host torch tensors** ("v1 goes
+through host torch tensors (no on-device transfer)"). Sized from the config at ISL 4096:
+
+| | MB |
+|---|---|
+| full-attention KV (6 layers x 2 x 2 heads x 4096 x 256, bf16) | 50.3 |
+| GDN recurrent state (18 layers, fp32) | 18.9 |
+| GDN conv carry (3 rows) | 0.7 |
+| **total across the host round-trip** | **69.9** |
+
+~70 MB down and back. At a ~2 GB/s effective PCIe round-trip that is **~35 ms**, which would
+exceed the entire prefill. This is an estimate from bytes, **not a measurement** -- but it is
+the single largest unquantified item in the flow and an on-device handoff would remove it
+outright. Mohamed is right to call it a big overhead to avoid.
+
+### Decode
+
+TPOT 6.99 ms/token is **device time only** at TP=8 (see the per-layer section). It excludes
+sampling and any host interaction per step. Median per-layer gives 6.99; total device work in
+the window / steps gives **7.69 ms**, so quote 6.99 as median with 7.69 as the worst case.
+
+### Honest e2e for the OSL=8 target
+
+| | ms |
+|---|---|
+| prefill TTFT (device + token readback) | 38.3 |
+| prefill -> decode handoff | **~35, estimated, unmeasured** |
+| 8 decode tokens @ 6.99 (median) | 55.9 |
+| 8 decode tokens @ 7.69 (worst) | 61.5 |
+| **e2e, median decode** | **~130** |
+
+Decode, not prefill, dominates the OSL=8 target, and the unmeasured handoff is comparable to
+the whole prefill. Both were invisible while only the wavefront was quoted.
+
 ## Per-layer cost, prefill and decode (measured 2026-09-23)
 
 Tracy device profile, filtered to the `start`..`stop` signpost window and bucketed by the
