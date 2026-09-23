@@ -692,8 +692,14 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 cq_signal_slot_stride_,
             };
 
+            // WATCHER_NOINLINE only takes effect in watcher builds: it lets the compiler outline the
+            // FORCE_INLINE helpers there, without which the watcher's NoC checks inlined at every
+            // call push this kernel past the DRISC firmware window. Other builds are unaffected.
             KernelHandle kernel_id = CreateKernel(
-                *program, kKernelPath, sender_logical, DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args});
+                *program,
+                kKernelPath,
+                sender_logical,
+                DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args, .defines = {{"WATCHER_NOINLINE", "1"}}});
 
             const uint32_t socket_addr = sockets_[d * num_senders_ + s]->get_config_buffer_address();
             std::vector<uint32_t> rt_args = {/*bank_id=*/static_cast<uint32_t>(sender_logical.x), socket_addr};
