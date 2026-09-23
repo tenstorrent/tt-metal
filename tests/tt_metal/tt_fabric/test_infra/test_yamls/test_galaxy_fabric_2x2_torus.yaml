@@ -2,24 +2,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Single BH galaxy 2x2 inter-mesh torus repro for #56298 -- Z-routed variant.
-# Four 2x2 RING/LINE stages (mesh_id 0..3) occupy half of one 32-ASIC BH galaxy,
-# ring-connected (mesh 3 -> mesh 0 loops back) with the inter-mesh links forced
-# onto the Z routers (assign_z_direction). Every mesh opens with the SAME fabric
-# config; for each torus topology (X, Y, XY) the InterMesh group drives routing
-# across the Z inter-mesh links -- which under the fix never enable deadlock
-# avoidance, whichever direction -- and the IntraMesh group is the control
-# (intra-mesh routing is untouched). Checks the torus fabric does not hang/starve.
+# Single BH galaxy 2x2 inter-mesh torus repro for #56298. Four 2x2 RING/LINE
+# stages (mesh_id 0..3, each stage a 2x2 mesh -- device_topology { dims: [2, 2] })
+# occupy half of one 32-ASIC BH galaxy, ring-connected (mesh 3 -> mesh 0 loops
+# back). Every mesh opens with the SAME fabric config; for each torus topology
+# (X, Y, XY) the InterMesh group drives routing across the inter-mesh links --
+# which under the fix never enable deadlock avoidance, whichever direction -- and
+# the IntraMesh group is the control (intra-mesh routing is untouched). Checks the
+# torus fabric does not hang/starve.
 #
-# Galaxy-only: pairs 1:1 with the 2x2 Z MGD below (each stage is a 2x2 mesh:
-# device_topology { dims: [2, 2] }). Wired as galaxy-fabric-2x2-torus-z in
-# tests/pipeline_reorg/galaxy_e2e_tests.yaml. Non-Z counterpart:
-# test_galaxy_fabric_2x2_torus_nonz.yaml.
+# This ONE config is run against BOTH 2x2 4-stage-ring MGDs, wired in
+# tests/pipeline_reorg/galaxy_e2e_tests.yaml:
+#   - galaxy-fabric-2x2-torus-z    -> single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto
+#                                     (inter-mesh links forced onto Z, assign_z_direction)
+#   - galaxy-fabric-2x2-torus-nonz -> single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto
+#                                     (inter-mesh links over the normal N/S/E/W routers)
+# so the same torus X/Y/XY neighbor-exchange coverage runs with inter-mesh links
+# on Z and on N/S/E/W. Galaxy-only.
 #
 #   ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <one BH galaxy> --image none --mpi-if none \
 #     --mesh-graph-desc-path tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto \
-#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus_z.yaml \
+#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus.yaml \
 #     --filter name.Torus
+#   (swap the MGD for single_galaxy_2x2_ring_4stage_ring_... for the non-Z variant)
 
 Tests:
 
