@@ -60,8 +60,6 @@ void kernel_main() {
     // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
     // #ifdef-gated because tensor::metadata / scratch::meta are bound only on the metadata program.
     const auto s_meta = TensorAccessor(tensor::metadata);
-    // meta is a reader-private staging region (NoC-read one page, read it back): a Scratchpad, not a
-    // self-loop DFB. Single page, filled once at the base — no FIFO, no wrap.
     Scratchpad<volatile uint32_t> meta(scratch::meta);
     noc.async_read(s_meta, meta, 4, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
