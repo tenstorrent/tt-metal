@@ -1071,8 +1071,18 @@ def gated_deltanet_forward_ttnn(
         # norm/concat/gate/clip at 2x the bytes
         # F10B item B: this typecast + per-head rms_norm + nlp_concat_heads is the "post-scan chain"
         # group -- mc_scan (independent L1 policy), not mc.
-        o = ttnn.typecast(o, ttnn.bfloat16, memory_config=mc_scan)
-        o = ttnn.rms_norm(o, weight=o_norm_weight, epsilon=norm_eps, memory_config=mc_scan)
+        # step2 (2026-09-23): default flipped "1" -> "0" per explicit user scope-change (this
+        # worktree's default behavior should exclude the norm-output-dtype change; the step2 FLA
+        # L1 fix validation runs with this OFF). Set to "1" to re-enable the bf16-out RMSNorm path.
+        if os.environ.get("QWEN36_GDN_POST_NORM_BF16OUT", "0") != "0":
+            # rms_norm's LayerNorm primitive now honors an explicit output dtype (fp32 in, bf16
+            # out), so the standalone typecast (~47 us/2048-token chunk) is folded into the norm's
+            # pack stage instead of running as a separate op. Requires the ttnn dtype-plumbing
+            # patch in scratchpad/rmsnorm_out_dtype.patch.
+            o = ttnn.rms_norm(o, weight=o_norm_weight, epsilon=norm_eps, memory_config=mc_scan, dtype=ttnn.bfloat16)
+        else:
+            o = ttnn.typecast(o, ttnn.bfloat16, memory_config=mc_scan)
+            o = ttnn.rms_norm(o, weight=o_norm_weight, epsilon=norm_eps, memory_config=mc_scan)
         o = ttnn.experimental.nlp_concat_heads(o, memory_config=mc_scan)  # [B, 1, T, Nv*Dv]
         o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])  # metadata only (last dim kept)
         if use_gate and g_proj_weight is not None:

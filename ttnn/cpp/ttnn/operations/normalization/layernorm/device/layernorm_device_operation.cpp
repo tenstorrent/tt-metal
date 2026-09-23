@@ -473,7 +473,9 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+                        operation_attributes.dtype.value_or(input_tensor.dtype()),
+                        PageConfig(output_layout),
+                        operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
