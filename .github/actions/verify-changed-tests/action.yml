@@ -1,0 +1,62 @@
+name: "Verify changed tests"
+description: >-
+  Scope tests/pipeline_reorg changes, narrow the matrix, and enforce owner
+  review for highly contended SKUs. Pinned to @main by every caller so a PR
+  branch always runs the current version of this gate, never a stale or
+  missing copy from its own head.
+
+inputs:
+  event:
+    description: "GitHub event name (pull_request or merge_group)"
+    required: true
+  base:
+    description: "Base ref or sha to diff against"
+    required: true
+  repo:
+    description: "owner/repo, for the reviews API"
+    required: true
+  pr:
+    description: "PR number"
+    required: false
+    default: ""
+  output:
+    description: "Path to also write the JSON scope result to"
+    required: false
+    default: ""
+
+outputs:
+  status:
+    description: "Gate status: no_op, blocked, or run"
+    value: ${{ steps.gate.outputs.status }}
+  expected-leg-count:
+    value: ${{ steps.gate.outputs.expected-leg-count }}
+  review-leg-count:
+    value: ${{ steps.gate.outputs.review-leg-count }}
+  review-met:
+    value: ${{ steps.gate.outputs.review-met }}
+  leg-digest:
+    value: ${{ steps.gate.outputs.leg-digest }}
+  needs-default:
+    value: ${{ steps.gate.outputs.needs-default }}
+  needs-profiler:
+    value: ${{ steps.gate.outputs.needs-profiler }}
+  matrix:
+    value: ${{ steps.gate.outputs.matrix }}
+  sim-libs:
+    value: ${{ steps.gate.outputs.sim-libs }}
+  leg-count:
+    value: ${{ steps.gate.outputs.leg-count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Scope the changed tests, narrow the matrix, enforce owner review
+      id: gate
+      shell: bash
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/verify_changed_tests.py" \
+          --event "${{ inputs.event }}" \
+          --base "${{ inputs.base }}" \
+          --repo "${{ inputs.repo }}" \
+          --pr "${{ inputs.pr }}" \
+          --output "${{ inputs.output }}"
