@@ -165,3 +165,51 @@
 - **Tests added**:
   - `test_tilize_knobs.py`: 12 Refinement 3 configs (windows, write-ahead, budget shrink, eager publish, NoC splits, bank stride / bank-major).
   - `test_tilize_r3_perf.py`: the device-ns harness. Variants and shapes come from env vars, plus a `_GRID` core-count probe and the 7-path guard set `test_r3_guard`.
+
+## Refinement 4 — Padding: auto / explicit pad, all fill signs, non-aligned H / W, rank 0 / 1
+- **Date**: 2026-09-23
+- **What was done**:
+  - **SUPPORTED.** Added `pad_mode` auto / explicit, `pad_value` zero / positive / negative, `alignment` w / h / hw_non_aligned, and `rank` 0 / 1.
+  - **Host (`tilize.py`).**
+    - `_resolve_padding` computes the padded shape `P`: auto rounds the last two dims to (`tile_h`, 32), and ranks 0 / 1 synthesize the tile dims (`[] → [32, 32]`, `[W] → [32, round_up(W, 32)]`); explicit takes `output_padded_shape`.
+    - The output is allocated at `P`, and `R`, `C` come from `P`.
+    - The returned tensor is a zero-copy view at the input's logical shape (`_logical_view`, i.e. `ttnn.reshape(out, logical, padded)` → `tt::tt_metal::view`). The buffer address is checked, so it can never become a second dispatch.
+    - The fill value is packed per input dtype (`_fill_bits`) into RT arg 10, so fills of different values share one cached program.
+  - **Reader (`tilize_stick_reads.hpp`, `tilize_reader.cpp`).**
+    - `PadMap` is the per-image stick map, with a mixed-radix leading-dim decode.
+    - `StickProducer::issue_row_padded` reads only the existing sticks' data bytes. It then fills the W-tail band and the trailing whole pad sticks: the H tail, and whole pad tile-rows / images.
+    - `PadFill` stores the fills. Short ranges use `fill_l1_range`, or a band split computed once per tile-row. Long ranges are NoC loopback copies from a 1 KiB reader-private `cb_pad_source` that is filled once, under their own transaction id and drained before every push.
+    - With one column block per core, the W-tail band is filled only on the first pass through the CB ring (`PAD_W_TAIL_PERSIST`).
+    - Compute and writer are unchanged. The unpadded path compiles to the same code: `issue_row` now goes through `open_row` / `close_row` with a no-op fill.
+  - **Placements.**
+    - A padded input always streams.
+    - A resident output shard over `P` works as before.
+    - A legacy-sharded output `MemoryConfig` with no shard spec now derives it from the input's shard grid and orientation over `P` (`_resolve_output_memory_config`, needed by the translated `tilize_with_val_padding` sharded cases).
+    - Tiny tiles pad against `tile_h`.
+  - **Refused.**
+    - Retile combined with a pad that has something to fill is an EXCLUSION (`_retile_pad_exclusions`): the face walk has no fill yet. An auto pad of an aligned TILE input fills nothing and runs.
+    - Growing an inner leading dim ([2, 3, …] → [3, 4, …]) raises `NotImplementedError`. TTNN's logical view maps logical image k to padded image k, so no buffer satisfies both the logical and the `F.pad` padded readback; I verified this on host with a correct `F.pad` buffer. Growing the outermost indexed leading dim, and growing the rank, both work.
+  - **Reused / added.** Reused: `StickProducer`, `Walker`, the CB slots, `rows_per_quantum` / `balanced_width`, `_allocate_output`, the whole writer and compute. Added: `PadMap`, `PadFill`, `issue_row_padded`, `cb_pad_source`, `PadSpec`, and three knobs (`PAD_SOURCE_BYTES`, `PAD_NOC_MIN_BYTES`, `PAD_W_TAIL_PERSIST`).
+- **Accuracy achieved**: bit-exact at bf16 (`torch.equal`, PCC = 1.0, atol = rtol = 0), on both the logical readback and the padded readback against `F.pad`. Covered shapes: [1,1,32,50], [1,1,50,64], [1,1,50,50], [1,1,30,32], [50,50], [3,50,64], [1,2,1,50,50], [64], [50], [], [2,3,70,100], [4,1,1000,72], explicit growth up to [1,1,128,128] and [3,1,32,64] / [2,64,64], L1, HEIGHT-sharded output, WIDTH-sharded input, and tiny tiles 16 / 8 / 1.
+- **Golden test progress**:
+  - `test_golden.py`: 15 of the 19 bf16 → bf16 padding / degenerate-rank cells pass. That is all of `padding_auto` (7), `padding_explicit` (4), `padded_to_height_sharded`, `padded_l1_to_l1`, `rank1` and `rank0_scalar`, plus `test_program_cache_reuse[auto_hw_tails_negative_fill]`; 0 failed, 0 XPASS. The 4 still xfail on Refinement 5 axes: `padded_low_l1`, `short_wide_single_stick`, `short_wide_w_tail`, `square_large_from_leading_dims`.
+  - `test_translated.py`: 723 passed; the only failure is `test_tilize_program_cache_addr_change[sharded_width_l1]`, the known module-order case recorded in Refinement 1.
+  - `test_regression.py`: the 10 tracked fp32 / integer failures, unchanged (Refinement 7).
+- **Perf** (WH B0, 64 Tensix cores, device-kernel ns):
+  - The unpadded guard set is unchanged within noise (5-rep medians): narrow DRAM [1,1,16384,64] 25621, wide DRAM 43783, tiny tile 16 24614. Single runs: L1 interleaved 5838, sharded resident 1918, sharded accessor 16317, retile 32→16 38045.
+  - Padded path: [1,1,16370,50] auto (H and W tails) 36.6 µs vs 25.3 µs aligned [1,1,16384,64]. Stubbing the W-tail fill gives 27.6 µs, so the band stores (~27 cycles per stick on NCRISC) are what is left.
+  - [1,1,65520,50] 118.8 µs vs aligned [1,1,65536,64] 108.6 µs, and 129.7 µs with persistence off.
+  - [1,1,8192,64] → [1,1,16384,64] (half the tile-rows whole pad): 22.0 µs, vs 49.5 µs with CPU-only fills.
+  - [1,1,16384,40] → [1,1,16384,128]: 48–49 µs vs aligned [1,1,16384,128] 46–47 µs.
+- **Issues encountered**:
+  - A non-dependent `static_assert` inside a discarded `if constexpr` branch of `kernel_main` is still evaluated; it broke the split-reader knob build. Moved to top-level conditional asserts.
+  - A first-pass whole-pad tile-row band-filled its whole segment (32 redundant loopback reads per row, 22 → 38 µs on the half-pad shape). The band is now only for existing sticks.
+  - An upfront W-tail prefill serialized ahead of the first reads (34 → 38 µs), so it was replaced by the lazy first-pass fill.
+  - The output shard spec derivation for spec-less sharded outputs was missing entirely. It surfaced here because those translated cases were previously refused on `pad_mode`.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_padding.py` (60 cases):
+  - auto / explicit / rank 0 / 1 / leading-dim and rank growth / L1 / sharded out / width-sharded in / tiny tiles;
+  - W-tail alignments;
+  - a fill-knob matrix;
+  - program cache across fill values;
+  - the two refusals (inner leading-dim growth, retile × fill) and retile × an auto pad with nothing to fill;
+  - perf shapes and A/B tests for `PAD_W_TAIL_PERSIST` and the fill mover.

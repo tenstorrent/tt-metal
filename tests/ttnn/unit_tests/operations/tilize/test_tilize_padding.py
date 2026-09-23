@@ -142,3 +142,96 @@ def test_pad_refuses_inner_leading_dim_growth(device, expect_error):
     t = ttnn.from_torch(torch.zeros([2, 3, 40, 40]).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(NotImplementedError, "grows a leading dim"):
         tilize(t, output_padded_shape=[3, 4, 64, 96], pad_value=0)
+
+
+@pytest.mark.parametrize(
+    "shape, padded",
+    [
+        pytest.param([1, 1, 16370, 50], None, id="auto_hw_tails_16370x50"),
+        pytest.param([1, 1, 8192, 64], [1, 1, 16384, 64], id="explicit_half_pad_rows_16384x64"),
+        pytest.param([1, 1, 16384, 40], [1, 1, 16384, 128], id="explicit_wide_w_pad_16384x128"),
+        pytest.param([1, 1, 16384, 128], None, id="aligned_ref_16384x128"),
+        pytest.param([1, 1, 65520, 50], None, id="auto_hw_tails_65520x50"),
+        pytest.param([1, 1, 65536, 64], None, id="aligned_ref_65536x64"),
+    ],
+)
+def test_pad_perf_shape(device, shape, padded):
+    """Perf-measurement shapes for the padded path (run_safe_pytest.sh --profile); still bit-exact."""
+    _run(device, shape, fill=-1, padded_shape=padded)
+
+
+@pytest.mark.parametrize("width", [33, 34, 35, 47, 62, 63])
+def test_pad_w_tail_alignments(device, width):
+    """Every W-tail head alignment (data bytes mod 4 = 2 or 0) and a 1-element tail; fill != 0."""
+    _run(device, [1, 1, 64, width], fill=-3)
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        pytest.param({"PAD_W_TAIL_PERSIST": False}, id="no_w_tail_persist"),
+        pytest.param({"PAD_NOC_MIN_BYTES": 1 << 30}, id="cpu_fills_only"),
+        pytest.param({"PAD_NOC_MIN_BYTES": 32, "PAD_SOURCE_BYTES": 64}, id="noc_fills_small_source"),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, padded",
+    [
+        pytest.param([2, 3, 70, 100], None, id="auto_tails"),
+        pytest.param([1, 1, 50, 50], [1, 1, 128, 160], id="explicit_growth"),
+        pytest.param([4, 1, 1000, 40], None, id="multicore_w_tail"),
+    ],
+)
+def test_pad_fill_knobs(device, monkeypatch, knobs, shape, padded):
+    """Every pad-fill knob setting is bit-exact (the knobs change who moves the fill, not what)."""
+    from ttnn.operations.tilize import tilize_program_descriptor as pd
+
+    for name, value in knobs.items():
+        monkeypatch.setattr(pd, name, value)
+    _run(device, shape, fill=-5, padded_shape=padded)
+
+
+@pytest.mark.parametrize("persist", [True, False], ids=["persist", "no_persist"])
+def test_pad_perf_w_tail_persist(device, monkeypatch, persist):
+    """A/B perf shape for PAD_W_TAIL_PERSIST (run with --profile); 32 tile-rows per Tensix core."""
+    from ttnn.operations.tilize import tilize_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "PAD_W_TAIL_PERSIST", persist)
+    _run(device, [1, 1, 65520, 50], fill=-1)
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        pytest.param({}, id="default"),
+        pytest.param({"PAD_NOC_MIN_BYTES": 1 << 30}, id="cpu_fills_only"),
+        pytest.param({"PAD_SOURCE_BYTES": 2048}, id="source_2k"),
+    ],
+)
+def test_pad_perf_fill_mover(device, monkeypatch, knobs):
+    """A/B perf shape for the fill mover (run with --profile): half the tile-rows are whole pad."""
+    from ttnn.operations.tilize import tilize_program_descriptor as pd
+
+    for name, value in knobs.items():
+        monkeypatch.setattr(pd, name, value)
+    _run(device, [1, 1, 8192, 64], fill=-1, padded_shape=[1, 1, 16384, 64])
+
+
+def test_pad_retile_nothing_to_fill(device):
+    """An auto pad of a tile-aligned Layout::TILE input fills nothing: the plain retile path runs."""
+    torch.manual_seed(0)
+    x = torch.randn([1, 1, 64, 64]).bfloat16()
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([32, 32]))
+    out = tilize(t, pad_value=3, tile=ttnn.Tile([16, 32]))
+    assert list(out.padded_shape) == [1, 1, 64, 64]
+    assert torch.equal(ttnn.to_torch(out), x)
+
+
+def test_pad_retile_with_fill_is_refused(device, expect_error):
+    """retile x a pad that fills is an EXCLUSION until the face walk learns to fill."""
+    from ttnn.operations._op_contract import ExcludedCell
+
+    x = torch.randn([1, 1, 50, 64]).bfloat16()
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(ExcludedCell, "unsupported combination"):
+        tilize(t, pad_value=0, tile=ttnn.Tile([32, 32]))

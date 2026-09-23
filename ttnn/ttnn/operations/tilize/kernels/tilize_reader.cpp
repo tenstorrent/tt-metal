@@ -175,7 +175,10 @@ void kernel_main() {
     constexpr uint32_t pad_source_bytes = get_compile_time_arg_val(22);
     constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);  // shorter fills are CPU stores
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);         // input element size
-    constexpr auto input_args = TensorAccessorArgs<25>();
+    constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;    // padded: band-fill first pass only
+    constexpr auto input_args = TensorAccessorArgs<26>();
+    static_assert(!padded || !split_reader, "the split reader has no pad path");
+    static_assert(!padded || depth_in + 1 <= 15, "the fill's transaction id follows the slots' 1..depth_in");
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -242,11 +245,12 @@ void kernel_main() {
     const uint32_t num_positions = walk.num_positions();
     if constexpr (padded) {
         // RT arg 10: the fill value packed per input dtype; 11..: the per-image stick map.
-        static_assert(!split_reader, "the split reader has no pad path");
-        static_assert(depth_in + 1 <= 15, "the fill's transaction id follows the slots' 1..depth_in");
         const tilize_dataflow::PadMap<tile_h, tile_col_bytes> pad_map(11);
         tilize_dataflow::PadFill<elem_bytes, pad_source_bytes, pad_noc_min_bytes, depth_in + 1> fill(
             cb_pad_source, get_arg_val<uint32_t>(10));
+        if (w_tail_persist && core_col_tiles <= block_width) {
+            producer.set_w_tail_persists();  // one column block: every tile-row has the same W tail
+        }
         for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {
             const uint32_t first_col = walk.first_col();
             const uint32_t valid_width = walk.valid_width();

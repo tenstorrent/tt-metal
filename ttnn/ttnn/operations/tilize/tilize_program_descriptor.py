@@ -166,6 +166,10 @@ WRITE_NOC_SPLIT = 0
 # sticks and tiles. Both are live knobs; PAD_NOC_MIN_BYTES must be >= 2 * L1 alignment.
 PAD_SOURCE_BYTES = 1024
 PAD_NOC_MIN_BYTES = 128
+# W-tail persistence: with one column block per core, the W-tail band of a CB row is filled
+# on the walk's first pass through the CB ring only (nothing overwrites it afterwards).
+# False = band-fill every tile-row.
+PAD_W_TAIL_PERSIST = True
 MAX_PAD_LEAD_DIMS = 8  # PadMap::MAX_LEAD_DIMS (tilize_stick_reads.hpp)
 
 
@@ -710,6 +714,7 @@ def create_program_descriptor(
         PAD_SOURCE_BYTES,
         PAD_NOC_MIN_BYTES,
         in_elem_bytes,
+        int(PAD_W_TAIL_PERSIST),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [

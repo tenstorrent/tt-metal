@@ -154,6 +154,39 @@ struct PadFill {
         dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst, tail, value);
     }
 
+    // Fill `count` ranges [dst + i * stride, dst + i * stride + bytes): the W tail of a
+    // tile-row's existing sticks. `stride` (the stick stride) is a multiple of 4, so every range
+    // shares dst's alignment: a short band is split into head elements / words / tail elements
+    // ONCE and stored with tight loops (fill_l1_range re-derives that split per call, which cost
+    // more than the stores on a narrow W tail); a long band goes range by range to fill().
+    FORCE_INLINE void fill_band(uint32_t dst, uint32_t stride, uint32_t count, uint32_t bytes) {
+        if (bytes >= noc_min_bytes) {
+            for (uint32_t i = 0; i < count; ++i, dst += stride) {
+                fill(dst, bytes);
+            }
+            return;
+        }
+        uint32_t head = (4 - (dst & 3)) & 3;
+        head = head < bytes ? head : bytes;
+        const uint32_t words = (bytes - head) / 4;
+        const uint32_t tail = bytes - head - 4 * words;
+        const uint32_t word = elem_bytes == 4   ? value
+                              : elem_bytes == 2 ? ((value & 0xFFFF) | (value << 16))
+                                                : (value & 0xFF) * 0x01010101u;
+        for (uint32_t i = 0; i < count; ++i, dst += stride) {
+            if (head != 0) {
+                dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst, head, value);
+            }
+            volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + head);
+            for (uint32_t k = 0; k < words; ++k) {
+                w[k] = word;
+            }
+            if (tail != 0) {
+                dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst + head + 4 * words, tail, value);
+            }
+        }
+    }
+
     // Every loopback fill issued so far has landed.
     FORCE_INLINE void complete() {
         if (reads_in_flight != 0) {
@@ -336,6 +369,14 @@ struct StickProducer {
     // Padded load_block for one tile-row: read the existing sticks' data bytes, fill each
     // existing stick's W tail [data_bytes, segment) and the trailing non-existing sticks.
     // Every read of the tile-row is issued before its fills, under the slot's transaction id.
+    // W-tail persistence: with one column block per core every tile-row carries the same
+    // data_bytes, and a W-tail byte of a CB row is never overwritten once filled (reads stop at
+    // data_bytes, whole-stick fills write the same value, compute only reads). So the band is
+    // filled only on the walk's first pass through the CB ring (depth * rows_per_slot rows, in
+    // step with that pass's reads so the stores still overlap them) and skipped afterwards.
+    FORCE_INLINE void set_w_tail_persists() { w_tail_rows_left = depth * rows_per_slot; }
+    uint32_t w_tail_rows_left = 0xFFFFFFFFu;  // tile-rows still to band-fill (all, unless persistent)
+
     template <typename Accessor, typename Fill>
     FORCE_INLINE void issue_row_padded(
         const Accessor& accessor, const RowSource& src, uint32_t first_col, uint32_t valid_width, Fill& fill) {
@@ -358,9 +399,16 @@ struct StickProducer {
                 }
             }
         }
-        const uint32_t tail_sticks = src.data_bytes < segment_bytes ? src.valid_sticks : 0;
-        for (uint32_t stick = 0; stick < tail_sticks; ++stick) {
-            fill.fill(l1_base + stick * block_stick_bytes + src.data_bytes, segment_bytes - src.data_bytes);
+        if (w_tail_rows_left != 0) {
+            // Only the existing sticks need the band: the trailing whole-stick fill below covers the
+            // rest of the tile-row (band included), so a persistent CB row is complete either way.
+            if (src.valid_sticks != 0 && src.data_bytes < segment_bytes) {
+                fill.fill_band(
+                    l1_base + src.data_bytes, block_stick_bytes, src.valid_sticks, segment_bytes - src.data_bytes);
+            }
+            if (w_tail_rows_left != 0xFFFFFFFFu) {
+                --w_tail_rows_left;
+            }
         }
         if (src.valid_sticks < tile_h) {
             // Trailing whole pad sticks (the H tail, or the whole tile-row) are one contiguous range.

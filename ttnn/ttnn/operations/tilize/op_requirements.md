@@ -137,7 +137,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Results.** Every lever is flat or slower on the perf shape. The one apparent 2 % gain (1-row quanta, 4-deep windows) did not reproduce and regressed [1,1,16384,32] by 9 %. NoC1 reads cost +30–40 %. Cheaper read issue made reads-only slower, because it congests the DRAM banks.
 - **Next.** Fewer, larger DRAM reads (Refinement 6's bank-coalesced reads: sticks `p`, `p + 12`, `p + 24` are contiguous in one bank). The parked bank-stride addressing already computes them. Not done here because it is Refinement 6's scope.
 
-### [ ] Refinement 4 — Padding: auto / explicit pad, all fill signs, non-aligned H / W, rank 0 / 1
+### [x] Refinement 4 — Padding: auto / explicit pad, all fill signs, non-aligned H / W, rank 0 / 1
 
 **Goal**: add to SUPPORTED:
 - `pad_mode`: `auto`, `explicit`
@@ -159,6 +159,13 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Cells that pass later.** `short_wide_single_stick`, `short_wide_w_tail` and `padded_low_l1` also need Refinement 5. `test_pad_value_extremes` (fp32) needs Refinement 7. XPASS-strict promotes them.
 
 **Done when**: the `padding_auto`, `padding_explicit` and `padding_crossed` cells (other than those gated on Refinement 5), `rank1` and `rank0_scalar` pass. The pad region holds exactly the fill, and `to_torch(out)` still equals `x` at the logical shape. `PROGRAM_CACHE_CASES` `auto_hw_tails_negative_fill` passes. Zero loud categories.
+**Outcome**: landed. Every named axis value is in SUPPORTED.
+- **Golden.** Every `padding_auto` / `padding_explicit` cell, `padded_to_height_sharded`, `padded_l1_to_l1`, `rank1`, `rank0_scalar` and `test_program_cache_reuse[auto_hw_tails_negative_fill]` pass bit-exact at bf16: 15 of 19 cells, 0 failed, 0 XPASS. The other 4 (`padded_low_l1`, `short_wide_single_stick`, `short_wide_w_tail`, `square_large_from_leading_dims`) xfail on Refinement 5 axes. The translated `tilize_with_val_padding` family passes, including the sharded cases whose output `MemoryConfig` has no shard spec (now derived from the input's).
+- **Mechanism.** The output is allocated at the padded shape and returned as a zero-copy logical view. The stick reader walks the padded grid through `PadMap` and fills with `PadFill`: CPU stores for short ranges, NoC loopback copies from a 1 KiB pre-filled source for long ones.
+- **Refused.**
+  - Retile × a pad that has something to fill is an EXCLUSION: the face walk has no fill; it would have to clamp staging reads and walk to the input's tile-rows / tile-columns, then fill after the walk lands.
+  - Inner leading-dim growth raises `NotImplementedError`: TTNN's logical view cannot express it.
+- **Perf.** No unpadded path regressed (guard set within noise). On the padded path the remaining cost is the per-stick W-tail band store on narrow tensors: [1,1,16370,50] is 36.6 µs vs 25.3 µs aligned, and 27.6 µs with the band stubbed. It is persisted across CB-ring passes, so tall tensors pay it once per CB row: [1,1,65520,50] is +9 % over aligned.
 
 ### [ ] Refinement 5 — 2-D grid split (short_wide, square_large) + low_l1
 

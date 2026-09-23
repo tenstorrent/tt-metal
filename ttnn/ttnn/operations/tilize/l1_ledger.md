@@ -53,6 +53,20 @@ A Layout::TILE input at `in_tile_h`. `cb_input_sticks` and `cb_output_tiles` are
 
 Data movement (retile): input 1 DRAM crossing in whole-tile NoC reads (`R_in * C` reads of `in_page_bytes`; 2048 bytes at `in_tile_h = 32` bf16, 64 bytes at `in_tile_h = 1`); output 1 crossing as in the row split; plus one core-local L1 → L1 re-lay of every input byte (the face walk), in face-row moves of `16 * in_elem_bytes` bytes. No ROW_MAJOR tensor is materialized.
 
+## Padding (Refinement 4)
+
+`cb_input_sticks` / `cb_output_tiles` are unchanged in size and format; the tile grid they stream is the PADDED shape's (`R = prod(P[:-2]) * P[-2] / tile_h`, `C = P[-1] / 32`). The reader fills every byte of a slot the input does not cover before it pushes the slot. One reader-private CB is added when something is to be filled (`PadSpec.needs_fill`); an unpadded call, or a pad that fills nothing, allocates exactly the rows above.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_pad_source` (index 4; padded only) | 1 page of `PAD_SOURCE_BYTES` = 1024 bytes | the whole page: filled once with the pad value (`fill_l1_range`), then only read, as the source of NoC loopback fills | none: a constant, independent of every block axis and tensor dim | input dtype (raw fill bytes; never unpacked) | reader (one CPU fill at kernel start) | reader (NoC loopback reads into `cb_input_sticks`). One RISC-V owns both ends, so it never pushes or pops; ordering is by the fill's own transaction id (`depth_in + 1`), drained before every slot push | whole kernel, padded only | cannot be `cb_input_sticks` itself: a slot is overwritten by stick reads every pass, and the source must outlive every slot. Not counted in `per_col_tile_bytes` (it is 1 KiB, dimension-independent), so the streamed CBs keep their `CB_BUDGET_BYTES[low_l1]` bound and the total grows by at most 1024 bytes |
+
+- Fill mover: ranges shorter than `PAD_NOC_MIN_BYTES` = 128 bytes are CPU stores (the W-tail band of a tile-row is split into head / words / tail once per tile-row, then stored per stick); longer ranges (whole pad sticks, the H tail, whole pad tile-rows / images, a wide explicit W growth) are NoC loopback copies in chunks of up to `PAD_SOURCE_BYTES`. Measured on [1,1,8192,64] → [1,1,16384,64] (half the tile-rows whole pad, WH, 64 Tensix cores): 22.0 µs with loopback fills vs 49.5 µs CPU-only; a 2048-byte source 23.6 µs (flat).
+- W-tail persistence (`PAD_W_TAIL_PERSIST`, default on): with one column block per core, a CB row's W-tail band is never overwritten after it is filled (stick reads stop at `data_bytes`, whole-stick fills write the same value, compute only reads), so it is filled on the walk's first pass through the ring only. Measured [1,1,65520,50] (32 tile-rows per core): 118.8 vs 129.7 µs.
+- The input side never resides under a fill (a padded input's stick layout is not the tilize layout of the padded grid); the split reader and the parked Refinement 3 NoC levers are off on the padded path.
+
+Data movement (padded): input 1 DRAM crossing of the input's own bytes (`X` elements: only existing sticks are read, each for its data bytes only); output 1 crossing of the padded grid (`R * C` tile writes over `P`); plus core-local L1 fills of `(prod(P) - prod(X)) * in_elem_bytes` bytes (CPU stores or NoC loopback), no cross-core traffic.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate / source that establishes it |

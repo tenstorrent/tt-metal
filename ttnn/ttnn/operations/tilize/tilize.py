@@ -256,15 +256,17 @@ def _row_split_wide_exclusions():
     return cells
 
 
-# Padding x retile (a Layout::TILE input with a padding argument): the pad fill lives in the
-# stick reader; the retile face walk has no fill (it would have to clamp the walk to the input's
-# rows and columns and fill the rest after the walk lands). Refused until that lands.
+# Padding x retile (a Layout::TILE input whose pad has something to fill): the pad fill lives in
+# the stick reader; the retile face walk has no fill yet (it would have to clamp the staging
+# reads and the walk to the input's tile-rows / tile-columns and fill the rest after the walk
+# lands). An auto pad of a tile-aligned TILE input fills nothing and runs the plain retile path.
 def _retile_pad_exclusions():
-    return [
-        {"pad_mode": mode, "in_tile_height": in_tile_h}
-        for mode in ("auto", "explicit")
-        for in_tile_h in LEGAL_TILE_HEIGHTS
-    ]
+    cells = []
+    for in_tile_h in LEGAL_TILE_HEIGHTS:
+        cells.append({"pad_mode": "explicit", "in_tile_height": in_tile_h})
+        for alignment in ("w_non_aligned", "h_non_aligned", "hw_non_aligned"):
+            cells.append({"pad_mode": "auto", "in_tile_height": in_tile_h, "alignment": alignment})
+    return cells
 
 
 EXCLUSIONS = _row_split_wide_exclusions() + _retile_pad_exclusions()
@@ -518,6 +520,51 @@ def _fill_bits(pad_value, dtype):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_output_memory_config(input_tensor, mem_config, out_shape, *, tile_h):
+    """A legacy-sharded output MemoryConfig given WITHOUT a shard spec takes the input's.
+
+    The input's shard grid and orientation are kept and the shard shape is re-derived over the
+    output (padded) 2-D fold, rounded to whole output tiles: WIDTH keeps the input's shard width
+    over all padded rows; HEIGHT and BLOCK keep the input's number of shards along each axis
+    (so a shard of whole input images becomes a shard of whole padded images).
+    """
+    if (
+        mem_config.memory_layout not in _SHARDED_LAYOUTS
+        or mem_config.shard_spec is not None
+        or getattr(mem_config, "nd_shard_spec", None) is not None
+    ):
+        return mem_config
+    in_mc = input_tensor.memory_config()
+    in_spec = in_mc.shard_spec
+    if in_mc.memory_layout not in _SHARDED_LAYOUTS or in_spec is None:
+        raise NotImplementedError(
+            "tilize: a sharded output memory_config without a shard spec needs a legacy-sharded input to derive it from"
+        )
+
+    def _up(a, b):
+        return -(-a // b) * b
+
+    in_shape = [int(d) for d in input_tensor.shape] or [1]
+    in_rows = 1
+    for d in in_shape[:-1]:
+        in_rows *= d
+    in_width = in_shape[-1]
+    out_rows = 1
+    for d in out_shape[:-1]:
+        out_rows *= int(d)
+    out_width = int(out_shape[-1])
+    in_sh, in_sw = (int(d) for d in in_spec.shape)
+    n_h, n_w = -(-in_rows // in_sh), -(-in_width // in_sw)
+    layout = mem_config.memory_layout
+    if layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        shard = [out_rows, _up(-(-out_width // n_w), TILE_WIDTH)]
+    elif layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        shard = [_up(-(-out_rows // n_h), tile_h), out_width]
+    else:
+        shard = [_up(-(-out_rows // n_h), tile_h), _up(-(-out_width // n_w), TILE_WIDTH)]
+    return ttnn.MemoryConfig(layout, mem_config.buffer_type, ttnn.ShardSpec(in_spec.grid, shard, in_spec.orientation))
+
+
 def _allocate_output(shape, dtype, device, mem_config, *, tile_h):
     """Device tensor in Layout::TILE with tile [tile_h, 32] on `mem_config`.
 
@@ -590,6 +637,7 @@ def tilize(
         pad = PadSpec(out_shape, expanded, _fill_bits(pad_value, input_tensor.dtype))
     # The device program writes the whole padded tile grid, so the output is allocated at the
     # padded shape; only the returned tensor's metadata carries the logical shape.
+    out_mem_config = _resolve_output_memory_config(input_tensor, out_mem_config, out_shape, tile_h=tile_h)
     output_tensor = _allocate_output(ttnn.Shape(out_shape), out_dtype, device, out_mem_config, tile_h=tile_h)
 
     program_descriptor = create_program_descriptor(
