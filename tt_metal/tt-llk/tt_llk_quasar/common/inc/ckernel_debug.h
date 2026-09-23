@@ -111,4 +111,16 @@ inline void dbg_read_dest_row_32b(std::uint32_t logical_row, std::uint32_t rd[16
     }
 }
 
+// Read one DEST row of sixteen 8-bit datums (Int8) into 4 packed uint32 words, element i in byte i.
+inline void dbg_read_dest_row_8b(std::uint32_t logical_row, std::uint32_t rd[4])
+{
+    volatile std::uint8_t* addr = reinterpret_cast<volatile std::uint8_t*>(RISCV_DEST_START_ADDR);
+    const std::uint32_t base    = logical_row * 16;
+    for (int i = 0; i < 4; ++i)
+    {
+        rd[i] =
+            addr[base + 4 * i] | (addr[base + 4 * i + 1] << 8) | (addr[base + 4 * i + 2] << 16) | (static_cast<std::uint32_t>(addr[base + 4 * i + 3]) << 24);
+    }
+}
+
 } // namespace ckernel

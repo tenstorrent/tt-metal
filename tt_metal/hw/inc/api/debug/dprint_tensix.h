@@ -255,11 +255,17 @@ inline uint32_t dest_order_from_ieee_float16_b(uint32_t ieee) {
     return (ieee & 0x8000u) | ((ieee & 0x7Fu) << 8) | ((ieee >> 7) & 0xFFu);
 }
 
+// Same swap for IEEE half (Float16): [sign][exp5][man10] -> [sign][man10][exp5].
+inline uint32_t dest_order_from_ieee_float16(uint32_t ieee) {
+    return (ieee & 0x8000u) | ((ieee & 0x3FFu) << 5) | ((ieee >> 10) & 0x1Fu);
+}
+
 // Prints the contents of tile tile_id within the destination register, row by row, in the same typed
 // array form the other architectures emit -- the host print parser decodes it, so the rendered text is
 // identical everywhere. The DEST data format is passed in rather than recovered from config, because
-// the RISCV_DEBUG_REG_* config-read wrappers are not wired up on Quasar. PR1 supports Float32 and
-// Float16_b.
+// the RISCV_DEBUG_REG_* config-read wrappers are not wired up on Quasar. Supports Float32, Float16,
+// Float16_b, Int32 and Int8. Pass the format DEST holds, not the tile's L1 format: block formats (MxFp8R/P,
+// MxFp6R/P, MxFp4, MxInt8/4/2) unpack into DEST as Float16_b, or as Float32 with a 32-bit DEST.
 //
 // Call this only between tile_regs_acquire() and tile_regs_commit(). The unpack<->math mailbox
 // rendezvous (dbg_thread_halt) quiesces unpack for the duration of the read, so an in-flight unpack
@@ -275,31 +281,58 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
         // obvious failure, so refuse formats this path has not been validated against. Note the
         // rendezvous is still entered and left symmetrically -- returning early here would strand
         // unpack in dbg_thread_halt.
-        if (data_format != DataFormat::Float32 && data_format != DataFormat::Float16_b) {
+        if (data_format != DataFormat::Float32 && data_format != DataFormat::Float16 &&
+            data_format != DataFormat::Float16_b && data_format != DataFormat::Int32 &&
+            data_format != DataFormat::Int8) {
             DPRINT(
-                "dprint_tensix_dest_reg: unsupported data format {}, expected Float32 or Float16_b\n",
+                "dprint_tensix_dest_reg: unsupported data format {}, expected Float32, Float16, Float16_b, Int32 or "
+                "Int8\n",
                 (uint32_t)data_format);
         } else {
+            // As on WH/BH, integers are printed as the raw bits DEST holds, rendered as two's complement. That
+            // is right for tensors the host wrote and a datacopy moved into DEST; sign-magnitude results of
+            // the FPU (e.g. integer matmul) print their negatives wrong, as they do on WH/BH. Int32 is read
+            // through the window's Float32 leg, which returns each 32-bit word unchanged.
+            const bool is_32b = data_format == DataFormat::Float32 || data_format == DataFormat::Int32;
+            const DataFormat read_format = data_format == DataFormat::Int32 ? DataFormat::Float32 : data_format;
             // Program Math's section for MMIO DEST reads. configure_dest_access issues RMWCIB config writes,
             // so wait for the config unit before the first read.
-            ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+            ckernel::configure_dest_access<ckernel::MathThreadId>(read_format, /*enable_swizzle=*/true);
             ckernel::wait_cfg_idle();
 
             DPRINT("Tile ID = {}\n", tile_id);
             uint32_t row = tile_id * NUM_ROWS_PER_TILE;
             for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
-                if (data_format == DataFormat::Float32) {
+                if (data_format == DataFormat::Int8) {
+                    constexpr int ARRAY_LEN = 4;
+                    uint32_t rd_data[ARRAY_LEN];
+                    ckernel::dbg_read_dest_row_8b(row, rd_data);
+                    // The unpacker decodes an Int8 tile as sign-magnitude, and the signed Int8 leg returns that
+                    // value in two's complement. Re-encode each byte as sign-magnitude to get back the bits the
+                    // tile held, which are then printed as two's complement like on WH/BH.
+                    for (int w = 0; w < ARRAY_LEN; ++w) {
+                        uint32_t out = 0;
+                        for (int b = 0; b < 4; ++b) {
+                            const uint32_t byte = (rd_data[w] >> (8 * b)) & 0xFFu;
+                            const uint32_t raw = (byte & 0x80u) ? 0x80u | ((0x100u - byte) & 0x7Fu) : byte;
+                            out |= raw << (8 * b);
+                        }
+                        rd_data[w] = out;
+                    }
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
+                } else if (is_32b) {
                     constexpr int ARRAY_LEN = 16;
                     uint32_t rd_data[ARRAY_LEN];
                     ckernel::dbg_read_dest_row_32b(row, rd_data);
-                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
                 } else {
                     constexpr int ARRAY_LEN = 8;
                     uint32_t rd_data[ARRAY_LEN];
                     ckernel::dbg_read_dest_row_16b(row, rd_data);
+                    const auto to_dest_order = data_format == DataFormat::Float16 ? dest_order_from_ieee_float16
+                                                                                  : dest_order_from_ieee_float16_b;
                     for (int w = 0; w < ARRAY_LEN; ++w) {
-                        rd_data[w] = dest_order_from_ieee_float16_b(rd_data[w] & 0xFFFFu) |
-                                     (dest_order_from_ieee_float16_b(rd_data[w] >> 16) << 16);
+                        rd_data[w] = to_dest_order(rd_data[w] & 0xFFFFu) | (to_dest_order(rd_data[w] >> 16) << 16);
                     }
                     dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
                 }
