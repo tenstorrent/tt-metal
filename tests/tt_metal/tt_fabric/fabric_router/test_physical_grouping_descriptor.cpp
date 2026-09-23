@@ -3619,28 +3619,28 @@ groupings {
     MeshGraphDescriptor mgd{std::string(R"(
 mesh_descriptors {
   name: "H"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
 }
 mesh_descriptors {
   name: "Sa"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 3 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
 }
 mesh_descriptors {
   name: "Sb"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
 }
 mesh_descriptors {
   name: "Sc"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
