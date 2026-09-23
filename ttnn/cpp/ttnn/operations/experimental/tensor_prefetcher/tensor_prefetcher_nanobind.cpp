@@ -119,9 +119,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     Supply exactly one of global_cb / prefetcher_pipes.
                 prefetcher_pipes (List[PrefetcherPipe]): DRAM-sender PrefetcherPipes (created via
                     ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
-                    instead of a GCB. Any order or subset of one such call's pipes is accepted;
-                    pipes from two different calls are not, since both number a bank's slabs from
-                    0. Receiver-contiguous tensors only; rotation works as it does
+                    instead of a GCB. Pass every pipe from one such call, in any order; a subset
+                    or a mix of two calls' pipes is rejected. Receiver-contiguous tensors only; rotation works as it does
                     for a GCB. A tensor's per-receiver block size need not equal the pipes'
                     entry_size nor divide the ring, so size the ring for the consumer: one block is
                     enough for the transport, two for a consumer that keeps a block of lookahead.
@@ -226,8 +225,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Returns one PrefetcherPipe per DRAM sender core, bank-major: a bank's pipes are
             adjacent, and the leading one owns that bank's leading receivers. Each pipe carries the
-            bank-local slab base its sender owns, so queueing accepts any order or subset of them;
-            what it rejects is mixing two calls' pipes.
+            bank-local slab base its sender owns, so queueing accepts them in any order. It
+            requires all of them, and rejects a subset or a mix of two calls' pipes.
 
             Consumers bind the pipes through ProgramRunArgs and read them through the device-side
             PrefetcherPipe (wait_front / scoped_read_lock / pop_front). Keep the pipes alive for as

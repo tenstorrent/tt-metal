@@ -531,7 +531,8 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     // Bank-major mapping: a bank's pipes stay adjacent and in their own order. Taken from the
     // shared helper so this order is the one a consumer op's cache key sees, not a re-derivation of
     // it. It fixes only which page goes to which sender; each pipe carries its own slab base, so
-    // the caller may pass any order or subset of one factory call's pipes.
+    // the caller may pass one factory call's pipes in any order. It must pass all of them: a tensor
+    // laid out for a subset has fewer slabs per bank than the pipes' slab bases assume.
     target.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(prefetcher_pipes);
     target.state_addr_per_sender.reserve(target.mapping.size());
     target.recv_index_base_per_sender.reserve(target.mapping.size());
@@ -539,15 +540,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     std::unordered_set<CoreCoord> distinct_receivers;
     uint32_t total_receivers = 0;
     std::optional<uint64_t> factory_id;
-
-    // The bank-local slabs each pipe claims, collected per bank (a pipe's bank is its sender's
-    // DRAM-logical x) and checked for overlap once the whole list is in.
-    struct SlabRun {
-        uint32_t begin = 0;
-        uint32_t end = 0;
-        size_t pipe = 0;
-    };
-    std::unordered_map<uint32_t, std::vector<SlabRun>> slab_runs_per_bank;
+    uint32_t factory_num_pipes = 0;
 
     for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
         // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
@@ -573,6 +566,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         const uint32_t ring_size = pipe.ring_size();
         if (!factory_id.has_value()) {
             factory_id = pipe.impl().tensor_prefetcher_factory_id();
+            factory_num_pipes = pipe.impl().tensor_prefetcher_factory_num_pipes();
             target.per_recv_capacity_bytes = ring_size;
         }
         TT_FATAL(
@@ -601,10 +595,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         total_receivers += receivers.num_cores();
         // The factory handed each pipe the base its sender owns in its bank, so the queue path
         // reads it off the pipe instead of re-deriving it from where the pipe sits in this list.
-        const uint32_t recv_index_base = pipe.impl().recv_index_base();
-        target.recv_index_base_per_sender.push_back(recv_index_base);
-        slab_runs_per_bank[bank_id].push_back(
-            SlabRun{.begin = recv_index_base, .end = recv_index_base + receivers.num_cores(), .pipe = p});
+        target.recv_index_base_per_sender.push_back(pipe.impl().recv_index_base());
         target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
     }
     TT_FATAL(
@@ -614,31 +605,14 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         total_receivers,
         distinct_receivers.size());
 
-    // Two pipes on one bank must claim disjoint runs of that bank's slabs, which is what the
-    // ceil/floor receiver split within one CreatePrefetcherPipesForTensorPrefetcher call gives —
-    // in any order and for any subset of its pipes. It does not hold across calls: every call
-    // numbers each bank's slabs from 0, so two calls' leading pipes for a bank would both write
-    // slab 0 onward, over each other. Their receiver sets can still be disjoint, so this is the
-    // check that catches it.
-    for (const auto& [bank_id, runs] : slab_runs_per_bank) {
-        for (size_t i = 1; i < runs.size(); ++i) {
-            for (size_t j = 0; j < i; ++j) {
-                TT_FATAL(
-                    runs[i].begin >= runs[j].end || runs[j].begin >= runs[i].end,
-                    "QueueTensorPrefetcherRequest requires a DRAM bank's PrefetcherPipes to own disjoint bank-local "
-                    "slabs, but on bank {} pipe {} owns slabs [{}, {}) and pipe {} owns [{}, {}). Pipes from "
-                    "different CreatePrefetcherPipesForTensorPrefetcher calls each number their banks' slabs from "
-                    "0, so one request cannot mix them.",
-                    bank_id,
-                    runs[j].pipe,
-                    runs[j].begin,
-                    runs[j].end,
-                    runs[i].pipe,
-                    runs[i].begin,
-                    runs[i].end);
-            }
-        }
-    }
+    // Same factory call and no pipe listed twice (the disjointness check above), so matching the
+    // call's pipe count means every one of its pipes is here.
+    TT_FATAL(
+        prefetcher_pipes.size() == factory_num_pipes,
+        "QueueTensorPrefetcherRequest requires every PrefetcherPipe from one "
+        "CreatePrefetcherPipesForTensorPrefetcher call, in any order, but {} of that call's {} pipes were passed.",
+        prefetcher_pipes.size(),
+        factory_num_pipes);
     return target;
 }
 

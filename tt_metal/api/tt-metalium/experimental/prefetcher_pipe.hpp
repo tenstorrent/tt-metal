@@ -15,6 +15,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/sender_core_type.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,7 +25,6 @@ class MeshDevice;
 
 namespace experimental {
 
-enum class SenderCoreType : uint8_t;
 class PrefetcherPipeImpl;
 class PrefetcherPipeSpaceImpl;
 
@@ -253,7 +253,6 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
 // AdvancedProgramRunArgs::prefetcher_pipe_args. See metal2_host_api/prefetcher_pipe_parameter.hpp.
 
 // Return one (sender core, its receivers) entry for each pipe, preserving the caller's list order.
-// Slab ownership is pipe metadata, so callers may pass any order or subset from one factory call.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
     const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
 CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
