@@ -11,6 +11,7 @@ class ProjectionTuning:
     wide_subblocks: bool = False
     bounded_barrier: bool = False
     buffer_count: int = 2
+    lookahead: int = 2
     hoist_pack_config: bool = False
     bank_vc: bool = False
     prefetch_gu_blocks: int = 0
@@ -23,6 +24,10 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     def __post_init__(self):
+        if not 2 <= self.lookahead <= min(4, self.buffer_count):
+            raise ValueError("Projection lookahead must be2..4 and fit the buffer count")
+        if self.buffer_count > 3 and not self.alias_projection_cbs:
+            raise ValueError("More than three projection buffers require phase aliases")
         if self.share_qkv_workers and (not self.alias_projection_cbs or self.reader == "original" or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):
             raise ValueError("Shared QKV workers require static aliases and currently exclude helper prefetch")
         if self.head_prefetch_targets not in ("both", "qkv", "o"):
@@ -37,8 +42,8 @@ class ProjectionTuning:
             raise ValueError("Projection placement must be row or dram")
         if any(n not in (0, 2, 4, 6) for n in (self.prefetch_gu_blocks, self.prefetch_down_blocks)):
             raise ValueError("Prefetch depth must be zero, two, four or six blocks")
-        if self.buffer_count not in (2, 3):
-            raise ValueError("Projection buffer_count must be two or three")
+        if self.buffer_count not in (2, 3, 4, 5):
+            raise ValueError("Projection buffer_count must be two to five")
         if self.reader not in ("original", "coalesced", "pipelined", "pipelined_rows"):
             raise ValueError(f"Unknown projection reader: {self.reader}")
 
@@ -59,5 +64,6 @@ class ProjectionTuning:
             ("GU_PREFETCH_BLOCKS", str(self.prefetch_gu_blocks)),
             ("DOWN_PREFETCH_BLOCKS", str(self.prefetch_down_blocks)),
             ("PROJECTION_BUFFERS", str(self.buffer_count)),
+            ("PROJECTION_LOOKAHEAD", str(self.lookahead)),
             ("PROJECTION_WIDE", str(int(self.wide_subblocks))),
         ]

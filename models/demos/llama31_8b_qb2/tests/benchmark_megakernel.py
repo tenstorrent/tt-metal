@@ -83,7 +83,8 @@ def parse_args():
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--require-exact", action="store_true", help="Require exact teacher logits, touched KV and greedy output against reference")
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
-    parser.add_argument("--projection-buffers", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
+    parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--share-qkv-workers", action="store_true")
     parser.add_argument("--projection-placement", choices=("row", "dram"), default="row")
@@ -121,7 +122,7 @@ def run(args):
 
     tuning = ProjectionTuning(
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
-        bounded_barrier=args.bounded_layer_barrier, buffer_count=args.projection_buffers,
+        bounded_barrier=args.bounded_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,

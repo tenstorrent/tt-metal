@@ -30,12 +30,14 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
     constexpr uint32_t blocks = K / KBlock;
     static_assert(K % KBlock == 0 && blocks >= 2);
 #if PROJECTION_READER >= 2
-    // Two or three physical slots; two DMA blocks in flight. Reservations include
-    // both the unpublished in-flight block and the next block to issue.
+    // A bounded window of DMA blocks in flight. Reservations include all
+    // unpublished blocks plus the next block to issue.
     // TRIDs are reused only after their prior block has completed. This is
     // bounded independently of the number of layers or trace replays.
-    cb_reserve_back(A, 2 * KBlock);
-    cb_reserve_back(B, 2 * KBlock * N);
+    constexpr uint32_t inflight = PROJECTION_LOOKAHEAD;
+    static_assert(inflight >= 2 && inflight <= PROJECTION_BUFFERS && blocks >= inflight);
+    cb_reserve_back(A, inflight * KBlock);
+    cb_reserve_back(B, inflight * KBlock * N);
     const uint32_t a_start = get_write_ptr(A);
     const uint32_t b_start = get_write_ptr(B);
 #endif
@@ -72,13 +74,14 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
             read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
         }
 #if PROJECTION_READER >= 2
-        if (block > 0) {
-            noc_async_read_barrier_with_trid((block - 1) % PROJECTION_BUFFERS + 1);
+        if (block + 1 >= inflight) {
+            const uint32_t completed = block + 1 - inflight;
+            noc_async_read_barrier_with_trid(completed % PROJECTION_BUFFERS + 1);
             cb_push_back(A, KBlock);
             cb_push_back(B, KBlock * N);
             if (block + 1 < blocks) {
-                cb_reserve_back(A, 2 * KBlock);
-                cb_reserve_back(B, 2 * KBlock * N);
+                cb_reserve_back(A, inflight * KBlock);
+                cb_reserve_back(B, inflight * KBlock * N);
             }
         }
 #else
@@ -88,9 +91,11 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
 #endif
     }
 #if PROJECTION_READER >= 2
-    noc_async_read_barrier_with_trid((blocks - 1) % PROJECTION_BUFFERS + 1);
-    cb_push_back(A, KBlock);
-    cb_push_back(B, KBlock * N);
+    for (uint32_t block = blocks + 1 - inflight; block < blocks; ++block) {
+        noc_async_read_barrier_with_trid(block % PROJECTION_BUFFERS + 1);
+        cb_push_back(A, KBlock);
+        cb_push_back(B, KBlock * N);
+    }
     noc_async_read_set_trid(0);
 #endif
 #if PROJECTION_BANK_VC

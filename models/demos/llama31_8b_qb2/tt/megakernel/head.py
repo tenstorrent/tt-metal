@@ -12,6 +12,9 @@ from .tuning import ProjectionTuning
 class FusedHead:
     def __init__(self, model, *, cores=None, norm_cores=None, norm_output=None, tuning=None):
         self.tuning = tuning or ProjectionTuning()
+        # The terminal vocabulary reader is independently capped by its L1
+        # weight footprint. Layer projections may use deeper alias buffers.
+        self.buffers = min(3, self.tuning.buffers)
         self.mesh = model.mesh_device
         if model.max_batch_size != 1 or model.padded_vocab_size != 131072:
             raise ValueError("Fused head requires the batch-one Llama3.1 vocabulary")
@@ -91,14 +94,17 @@ class FusedHead:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1"), *self.tuning.defines],
+                    defines=[(role, "1"), *[(name,
+                        str(self.buffers) if name == "PROJECTION_BUFFERS" else
+                        str(min(self.buffers, self.tuning.lookahead)) if name == "PROJECTION_LOOKAHEAD" else value)
+                        for name, value in self.tuning.defines]],
                     config=config,
                 )
             )
         cbs = []
         for index, count, dtype in (
-            (0, 4 * self.tuning.buffers, ttnn.bfloat16),
-            (1, 256 * self.tuning.buffers, ttnn.bfloat8_b),
+            (0, 4 * self.buffers, ttnn.bfloat16),
+            (1, 256 * self.buffers, ttnn.bfloat8_b),
             (16, 64, ttnn.bfloat16),
             (24, 64, ttnn.bfloat16),
         ):
