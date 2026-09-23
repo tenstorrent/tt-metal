@@ -71,9 +71,11 @@ def test_recipe_q_chunk_preserves_accuracy(
         segments = [upload(device, host, variant)]
     else:
         # Split on the host so each segment keeps its own minimal tile padding.
+        q_rows, kv_rows = joint_rows
+        split = list(zip(host, (q_rows, kv_rows, kv_rows)))
         segments = [
-            upload(device, [x[..., :-rows, :].contiguous() for x, rows in zip(host, joint_rows)], variant),
-            upload(device, [x[..., -rows:, :].contiguous() for x, rows in zip(host, joint_rows)], variant),
+            upload(device, [x[..., :-rows, :].contiguous() for x, rows in split], variant),
+            upload(device, [x[..., -rows:, :].contiguous() for x, rows in split], variant),
         ]
     expected = torch.cat([ttnn.to_torch(x) for x in invoke(segments, variant, grid, 256)], dim=2)
     if variant in PAIRED_VARIANTS and (q_chunk_size // 32) % 2:

@@ -45,7 +45,8 @@ meshes, dense noncausal unmasked attention, and:
 
 - Q `[B, Hq, Q, 128]`, K/V `[B, Hkv, K, 128]`, with positive dimensions
   and `Hq` divisible by `Hkv` (including grouped-query attention);
-- arbitrary positive sequence lengths; fixed Q256/K512 blocks;
+- arbitrary positive sequence lengths; K512 blocks and a Q chunk from 128 to
+  320 rows in 32-row steps (see [Q blocking](#q-blocking));
 - standard 32x32 tiles, minimal sequence tile padding, interleaved DRAM
   inputs/output, and no padding in the other dimensions;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
@@ -69,6 +70,25 @@ softmax denominator. Physical tile padding is masked by the implementation.
 Mesh execution applies the same local operation independently on each device.
 Replicated, head-sharded and query-sharded tensors are qualified; KV must be
 complete for each local query. This is not sequence-parallel ring attention.
+
+## Q blocking
+
+`q_chunk_size` may be 128 to 320 rows in 32-row steps; `k_chunk_size` stays 512.
+COMPENSATED and LOW_PRECISION pair query tile rows in their compensated state,
+so they need a multiple of 64 rows. Ring recipes also need a multiple of 64 so
+that every raw state plane stays a whole transfer page. The host rejects a
+layout that exceeds unreserved L1 before dispatch; at K512, Q320 fits FAST and
+the BFP8/BFP4 LOW_PRECISION storage choices but not B, C, D or BF16 E. Q224
+runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1).
+
+Q256 remains the frozen, bit-for-bit qualified geometry. Other Q chunks keep
+each recipe's arithmetic but are **not bit-identical** to Q256: Phase 2
+overlaps the last row's exponential with the first PV row group of every Q
+chunk, which accumulates that group's product in L1 over 4-tile K partials,
+while later groups accumulate every K tile in dest. A row's position within
+its chunk therefore sets its rounding order (about one BF16 ulp). Consecutive
+Q jobs on one core are bit-identical. Other Q chunks are qualified on
+determinism, FP64 L2 no worse than Q256, and a bounded difference from Q256.
 
 ## Joint attention
 
@@ -106,7 +126,7 @@ to an internal DRAM buffer. C/D retain FP32 numerator/denominator; B/E retain
 both BF16 components, unfinished local groups and global chunk parity. Only the
 last active contribution normalizes. A retains the existing ring streaming loop.
 
-Current ring scope is Blackhole, noncausal D128, Q256/K512, batch/GQA, scalar
+Current ring scope is Blackhole, noncausal D128, K512 with Q128/Q192/Q256/Q320, batch/GQA, scalar
 logical lengths, and the existing `rear` joint strategy. Physical local primary
 Q/KV sequence extents must be tile-aligned; `logical_n` masks a possibly
 sub-tile global KV tail. Q shorter than local KV requires `is_cross=True`.
@@ -116,8 +136,12 @@ qualified. Causal/balanced, indexed/paged/chunked-cache, sliding-window, sink,
 MLA and device-tensor logical lengths remain legacy-only and reject explicit recipes.
 The third returned tensor is internal scratch, **not a supported LSE result**.
 
-`WanAttention` has opt-in `sdpa_precision` and `sdpa_kv_dtype` constructor
-arguments for self-attention. E preparation happens after norm/RoPE and before
+`WanPipeline`, `WanTransformer3DModel`, `WanTransformerBlock` and `WanAttention`
+have opt-in `sdpa_precision` and `sdpa_kv_dtype` arguments that apply to both
+self- and unmasked cross-attention. Ring self-attention keeps the mesh-tuned Q
+chunk when the recipe supports it and otherwise uses Q256; exp_ring (the 4x32
+Galaxy path) is not yet integrated, so a recipe routes that mesh through
+ring_joint. E preparation happens after norm/RoPE and before
 ring communication; ping-pong KV buffers use the selected storage dtype.
 Omitting these arguments retains the original model behavior. Fresh pretrained
 attention-block tests qualify this integration, not generated-video quality or
