@@ -274,25 +274,33 @@ class FullCausalAttention:
         """Restore natural token order from the rank-major gathered buffer.
 
         The buffer is already (rank, chunk, block, head_dim) once reshaped, and natural order is that
-        same view with rank and chunk swapped, so a fixed five shape ops replace one slice per
+        same view with rank and chunk swapped, so a fixed handful of shape ops replaces one slice per
         256-token block plus a concat of the same arity. The per-block route cost 2.838 ms at an
-        8192-token extent against 0.128 ms here (22x), and it grew with the extent while this does
-        not -- at 32 layers x K and V that reorder was a large share of the per-chunk time.
+        8192-token extent against 0.128 ms here, and it grew with the extent while this does not --
+        at 32 layers x K and V that reorder was a large share of the per-chunk time.
         tests/unit/test_prefix_reorder_probe.py grades both routes against ground truth at four
         extents.
         """
         stride = self.max_seq_len // layout.sp
         chunks = extent // layout.chunk_size
+        full = chunks * layout.local_sequence == stride
         ranked = ttnn.reshape(gathered, (layout.sp, stride, Model.HEAD_DIM))
-        active = ttnn.slice(ranked, [0, 0, 0], [layout.sp, chunks * layout.local_sequence, Model.HEAD_DIM])
+        # A slice spanning every row is a no-op that hands back its input, so at a full prefix
+        # `active` IS the persistent gather buffer.
+        active = ranked
+        if not full:
+            rows = chunks * layout.local_sequence
+            active = ttnn.slice(ranked, [0, 0, 0], [layout.sp, rows, Model.HEAD_DIM])
         split = ttnn.reshape(active, (layout.sp, chunks, layout.local_sequence, Model.HEAD_DIM))
         chunk_major = ttnn.permute(split, (1, 0, 2, 3))
-        natural = ttnn.reshape(chunk_major, (1, 1, extent, Model.HEAD_DIM))
-        # Every reshape here is a view, so `ranked` aliases the caller's persistent gather buffer and
-        # must not be freed; at a full prefix the slice spans every row and hands back that same
-        # buffer rather than a copy, which makes `active` an alias too. Freeing either one leaves the
-        # next gather reporting that its input and output are on different mesh devices.
-        if chunks * layout.local_sequence != stride:
+        # Copy out before anything above can be freed. Every reshape here is a view, and a permute
+        # that only moves a unit-length dimension is a metadata swap, so without this the result can
+        # alias either the slice below or the persistent gather buffer. That reads as correct for the
+        # first few layers of a chunk and then silently returns whatever the allocator handed out
+        # next: SP rank 0 stays exact while the rest of the prefix decays. The copy moves the same
+        # bytes the concat it replaces did, so the dispatch win stands.
+        natural = ttnn.clone(ttnn.reshape(chunk_major, (1, 1, extent, Model.HEAD_DIM)))
+        if not full:
             active.deallocate(True)
         return natural
 

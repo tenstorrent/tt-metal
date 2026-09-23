@@ -18,7 +18,7 @@ depend on the prefix:
     slice   each rank's active rows                ONE slice, not one per block
     reshape -> (4,slabs,256,128)                   expose the slab
     permute (1,0,2,3) -> (slabs,4,256,128)         slab-major IS natural order
-    reshape -> (1,1,extent,128)
+    reshape -> (1,1,extent,128)                    then copy out, since all of the above are views
 
 Both routes are graded against ground truth, not just against each other: chunk i is written as the
 constant i+1, so natural order must read 1,1,...,2,2,...  A wrong permutation shows up as blocks in
@@ -88,18 +88,18 @@ def _reorder_by_permute(gathered, capacity, extent):
     """Candidate route: a fixed number of shape ops, independent of the prefix length."""
     stride = capacity // SP
     slabs = extent // CHUNK
+    full = slabs * BLOCK == stride
     ranked = ttnn.reshape(gathered, (SP, stride, HEAD_DIM))
-    active = ttnn.slice(ranked, [0, 0, 0], [SP, slabs * BLOCK, HEAD_DIM])
+    # A slice that spans every row is a no-op that hands back a view of the input, so at a full
+    # prefix `active` IS the caller's persistent gather buffer and must be left alone.
+    active = ranked if full else ttnn.slice(ranked, [0, 0, 0], [SP, slabs * BLOCK, HEAD_DIM])
     split = ttnn.reshape(active, (SP, slabs, BLOCK, HEAD_DIM))
     slab_major = ttnn.permute(split, (1, 0, 2, 3))
-    natural = ttnn.reshape(slab_major, (1, 1, extent, HEAD_DIM))
-    # Only `active` and `slab_major` own storage; the reshapes are views. Freeing `ranked` frees the
-    # caller's persistent gather buffer, and freeing `slab_major` frees what `natural` returns --
-    # both of which read as "tensors are on different mesh devices" on the NEXT gather. `split`
-    # views `active`, so the slice is only safe to free once permute has consumed it.
-    # A slice that spans every row is a no-op that hands back a view of the input, so at a full
-    # prefix `active` IS the caller's buffer and must be left alone.
-    if slabs * BLOCK != stride:
+    # The reshapes are views and a permute of a unit-length dimension is a metadata swap, so the
+    # result has to be copied out before `active` is freed; the concat the block route ends on
+    # materializes the same bytes, which keeps the timings below comparable.
+    natural = ttnn.clone(ttnn.reshape(slab_major, (1, 1, extent, HEAD_DIM)))
+    if not full:
         active.deallocate(True)
     return natural
 
