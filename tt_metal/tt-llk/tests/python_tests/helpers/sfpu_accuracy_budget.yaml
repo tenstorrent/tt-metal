@@ -22,9 +22,10 @@
 #
 # ── Enrolled first: the ops exact by construction ──────────────────────────
 #
-# They are the flakiness canaries. A 0-step budget on Abs cannot be wrong about the
-# kernel -- if one fails, the golden or the datapath moved. Re-measure on Blackhole
-# before trusting any of it there.
+# They are the flakiness canaries. A 0-step budget on Floor, Ceil or Trunc -- which are
+# unconditionally 0-step, unlike Abs, whose default row carries 1 -- cannot be wrong
+# about the kernel: if one fails, the golden or the datapath moved. Re-measure on
+# Blackhole before trusting any of it there.
 #
 # Relu is absent because it is packer-applied via STACC_RELU and is not a SfpuType
 # member, so it will not compile through the unary driver; ReluMax/ReluMin take a
@@ -412,10 +413,10 @@ Square:
 # would produce. The two share one number because they share one cause, so a retune
 # cannot move SigmoidAppx and leave GeluAppx behind without the diff saying so.
 SigmoidAppx:
-  - {metric: tolerance, atol: 0.13, rtol: 0.05}
+  - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
 
 GeluAppx:
-  - {metric: tolerance, atol: 0.13, rtol: 0.05}
+  - *coarse_lut_tolerance
 
 # ── Derived from the accuracy sweep ───────────────────────────────────────
 #
