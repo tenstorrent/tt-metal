@@ -527,9 +527,9 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
 
 
 #: The ops enrolled from the accuracy sweep: 19 transcendentals in P3, the exact and
-#: predicate ops in P5, and the rest of the table here, for 125. Their keys all pin
-#: ``input_format``, which is what makes them the witnesses for the resolution
-#: regression below.
+#: predicate ops in P5, the 42 re-measured in P6, and the 57 this PR enrols for the
+#: first time, for 125. Their keys all pin ``input_format``, which is what makes them
+#: the witnesses for the resolution regression below.
 _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
     op
     for op, table in _SFPU_ACCURACY_BUDGET.items()
