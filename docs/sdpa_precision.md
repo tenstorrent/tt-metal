@@ -92,6 +92,16 @@ its chunk therefore sets its rounding order (about one BF16 ulp). Consecutive
 Q jobs on one core are bit-identical. Other Q chunks are qualified on
 determinism, FP64 L2 no worse than Q256, and a bounded difference from Q256.
 
+## K blocking
+
+`k_chunk_size` may be 256, 384 or 512 for dense, joint and ring recipes (exp ring
+remains K512). K blocking sets the online-softmax update cadence, the PV partial
+grouping and which K chunks COMPENSATED/LOW_PRECISION pair, so K256/K384 are
+qualified on accuracy relative to K512 rather than bitwise. C/D are essentially
+K-invariant. COMPENSATED at K256 keeps less of its long-context advantage: on
+8192-key uniform attention it measures 1.48% L2 versus 1.04% at K512 and 0.93% at
+K384, still below FAST (2.0%). Prefer K384/K512 for COMPENSATED at long context.
+
 ## Joint attention
 
 `joint_scaled_dot_product_attention` accepts the same `precision` and
