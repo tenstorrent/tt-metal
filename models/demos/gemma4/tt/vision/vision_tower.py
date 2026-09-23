@@ -166,11 +166,17 @@ class VisionTower(LightweightModule):
         # Encoder: rotary + transformer blocks. Consumes ``inputs_embeds`` (freed internally).
         # Output is sliced back to the true patch count (padding patches included; the pooler
         # masks them out).
+        # Real patch count for the encoder's bidirectional padding mask. Note this
+        # is a DIFFERENT padding from ``unpadded_seq_len``: that one is tile
+        # padding (num_patches -> seq_len), this one is the (-1,-1) image padding
+        # inside num_patches. Only the former was handled before.
+        num_valid_patches = int((~padding_positions).sum().item())
         encoder_output = self.encoder(
             inputs_embeds,
             position_ids_tt,
             unpadded_seq_len=num_patches,
             seq_len=seq_len,
+            num_valid_patches=num_valid_patches,
         )
         ttnn.deallocate(position_ids_tt)
 
