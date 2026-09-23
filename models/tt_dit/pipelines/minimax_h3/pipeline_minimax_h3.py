@@ -355,7 +355,6 @@ class MiniMaxH3Output:
     """One generation. `audio` is `(1, 2, samples)`; `video` is `(1, 3, F, H, W)` float for `"rgb_float"`
     or a planar `(F, H * 3 // 2, W)` uint8 numpy array for `"yuv420"`."""
 
-
     video: torch.Tensor
     audio: torch.Tensor
     sampling_rate: int
