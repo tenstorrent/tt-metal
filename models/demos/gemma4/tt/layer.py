@@ -43,7 +43,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
-from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
@@ -130,8 +130,9 @@ class Gemma4DecoderLayer:
         # Dense 12B/31B on a full Wormhole T3K: keep the decode residual stream
         # in the width-sharded L1 layout RMSNorm and the TP all-reduce share,
         # instead of round-tripping it through DRAM between every op. Same gate
-        # as the tuned matmul path; see dram_sharded.is_t3k_dense_target.
-        self._tuned_decode = is_t3k_dense_target(mesh_device, hf_config)
+        # as the tuned matmul path, and off for multi-user decode; see
+        # dram_sharded.decode_tuning_enabled.
+        self._tuned_decode = decode_tuning_enabled(mesh_device, hf_config)
         # On that same target the layer scalar can ride the final residual add
         # as an output activation instead of costing its own device op.
         #

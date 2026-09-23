@@ -25,7 +25,7 @@ from models.common.weight_cache import (
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import LINEAR_PIN_MIN_SEQ_LEN, CCLManager, effective_pinned_ccl_topology
-from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
 from models.demos.gemma4.tt.generator_trace import normalize_gemma4_model_key
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
@@ -98,6 +98,15 @@ def create_tt_model(
     # 39x loop)" -- and ``ccl_topology`` only fixes the Ring half. Scoped to the
     # measured configuration: 31B, Wormhole, at or above the same 128k threshold
     # the Linear pin uses. 12B keeps the table at every length.
+    # Multi-user decode tuning wedges the mesh; see
+    # dram_sharded.decode_tuning_enabled. 31B batch-32 hung 6 of 11 runs and
+    # batch-8 3 of 3, at iterations 31/118/166 -- a race, not a fixed-capacity
+    # overflow. Only batch-1 has ever been measured clean, so the gate keeps
+    # tuning for one user and drops it for every multi-user decode; 2..7 users
+    # are untested and are gated off with the rest. Set before the model is
+    # built so every decode gate reads the same answer.
+    model_args.gemma4_decode_tuning_disabled = bool(max_batch_size is not None and int(max_batch_size) > 1)
+
     model_args.gemma4_swept_decode_disabled = bool(
         not is_blackhole()
         and normalize_gemma4_model_key(model_path) == "31B"
@@ -138,7 +147,7 @@ def create_tt_model(
                 max_seq_len=max_seq_len,
             ),
             is_moe=_is_moe,
-            tuned_decode=is_t3k_dense_target(mesh_device, model_args),
+            tuned_decode=decode_tuning_enabled(mesh_device, model_args),
         )
     else:
         ccl_manager = None

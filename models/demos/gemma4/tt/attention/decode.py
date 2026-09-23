@@ -11,7 +11,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
-from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
 
 from .operations import (
     apply_allreduce,
@@ -118,10 +118,12 @@ def decode_forward(
     # statically allocated dataflow buffers ("clash with L1 buffers ... static
     # dataflow buffer region ends at 1355104"), killing the program. Measured on
     # a real T3K, 12B: batch-32 fails with this on and passes with it off, while
-    # batch-8 (one 8-wide grid row) passes with it on. Between 9 and 31 users is
-    # untested -- widen only with a batch-32 run.
+    # batch-8 (one 8-wide grid row) passes with it on. That batch-8 result is
+    # 12B-only -- 31B batch-8 hangs 3 of 3 with decode tuning on, which is why
+    # decode_tuning_enabled now gates every multi-user decode and this ceiling
+    # is only reachable at batch-1. Between 9 and 31 users is untested.
     decode_users = int(hidden_states.shape[-2])
-    l1_act = is_t3k_dense_target(mesh_device, config) and decode_users <= _L1_DECODE_ACT_MAX_USERS
+    l1_act = decode_tuning_enabled(mesh_device, config) and decode_users <= _L1_DECODE_ACT_MAX_USERS
     qkv_interleaved = ttnn.L1_MEMORY_CONFIG if l1_act else ttnn.DRAM_MEMORY_CONFIG
 
     # 1. Fused QKV projection

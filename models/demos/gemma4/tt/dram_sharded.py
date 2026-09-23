@@ -376,6 +376,44 @@ def is_t3k_dense_target(mesh_device, config) -> bool:
     return is_t3k_mesh(mesh_device)
 
 
+def decode_tuning_enabled(mesh_device, config) -> bool:
+    """``is_t3k_dense_target`` for the DECODE path, minus multi-user 31B.
+
+    Multi-user decode on 31B wedges the mesh. Measured on a real T3K:
+
+      31B batch-32, tuned    6 hangs / 11 runs   (main: 0 / 8, Fisher p = 0.018)
+      31B batch-8,  tuned    3 hangs / 3 runs    (hung at iteration 31, 118, 166)
+      31B batch-8,  gated    0 hangs / 3 runs    68.4-68.7 ms/tok
+      31B batch-32, gated    0 hangs / 3 runs    85.7-85.8 ms/tok
+      12B batch-8,  tuned    0 hangs / 1 run     38.6 ms/tok  -- unaffected
+
+    The hang iteration wanders (31/118/166), so this is a race, not a
+    fixed-capacity overflow. ``tt-triage`` on the live wedged board shows one
+    device still inside a sharded LayerNorm -- 43 mcast receivers parked in
+    ``noc_semaphore_wait`` under
+    ``reader_mcast_receiver_unary_sharded_ln`` -- while the other seven block
+    behind it in the next reduce-scatter, ~54 ops ahead. No dead cores: not
+    hardware. Bisected to f6df2ea8916; its parent 03d218f9bf1 is clean over 8
+    runs at main's speed.
+
+    12B passing batch-8 with every optimisation on is the sharpest clue: the
+    defect is 31B-specific, so it depends on that model's geometry rather than
+    on the tuned path existing at all.
+
+    The exact defect inside f6df2ea8916 is not isolated, so this restores the
+    parent's decode path wholesale for multi-user decode rather than guessing
+    at a narrower gate -- two narrower gates (the residual island, the swept
+    matmul table) were each tried and each still hung. Only batch-1 has been
+    measured clean, so 2..7 users are gated off with the rest despite being
+    untested; the demo only parametrises 1/8/32, so nothing measured regresses.
+
+    Prefill is untouched, so TTFT is unchanged.
+    """
+    if not is_t3k_dense_target(mesh_device, config):
+        return False
+    return not bool(getattr(config, "gemma4_decode_tuning_disabled", False))
+
+
 def swept_decode_enabled(mesh_device, config) -> bool:
     """``is_t3k_dense_target``, minus the case where the swept decode table loops.
 
@@ -396,7 +434,7 @@ def swept_decode_enabled(mesh_device, config) -> bool:
     Wormhole. 12B is unaffected at every length (its 128k answer is clean and
     15% faster), and prefill keeps the tuned configs -- TTFT is unchanged.
     """
-    if not is_t3k_dense_target(mesh_device, config):
+    if not decode_tuning_enabled(mesh_device, config):
         return False
     return not bool(getattr(config, "gemma4_swept_decode_disabled", False))
 
