@@ -56,7 +56,7 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // receiver -- today a full grid row, for either the shared-K (latent-V) or the GQA-grouped family.
 // Everything here is derived identically by the program factory and all three kernels.
 //
-// rotated_max_slots -- the per-iteration chunk-list length -- is not here: the factory pushes it as
+// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory pushes it as
 // each kernel's LAST compile-time arg, and each kernel reads it back from that position.
 // ---------------------------------------------------------------------------
 
@@ -65,14 +65,28 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // and all-gather. 3 tolerates a full iteration of inter-core skew.
 constexpr uint32_t kRotatedHandoffSemDepth = 3;
 
-// Header words each kernel's per-iteration runtime-arg block carries before its chunk-id list.
-constexpr uint32_t kRotatedReaderIterHeaderWords = 2;   // [group_slot_count, my_count]
-constexpr uint32_t kRotatedWriterIterHeaderWords = 3;   // [my_count, float_migrated_in, float_dest]
-constexpr uint32_t kRotatedComputeIterHeaderWords = 1;  // [my_count]
+// Per active ordinal, only the moving unit is sent. Its ID is its first flat chunk
+// index (a balanced unit has two consecutive chunks); ~0u means no remainder.
+// The existing global_q_start/end args describe the fixed base range.
+constexpr uint32_t kRotatedNoRemainder = ~0u;
+constexpr uint32_t kRotatedReaderIterWords = 2;   // [remainder_start, group_has_remainder]
+constexpr uint32_t kRotatedWriterIterWords = 2;   // [remainder_start, float_dest]
+constexpr uint32_t kRotatedComputeIterWords = 1;  // [remainder_start]
 
-// One iteration's block is header words + rotated_max_slots chunk ids, so blocks are a fixed stride
-// apart and iteration `ordinal` starts here.
-constexpr uint32_t rotated_iter_stride(uint32_t header_words, uint32_t max_slots) { return header_words + max_slots; }
+struct RotatedQSlots {
+    uint32_t base_start = 0;
+    uint32_t base_count = 0;
+    uint32_t remainder_start = kRotatedNoRemainder;
+
+    constexpr uint32_t count(uint32_t unit_chunks) const {
+        return base_count + (remainder_start != kRotatedNoRemainder ? unit_chunks : 0);
+    }
+
+    constexpr uint32_t at(uint32_t slot) const {
+        return slot < base_count ? base_start + slot : remainder_start + slot - base_count;
+    }
+};
+
 constexpr uint32_t rotated_iter_base(uint32_t args_base, uint32_t iter_stride, uint32_t ordinal) {
     return args_base + ordinal * iter_stride;
 }

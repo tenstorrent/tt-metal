@@ -19,9 +19,8 @@ struct RotatedQLockstepGroup {
 };
 
 struct RotatedQIteration {
-    std::vector<uint32_t> my_chunks;  // base chunks first, remainder (if any) last
-    uint32_t group_slot_count = 0;    // includes padded multicast synchronization slots
-    uint32_t float_migrated_in = 0;   // one handoff covers all chunks in a remainder unit
+    uint32_t remainder_start = kRotatedNoRemainder;  // first flat chunk of the moving unit
+    bool group_has_remainder = false;                // includes padded multicast synchronization slots
     uint32_t float_dest_core = kRotatedNoDest;  // logical core index; factory packs physical coordinates
 };
 
@@ -59,30 +58,17 @@ inline RotatedQSchedule build_rotated_q_schedule(
         return group.members[member_idx];
     };
     RotatedQSchedule rotated_sched(num_cores, std::vector<RotatedQIteration>(ring_size));
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            auto& sched = rotated_sched[core_idx][ring_iter];
-            sched.my_chunks.reserve(rotated_base_chunks + rotation_unit_chunks);
-            for (uint32_t b = 0; b < rotated_base_chunks; ++b) {
-                sched.my_chunks.push_back(core_idx * rotated_base_chunks + b);
-            }
-        }
-    }
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         for (uint32_t float_idx = 0; float_idx < rotated_float_chunks; ++float_idx) {
             const uint32_t owner = float_owner(ring_iter, float_idx);
             auto& sched = rotated_sched[owner][ring_iter];
-            for (uint32_t member = 0; member < rotation_unit_chunks; ++member) {
-                sched.my_chunks.push_back(rotated_base_chunks * num_cores + float_idx * rotation_unit_chunks + member);
-            }
-            // (row, pos) is unique per float within an iteration, so a core holds at most one
-            // remainder unit and these two fields are assigned at most once each.
-            TT_ASSERT(sched.my_chunks.size() == rotated_base_chunks + rotation_unit_chunks);
+            // At most one remainder unit per core; fixed base IDs are derived locally.
+            TT_ASSERT(sched.remainder_start == kRotatedNoRemainder);
+            sched.remainder_start = rotated_base_chunks * num_cores + float_idx * rotation_unit_chunks;
             if (ring_iter > 0) {
                 const uint32_t previous_owner = float_owner(ring_iter - 1, float_idx);
                 if (previous_owner != owner) {
-                    // Record both ends of this handoff together.
-                    sched.float_migrated_in = 1;
+                    // The receiver derives migration by comparing consecutive remainder IDs.
                     rotated_sched[previous_owner][ring_iter - 1].float_dest_core = owner;
                 }
             }
@@ -91,10 +77,10 @@ inline RotatedQSchedule build_rotated_q_schedule(
         // the mcast handshakes.
         for (const auto& group : rotated_groups) {
             // The injector owns the first remainder, so its count is the group maximum.
-            const uint32_t group_max =
-                static_cast<uint32_t>(rotated_sched[group.members[group.injector_pos]][ring_iter].my_chunks.size());
+            const bool group_has_remainder =
+                rotated_sched[group.members[group.injector_pos]][ring_iter].remainder_start != kRotatedNoRemainder;
             for (const uint32_t ci : group.members) {
-                rotated_sched[ci][ring_iter].group_slot_count = group_max;
+                rotated_sched[ci][ring_iter].group_has_remainder = group_has_remainder;
             }
         }
     }

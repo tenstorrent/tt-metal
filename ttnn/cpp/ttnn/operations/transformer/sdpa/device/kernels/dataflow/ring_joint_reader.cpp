@@ -485,15 +485,14 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
 
-    // Rotated per-ring-iteration Q distribution. Chunk-LIST LENGTH per iteration (base chunks plus
-    // one float slot), or 0 when the host declined the rotation. Per ring iteration the factory
-    // appends [group_slot_count, my_count, chunk ids x rotated_max_slots] at this fixed stride; when
-    // enabled, the static global_q_start/global_q_end range is superseded entirely.
+    // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling.
+    // Per active ordinal the factory sends [remainder_start, group_has_remainder].
+    // global_q_start/end describe the fixed base range when rotation is enabled.
     // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
-    constexpr uint32_t rotated_iter_stride = ::rotated_iter_stride(kRotatedReaderIterHeaderWords, rotated_max_slots);
+    constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
     constexpr uint32_t logical_length_common_arg_base =
@@ -849,14 +848,15 @@ void kernel_main() {
         // work still participate in padded multicast handshakes without pushing visible data.
         uint32_t loop_q_count;
         uint32_t rotated_my_count = 0;
-        uint32_t rotated_ids_base = 0;
+        RotatedQSlots rotated_slots;
+        constexpr uint32_t rotation_unit_chunks = use_zigzag_balancing ? 2 : 1;
         if constexpr (rotated_q_split_enabled) {
             const uint32_t rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
             const uint32_t rotated_iter_base =
                 ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
-            loop_q_count = get_arg_val<uint32_t>(rotated_iter_base);
-            rotated_my_count = get_arg_val<uint32_t>(rotated_iter_base + 1);
-            rotated_ids_base = rotated_iter_base + kRotatedReaderIterHeaderWords;
+            rotated_slots = {global_q_start, q_per_core, get_arg_val<uint32_t>(rotated_iter_base)};
+            loop_q_count = q_per_core + get_arg_val<uint32_t>(rotated_iter_base + 1) * rotation_unit_chunks;
+            rotated_my_count = rotated_slots.count(rotation_unit_chunks);
         } else {
             loop_q_count = q_per_core;
             if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
@@ -876,14 +876,13 @@ void kernel_main() {
                 is_padded_iter = (q_iter >= rotated_my_count);
                 // Padded iterations only handshake; decode a member of a valid owned unit so
                 // downstream indices and balanced causal skips match the multicast slot.
-                // Every core owns at least one complete unit and no more than the pushed list.
-                constexpr uint32_t rotation_unit_chunks = use_zigzag_balancing ? 2 : 1;
+                // Every core owns at least one complete base unit.
                 ASSERT(rotated_my_count >= rotation_unit_chunks && rotated_my_count <= rotated_max_slots);
                 ASSERT(rotated_my_count % rotation_unit_chunks == 0);
                 // Pad with the corresponding member of the last owned unit. A balanced low
                 // slot must skip on every multicast peer, including cores without a remainder.
                 const uint32_t padded_slot = rotated_my_count - rotation_unit_chunks + q_iter % rotation_unit_chunks;
-                flat_q_index = get_arg_val<uint32_t>(rotated_ids_base + (is_padded_iter ? padded_slot : q_iter));
+                flat_q_index = rotated_slots.at(is_padded_iter ? padded_slot : q_iter);
             } else {
                 is_padded_iter = (q_iter >= q_per_core);
                 flat_q_index = global_q_start + q_iter;

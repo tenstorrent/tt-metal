@@ -345,7 +345,7 @@ void write_output_and_lse(
 }
 
 // Maps a Q slot index to the flat chunk id this core processes there. Under the rotated split the
-// mapping comes from this ring iteration's runtime-arg list; otherwise the slot index is itself the
+// base IDs are contiguous and only the remainder ID is passed; otherwise the slot index is the
 // offset into the static flat range. `ordinal` is an ACTIVE ordinal, so ordinal + 1 is the next
 // EXECUTED iteration -- what every cross-iteration caller here means.
 template <bool Rotated>
@@ -354,10 +354,12 @@ struct QSlotMap {
     uint32_t iter_stride;
     uint32_t ordinal;
     uint32_t flat_start;
+    uint32_t base_count;
 
     uint32_t flat_at_ordinal(uint32_t ord, uint32_t slot) const {
-        return get_arg_val<uint32_t>(
-            rotated_iter_base(args_base, iter_stride, ord) + kRotatedWriterIterHeaderWords + slot);
+        const RotatedQSlots slots{
+            flat_start, base_count, get_arg_val<uint32_t>(rotated_iter_base(args_base, iter_stride, ord))};
+        return slots.at(slot);
     }
 
     // Flat chunk id at `slot` of the current iteration.
@@ -371,13 +373,7 @@ struct QSlotMap {
 
     // Flat chunk id processed first in the next executed iteration. Under rotation that is a base
     // chunk this core owned all along (floats sit last), so it needs no handoff wait.
-    uint32_t next_iter_first() const {
-        if constexpr (Rotated) {
-            return flat_at_ordinal(ordinal + 1, 0);
-        } else {
-            return flat_start;
-        }
-    }
+    uint32_t next_iter_first() const { return flat_start; }
 
     // Does the prefetch issued at `slot` target chunk `flat_q`? That is the next slot of this
     // iteration, or slot 0 of the next executed one when `slot` is the last.
@@ -555,17 +551,17 @@ void kernel_main() {
     constexpr uint32_t cb_arg_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
-    // Per-iteration chunk-list length (base chunks plus one remainder unit), or 0 when the host
+    // Maximum owned chunk count (base chunks plus one remainder unit), or 0 when the host
     // declined the rotation. The offset clears the whole CB block, not just the CBs used here.
     // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
-    constexpr uint32_t rotated_iter_stride = ::rotated_iter_stride(kRotatedWriterIterHeaderWords, rotated_max_slots);
+    constexpr uint32_t rotated_iter_stride = kRotatedWriterIterWords;
     constexpr uint32_t rotated_sem_count = rotated_handoff_sem_count(ring_size);
 
     // The factory appends the handoff semaphore ids, then per ring iteration
-    // [my_count, float_migrated_in, float_dest, chunk ids x rotated_max_slots]. The donor signals
+    // [remainder_start, float_dest]. The donor signals
     // the receiver's semaphore once its accumulator save lands in DRAM; the receiver waits before
     // issuing that float's restore reads.
     uint32_t rotated_sem_ids[rotated_sem_count] = {};
@@ -843,15 +839,20 @@ void kernel_main() {
                 rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
                 const uint32_t rotated_iter_base =
                     ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
-                q_per_core = get_arg_val<uint32_t>(rotated_iter_base);
-                rotated_has_mig_in_float = get_arg_val<uint32_t>(rotated_iter_base + 1);
-                rotated_float_dest = get_arg_val<uint32_t>(rotated_iter_base + 2);
+                const uint32_t remainder_start = get_arg_val<uint32_t>(rotated_iter_base);
+                const RotatedQSlots slots{global_q_start, global_q_end - global_q_start, remainder_start};
+                q_per_core = slots.count(use_zigzag_balancing ? 2 : 1);
+                // A different owned remainder at the previous ACTIVE ordinal implies an incoming handoff.
+                rotated_has_mig_in_float =
+                    remainder_start != kRotatedNoRemainder && rotated_ordinal > 0 &&
+                    remainder_start != get_arg_val<uint32_t>(rotated_iter_base - rotated_iter_stride);
+                rotated_float_dest = get_arg_val<uint32_t>(rotated_iter_base + 1);
             } else {
                 q_per_core = global_q_end - global_q_start;
             }
 
             const QSlotMap<rotated_q_split_enabled> q_slots{
-                rotated_args_base, rotated_iter_stride, rotated_ordinal, global_q_start};
+                rotated_args_base, rotated_iter_stride, rotated_ordinal, global_q_start, global_q_end - global_q_start};
 
             const uint32_t last_q_index = q_per_core - 1;
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
@@ -863,8 +864,12 @@ void kernel_main() {
             uint32_t previous_q_per_core = q_per_core;
             if constexpr (rotated_q_split_enabled) {
                 if (rotated_ordinal > 0) {
-                    previous_q_per_core = get_arg_val<uint32_t>(
-                        ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal - 1));
+                    const RotatedQSlots previous_slots{
+                        global_q_start,
+                        global_q_end - global_q_start,
+                        get_arg_val<uint32_t>(
+                            ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal - 1))};
+                    previous_q_per_core = previous_slots.count(use_zigzag_balancing ? 2 : 1);
                 }
             }
             auto trid_for_q = [&](uint32_t qi) {

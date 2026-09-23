@@ -2344,8 +2344,8 @@ template <
     // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
     bool joint_n_skip_enabled = false,
     uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
-    // Rotated Q split: the q loop runs positions, mapping each to a flat chunk id from the
-    // runtime-arg list at rotated_list_arg_base. Off by default (position is the flat id).
+    // Rotated Q split: map q-loop positions through the fixed base range and moving remainder.
+    // Off by default (position is the flat id).
     bool rotated_q_split_enabled = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
@@ -2375,8 +2375,8 @@ void sdpa_ring_v2(
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
-    // Rotated Q split only: runtime-arg index of this ring iteration's flat chunk-id list.
-    [[maybe_unused]] const uint32_t rotated_list_arg_base = 0) {
+    // Rotated Q split only: fixed base range plus this iteration's remainder unit.
+    [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2518,7 +2518,7 @@ void sdpa_ring_v2(
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
         uint32_t q_flat = q;
         if constexpr (rotated_q_split_enabled) {
-            q_flat = get_arg_val<uint32_t>(rotated_list_arg_base + q);
+            q_flat = rotated_slots.at(q);
         }
         uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
@@ -2725,8 +2725,12 @@ void sdpa_ring_v2(
                 }
             }
             if constexpr (straddle_mask_enabled) {
-                if (!narrowed_by_mask && is_straddle_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                // A short balanced shard can end inside the same K chunk as its
+                // causal half boundary. Padding does not supersede that tighter
+                // boundary: intersect both masks rather than keeping the first one.
+                const uint32_t straddle_active = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                if (is_straddle_mask_chunk && straddle_active < active_Sk_param) {
+                    active_Sk_param = straddle_active;
                     chunk_sbw = straddle_sbw;
                 }
             }

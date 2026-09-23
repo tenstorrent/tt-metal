@@ -29,6 +29,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -2502,13 +2503,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     ring_joint::RotatedQSchedule rotated_sched;
     std::vector<uint32_t> rotated_handoff_sem_ids;
-    // Appends one iteration's chunk-id list padded to the fixed rotated_max_slots length, so every
-    // ring iteration occupies the same number of runtime args and the kernels can index by stride.
-    const auto append_rot_chunk_ids = [&](CheckedRuntimeArgList& args_out, const ring_joint::RotatedQIteration& sched) {
-        for (uint32_t slot = 0; slot < rotated_base_chunks + rotation_unit_chunks; ++slot) {
-            args_out.push_back(slot < sched.my_chunks.size() ? sched.my_chunks[slot] : 0);
-        }
-    };
     if (use_rotated_q_split) {
         const uint32_t num_groups = static_cast<uint32_t>(rotated_groups.size());
         const uint32_t groups_needed = rotated_groups_needed;
@@ -2580,7 +2574,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_group_reject.empty() ? "ok" : rotated_group_reject);
     }
 
-    // Rotated Q split, compile-time: the per-iteration chunk-list length (base chunks plus one
+    // Rotated Q split, compile-time: the maximum owned chunk count (base chunks plus one
     // remainder unit: a chunk or a balanced pair), or 0 when the rotation declines. Kernels gate on `> 0` via if
     // constexpr, so both paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
     // kernels, which is how they read it back -- no per-kernel index to keep in sync. The
@@ -2941,8 +2935,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
-        uint32_t global_q_start = work.global_q_start;
-        uint32_t global_q_end = work.global_q_start + work.global_q_count;
+        // Rotation keeps a contiguous base range; only its remainder unit changes by ordinal.
+        uint32_t global_q_start = use_rotated_q_split ? i * rotated_base_chunks : work.global_q_start;
+        uint32_t global_q_end = global_q_start + (use_rotated_q_split ? rotated_base_chunks : work.global_q_count);
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -3021,14 +3016,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
-        // Rotated Q split: per ring iteration [group_slot_count, my_count, chunk ids].
-        // Header width must stay kRotatedReaderIterHeaderWords.
+        // Rotated Q split: per active ordinal [remainder_start, group_has_remainder].
         if (use_rotated_q_split) {
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
                 const auto& sched = rotated_sched[i][ring_iter];
-                reader_args.push_back(sched.group_slot_count);
-                reader_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
-                append_rot_chunk_ids(reader_args, sched);
+                reader_args.push_back(sched.remainder_start);
+                reader_args.push_back(sched.group_has_remainder);
             }
         }
 
@@ -3051,17 +3044,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
-        // Rotated Q split: the handoff semaphore ids, indexed by (ring_iter - 1) % count on both
-        // sides, then per ring iteration [my_count, float_migrated_in, float_dest, chunk ids].
-        // Header width must stay kRotatedWriterIterHeaderWords.
+        // Rotated Q split: the handoff semaphore ids, then per active ordinal
+        // [remainder_start, float_dest].
         if (use_rotated_q_split) {
             for (uint32_t sem_slot = 0; sem_slot < rotated_handoff_sem_count(ring_size); ++sem_slot) {
                 writer_args.push_back(rotated_handoff_sem_ids[sem_slot]);
             }
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
                 const auto& sched = rotated_sched[i][ring_iter];
-                writer_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
-                writer_args.push_back(sched.float_migrated_in);
+                writer_args.push_back(sched.remainder_start);
                 uint32_t float_dest = kRotatedNoDest;
                 if (sched.float_dest_core != kRotatedNoDest) {
                     const auto& dest_phys = core_work[sched.float_dest_core].physical_core;
@@ -3073,7 +3064,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     float_dest = rotated_pack_dest(dest_phys.x, dest_phys.y);
                 }
                 writer_args.push_back(float_dest);
-                append_rot_chunk_ids(writer_args, sched);
             }
         }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
@@ -3105,13 +3095,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Rotated Q split: per ring iteration [my_count, chunk ids].
-        // Header width must stay kRotatedComputeIterHeaderWords.
+        // Rotated Q split: one remainder_start per active ordinal.
         if (use_rotated_q_split) {
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
                 const auto& sched = rotated_sched[i][ring_iter];
-                compute_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
-                append_rot_chunk_ids(compute_args, sched);
+                compute_args.push_back(sched.remainder_start);
             }
         }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
