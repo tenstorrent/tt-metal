@@ -5,7 +5,8 @@
 
 void custom_qkv_projection() {
     // Original QKV K-block16, six output tiles, LoFi, BF16 L1 partials.
-    // No split accumulation. The specialized MVMUL can change numerical
+    // A uses8 rows; partial/output use16 rows so copy_block preserves the
+    // custom math second-face destination atrow16. No split accumulation. The specialized MVMUL can change numerical
     // association, so qualification is explicit rather than assumed.
     custom_mm_block_init_short<false, false, false>(0, 1, 24, 6);
     pack_reconfig_data_format(24);

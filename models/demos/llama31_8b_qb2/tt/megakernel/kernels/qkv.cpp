@@ -71,13 +71,6 @@ void QB2_ENTRY() {
 #endif
 #else
     cb_wait_front(16, 6);
-#if QKV_CUSTOM_MM
-    // Publish the native32-row external layout before RoPE/cache consumers.
-    for (uint32_t tile = 0; tile < 6; ++tile) {
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(16) + tile * 2048);
-        for (uint32_t i = 0; i < 8; ++i) { words[128 + i] = words[64 + i]; words[64 + i] = 0; }
-    }
-#endif
     noc_semaphore_inc(peer(0, get_semaphore(0)), 1);
     noc_async_atomic_barrier();
     if (bank == 0) {

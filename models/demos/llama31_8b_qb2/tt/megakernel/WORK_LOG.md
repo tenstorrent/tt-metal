@@ -218,3 +218,6 @@ InlineCBreset opt-in reusesexistinglocalendbarrier: allRISCsfinishanddrainengine
 
 ## 13:49 UTC — inline reset result and plan audit
 InitialinlinegatefailedHOSTmetadataquerybecauseCBFormatDescriptor.data_format getterreturnsunboundtt::DataFormat; noresidentbodylaunched. RemovednonessentialdtypequeryandhandledemptycomputeRTargs. RerunfocusedWorkerWatcher exactpassed. Full128inlineCBreset=7.936444870ms, strict exact, versusfresh7.937778647control:~1.3us is notmaterialwithoutpairedconfirmation. Keepoptional. Descriptorplan nowreportsmaxstaticCB991232B/core. audit-kernel-code.py onTiny8192runtime: maxkerneltextBR12000,NC7672,TR0 14788,TR1 13652,TR2 11180B,60uniqueELFs in4residentprograminstances; thesearetextsections, notsummedpeakL1.
+
+## 13:52 UTC — custom QKV layout failure isolated and fixed
+Isolatedone-layerQKVsave showedEVERYfirst16columnsofevery32-columntile EXACT, whileallrighthalvesmissingaccumulation(PCC0.817fullQKV). Rootcauseconsistentwith8-rowcopy_blockplacingpartialsecondfaceatDSTrow8whilecustomMVMULexpectsrow16. ChangedONLYAto8-rowformat;Partial/Outretain16-rowgeometryandnativeexternalfaceoffset512, removedoutputconversion. Complete2-layerfocusedWorkerWatcher nowPASSESEXACToutput/KV/inactive/page/replay. Custominputblockcompactionunchanged. Thiswasimplementationlayoutbug, notacceptednumericaldrift. Full128timingnext.
