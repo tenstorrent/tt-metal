@@ -140,10 +140,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         &queue_tensor_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
-        nb::arg("global_cb") = std::nullopt,
+        nb::arg("global_cb") = nb::none(),
         nb::kw_only(),
         nb::arg("prefetcher_pipes") = std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>{},
-        nb::arg("device_subset") = std::nullopt,
+        nb::arg("device_subset") = nb::none(),
         nb::arg("capture_into_trace") = false);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
@@ -170,9 +170,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         )doc",
         &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
-        nb::arg("cq_id") = std::nullopt,
+        nb::arg("cq_id") = nb::none(),
         nb::kw_only(),
-        nb::arg("device_subset") = std::nullopt);
+        nb::arg("device_subset") = nb::none());
 
     ttnn::bind_function<"stop_tensor_prefetcher", "ttnn.experimental.">(
         mod,
@@ -278,7 +278,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("support_multi_receiver_shards") = std::nullopt);
+        nb::arg("support_multi_receiver_shards") = nb::none());
 
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
