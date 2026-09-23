@@ -105,7 +105,7 @@ def test_host_identity_matches_golden_fp32():
 def test_host_identity_survives_bfloat16_inputs():
     """bfloat16 is the dtype the device will actually carry. The real magnitude
     spans ~14 decades, which costs about two thirds of a nine versus synthetic
-    data -- so this gate is checked against real tensors, not random ones."""
+    data -- so this check uses real tensors, not random ones."""
     from models.demos.cosyvoice.tt.hifigan.istft import TtIStft, periodic_hann
 
     real, imag, ref = _golden_inputs()
@@ -134,10 +134,9 @@ def test_host_identity_across_lengths(n_frames):
 # --------------------------------------------------------------------------
 # device tier -- needs silicon or ttsim
 # --------------------------------------------------------------------------
-# conv_transpose2d allocates from the L1_SMALL bank; the default l1_small_size=0
-# fails with "bank size is 0 B" (CLAUDE.md DD-1). The root conftest's device
-# fixture honours device_params, so unlike the DiffusionDrive demo -- which had to
-# hardcode it around a shadowing local conftest -- the indirect idiom works here.
+# conv_transpose2d allocates from the L1_SMALL bank, and the default
+# l1_small_size=0 fails with "bank size is 0 B". The root conftest's device fixture
+# honours device_params, so the indirect parametrization sets it.
 needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 
 

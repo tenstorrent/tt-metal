@@ -25,7 +25,7 @@ on the host. [Why that was the hard part](#why-the-vocoder-is-the-interesting-pa
 | Sample rate | 22 050 Hz |
 | Languages | Chinese, English, Japanese, Cantonese, Korean |
 | Modes | SFT, zero-shot, cross-lingual, instruct |
-| Status | **All three stages on device**, per-module PCC ≥ 0.99 against the reference. Figures in [PERF.md § Accuracy](PERF.md#accuracy) |
+| Status | **All three stages on device**, per-module PCC ≥ 0.99 against the reference. Figures in [PERF.md § Accuracy](PERF.md#7-accuracy) |
 
 ---
 
@@ -110,7 +110,6 @@ pytest models/demos/cosyvoice/tests/ -k "not device"
 
 # device tier: needs /dev/tenstorrent. 37 device tests here, 14 more in perf below;
 # the host tier lives in tests/pcc/ and runs here too, so this collects 150.
-# One is skipped with its reason attached -- see docs/VALIDATION.md.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
 # performance -- every numeric threshold is asserted, not printed; see
@@ -169,9 +168,8 @@ Writes `sft_en.wav`, `zero_shot_en.wav`, `cross_lingual_en.wav` and `instruct_en
 excitation per mode through `tt.pipeline.CosyVoiceTTNN.synthesize` — real synthesis, not
 reproduction, so there is nothing to score it against and no two runs sound identical.
 `--modes sft,instruct` restricts the loop; `--lang` picks which of
-`prepare_inputs.py --langs`'s outputs to use (default `en`). One utterance per mode is the
-right scope for a quickstart — the full mode x language sweep is what
-`run_reference.py`/`eval_wer_sim.py` already cover for scoring.
+`prepare_inputs.py --langs`'s outputs to use (default `en`). The full mode × language
+sweep, scored, is `run_reference.py` and `eval_wer_sim.py` below.
 
 ### Reference baseline and scoring
 
@@ -217,8 +215,8 @@ CosyVoice or `onnxruntime` — the same split `export_weights.py` draws.
 
 `tt/flow/reference.py` and `tt/llm/reference.py` reimplement their stages in plain torch
 from the flat weight export alone — no CosyVoice, no `diffusers`, no device. Both reproduce
-the captured goldens to PCC 0.9999999, which is what lets a device bring-up start from
-"the graph is right" instead of bisecting eighty blocks on rented silicon.
+the captured goldens to PCC 0.9999999, so a device mismatch points at the port rather
+than at the graph.
 
 ### The trap: three modules draw from the RNG mid-forward
 
@@ -265,9 +263,6 @@ See `tt/hifigan/istft.py` for the derivation and `tests/pcc/test_istft.py` for t
 
 ## Validation strategy
 
-Designed first rather than last — the checks below were written before the port, not
-fitted to it.
-
 | what is checked | how |
 |---|---|
 | Token accuracy | Exact agreement, not top-k overlap: teacher-forced argmax match per position, plus free-running greedy (`top_k=1`) full-sequence comparison. RAS sampling (`top_p 0.8`, `top_k 25`) is stochastic — reported for audio quality, never what decides pass or fail. |
@@ -277,19 +272,14 @@ fitted to it.
 | Batching | Batched decode against single-row decode at *ragged* prompt lengths, checked on PCC and on the deviation not compounding across steps; plus a sweep that fails if batching amortises nothing. |
 | Perf targets | **Asserted, not printed**, through [`tests/perf/gates.py`](tests/perf/gates.py) — mechanism in [`docs/VALIDATION.md`](docs/VALIDATION.md#how-the-numeric-thresholds-are-enforced). |
 
-Every measured figure lives in [`PERF.md`](PERF.md) and nowhere else — the end-to-end
+Measured performance and accuracy figures are in [`PERF.md`](PERF.md): the end-to-end
 RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are met on
-which part, and the per-module PCCs under [§ Accuracy](PERF.md#accuracy). The handful of
-PCCs quoted in this file support an argument; PERF.md is the record.
+which part, and the per-module PCCs under [§ Accuracy](PERF.md#7-accuracy). The few PCCs
+quoted in this file support an argument; PERF.md is the record.
 
-[`docs/VALIDATION.md`](docs/VALIDATION.md) maps it the other way — every requirement
-in the bring-up scope against the test that decides it, including the ones that are not
-met and why. It carries no numbers of its own; it links to PERF.md for each. Start there
-to check a specific requirement; start at PERF.md to read the measurements. It also
-carries the open device-level findings, including one where buffers carried across a
-streaming chunk seam while a decode trace was live get corrupted — diagnosed, with a
-remedy identified but not yet shipped, which is a constraint on anyone extending that
-path.
+[`docs/VALIDATION.md`](docs/VALIDATION.md) maps every requirement in the bring-up scope
+to the test that decides it, and is the one place for unmet requirements, open defects
+and the workarounds the tree carries.
 
 ### Two things cannot be checked against exact agreement
 
@@ -333,7 +323,10 @@ models/demos/cosyvoice/
 
 ---
 
-## Known constraints
+## Implementation notes
+
+Unmet requirements, open defects and workarounds for TTNN behaviour are in
+[`docs/VALIDATION.md`](docs/VALIDATION.md).
 
 - `weight_norm` must be folded at load time. Every conv in HiFT is wrapped in it;
   folding `w = g·v/‖v‖` on host removes a per-inference normalisation for free.
@@ -342,8 +335,5 @@ models/demos/cosyvoice/
   module in the model.
 - `att_cache` is `[n_layers, n_heads, T, 2·head_dim]` with K and V concatenated on
   the last axis. `ttnn.experimental.paged_cache` does not take this shape directly.
-- `SineGen` integrates phase with `cumsum` over the audio-rate signal. In bfloat16 an
-  accumulator reaching ~1e3 loses the ~1e-2 increments entirely; use
-  `ttnn.cumsum(dtype=ttnn.float32)`.
 - RAS's retry path is a plain multinomial over the full 4097-token vocabulary, not a
   re-draw from the truncated distribution. `ttnn.sampling` covers the primary path only.

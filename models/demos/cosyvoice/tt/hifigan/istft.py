@@ -104,9 +104,9 @@ def nola_envelope(window: np.ndarray, n_frames: int, hop: int) -> np.ndarray:
 class TtIStft:
     """Device-resident iSTFT. Constant tensors are built once, per utterance length.
 
-    Any tensor created inside a captured trace is pinned to a fixed device address
-    (CLAUDE.md ss.7), so every constant here is allocated up front and the T-dependent
-    envelope is cached rather than rebuilt inside the forward path.
+    Any tensor created inside a captured trace is pinned to a fixed device address, so
+    every constant here is allocated up front and the T-dependent envelope is cached
+    rather than rebuilt inside the forward path.
     """
 
     def __init__(
@@ -174,7 +174,7 @@ class TtIStft:
 
         The mirror of `TtStft._prepared`, and for the same reason: `conv_transpose2d`
         prepares a host-layout weight on every call, and that host traffic is what a
-        trace forbids. These two convolutions were the only things keeping
+        trace forbids. Unprepared, these two convolutions would keep
         `TtHiFTGenerator.decode` from being captured.
 
         Returns `(weight, conv_config)`. The config is `None` on the fallback path

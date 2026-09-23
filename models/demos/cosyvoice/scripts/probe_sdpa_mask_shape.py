@@ -1,27 +1,21 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Which property of the real mask breaks `sdpa_decode`?
+"""Which property of the real mask affects `sdpa_decode`?
 
-`probe_sdpa_decode.py` measured the fused decode path at PCC 0.99998 and 3.3x.
-Wired into the model it gives 0.88. The arithmetic is the same, so the difference
-is in the *mask*, and the probe's mask differs from the model's in two ways at once:
+The probe mask and the model's differ in two ways at once:
 
   probe   last 32 of 384 suppressed, value -1e4
   model   first 174 of 384 suppressed, value -1e9   (`right_aligned_bias`, `NEG_INF`)
 
-Either could matter, for reasons that are not the same:
+The value. The kernel computes `exp((QK - row_max) * scale)` (`sdpa_flash_decode.cpp:435`).
+At -1e9 and scale 0.125 the argument is -1.25e8; at -1e4 it is -1250. Both are zero in
+exact arithmetic, but only one is inside the range an SFPU exponential is built for.
 
-**The value.** The kernel computes `exp((QK - row_max) * scale)`
-(`sdpa_flash_decode.cpp:435`). At -1e9 and scale 0.125 the argument is -1.25e8;
-at -1e4 it is -1250. Both are zero in exact arithmetic, but only one of them is
-inside the range an SFPU exponential is built for.
-
-**The position.** A right-aligned cache suppresses a *prefix*, so with
-`k_chunk_size = 128` the first chunk is **entirely masked** -- its row max is the
-mask value itself, its local softmax is uniform over 128 dead slots, and only the
-cross-chunk rescale suppresses it. The probe's trailing mask never produced a fully
-dead chunk, so it never exercised that path.
+The position. A right-aligned cache suppresses a prefix, so with `k_chunk_size = 128`
+the first chunk is entirely masked -- its row max is the mask value itself, its local
+softmax is uniform over 128 dead slots, and only the cross-chunk rescale suppresses it.
+A trailing mask never produces a fully dead chunk.
 
 One variable at a time, four cells, against a torch golden.
 

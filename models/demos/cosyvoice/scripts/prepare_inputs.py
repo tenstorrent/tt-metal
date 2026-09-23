@@ -4,14 +4,14 @@
 """Run CosyVoice's front-end over the 4-mode x 5-language sweep and emit device inputs.
 
 The front-end is not a neural network this bring-up ports. It is a text
-normaliser, a Whisper-family tokenizer, an **ONNX** speech tokenizer
-(`speech_tokenizer_v1.onnx`) and an **ONNX** speaker encoder (`campplus.onnx`),
+normaliser, a Whisper-family tokenizer, an ONNX speech tokenizer
+(`speech_tokenizer_v1.onnx`) and an ONNX speaker encoder (`campplus.onnx`),
 plus a mel filterbank. Three of those four are ONNX graphs shipped as blobs, and
 none is on this port's critical path -- the port is the LLM, the flow decoder
 and the vocoder.
 
 So the boundary is drawn here, the same two-environment boundary as
-`export_weights.py`: this runs **once in the CosyVoice venv** and writes a flat
+`export_weights.py`: this runs once in the CosyVoice venv and writes a flat
 `.npz` per case that the TTNN side loads without importing cosyvoice or
 onnxruntime.
 
@@ -25,13 +25,13 @@ them.
 
 Three mode-specific shapes, all of them easy to get wrong:
 
-* **cross_lingual** deletes `prompt_text` and `llm_prompt_speech_token`, so the
+* cross_lingual deletes `prompt_text` and `llm_prompt_speech_token`, so the
   LLM sees only the target text while the *flow* still gets the prompt speech
   tokens and mel. The text carries a `<|zh|>`-style language tag instead.
-* **instruct** deletes `llm_embedding` -- the LLM runs with no speaker vector at
+* instruct deletes `llm_embedding` -- the LLM runs with no speaker vector at
   all -- and puts the instruction in the `prompt_text` slot. It must be a style
-  *description*, not a directive; see `run_reference.py` for what that cost.
-* **sft** and **instruct** have no prompt audio, so the flow has no
+  *description*, not a directive; see `run_reference.py`.
+* sft and instruct have no prompt audio, so the flow has no
   `prompt_speech_feat` and the generated mel starts at frame 0.
 """
 from __future__ import annotations

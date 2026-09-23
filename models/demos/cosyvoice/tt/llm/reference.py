@@ -11,7 +11,7 @@ and is silently wrong.
 1. `static_chunk_size: 1` on the text encoder. `subsequent_chunk_mask` turns that
    into a plain causal mask. The flow encoder, same class, leaves it at 0 and
    attends fully.
-2. `input_layer: 'linear_legacy'` on the AR decoder appends a **ReLU** the plain
+2. `input_layer: 'linear_legacy'` on the AR decoder appends a ReLU the plain
    `'linear'` variant does not have.
 3. `ConformerEncoder` defaults its FFN activation to swish, `TransformerEncoder`
    to relu. Neither is set in the yaml, so the two stacks differ.

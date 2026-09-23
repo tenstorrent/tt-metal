@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """One place for every dtype, memory config and shape constant in the port.
 
-Centralised for the reason DD-1 in CLAUDE.md records: memory configuration is
-where bring-ups go wrong, and hunting a wrong memory config across a dozen files
-is far more expensive than looking it up in one.
+Centralised because memory configuration is where bring-ups go wrong, and a wrong
+memory config is far cheaper to find in one file than across a dozen.
 
 Every number here is read from the actual cosyvoice.yaml of FunAudioLLM/CosyVoice-300M
 and confirmed against captured tensor shapes in tests/golden/manifest.json. Nothing
@@ -18,15 +17,14 @@ from dataclasses import dataclass, field
 
 import ttnn
 
-# Weights may be stored bfloat8_b to halve bandwidth. On TTM-R1 this bought 5-7%
-# at large batch with PCC >= 0.99 preserved (CLAUDE.md Stage 5), so it is offered
-# but stays opt-in until measured on this model.
+# `COSYVOICE_WEIGHT_BF8=1` stores weights as bfloat8_b, halving their memory; on this
+# model it is a memory option, not a speed one (PERF.md §6).
 WEIGHT_BF8 = os.environ.get("COSYVOICE_WEIGHT_BF8", "0") == "1"
 WEIGHTS_DTYPE = ttnn.bfloat8_b if WEIGHT_BF8 else ttnn.bfloat16
 ACTIVATIONS_DTYPE = ttnn.bfloat16
 
 # conv2d/conv_transpose2d allocate from the L1_SMALL bank; l1_small_size=0 fails
-# with "bank size is 0 B" (CLAUDE.md DD-1).
+# with "bank size is 0 B".
 L1_SMALL_SIZE = 32768
 TRACE_REGION_SIZE = 23887872
 

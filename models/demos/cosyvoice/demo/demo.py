@@ -149,17 +149,10 @@ def run_multi_mode(args) -> int:
     out_dir = "cosyvoice_ttnn_out" if args.out == "cosyvoice_ttnn.wav" else args.out
     os.makedirs(out_dir, exist_ok=True)
 
-    # A fresh device per mode, not one shared across the loop. Measured on
-    # silicon: `model.llm.release_caches()` alone is not enough here -- the four
-    # modes' mel lengths are all different (this is real synthesis, not one
-    # repeated golden geometry), and something in the conv/halo sliding-window
-    # path accumulates L1_SMALL state per *distinct* geometry rather than per
-    # utterance. Two modes in a row completely exhausted a 32 KB L1_SMALL bank
-    # (`0 B free`) even with the LLM caches released every time. Nobody has
-    # exercised this pipeline across varying-length real inputs before, so
-    # reopening the device is the correct scope for a quickstart demo -- root
-    # -causing the leak itself belongs to whichever stage turns out to own it,
-    # not to this script.
+    # A fresh device per mode, not one shared across the loop. The four modes' mel
+    # lengths differ, and L1_SMALL grows with each distinct vocoder geometry and is
+    # never freed (`docs/VALIDATION.md`); `model.llm.release_caches()` does not reclaim
+    # it, and two modes in a row can exhaust a 32 KB bank.
     for mode in modes:
         npz_path = os.path.join(args.inputs, f"{mode}_{args.lang}.npz")
         if not os.path.exists(npz_path):

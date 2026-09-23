@@ -4,7 +4,7 @@
 """ConditionalDecoder: the UNet-1D that the flow-matching ODE calls at every step.
 
 This is the model's hot spot. `ConditionalCFM` runs 10 Euler steps and each step
-evaluates this network on a **batch of 2** -- the conditioned and unconditioned
+evaluates this network on a batch of 2 -- the conditioned and unconditioned
 rows of classifier-free guidance -- so the RTF of the whole flow stage is
 essentially 20 forward passes of what is written here.
 
@@ -18,20 +18,20 @@ Shape, for the captured 608-frame utterance:
     up   1:  cat(skip) 512->256, 4 transformers, Conv1d(3, stride 1)     608 -> 608
     final:   Block1D 256->256, Conv1d(1) 256->80
 
-16 ResnetBlock1D and **64 BasicTransformerBlock** per call.
+16 ResnetBlock1D and 64 BasicTransformerBlock per call.
 
 Two things make the TTNN version structurally cheaper than the reference rather
 than merely equivalent:
 
-**No transposes.** The reference lives in `[B, C, T]` for its convolutions and
+No transposes. The reference lives in `[B, C, T]` for its convolutions and
 `rearrange`s to `[B, T, C]` and back around every transformer stack -- 32
 contiguous copies per forward pass. `ttnn.conv1d` is channels-last and so are
 linear, layer_norm and attention, so the entire UNet stays in `[B, T, C]` and
 every one of those transposes disappears.
 
-**GroupNorm as a LayerNorm.** See `TtGroupNorm` -- it is not an approximation,
-it is the same statistic reached by a cheaper route, and on silicon it is more
-accurate than the native kernel.
+GroupNorm without the native kernel. `ttnn.group_norm` rejects these shapes;
+`TtGroupNorm` computes the same statistic as `torch.nn.GroupNorm` through a matmul
+against a group-indicator matrix.
 
 Masking: every captured call passes an all-ones mask, because CosyVoice-300M
 feeds the flow one utterance at a time (chunked in streaming, but each chunk is
@@ -52,16 +52,15 @@ from ..hifigan.conv import TtConv1d, accurate_compute_config
 from ..hifigan.upsample import TtConvTranspose1d
 from .encoder import _linear_fused  # same [out, in] -> [in, out] convention as `_linear` below
 
-# Flash attention for the estimator's self-attention blocks. On by default: measured
-# faster *and* more accurate on every gate (flow stage 0.707 -> 0.600 s, and all four
-# PCCs improved, components included). `COSYVOICE_SDPA=0` restores the explicit
-# matmul/softmax/matmul chain for A/B. See `TtAttention.__call__`.
+# Flash attention for the estimator's self-attention blocks, on by default: faster and
+# more accurate on every check (PERF.md Part II §2.1). `COSYVOICE_SDPA=0` restores the
+# explicit matmul/softmax/matmul chain. See `TtAttention.__call__`.
 COSY_SDPA = os.environ.get("COSYVOICE_SDPA", "1") == "1"
 
-# `bfloat8_b` measured 1.00x on the AR decoder, twice, because that stage is bound by
-# per-op latency rather than weight traffic. The flow decoder is a different regime --
-# real tensors, batch 2, 64 blocks x 10 Euler steps -- so it is worth its own
-# measurement rather than inheriting the decoder's verdict. `COSYVOICE_FLOW_BF8=1`.
+# `bfloat8_b` estimator weights, opt-in with `COSYVOICE_FLOW_BF8=1`. The AR decoder
+# is limited by per-op latency, so `bfloat8_b` does not speed it up (PERF.md Part II
+# §1.3); the estimator runs real tensor sizes (batch 2, 64 blocks x 10 Euler steps), so
+# it has its own flag.
 FLOW_WEIGHTS_BF8 = os.environ.get("COSYVOICE_FLOW_BF8", "0") == "1"
 
 
@@ -108,55 +107,24 @@ def _ln_weights(device, bag, name, dtype):
 class TtGroupNorm:
     """`torch.nn.GroupNorm(G, C)` on a channels-last `[B, T, C]` activation.
 
-    GroupNorm pools each group's statistic over **channels-in-group and time
-    jointly**. Reshaping `[B, T, C]` to `[B, G, T*(C/G)]` puts exactly that set on
-    the last axis, so the normalisation is a plain LayerNorm and the affine is a
-    per-channel multiply-add afterwards. No approximation is involved.
+    GroupNorm pools each group's statistic over channels-in-group and time jointly.
+    The native `ttnn.group_norm` rejects these shapes (`[2, 141, 256]` at `G = 8`) on
+    both architectures, so the statistic is computed here.
 
-    TTNN does ship a native `group_norm`, and it is the wrong choice here on all
-    three counts measured on Blackhole:
-
-      native DRAM group_norm              PCC 0.9999231835
-      native, use_welford=True            PCC 0.9998651553
-      this, permute + layer_norm          PCC 0.9999931119
-
-    It is also the only one of the three that needs no `core_grid` negotiation and
-    does not have to be rebuilt when T changes -- and T changes between the down,
-    mid and up stages of this very UNet. (The native op is not merely less accurate
-    here, it is unavailable: it rejects `[2, 141, 256]` at group 8 on both parts.)
-
-    **The reshape-permute route to that statistic is the estimator's single largest
-    cost**, and it took a traced measurement to see it. Per call, on Blackhole:
-
-        conv1d k3 256->256 @141    0.0320 ms
-        this, permute + layer_norm 0.2190 ms      <- 6.8x the convolution it follows
-        mish @141                  0.0076 ms
-
-    33 of these run per Euler step, ~36% of the whole estimator. Untraced it looks
-    ordinary (0.44 ms against the conv's 0.43) because dispatch dominates both -- the
-    same trap PERF.md records for the decode step.
-
-    The cost is the two `permute`s. Under `TILE_LAYOUT` they swap the tiled row axis,
-    which is a genuine re-tiling shuffle rather than a view, and the intermediate's
-    tiled face is `G x C/G` = `8 x 32` -- one tile carrying 8 useful rows out of 32.
-
-    So take the same statistic without changing shape at all. Each group's sum over
-    channels is a **matmul against a `[C, G]` indicator**; what remains is a reduction
-    over T, an axis that needs no re-tiling. The statistics come back as `[B, 1, G]`,
-    return to `[B, 1, C]` through the same indicator transposed, and normalise-plus-affine
-    folds into one multiply and one add:
+    The default form takes each group's channel sum as a matmul against a `[C, G]`
+    indicator; what remains is a reduction over T, an axis that needs no re-tiling.
+    The statistics come back as `[B, 1, G]`, return to `[B, 1, C]` through the
+    transposed indicator, and normalise-plus-affine folds into one multiply and one
+    add:
 
         out = x * (inv*w) + (b - mean*inv*w)
 
-    Measured traced, against the permute form and a torch reference:
-
-        [2, 141, 256]   0.2190 -> 0.0940 ms  (2.33x)   PCC 0.999988854
-        [2, 282, 256]   0.3975 -> 0.0978 ms  (4.06x)   PCC 0.999992251
-
-    Wormhole gives 2.07x and 3.33x. Note the matmul form is nearly **independent of T**
-    where the permute form doubles with it, which is the re-tiling cost showing itself.
-
-    `COSYVOICE_GN_PERMUTE=1` restores the permute form for A/B.
+    `COSYVOICE_GN_PERMUTE=1` restores the other form: reshape `[B, T, C]` to
+    `[B, G, T*(C/G)]`, so the normalisation is a plain LayerNorm. Under `TILE_LAYOUT`
+    its two permutes swap the tiled row axis, a re-tiling shuffle whose tiled face is
+    `G x C/G` = `8 x 32`, which makes it several times slower than the matmul form,
+    with a cost that grows with T where the matmul form's barely moves (PERF.md
+    Part II §2.3). 33 GroupNorms run per Euler step.
     """
 
     PERMUTE = os.environ.get("COSYVOICE_GN_PERMUTE") == "1"
@@ -217,15 +185,11 @@ class TtGroupNorm:
         var_raw = ttnn.subtract(ex2, m2)
         ttnn.deallocate(ex2)
         ttnn.deallocate(m2)
-        # E[x^2] - E[x]^2 is catastrophic cancellation waiting to happen: when the
-        # true variance is small relative to the mean's square, bfloat16 rounding
-        # can push this negative even though variance is mathematically >= 0.
-        # rsqrt of that -- silently, no exception -- is where zero_shot's real
-        # (non-golden) inputs produced an outright Inf mel (22795 of 50560
-        # elements) that the rest of the chain propagated as full-spectrum clipped
-        # noise. Every existing GroupNorm test uses one fixed golden geometry,
-        # which apparently never lands in the cancellation regime; a real,
-        # varying-length utterance did on its first real exercise.
+        # E[x^2] - E[x]^2 cancels catastrophically when the variance is small against
+        # the mean's square: bfloat16 rounding can push it negative, and rsqrt of a
+        # negative is an unraised Inf that the rest of the chain turns into
+        # full-spectrum clipped noise. The fixed golden geometry does not reach that
+        # regime; real varying-length prompts do. So the variance is clamped at zero.
         var = ttnn.relu(var_raw)
         ttnn.deallocate(var_raw)
         veps = ttnn.add(var, self.eps)
@@ -390,7 +354,7 @@ class TtBasicTransformerBlock:
     """norm1 -> self-attention -> residual -> norm3 -> feed-forward -> residual.
 
     `act_fn='gelu'` in the checkpoint selects diffusers' `GELU`, which is a plain
-    `Linear(256, 1024)` followed by the **erf** GELU -- not GEGLU and not the tanh
+    `Linear(256, 1024)` followed by the erf GELU -- not GEGLU and not the tanh
     approximation. `ttnn.gelu(fast_and_approximate_mode=False)` is the matching
     one; the approximate mode measured 0.99999 vs 0.99999_75 on Blackhole, a real
     if small difference over 64 blocks.

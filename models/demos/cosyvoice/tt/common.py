@@ -20,7 +20,7 @@ def load_golden(name: str, golden_dir: str | None = None) -> dict[str, np.ndarra
     """Load tests/golden/<name>.npz, resolving the dedup alias map.
 
     gen_golden.py stores byte-identical arrays once (step N's input KV cache is
-    step N-1's output verbatim), so a plain np.load would report missing keys.
+    step N-1's output verbatim), so a plain np.load would not find those keys.
     """
     d = golden_dir or GOLDEN_DIR
     path = os.path.join(d, name if name.endswith(".npz") else f"{name}.npz")

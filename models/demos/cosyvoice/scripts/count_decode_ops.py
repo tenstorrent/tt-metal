@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Count the TTNN ops in one AR decode step, by name.
 
-Once tracing has removed host dispatch and `bfloat8_b` weights have shown the step
-is nowhere near bandwidth-bound, what is left is per-op cost on one-row tensors --
-so the next optimisation is whichever op the step issues most of. That is a
-countable fact, not something to estimate from reading the code, and reading the
-code gets it wrong: the projections look like the bulk and are not.
+The traced decode step is limited by per-op cost on one-row tensors rather than by
+weight bandwidth (PERF.md Part II §1.3), so the op the step issues most of is the next
+target. Reading the code misleads here -- the projections look like the bulk and are
+not -- so this counts.
 
 Counting needs no device time. `ttnn` functions are module attributes, so wrapping
 them with a counter and running one decode body is enough.

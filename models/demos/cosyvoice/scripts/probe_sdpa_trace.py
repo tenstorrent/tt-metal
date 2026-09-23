@@ -3,25 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does `sdpa_decode` survive `begin_trace_capture`?
 
-`probe_sdpa_wiring.py` localised the model's accuracy loss precisely:
+Checks whether the fused decode attention replays correctly under a trace, against the
+same call untraced. Three questions, in order:
 
-    A  untraced fused vs untraced explicit    0.9995602176
-    B  traced fused   vs untraced fused       0.9176136440
-    C  traced explicit vs untraced explicit   1.0000000000
-
-The arithmetic is right (A) and the explicit path traces bit-exactly (C). What fails
-is the combination. `sdpa_decode` is a multi-core flash kernel: it splits the key axis
-across cores, each computes a partial softmax, and a reducer core combines them through
-inter-core semaphores. Semaphores and per-core work division are exactly the kind of
-state a replayed trace can get wrong -- and nothing about it raises.
-
-Three questions, in order:
-
-  1. Is the **first** replay right and later ones wrong? That is leftover state.
-  2. Is **every** replay wrong the same way? That is a capture-time work division.
-  3. Does forcing **one core per head-batch** fix it? If the cross-core reduction is
-     the problem, removing the reduction removes it -- at some cost in speed, which
-     is worth measuring rather than assuming fatal.
+  1. Is the first replay right and later ones wrong? That is leftover state.
+  2. Is every replay wrong the same way? That is a capture-time work division.
+  3. Does forcing one core per head-batch fix it? `sdpa_decode` splits the key axis
+     across cores and combines partial softmaxes through inter-core semaphores, so if
+     the cross-core reduction is the problem, removing it removes the fault.
 
     python3 models/demos/cosyvoice/scripts/probe_sdpa_trace.py
 """

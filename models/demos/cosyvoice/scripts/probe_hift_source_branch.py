@@ -1,37 +1,24 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The Wormhole streaming failure, down to one operator and one band of lengths.
+"""The Wormhole vocoder failure, down to one operator and one band of lengths.
 
-`probe_hift_isolate.py` vocoded a known-good mel at a sweep of lengths and found the
-failure is a **shape**, not the streaming cache's contents:
+On Wormhole, vocoding a known-good mel at some lengths saturates the waveform, and the
+per-stage walk (`probe_hift_isolate.py`) finds `src1` --
+`source_resblocks[1](source_downs[1](s_stft))`, at upsample stage 1 -- non-finite while
+its input and the other branches stay finite. The streaming path reaches that band
+because prepending the 20-frame `hift_mel` cache takes chunk 1 from 110 frames to 130.
 
-    L    f0        excitation   s_stft      conv_post    wav
-    120  211/297   0.030/0.063  0.061/0.46  5.20/29.8    0.041   ok
-    128  214/319   0.030/0.063  0.061/0.46  inf/inf      0.975   SATURATED
-    130  215/308   0.030/0.062  0.061/0.46  inf/inf      0.976   SATURATED
-    144  218/309   0.030/0.062  0.061/0.46  5.05/29.9    0.049   ok
+This drives the two modules directly, without the vocoder, to find:
 
-and its per-stage walk named the branch: `up0`, `up1` and `src0` stay finite while
-**`src1` is `inf`** -- `source_resblocks[1](source_downs[1](s_stft))`, at upsample stage 1.
-The excitation feeding it is normal (RMS 0.030, max 0.062) and so is its STFT, so a finite
-input is producing a non-finite output.
-
-The streaming path lands in that band because prepending the 20-frame `hift_mel` cache
-takes chunk 1 from 110 frames to 130. The cache is not corrupt and never was; it changes
-the *length*, and 130 is inside the band while 110 is outside it.
-
-This probe drops the vocoder entirely and drives the two modules directly, so it can sweep
-finely and say three things the full run cannot:
-
-  - **where the band starts and ends**, in `stft_frames = 64L + 1` rather than in L;
-  - **which operator** first produces `inf` -- the `k=1` down-projection, one of the six
+  - where the band starts and ends, in `stft_frames = 64L + 1` rather than in L;
+  - which operator first produces `inf` -- the `k=1` down-projection, one of the six
     dilated convolutions in the ResBlock, or a Snake activation between them;
-  - **whether Blackhole has the same band**, since the same script runs on both.
+  - whether Blackhole has the same band, since the same script runs on both.
 
 Input is synthetic but scale-matched to the measured `s_stft` (RMS 0.061, max 0.46). A
-finite, well-conditioned input that comes back non-finite is a kernel defect and needs no
-model context to report.
+finite, well-conditioned input that comes back non-finite is a kernel defect and needs
+no model context to report.
 
     python3 models/demos/cosyvoice/scripts/probe_hift_source_branch.py [--lengths ...]
 """

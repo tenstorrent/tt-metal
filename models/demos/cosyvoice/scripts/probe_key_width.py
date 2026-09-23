@@ -1,23 +1,14 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Does a decode step cost what its key width says, or what its **tile count** says?
+"""Does a decode step cost what its key width says, or what its tile count says?
 
-The in-place KV cache needs a buffer 32 rows wider than the window it serves, and
-measured on Blackhole that widening cost +1.21 ms on a 6.74 ms step -- 18 % more time
-for 8 % more data. Something other than volume is setting that price.
-
-The suspect is divisibility. 384 rows is 12 tiles; 416 is 13, which is prime. Every
-op on the key axis splits its tiles across cores, and a tile count that divides badly
-leaves one core holding an extra tile while the rest idle -- so the step pays for
-`ceil(tiles / cores)`, not for `tiles`. If that is what is happening, then 512 rows
-(16 tiles, highly composite) could be *cheaper* than 416, and the in-place design's
-+0.82 ms mechanism would go from buried to banked.
-
-If instead cost rises monotonically with width, the widening is simply volume, the
-in-place design cannot pay for itself at any scratch size, and that is the end of it.
-
-Either answer is worth having, and it is one sweep.
+The in-place KV cache needs a buffer wider than the window it serves, and that widening
+costs more than its share of the data. If cost follows how the key axis's tile count
+divides across cores, a wider buffer with a better-dividing tile count can be cheaper
+than a narrower one; if cost rises monotonically with width, the widening is volume.
+This sweeps the key width to tell the two apart (`TracedDecodeStepInPlace` documents
+the tile-count parity effect it finds).
 
     python models/demos/cosyvoice/scripts/probe_key_width.py
 """

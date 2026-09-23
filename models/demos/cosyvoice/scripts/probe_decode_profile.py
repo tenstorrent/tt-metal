@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Per-op-class cost of one AR decode layer, at the shapes it actually uses.
+"""Per-op-class cost of one AR decode layer, at the shapes it uses.
 
-`probe_op_floor.py` established a ~6.3 us floor for a trivial op and
-`probe_matmul_config.py` priced the four linears at 201 us per layer. That leaves
-~5.4 ms of an 8.25 ms step unaccounted for across ~280 non-linear ops, and "the KV
-cache is the largest remaining block" was an inference from tensor sizes rather than
-a measurement. This prices each class directly so the claim can be checked.
-
-Shapes are the real ones for d_model 1024, 16 heads, d_k 64, max_len 256:
+Prices each op class directly (`probe_op_floor.py` gives the per-op floor and
+`probe_matmul_config.py` the four linears), at d_model 1024, 16 heads, d_k 64,
+max_len 256:
 
     KV maintenance   slice / concat / copy on [1, 16, 256, 64]   (0.5 MB each)
     scores           [1,16,1,64] x [1,16,64,256]

@@ -3,20 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """ConvTranspose1d for HiFT's upsampling stages.
 
-TTNN has `conv1d`, `conv2d` and `conv_transpose2d` but **no native 1-D
-transpose** -- an odd asymmetry, since the forward `conv1d` exists as a 1-D
-specialisation and the precedent for the transposed twin is right there in the
-tree. So the 1-D transpose is expressed as a 2-D one with `H = 1`, which is the
-same trick istft.py uses for overlap-add and which was verified to work at
-`H=1, in_ch=16, k=16, stride=4`.
+TTNN has `conv1d`, `conv2d` and `conv_transpose2d` but no native 1-D transpose, so
+the 1-D transpose is expressed as a 2-D one with `H = 1`, the same form istft.py
+uses for overlap-add.
 
 HiFT upsamples twice, `upsample_rates [8, 8]` with `upsample_kernel_sizes
 [16, 16]` and `padding = (k - u) // 2 = 4`, taking the mel frame rate up by 64.
 The remaining factor of 4 comes from the iSTFT hop, for a total of 256 -- which
 matches the mel `hop_size`.
 
-Whether the `H=1` path carries large constant overhead is the measurement that
-would justify proposing a native `ttnn.conv_transpose1d`.
+The `H = 1` path dominates the vocoder's time (PERF.md Part II §3).
 """
 from __future__ import annotations
 

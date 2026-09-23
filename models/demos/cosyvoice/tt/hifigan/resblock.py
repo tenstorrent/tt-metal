@@ -93,10 +93,9 @@ class TtResBlock:
 
         OWNERSHIP: this frees only the intermediates it creates, never `x`. HiFT
         runs three ResBlocks over the *same* input per stage and averages them, so
-        a block that deallocated its input would hand the next one a freed tensor.
-        That is exactly what happened -- it passes in isolation and dies at
-        integration with `TT_FATAL: Input Tensor A is not allocated`, which names
-        the victim rather than the culprit.
+        a block that deallocated its input would hand the next one a freed tensor,
+        and the failure -- `TT_FATAL: Input Tensor A is not allocated` in the next
+        block -- names the victim rather than the culprit.
         """
         cur = x
         for i in range(self.n):

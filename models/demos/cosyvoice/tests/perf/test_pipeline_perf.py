@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end RTF -- the bring-up's headline perf gate: RTF < 0.5, then < 0.2.
+"""End-to-end RTF -- the bring-up's headline perf target: RTF < 0.5, then < 0.2.
 
 Real-time factor is compute seconds per second of audio produced. The three
 stages contribute very differently, and the split is the whole story:
 
-* the **LLM runs once per token**, and a second of speech is 50 tokens, so its
+* the LLM runs once per token, and a second of speech is 50 tokens, so its
   contribution is `50 / tok_s` -- it is the only stage whose cost scales with
   the length of the output rather than being amortised over it;
-* the **flow decoder** runs ten Euler steps over the whole utterance at once;
-* the **vocoder** runs once.
+* the flow decoder runs ten Euler steps over the whole utterance at once;
+* the vocoder runs once.
 
 So the flow and the vocoder get cheaper per second as utterances get longer,
 while the LLM does not. Reporting a single RTF without that breakdown would hide
@@ -179,9 +179,9 @@ def test_device_end_to_end_rtf(device):
     print(f"  TOTAL                                 = {total_s:6.3f} s   RTF {rtf:5.3f}")
     print(f"  LLM share of total: {100*llm_total_s/total_s:.1f}%")
 
-    # The gates, enforced. Every threshold is asserted -- a met one against the
-    # requirement itself, a missed one against its recorded band, both bounds. See
-    # `gates.py` for why a missed target is not an `xfail`.
+    # Every threshold is asserted -- a met one against the requirement itself, an unmet
+    # one against its recorded band, in both directions. See `gates.py` for why an unmet
+    # target is not an `xfail`.
     tok_s = 1e3 / llm_step_ms
     report(
         [

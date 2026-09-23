@@ -1,31 +1,27 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Is `ttnn.concat` along a *tiled* axis correct when the first operand is not tile-aligned?
+"""Is `ttnn.concat` along a tiled axis correct when the first operand is not tile-aligned?
 
-The streaming bisect named `hift_mel`, and the one thing that cache does is this:
+The streaming vocoder prepends the 20-frame `hift_mel` cache to each chunk:
 
     joined = ttnn.concat([state.hift_mel, mel], dim=1)     # [1, 20, 80] ++ [1, 110, 80]
 
-`dim=1` is the second-to-last axis, so under `TILE_LAYOUT` it is **tiled**: rows live in
-32-row tiles. A 20-row first operand means the second operand's row 0 has to land at row 20
-of the result -- 12 rows into a tile that the first operand only partly fills. That is a
-re-tiling shuffle, not a memcpy, and it is exactly the kind of thing that can be right on
-one architecture and wrong on another.
+`dim=1` is the second-to-last axis, so under `TILE_LAYOUT` it is tiled: rows live in
+32-row tiles. With a 20-row first operand, the second operand's row 0 goes to row 20 of
+the result, 12 rows into a tile the first operand only partly fills -- a re-tiling
+shuffle, not a memcpy, and the kind of thing that can be right on one architecture and
+wrong on another.
 
-`probe_streaming_amplitude.py` cannot see this. It records the mel RMS **inside**
-`flow_chunk`, before any streaming machinery runs, so the concat's output was never
-measured -- only its input and, 40 convolutions later, its consequence.
+Two controls:
 
-Two controls make the answer unambiguous:
-
-  - **row-index values.** Every element of row `i` is `i`, so a wrong result names the rows
-    it actually returned instead of merely failing a tolerance. Values stay under 256 so
-    bfloat16 represents each row index exactly (above 256 the spacing is 2 and a "mismatch"
-    would be rounding, not corruption -- a trap this probe's predecessor fell into).
-  - **the sweep covers aligned and unaligned splits alike.** If 32/64/96 pass and 20 fails,
-    the axis alignment is the variable. If everything passes, concat is exonerated and the
-    failure is downstream -- see `probe_hift_isolate.py` for that half.
+  - row-index values. Every element of row `i` is `i`, so a wrong result names the rows
+    it returned instead of merely failing a tolerance. Values stay under 256 so bfloat16
+    represents each row index exactly; above 256 the spacing is 2, and a mismatch would
+    be rounding, not corruption.
+  - aligned and unaligned splits alike. If 32/64/96 pass and 20 fails, the axis
+    alignment is the variable; if everything passes, the fault is downstream
+    (`probe_hift_isolate.py`).
 
     python3 models/demos/cosyvoice/scripts/probe_concat_rows.py
 """
@@ -47,11 +43,10 @@ CASES = [
     (31, 110),
     (32, 110),  # aligned
     (33, 110),
-    (34, 76),  # the mel_overlap fade's split, which the bisect exonerated
+    (34, 76),  # the mel_overlap fade's split
     (64, 110),  # aligned
-    (96, 150),  # aligned. Total stays under 256 -- see the bfloat16 note above; an
-    # earlier version ran 96 ++ 186 and reported row 257 as corrupt, when 257 simply
-    # is not representable and 256 is the correct rounding.
+    (96, 150),  # aligned. The total stays under 256, where bfloat16 represents
+    # every row index exactly (see the docstring).
 ]
 WIDTHS = (80, 1)  # 80 = mel channels; 1 = the waveform/source axis the fades use
 

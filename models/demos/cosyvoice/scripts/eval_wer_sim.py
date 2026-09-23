@@ -23,7 +23,7 @@ Two deliberate substitutions, both documented rather than silent:
 
   1. Whisper is used for every language, so Chinese/Cantonese/Japanese CER comes
      from Whisper rather than Paraformer. Whisper is weaker on zh than Paraformer,
-     so the CER reported here is pessimistic -- an upper bound on the true error.
+     so the CER reported here is pessimistic, overstating the true error.
   2. SIM uses microsoft/wavlm-base-plus-sv (WavLMForXVector, on the HF hub) rather
      than the Drive-hosted wavlm-large SV checkpoint. Same family, same cosine-of-
      x-vectors formulation, fetched reproducibly.
@@ -77,7 +77,7 @@ def _to_simplified(text: str) -> str:
     said.
 
     Measured: the PyTorch reference's own audio for the golden utterance scored
-    **35.71 % CER** because Whisper emitted Traditional, while TTNN audio for the
+    35.71 % CER because Whisper emitted Traditional, while TTNN audio for the
     same sentence scored 7.14 % purely because it drew Simplified. Two implementations
     that sound the same, a 5x apparent difference, and the model had nothing to do
     with it. Folding first drops the reference to 14.29 % and TTNN to 7.14 %, both
@@ -350,8 +350,8 @@ def aggregate(run: dict) -> dict:
         "tokens_per_second_mean": mean([r.get("tokens_per_second") for r in ok]),
     }
 
-    # Quality and perf gates, evaluated but never enforced here -- the pytest perf
-    # suite owns enforcement. This is the number, stated plainly.
+    # Quality and perf thresholds, evaluated but not enforced here; the pytest perf
+    # suite enforces them.
     def gate(value, ok):
         """A metric that was not measured is 'n/a', NOT a failure.
 
@@ -403,14 +403,10 @@ def main() -> int:
         take a reference wav.
 
         SFT and instruct speak as a checkpoint-internal speaker with no reference
-        recording at all, so they get None. An earlier version anchored them to the
-        same mode's Chinese utterance -- which is wrong, because the language sweep
-        deliberately uses a DIFFERENT speaker per language (英文女 for en, 中文女 for
-        zh, ...). That compared two different voices and duly reported ~39-49
-        similarity, a number that looked like a quality problem and was actually a
-        harness bug. Scoring SFT/instruct properly needs two utterances from the
-        same speaker; until the sweep generates those, reporting nothing is the
-        honest answer.
+        recording at all, so they get None. Another utterance of the same mode is
+        not a valid reference either: the language sweep uses a different speaker
+        per language (英文女 for en, 中文女 for zh, ...). Scoring SFT/instruct needs two
+        utterances from the same speaker, which the sweep does not generate.
         """
         if r["mode"] == "zero_shot":
             return zero_shot_prompt

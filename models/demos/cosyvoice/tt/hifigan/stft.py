@@ -11,7 +11,7 @@ HiFT's `decode` opens by transforming the harmonic excitation:
 which is `torch.stft(x, 16, 4, 16, window=hann)` -- so `center=True` and
 `pad_mode='reflect'` by default.
 
-At n_fft = 16 this decomposes the same way the inverse does, and lands on the
+At n_fft = 16 this decomposes the same way the inverse does, and arrives at the
 same 18-row shape:
 
     X[k,t] = sum_n frames[n,t]*w[n] * exp(-2*pi*i*k*n/N)
@@ -21,7 +21,7 @@ so with C[k,n] = cos(2*pi*k*n/N) and S[k,n] = sin(2*pi*k*n/N),
     real = C @ (windowed frames),  imag = -S @ (windowed frames)
 
 and stacking `[C ; -S]` as one `[18, 16]` matrix produces `[real ; imag]`
-**directly in the concatenated layout `decode` wants** -- the concat is free, it
+directly in the concatenated layout `decode` wants -- the concat is free, it
 is just how the matmul comes out.
 
 Framing plus windowing is a single strided conv1d with a diagonal kernel
@@ -119,15 +119,12 @@ class TtStft:
     def _prepared(self, x, length: int, batch_size: int):
         """Pre-tilized framing weight, cached per input geometry.
 
-        Same reasoning as `TtConv1d._prepared`, and the same consequence: handing
-        `ttnn.conv1d` a host-layout weight makes it redo the layout transform on every
-        call, which is host traffic, which is what a trace forbids. Until this was
-        hoisted out, the vocoder could not be captured at all -- capture died on
-        `Writes are not supported during trace capture` inside this one op.
-
-        It buys nothing on its own (measured `1.00x` untraced). Its whole value is
-        making `TtHiFTGenerator.decode` traceable, which is worth `3.3x` on Blackhole
-        and `1.6x` on Wormhole. Output is bit-identical either way (`max|d| 0.000e+00`).
+        Same reasoning as `TtConv1d._prepared`: handing `ttnn.conv1d` a host-layout
+        weight makes it redo the layout transform on every call, which is host traffic,
+        which a trace forbids -- without this, capture fails inside this op with
+        `Writes are not supported during trace capture`. It buys nothing untraced; its
+        value is making `TtHiFTGenerator.decode` traceable. Output is bit-identical
+        either way.
 
         `length` is the *padded* length, since that is what the conv sees.
         """

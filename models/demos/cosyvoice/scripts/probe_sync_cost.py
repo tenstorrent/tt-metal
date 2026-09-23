@@ -1,18 +1,12 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Would 2-CQ double-buffering pay here? Measure the sync baseline first.
+"""Would 2-CQ double-buffering pay here? Measures the idle `synchronize_device` cost.
 
-The cookbook's rule, from the TTM-R1 bring-up: `synchronize_device` on an *idle*
-queue costs ~0.155 ms on Wormhole N300s, which exceeded the ~0.12 ms host-to-device
-transfer it was hiding -- so pipelining measured slower than not pipelining.
-
-CosyVoice's per-token tail is 0.352 ms, of which the embedding row going back to the
-device is 0.092 ms. That is what a second command queue could hide. So the question
-is entirely whether an idle `synchronize_device` on **Blackhole** costs less than
-0.092 ms; if it does not, the pipeline loses before it is written.
-
-Cheaper to measure the precondition than to build the pipeline and measure that.
+A second command queue could hide the embedding row's host-to-device transfer in the
+per-token tail (PERF.md Part II §1.6). That only pays if a `synchronize_device` on an
+idle queue costs less than the transfer it hides, so this measures that cost on the
+local board before any pipeline is built.
 
     python models/demos/cosyvoice/scripts/probe_sync_cost.py
 """

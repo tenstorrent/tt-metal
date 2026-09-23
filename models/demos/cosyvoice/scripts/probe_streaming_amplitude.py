@@ -1,30 +1,15 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Where does the streamed waveform's amplitude go wrong on Wormhole?
+"""Where does a streamed waveform's amplitude go wrong?
 
-`test_device_streamed_matches_non_streamed` fails on n300 with mel-space PCC `0.218`
-against a `0.85` gate, and passes on both Blackhole boards at `0.9019`. An earlier pass
-recorded it as arch-specific and left it there.
+Prints the amplitude of every chunk and of every cache carried across a seam, on either
+architecture. Three outcomes point different ways:
 
-The diagnostic the test already prints says it is not a subtle numerical difference:
-
-    RMS  streamed 0.63250   non-streamed 0.04970
-
-**The streamed audio is 12.7x louder.** `0.63` RMS is clipping territory; `0.0497` is
-ordinary speech. Something is contributing a large wrong signal rather than a slightly
-wrong one, which is a much easier class of bug to find -- and the shape of it (fine on one
-architecture, wrong on another) points at a buffer that is read before it is written, or
-one whose contents survive from somewhere they should not.
-
-So: print the amplitude of **every chunk** and of **every cache carried across a seam**,
-and run the identical script on both architectures. Three outcomes, each pointing
-somewhere different:
-
-  - chunk 0 already loud            -> not the seam logic at all; the first flow/vocoder
-                                       call differs, and the caches are innocent.
-  - chunk 0 fine, chunk 1+ loud     -> the carry is the problem; the cache RMS says which
-                                       of the three.
+  - chunk 0 already loud            -> not the seam logic; the first flow/vocoder call
+                                       differs, and the caches are not involved.
+  - chunk 0 fine, chunk 1+ loud     -> the carry is the problem; the cache RMS says
+                                       which of the three.
   - all chunks fine, total loud     -> the concatenation or the fade, not the synthesis.
 
     python3 models/demos/cosyvoice/scripts/probe_streaming_amplitude.py

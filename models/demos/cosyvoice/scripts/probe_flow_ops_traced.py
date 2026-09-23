@@ -1,36 +1,24 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The flow estimator's per-block cost with dispatch removed -- the only version that can
-locate Wormhole's penalty.
+"""The flow estimator's per-block cost with dispatch removed.
 
-`probe_flow_ops.py` timed each block class with a `synchronize_device` around it and found
-Wormhole **faster than Blackhole on every one**:
+Untraced, a per-call wall time on this model measures host dispatch as much as the
+device, and can invert the architecture ranking: `probe_flow_ops.py` finds Wormhole
+faster than Blackhole on every block class untraced, while the traced stage is slower
+on Wormhole (PERF.md §3.1). So this captures each block class in its own trace,
+replays it, and divides; `REPS` calls per trace amortise the one `execute_trace`
+command, leaving device time.
 
-    whole estimator, untraced    Blackhole 85.80 ms    Wormhole 70.80 ms
-    transformer @ T=141                    0.707                 0.601
-    resnet 256->256 @141                   2.331                 1.925
-
-while the *traced* stage is 0.683 s on Wormhole against 0.375 s on Blackhole -- 1.82x the
-other way. Both facts are consistent, and PERF.md already records why for the decode step:
-**untraced, this model is host-dispatch-bound and the accelerator barely participates**, so
-a per-call wall time measures the host. The architecture gap only exists once tracing
-removes dispatch.
-
-So capture each block class in its own trace, replay it, and divide. `REPS` calls per trace
-amortise the one `execute_trace` command, so what is left is device time.
-
-Two properties of the measurement worth stating, because they decide what it is good for:
-
-  - the block is called `REPS` times on the **same** input, and each output is deallocated
-    inside the traced body. That is a valid graph, and it measures the block rather than a
-    chain, which is what a per-class attribution needs.
+  - the block is called `REPS` times on the same input, and each output is deallocated
+    inside the traced body -- a valid graph that measures the block rather than a
+    chain, which a per-class attribution needs;
   - trace capture bakes tensor addresses, so every buffer is pre-allocated before
-    `begin_trace_capture` -- the constraint CLAUDE.md sec.7 records.
+    `begin_trace_capture`.
 
 If every class comes back at roughly the same ratio, there is no per-op target on this
-stage and the gap is the core count (130 vs 64 = 2.03x). If one class is far worse than the
-rest, that class is the work.
+stage and the gap is the core count (130 vs 64 = 2.03x). If one class is far worse than
+the rest, that class is the work.
 
     python3 models/demos/cosyvoice/scripts/probe_flow_ops_traced.py [--reps 16]
 """

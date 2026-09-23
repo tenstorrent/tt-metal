@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The vocoder's exit criterion: mel -> waveform through the whole HiFT vocoder on device.
 
-The bar is "mel → waveform PCC ≥ 0.99, **zero host ops**". This is that test. It feeds the exact mel and excitation the reference consumed --
+The bar is "mel → waveform PCC ≥ 0.99, zero host ops". This is that test. It feeds the exact mel and excitation the reference consumed --
 captured in `hift.decode` -- and compares the waveform it produced.
 
 Weights come from `scripts/export_weights.py`, not from a live CosyVoice module,
@@ -51,7 +51,7 @@ def test_exported_weights_are_self_consistent():
     assert tuple(bag.sub("ups.1").tensor("weight").shape) == (256, 128, 16)
     assert tuple(bag.sub("conv_post").tensor("weight").shape) == (18, 128, 7)
 
-    # The source branch must land on exactly the lengths the main path reaches.
+    # The source branch must reach exactly the lengths the main path reaches.
     t = shape_trace(282)
     for i, stage in enumerate(t["stages"]):
         k = bag.sub(f"source_downs.{i}").tensor("weight").shape[-1]

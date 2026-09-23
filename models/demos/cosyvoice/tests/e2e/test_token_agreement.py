@@ -1,24 +1,25 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Exact token agreement -- the bring-up's first gate.
+"""Exact token agreement -- the bring-up's first acceptance check.
 
 This comes before everything else.
 
-**Top-k overlap is not agreement.** Two gates, both deterministic, neither
-involving the sampler:
+Top-k overlap is not agreement. Two checks, both deterministic, neither involving
+the sampler:
 
-1. **Teacher-forced argmax match.** Feed the reference's own hidden states and
-   the device's through the same head, and compare `argmax(logits)` at every
-   position. No sampling, no drift, no compounding -- a position either agrees or
-   it does not. Gate: **> 95 %**.
-2. **Free-running greedy decode.** `top_k = 1` on both sides from the same prefix,
+1. Teacher-forced argmax match (`test_gate1_*`). Feed the reference's own hidden
+   states and the device's through the same head, and compare `argmax(logits)` at
+   every position. No sampling, no drift, no compounding -- a position either agrees
+   or it does not. Threshold: > 95 %.
+2. Free-running greedy decode (`test_gate2_*`). `top_k = 1` on both sides from the
+   same prefix,
    compared as full sequences. Reported as exact-match prefix length and
    full-sequence match. This one *does* compound: one disagreement diverges
    everything after it, which is exactly what makes it worth measuring separately.
 
-RAS sampling is stochastic and is never the accuracy gate -- it is reported for
-audio quality only.
+RAS sampling is stochastic and never decides accuracy -- it is reported for audio
+quality only.
 """
 from __future__ import annotations
 
@@ -62,12 +63,12 @@ def agreement(a: torch.Tensor, b: torch.Tensor) -> dict:
 
 
 # --------------------------------------------------------------------------
-# host tier -- the reference's own greedy stream, so the gate has a target
+# host tier -- the reference's own greedy stream, the greedy check's target
 # --------------------------------------------------------------------------
 def torch_greedy(w, meta, prefix_xs: torch.Tensor, n_steps: int) -> list[int]:
     """Greedy decode in plain torch from the flat weight export.
 
-    This is the comparison target for gate 2. It has to exist separately from the
+    This is the greedy check's comparison target. It has to exist separately from the
     captured goldens because the reference *sampled* -- its recorded token stream
     is one draw from RAS, not the greedy stream, so it cannot be compared against
     a greedy device run.
@@ -90,7 +91,7 @@ def torch_greedy(w, meta, prefix_xs: torch.Tensor, n_steps: int) -> list[int]:
 @needs_weights
 @needs_golden
 def test_teacher_forced_argmax_on_the_reference_hidden_states():
-    """Sanity floor for gate 1: the head applied to the reference's own hidden
+    """Sanity floor for the teacher-forced check: the head applied to the reference's own hidden
     states must agree with itself, and must produce tokens in range.
 
     Establishes that the 209 prefill positions are a usable comparison surface
@@ -109,7 +110,7 @@ def test_teacher_forced_argmax_on_the_reference_hidden_states():
 @needs_weights
 @needs_golden
 def test_torch_greedy_is_deterministic():
-    """Gate 2's target must be reproducible or the gate means nothing."""
+    """The greedy check's target must be reproducible, or the check means nothing."""
     w, meta = _weights()
     prefix = as_torch(load_golden("llm.ar_forward_chunk")["call0.in_xs"])
     a = torch_greedy(w, meta, prefix, 6)
@@ -119,13 +120,13 @@ def test_torch_greedy_is_deterministic():
 
 
 # --------------------------------------------------------------------------
-# device tier -- the gates themselves
+# device tier -- the checks themselves
 # --------------------------------------------------------------------------
 @needs_weights
 @needs_golden
 @needs_l1_small
 def test_gate1_teacher_forced_argmax_match(device):
-    """**§6 gate 1.** Argmax agreement at every one of the 209 prefill positions.
+    """The teacher-forced check: argmax agreement at every one of the 209 prefill positions.
 
     Teacher-forced: both sides see the reference's inputs, so nothing compounds
     and each position is an independent verdict. That is what makes >95 % a
@@ -179,7 +180,7 @@ def test_gate1_teacher_forced_argmax_match(device):
 @needs_l1_small
 @pytest.mark.parametrize("n_steps", [24])
 def test_gate1b_teacher_forced_argmax_through_the_kv_cache(device, n_steps):
-    """**§6 gate 1, extended to the decode path.** Gate 1 above only exercises
+    """The teacher-forced check, extended to the decode path. The one above only exercises
     *prefill*; every token after the first goes through the cached path, which is
     where the fixed-width buffer, the right-alignment and the growing positional
     window all live. None of that is covered by a prefill-only sweep.
@@ -258,9 +259,9 @@ def test_gate1b_teacher_forced_argmax_through_the_kv_cache(device, n_steps):
 @needs_l1_small
 @pytest.mark.parametrize("n_steps", [16])
 def test_gate2_free_running_greedy(device, n_steps):
-    """**§6 gate 2.** `top_k=1` on both sides from the same prefix.
+    """The greedy check: `top_k=1` on both sides from the same prefix.
 
-    Unlike gate 1 this compounds: the device's token at step k becomes its input
+    Unlike the teacher-forced check this compounds: the device's token at step k becomes its input
     at step k+1, so one disagreement diverges the rest. Reported as the exact
     match prefix length rather than a pass/fail rate, because that is the number
     that actually describes the divergence.
@@ -327,7 +328,7 @@ def test_gate2_free_running_greedy(device, n_steps):
             "    and it is why gate 1b exists: teacher forcing with the reference's own\n"
             "    non-degenerate token stream is what actually exercises the cached path."
         )
-    # A compounding gate cannot sensibly demand 100%: one bfloat16 tie-break at a
+    # A compounding check cannot sensibly demand 100%: one bfloat16 tie-break at a
     # near-degenerate logit pair diverges everything after it. The prefix length
     # is the number that describes the divergence, and it is what gets reported.
     assert a["prefix"] >= 1, f"diverged on the very first token: {a}"

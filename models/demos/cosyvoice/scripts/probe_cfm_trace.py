@@ -6,9 +6,9 @@
 A traced solver that returns a bad answer has exactly two failure modes, and they
 need different fixes:
 
-1. **the captured graph is wrong** -- replay does not reproduce what an untraced
+1. the captured graph is wrong -- replay does not reproduce what an untraced
    call computes from the same inputs;
-2. **the refresh is wrong** -- the graph is fine, but writing new values into the
+2. the refresh is wrong -- the graph is fine, but writing new values into the
    persistent input buffers between replays does not reach the ops that read them.
 
 Guessing between them costs a device round trip per guess. This asks all three

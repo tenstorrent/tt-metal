@@ -1,26 +1,18 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Is the flow decoder's cost non-monotonic in mel length, the way the AR step is?
+"""Is the flow decoder's cost non-monotonic in mel length, the way the AR step's is?
 
-An earlier decode sweep found that a step costs what the *parity* of its key-axis tile count says,
-not what its size says: 10/12/14/16 tiles cost 6.32/6.73/7.09/7.99 ms while 11/13/15
-cost 7.33/7.92/8.54. Padding a tensor up to an even tile count was worth about a
-millisecond on a 6.7 ms step.
+A decode step's cost tracks the parity of its key-axis tile count rather than its size
+(`TracedDecodeStepInPlace`), so padding to an even tile count can pay. The flow's
+activations are `[B, T, C]` with `T` on a tiled axis, and the captured utterance's 282
+mel frames pad to 9 tiles, an odd count; if the same effect applies, padding the solver
+to 320 frames (10 tiles) pays despite moving 13 % more data. The flow runs much larger
+tensors than the AR step, so if it is compute-limited, 13 % more data is 13 % more
+time.
 
-The flow is now the second-largest stage -- 0.602 s of a 1.675 s total, 36 % -- and its
-activations are `[B, T, C]` with `T` on a tiled axis. This utterance is **282 mel
-frames, which pads to 9 tiles: odd**. If the same effect applies, padding the solver to
-320 frames (10 tiles) would be a pure win despite moving 13 % more data.
-
-Whether it applies is a real question rather than a formality, because the two stages
-sit in different regimes. The AR step is dispatch-bound on tiny tensors, where an extra
-tile costs almost nothing to move and a great deal to schedule badly. The flow moves
-`[2, 282, 320]`-scale activations through 10 Euler steps, and if it is compute-bound
-then 13 % more data is simply 13 % more time and the idea is dead.
-
-So: sweep the length, and read the shape of the curve rather than any single point.
-Saw-toothed means build it; smooth and rising means stop.
+This sweeps the length. Read the shape of the curve rather than any single point:
+saw-toothed means pad, smooth and rising means do not.
 
     python models/demos/cosyvoice/scripts/probe_flow_length.py
 """

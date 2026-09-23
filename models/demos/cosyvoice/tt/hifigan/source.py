@@ -5,48 +5,33 @@
 
 CosyVoice-300M runs at 22050 Hz, which selects `SineGen` (type 1) rather than
 `SineGen2` -- the implementation that integrates phase with a cumsum over the
-**audio-rate** signal, 72 192 samples for 3.3 s of speech.
+audio-rate signal, 72 192 samples for 3.3 s of speech.
 
-Precision, measured on silicon
-------------------------------
-This cumsum was flagged up front as a precision risk. It is a larger one than
-expected, and in two independent ways -- both invisible to this
-module's own short PCC tests and both found only end to end.
+Precision
+---------
+1. The phase cumsum. `ttnn.cumsum` is far less accurate than torch's over a full
+utterance -- enough to randomise the harmonic phase by its end -- while short
+tests (T = 1024, 8192) cannot see it. `phase_mod1()` reduces each block mod 1
+before accumulating, which keeps every partial sum O(1), and is also faster.
+PERF.md Part II §3.1 has the figures and `docs/VALIDATION.md` the upstream status.
 
-**1. `ttnn.cumsum` is far less accurate than torch's.** Against an fp64 reference
-over the real 72192-sample f0, on Blackhole:
-
-    device cumsum, fp32    max|d| 5.62e-01    (t=1k 2.3e-07, t=36k 0.114)
-    torch  cumsum, fp32    max|d| 2.44e-04
-
-Two thousand times worse. Since phase is `2*pi * (cumsum mod 1)`, an absolute
-error of 0.56 is more than half a cycle: the harmonic bank is randomised by the
-end of the utterance. At T=1024 and T=8192 the error is ~1e-5 and invisible.
-`phase_mod1()` fixes it by reducing each block total mod 1 before accumulating,
-which keeps every partial sum O(1) instead of O(T) -- measured 0.843 -> 0.99999745
-on the captured f0, and it is also the *faster* path; see PERF.md. (A previous
-version of this note claimed the blocked scan was unnecessary and would be
-*worse*. That was measured against torch on the host, where it is true; on device
-it is the difference between working and not.)
-
-**2. f0 error integrates, so the excitation cannot be reproduced from scratch.**
+2. f0 error integrates, so the excitation cannot be reproduced from scratch.
 Phase drift is `sum(delta_f0)/sr` over samples, so holding it under 0.1 cycle
-across 72192 samples needs a mean f0 error below **0.03 Hz** -- 1.5e-4 relative at
-200 Hz, about 13 mantissa bits. The device's f0 predictor lands at ~16 Hz max
+across 72192 samples needs a mean f0 error below 0.03 Hz -- 1.5e-4 relative at
+200 Hz, about 13 mantissa bits. The device's f0 predictor reaches ~16 Hz max
 error even with fp32 weights and activations, because Tensix HiFi4 is four
 bfloat16 passes rather than true fp32.
 
-That is not a defect to fix; it is a property of the model. **Sample-level
-waveform comparison is only meaningful with the reference source injected**, which
-is what the PCC gates do. For a self-computed source the honest metrics are the
-energy envelope and the spectrum, and those hold up -- the audio is correct, its
-phase is simply a different valid realisation, exactly like the RNG draws below.
+That is a property of the model, not a defect. Sample-level waveform comparison is
+meaningful only with the reference source injected, which is what the PCC tests
+do. For a self-computed source the meaningful metrics are the energy envelope and
+the spectrum, and those hold: the audio is correct, and its phase is a different
+valid realisation, like the RNG draws below.
 
-One structural fact worth recording even though it is not used here: f0 is
-upsampled by `nn.Upsample(scale_factor=256)`, whose default mode is *nearest*, so
-the audio-rate f0 is piecewise-constant in blocks of 256 -- 282 distinct values
-driving 72 192 samples. The scan is therefore 256x redundant. That is a
-performance lever for Stage 2/3, not a correctness fix.
+f0 is upsampled by `nn.Upsample(scale_factor=256)`, whose default mode is nearest,
+so the audio-rate f0 is piecewise-constant in blocks of 256 -- 282 distinct values
+driving 72 192 samples -- and the scan is 256x redundant. That is an unused
+performance lever, not a correctness issue.
 
 Randomness
 ----------
@@ -99,28 +84,19 @@ class TtSineGen:
     def phase_mod1(self, F):
         """`cumsum(F, dim=1) mod 1`, kept accurate over a full utterance.
 
-        A plain `ttnn.cumsum` is not good enough here, and the reason is worth
-        stating precisely because the naive version passes every short test.
-        Measured on Blackhole against an fp64 reference over 72192 samples:
+        One `ttnn.cumsum` over the whole utterance is not accurate enough: its error
+        grows with the scan length, and at 72 192 samples it exceeds half a cycle of
+        phase (PERF.md Part II §3.1), while at T = 1024 or 8192 it is ~1e-5.
 
-            device cumsum, fp32    max|d| 5.62e-01   (t=1k 2.3e-07, t=36k 0.114)
-            torch  cumsum, fp32    max|d| 2.44e-04
+        Only the value mod 1 is ever used, so the accumulator never needs to reach
+        650. Summing within short blocks, reducing each block total mod 1, and
+        accumulating those keeps every partial sum O(1), and
+        `(a + b) mod 1 == ((a mod 1) + (b mod 1)) mod 1` makes it exact. Precision
+        then does not depend on the utterance length.
 
-        Two thousand times worse than torch's, and since the phase is
-        `2*pi * (cumsum mod 1)`, an absolute error of 0.56 is **more than half a
-        cycle** -- the harmonic bank is randomised by the end of the utterance. At
-        T=1024 and T=8192 the error is ~1e-5 and invisible, which is exactly why
-        this survived the module's own PCC tests and only surfaced end-to-end.
-
-        The fix is arithmetic, not numerical: **only the value mod 1 is ever used**,
-        so the accumulator never needs to reach 650. Summing within short blocks,
-        reducing each block total mod 1, and accumulating those keeps every partial
-        sum O(1) -- and `(a + b) mod 1 == ((a mod 1) + (b mod 1)) mod 1` makes it
-        exact. Precision then stops depending on the utterance length at all.
-
-        Do not "simplify" this back to one `ttnn.cumsum`: it is slower as well as
-        wrong. The op parallelises only over the axes it is not scanning, so a single
-        long scan gets one core; blocking is what gives it rows to spread. See PERF.md.
+        It is also faster than one `ttnn.cumsum`, which parallelises only over the
+        axes it is not scanning, so a single long scan gets one core; blocking gives
+        it rows to spread.
         """
         b, t, c = F.shape
         blk = self.BLOCK
@@ -162,7 +138,7 @@ class TtSineGen:
 
         phase_vec / noise are the captured RNG draws; pass them in PCC tests.
 
-        **f0 arrives in fp32 or the output is noise.** Not because the arithmetic
+        f0 arrives in fp32 or the output is noise -- not because the arithmetic
         here is delicate, but because f0 error integrates: bfloat16 at 200 Hz
         quantises to 0.78 Hz, and 0.78 Hz over 72192 samples is 2.5 whole cycles of
         phase. The input is widened rather than trusted.
