@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -24,13 +25,11 @@ void kernel_main() {
     const auto s1 = TensorAccessor(tensor::dst);
     Noc noc;
     DataflowBuffer dfb_out0(dfb::out0);
-    DataflowBuffer dfb_pad(dfb::pad);
+    Scratchpad<uint32_t> pad(scratch::pad);
 
     const uint32_t tile_size = dfb_out0.get_tile_size();
 
-    dfb_pad.reserve_back(1);  // in this kernel we are not pushing anything into DFBs, just using the space
-
-    uint32_t pad_buffer_l1_addr = dfb_pad.get_write_ptr();
+    uint32_t pad_buffer_l1_addr = pad.get_base_address();
 
     // Fill pad tile with pad value
     volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
@@ -38,6 +37,12 @@ void kernel_main() {
     for (uint32_t z = 0; z < num_elems; z++) {
         pad_buffer[z] = pad_value;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC writes below source the pad tile
+    // from TL1 directly. Flush the filled tile so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(pad_buffer_l1_addr), static_cast<size_t>(tile_size));
+#endif
 
     uint32_t src_tile_id = 0;
     uint32_t dst_tile_id = 0;

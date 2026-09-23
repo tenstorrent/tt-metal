@@ -114,14 +114,6 @@ STANDARD_SWEEP_OPS = sorted(
     key=lambda op: op.name,
 )
 
-# Approximate tanh is a 3-segment SFPLUT, and its error clears the default 5% rtol only
-# where the output format's own tolerance is looser than the LUT is coarse. MEASURED on a
-# Wormhole n150: all 24 Bfp8_b/Bfp4_b-output cases pass over eleven runs (unseeded stimuli,
-# so each run is a fresh sample), while all 56 Float16/Float16_b/Float32-output cases fail.
-# So the skip below is keyed on the output format rather than withholding the op outright.
-_APPROX_TANH_TOLERANT_OUTPUTS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
-
-
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
 # per-format default in passed_test.
 CUSTOM_TOLERANCES = {
@@ -373,20 +365,6 @@ def test_eltwise_unary_sfpu(
 
     _skip_coverage_unsupported(mathop)
 
-    if (
-        mathop == MathOperation.Tanh
-        and approx_mode == ApproximationMode.Yes
-        and formats.output_format not in _APPROX_TANH_TOLERANT_OUTPUTS
-    ):
-        # An approximation path does exist -- a 3-segment SFPLUT in calculate_tanh -- so
-        # this is an accuracy limit, not a missing kernel. Narrowed to the outputs that
-        # actually fail; see _APPROX_TANH_TOLERANT_OUTPUTS for the measurement.
-        pytest.skip(
-            reason="Approximate tanh is a 3-segment LUT whose error exceeds the default "
-            "5% rtol on Float16/Float16_b/Float32 outputs; it needs an approx-mode "
-            "tolerance, which CUSTOM_TOLERANCES cannot express (it is keyed on the op)."
-        )
-
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or
     # Float32->Float16, while the standard profile allows only Float32->Float32.
@@ -423,75 +401,44 @@ _EDGE_SWEEP_OPS = sorted(
 )
 
 # What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
-# still executes and reports XPASS if the behaviour changes. Listed exhaustively per
-# (input, output, dest_acc) so a combination drifting in or out shows up as a diff here.
-# Sign(-0.0) and Heaviside(-0.0) used to sit here: SFPSETCC is specified only for inputs that
-# are neither negative zero nor NaN, so they were outside the documented contract rather than
-# hardware faults, and they diverged on exactly the two unpack_to_dest combinations, the only
-# ones where a real -0.0 reaches the LREG. Both kernels now take their zero arm on
-# sfpi::abs(v), which brings -0.0 inside that contract (NaN stays outside it), so the entries
-# are gone rather than reclassified. See _assert_signed_zero_partition_valid below.
-_EDGE_KNOWN_DIVERGENCES = {}
-
-
-# The cat-B divergences, derived rather than listed: each op diverges on exactly the
-# combinations that deliver the probe it diverges on, so the sets stay right when the format
-# axis grows or a delivery measurement is revised. Reciprocal and SqrtCustom diverge wherever
-# specials are carried at all; Sqrt and Rsqrt only where a real -0.0 is also delivered.
-def _cat_b_divergences(delivers):
-    return tuple(
+# still executes and reports XPASS if the behaviour changes.
+#
+# Five of the six recorded divergences are fixed in the kernels: Sign and Heaviside on -0.0 in
+# #55306, and Sqrt, Rsqrt and SqrtCustom here. Only Reciprocal on 1/NaN is left, with its
+# reason in _EDGE_DIVERGENCE_REASON. Wormhole and Blackhole only; Quasar carries its own
+# kernels, and a failure there is a divergence to fix at the kernel rather than record here.
+#
+# This sweep does not settle the signed-zero results: passed_test() treats -0.0 and +0.0 as
+# equal, and it runs ApproximationMode.No only. test_sqrt_family_negative_zero_regression
+# reads the raw 32-bit result on both approximation modes instead.
+#
+# Reciprocal is derived rather than listed: it diverges on exactly the combinations that
+# deliver the NaN probe, so the set stays right if the format axis changes.
+_EDGE_KNOWN_DIVERGENCES = {
+    MathOperation.Reciprocal: tuple(
         (fmt.input_format, fmt.output_format, dest_acc)
         for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
         if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
-        and delivers(fmt.input_format, dest_acc)
-    )
-
-
-_EDGE_KNOWN_DIVERGENCES.update(
-    {
-        MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.SqrtCustom: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
-        MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
-    }
-)
-
-# The four whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
-# specials surviving the NaN-sign gate; see where the marker is applied.
-_CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {
-        MathOperation.Reciprocal,
-        MathOperation.SqrtCustom,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-    }
-)
+    ),
+}
 
 _EDGE_DIVERGENCE_REASON = {
     MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
     "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
-    "combination that delivers one. Not prescribed by the ISA.",
-    MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
-    "NaN. The non-finite guard passes non-finite input straight through rather than "
-    "synthesising a NaN, which is right for +inf and NaN and wrong for -inf -- a deliberate "
-    "limit of the minimal fix, since a negative-to-NaN guard would regress erfinv on "
-    "ordinary in-domain inputs. See https://github.com/tenstorrent/tt-metal/issues/52930.",
-    MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
-    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG.",
-    MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt.",
+    "combination that delivers one. Not prescribed by the ISA, and a guard costs the op "
+    "1.44x, so it is left unfixed.",
 }
 
 
 def _assert_signed_zero_partition_valid():
-    """None of the three signed-zero ops may carry edge divergences any more.
+    """None of the signed-zero ops may carry edge divergences any more.
 
     Sign and Heaviside held the two unpack_to_dest combinations and Signbit the complementary
     six, and the partition between them was the evidence that -0.0 reaches the LREG on exactly
-    those two. Both halves are now gone, for the different reasons recorded below. Asserting
-    their absence at collection keeps a table edit from skipping the reasoning: an entry here
-    would be a non-strict xfail that XPASSes every run.
+    those two. Sqrt and Rsqrt held the same two. All of it is gone, for the different reasons
+    recorded below. Asserting their absence at collection keeps a table edit from skipping the
+    reasoning: an entry here would be a non-strict xfail that XPASSes every run.
     """
     fixed_or_not_delivered = {
         MathOperation.Sign: (
@@ -506,6 +453,14 @@ def _assert_signed_zero_partition_valid():
         MathOperation.Signbit: (
             "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
             "here means the delivery gate changed -- re-derive it rather than restoring it."
+        ),
+        MathOperation.Sqrt: (
+            "sqrt(-0.0) returns -0.0 now, from the zero-magnitude arm in ckernel_sfpu_sqrt.h; "
+            "an entry here means that arm regressed. test_sqrt_family_negative_zero_regression "
+            "is what actually pins the sign, since this sweep cannot tell the two zeros apart."
+        ),
+        MathOperation.Rsqrt: (
+            "rsqrt(-0.0) returns -inf now. Same arm and the same regression test as Sqrt."
         ),
     }
 
@@ -545,13 +500,13 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate: where the gate has taken cat B away the probe is not sent, so the
-    # entry would be a non-strict xfail that XPASSes every run. Sign and Heaviside are cat-A
-    # signed zeros and are unaffected.
+    # Marked after the gate: the one recorded divergence left is Reciprocal's on the NaN
+    # probe, so where the gate has taken cat B away the probe is not sent and the entry
+    # would be a non-strict xfail that XPASSes every run.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
-    if diverges_here and (specials or mathop not in _CAT_B_DERIVED_DIVERGENCES):
+    if diverges_here and specials:
         request.node.add_marker(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
         )
@@ -587,30 +542,23 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
-# sqrt_custom(+inf): a strict regression assertion, deliberately outside the edge sweep.
+# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
+# the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
+# because a 16-bit output narrows NaN to inf and could not show a regression.
 #
-# The edge sweep marks the whole SqrtCustom invocation non-strict XFAIL for the
-# sqrt_custom(-inf) divergence, which would absorb a return to sqrt_custom(+inf) = NaN, so the
-# repaired value is asserted here on its own. It runs on Float32 -> Float32 at dest_acc=Yes: a
-# 16-bit output narrows NaN to inf on the way to L1, which is how the defect originally stayed
-# hidden, so only a 32-bit output can show a regression.
+# Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
+# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
+# copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
+# `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
+#
+# The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
+# into and nothing in production does. erfinv, asin and acos take the default and still get
+# -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
-
-    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
-    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
-    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
-                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
-                strict=False,
-            )
-        )
 
     # If this ever goes False the pipeline stopped delivering +inf and the assertion below
     # would pass vacuously -- fail loudly instead of quietly testing nothing.
@@ -624,6 +572,7 @@ def test_sqrt_custom_infinity_regression(request):
     # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
     src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
     src_A[0] = float("inf")
+    src_A[1] = float("-inf")
     src_B = torch.zeros(num_elements, dtype=torch.float32)
     tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
@@ -671,11 +620,16 @@ def test_sqrt_custom_infinity_regression(request):
         f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
         "ckernel_sfpu_sqrt_custom.h is what prevents this. See tt-metal issue #52930."
     )
+    assert torch.isnan(res[1]), (
+        f"sqrt_custom(-inf) returned {res[1].item()!r}, expected NaN. The NEGATIVE_INFINITY_SAFE "
+        "arm in ckernel_sfpu_sqrt_custom.h is what produces this; a -inf means the arm did not "
+        "fire, and a +inf means the qNaN it writes is not a positive one."
+    )
     # Tolerance, not equality: sqrt_custom is an approximation, so the band only has to
     # separate a computed 2.0 from a passed-through 4.0.
-    assert torch.allclose(res[1:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
-        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probe "
-        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}); the non-finite guard's "
+    assert torch.allclose(res[2:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
+        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probes "
+        f"(max deviation {(res[2:] - 2.0).abs().max().item():.6g}); the non-finite guard's "
         "predicate has been widened to divert finite lanes."
     )
 
@@ -770,6 +724,120 @@ def test_reciprocal_compat_negative_zero_regression():
     assert torch.allclose(res[2:], torch.tensor(1.0), rtol=1e-3, atol=0.0), (
         f"reciprocal_compat(1.0) is no longer ~1.0 on the lanes around the probe "
         f"(max deviation {(res[2:] - 1.0).abs().max().item():.6g})."
+    )
+
+
+# sqrt(-0) and rsqrt(-0), read back as raw bit patterns. Outside the edge sweep because
+# passed_test() treats -0.0 and +0.0 as equal, so only an integer comparison can tell them
+# apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a
+# second copy of these guards under APPROXIMATE. Float32 -> Float32 at dest_acc=Yes is the only
+# pipeline that delivers a real -0.0 and returns 32 bits intact.
+#
+# FastMode.No on both, and deliberately so rather than a gap: every edge arm in
+# _calculate_sqrt_body_ is gated on !FAST_APPROX, as the negative clamp alone was before this
+# fix, so sqrt_tile<true>/rsqrt_tile<true> have no signed-zero result to pin. That is the
+# kernel's standing trade, not a regression, and it is what the comment there records.
+@pytest.mark.nightly
+@pytest.mark.parametrize(
+    "approx_mode",
+    [ApproximationMode.No, ApproximationMode.Yes],
+    ids=lambda m: f"approx_{m.name}",
+)
+@pytest.mark.parametrize(
+    "mathop, negative_zero_bits, positive_zero_bits",
+    [
+        # IEEE: sqrt(-0) = -0, sqrt(+0) = +0.
+        (MathOperation.Sqrt, 0x80000000, 0x00000000),
+        # IEEE: rsqrt(-0) = -inf, rsqrt(+0) = +inf.
+        (MathOperation.Rsqrt, 0xFF800000, 0x7F800000),
+    ],
+    ids=lambda v: v.name if isinstance(v, MathOperation) else f"0x{v:08X}",
+)
+def test_sqrt_family_negative_zero_regression(
+    mathop, negative_zero_bits, positive_zero_bits, approx_mode
+):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering -0.0 and the -0.0 assertion
+    # below would really be testing +0.0 -- fail loudly rather than quietly testing nothing.
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # -0.0 and +0.0 side by side, so a guard that sets a sign rather than carrying the input's
+    # fails one of the two.
+    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A[0] = -0.0
+    src_A[1] = 0.0
+    # A negative that must stay NaN: catches the zero-magnitude arm being widened.
+    src_A[2] = -1.0
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    bits = res.view(torch.int32)
+    op = mathop.name.lower()
+
+    assert bits[0].item() & 0xFFFFFFFF == negative_zero_bits, (
+        f"{op}(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} ({res[0].item()!r}), "
+        f"expected 0x{negative_zero_bits:08X}. See the signed-zero arms in "
+        "ckernel_sfpu_sqrt.h."
+    )
+    assert bits[1].item() & 0xFFFFFFFF == positive_zero_bits, (
+        f"{op}(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} ({res[1].item()!r}), "
+        f"expected 0x{positive_zero_bits:08X}."
+    )
+    assert torch.isnan(res[2]), (
+        f"{op}(-1.0) returned {res[2].item()!r}, expected NaN; the zero-magnitude arm is "
+        "swallowing ordinary negative inputs."
+    )
+    # The rest of the tile is 4.0, catching a guard that fires on every lane.
+    expected = 2.0 if mathop == MathOperation.Sqrt else 0.5
+    assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
+        f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
+        f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
     )
 
 

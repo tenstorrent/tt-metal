@@ -30,12 +30,16 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::src);
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
+#ifndef ARCH_QUASAR
     uint32_t l1_write_addr;
+#endif
     uint32_t in0_tensor_current_tile_id;
     uint32_t in0_tensor_current_tile_id_along_c;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
+#ifndef ARCH_QUASAR
         l1_write_addr = dfb_in0.get_write_ptr();
+#endif
 
         in0_tensor_current_tile_id_along_c = in0_tensor_tile_id;
         for (uint32_t c_dim = 0; c_dim < in0_c; c_dim++) {
@@ -43,6 +47,13 @@ void kernel_main() {
             for (uint32_t w_dim = 0; w_dim < in0_w_tiles; w_dim++) {
                 dfb_in0.reserve_back(block_size);
 
+#ifdef ARCH_QUASAR
+                // On Quasar DM, get_write_ptr() returns the UNCACHED L1 alias and NOC APIs do not
+                // accept uncached addresses — pass the DFB endpoint so the NoC uses the cached
+                // address (it resolves to the current write pointer, which reserve_back/push_back
+                // keep equal to the manually tracked address the Gen1 branch uses).
+                noc.async_read(s0, dfb_in0, single_tile_size_bytes, {.page_id = in0_tensor_current_tile_id}, {});
+#else
                 noc.async_read(
                     s0,
                     CoreLocalMem<uint32_t>(l1_write_addr),
@@ -50,6 +61,7 @@ void kernel_main() {
                     {.page_id = in0_tensor_current_tile_id},
                     {});
                 l1_write_addr += single_tile_size_bytes;
+#endif
                 in0_tensor_current_tile_id++;
 
                 noc.async_read_barrier();

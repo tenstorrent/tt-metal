@@ -30,6 +30,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -38,6 +41,15 @@ class KimiK3Config:
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
+    # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
+    # is known: 24576 (this package's usual value) starves MLA chunked attention of circular
+    # buffers as soon as there is a second chunk to attend over. There is no AttnRes floor any
+    # more -- #54834's fix made the sealed set allocate one persistent semaphore set up front, and
+    # tests/attn_res/model/test_l1_small_footprint.py asserts 0 B/bank at every sealed depth with
+    # l1_small_size 1152. 4096 is therefore inherited, not measured: peers run 768 (Kimi-K2.7,
+    # Mistral-4) and 1216 (GLM-5.x). Re-bisect before trusting it.
+    L1_SMALL_SIZE = 4096
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
@@ -218,3 +230,30 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """The HF JSON-shaped fields `KDAConfig` consumes, built from the pinned Kimi-K3 constants.
+
+    Kimi-K3's own config.json cannot be loaded here: its `model_type` is `kimi_linear` and the
+    checkpoint's remote code raises ImportError without `fla-core`. So the KDA half of the config is
+    assembled from the constants above rather than parsed.
+    """
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
