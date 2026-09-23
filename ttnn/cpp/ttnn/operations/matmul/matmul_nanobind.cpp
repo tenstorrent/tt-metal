@@ -162,7 +162,8 @@ void py_module(nb::module_& mod) {
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
            bool fuse_batch,
-           std::optional<CoreRangeSet> allowed_worker_cores) {
+           std::optional<CoreRangeSet> allowed_worker_cores,
+           bool diagonal_in1_senders) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -178,7 +179,8 @@ void py_module(nb::module_& mod) {
                 transpose_mcast,
                 std::move(fused_activation),
                 fuse_batch,
-                std::move(allowed_worker_cores)};
+                std::move(allowed_worker_cores),
+                diagonal_in1_senders};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -192,7 +194,8 @@ void py_module(nb::module_& mod) {
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fuse_batch").noconvert() = true,
-        nb::arg("allowed_worker_cores") = nb::none());
+        nb::arg("allowed_worker_cores") = nb::none(),
+        nb::arg("diagonal_in1_senders").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -306,12 +309,23 @@ void py_module(nb::module_& mod) {
         When set, overrides ``compute_with_storage_grid_size`` for determining the active
         compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "diagonal_in1_senders",
+        &MatmulMultiCoreReuseMultiCastProgramConfig::diagonal_in1_senders,
+        R"doc(
+        Place the in1 (weight) multicast senders on a diagonal of the grid instead of one row (one column under
+        ``transpose_mcast``), and run in1 senders and receivers as one kernel.
+
+        A line of in1 senders that all read interleaved DRAM shares NoC links; spreading them removes that
+        bottleneck (e.g. transposed full-grid matmuls with small N per core). Defaults to False.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={}, "
+                "diagonal_in1_senders={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -324,7 +338,8 @@ void py_module(nb::module_& mod) {
                 config.fused_activation,
                 config.fuse_batch,
                 config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
-                                                        : "None");
+                                                        : "None",
+                config.diagonal_in1_senders);
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =

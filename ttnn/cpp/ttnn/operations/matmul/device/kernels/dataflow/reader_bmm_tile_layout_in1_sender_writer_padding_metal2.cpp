@@ -60,7 +60,162 @@
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 
+#ifdef IN1_UNIFIED_ROLE
+// in1 receiver role of this kernel with diagonal in1 senders (runtime arg in1_role: 0 sender, 1 receiver), so senders
+// and receivers form one kernel group instead of a receiver kernel on the fragmented grid-minus-diagonal. Mirrors
+// reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp, but with this kernel's compile-time args.
+FORCE_INLINE void in1_receiver_writer_main() {
+    const uint32_t in1_mcast_sender_noc_x = get_arg(args::in1_mcast_sender_noc_x);
+    const uint32_t in1_mcast_sender_noc_y = get_arg(args::in1_mcast_sender_noc_y);
+    uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
+    const uint32_t out_num_nonzero_subblocks_h = get_arg(args::out_num_nonzero_subblocks_h);
+    const uint32_t out_last_num_nonzero_subblocks_h = get_arg(args::out_last_num_nonzero_subblocks_h);
+    const uint32_t out_last_subblock_h = get_arg(args::out_last_subblock_h);
+    const uint32_t padded_block_tiles_h_skip = get_arg(args::padded_block_tiles_h_skip);
+    const uint32_t out_num_nonzero_subblocks_w = get_arg(args::out_num_nonzero_subblocks_w);
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg(args::out_last_num_nonzero_subblocks_w);
+    const uint32_t out_last_subblock_w = get_arg(args::out_last_subblock_w);
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg(args::padded_subblock_tiles_addr_skip);
+    const uint32_t padded_block_tiles_w_skip = get_arg(args::padded_block_tiles_w_skip);
+#ifndef OUT_SHARDED
+    const uint32_t last_num_blocks_h_dim = get_arg(args::last_num_blocks_h_dim);
+    const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
+#endif
+
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
+    constexpr auto batch = get_arg(args::batch);
+    constexpr auto out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr auto out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr auto out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr auto out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr auto out_tensor_next_w_dim_block_stride = get_arg(args::out_tensor_next_w_dim_block_stride);
+    constexpr auto out_tensor_next_h_dim_block_stride = get_arg(args::out_tensor_next_h_dim_block_stride);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
+    constexpr auto MtNt = get_arg(args::MtNt);
+#ifdef FUSE_BIAS
+    constexpr auto in3_block_w = get_arg(args::in1_block_w);  // bias block width in tiles
+#endif
+
+    const Noc noc;
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    Semaphore sender_sem(sem::in1_mcast_sender);
+    Semaphore receiver_sem(sem::in1_mcast_receiver);
+#ifdef FUSE_BIAS
+    DataflowBuffer dfb_in3(dfb::bias);
+#endif
+    const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
+    const auto s = TensorAccessor(tensor::out);
+    (void)s;  // only used by the interleaved-output write path
+
+    for (uint32_t b = 0; b < batch; ++b) {
+        uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
+        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
+            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    dfb_in1.reserve_back(in1_block_num_tiles);
+                    receiver_sem.set(INVALID);
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                    receiver_sem.wait(VALID);
+                    dfb_in1.push_back(in1_block_num_tiles);
+                }
+#ifdef FUSE_BIAS
+                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    dfb_in3.reserve_back(in3_block_w);
+                    receiver_sem.set(INVALID);
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                    receiver_sem.wait(VALID);
+                    dfb_in3.push_back(in3_block_w);
+                }
+#endif
+#ifndef OUT_SHARDED
+                const uint32_t num_blocks_h_dim_ =
+                    bh >= last_num_blocks_h_dim - 1 ? last_num_blocks_h_dim : num_blocks_h_dim;
+                const uint32_t num_blocks_w_dim_ =
+                    bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
+                uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
+                uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;
+                if (bh == num_blocks_h_dim_ - 1) {
+                    out_num_nonzero_subblocks_h_ = out_last_num_nonzero_subblocks_h;
+                }
+                if (bw == num_blocks_w_dim_ - 1) {
+                    out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
+                }
+                uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
+                for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
+                    uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
+                    for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
+                        uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
+                        uint32_t out_subblock_h_ = out_subblock_h;
+                        uint32_t out_subblock_w_ = out_subblock_w;
+                        uint32_t subblock_tiles_addr_skip = 0;
+                        if (bh == num_blocks_h_dim_ - 1 && sbh == out_num_nonzero_subblocks_h_ - 1) {
+                            out_subblock_h_ = out_last_subblock_h;
+                        }
+                        if (bw == num_blocks_w_dim_ - 1 && sbw == out_num_nonzero_subblocks_w_ - 1) {
+                            out_subblock_w_ = out_last_subblock_w;
+                            subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
+                        }
+                        dfb_out.wait_front(out_subblock_tile_count);
+                        uint32_t out_read_offset = 0;
+                        for (uint32_t h = 0; h < out_subblock_h_; ++h) {
+                            uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
+                            for (uint32_t w = 0; w < out_subblock_w_; ++w) {
+                                if (bh < num_blocks_h_dim_ && bw < num_blocks_w_dim_) {
+                                    noc.async_write(
+                                        dfb_out,
+                                        s,
+                                        output_single_tile_size_bytes,
+                                        {.offset_bytes = out_read_offset},
+                                        {.page_id = out_tensor_tile_id});
+                                }
+                                out_read_offset += output_single_tile_size_bytes;
+                                out_tensor_tile_id += out_tensor_stride_w;
+                            }
+                            out_read_offset += subblock_tiles_addr_skip;
+                            out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
+                        }
+                        noc.async_write_barrier();
+                        dfb_out.pop_front(out_subblock_tile_count);
+                        out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
+                    }
+                    if (bw == num_blocks_w_dim_ - 1) {
+                        dfb_out.wait_front(static_cast<uint16_t>(padded_block_tiles_w_skip));
+                        dfb_out.pop_front(static_cast<uint16_t>(padded_block_tiles_w_skip));
+                    }
+                    out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
+                }
+                if (bh == num_blocks_h_dim_ - 1) {
+                    dfb_out.wait_front(static_cast<uint16_t>(padded_block_tiles_h_skip));
+                    dfb_out.pop_front(static_cast<uint16_t>(padded_block_tiles_h_skip));
+                }
+#endif
+                out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
+            }
+            out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
+        }
+        out_tensor_start_tile_id += MtNt;
+    }
+#ifdef OUT_SHARDED
+    dfb_out.wait_front(static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+#endif
+}
+#endif  // IN1_UNIFIED_ROLE
+
 void kernel_main() {
+#ifdef IN1_UNIFIED_ROLE
+    if (get_arg(args::in1_role) == 1u) {
+        in1_receiver_writer_main();
+        return;
+    }
+#endif
     // READER
 #if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
     uint32_t rt_args_idx = 0;

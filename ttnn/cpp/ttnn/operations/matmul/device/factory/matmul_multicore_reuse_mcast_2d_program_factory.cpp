@@ -128,11 +128,13 @@ static OutBlockPadding make_out_block_padding(
 }
 
 // Runtime args for the in1 sender/writer kernel on one node: the top row of the grid, or the left
-// column when transpose_mcast (the per-core loop swaps the axes before calling).
+// column when transpose_mcast (the per-core loop swaps the axes before calling). With diagonal in1
+// senders a sender can own the ragged last M block (last_row); it then gets the receivers' padding.
 static NamedRuntimeArgs build_in1_sender_writer_args(
     const OutBlockPadding& pad,
     uint32_t in0_idx,
     uint32_t in1_idx,
+    bool last_row,
     bool last_col,
     uint32_t per_core_M,
     uint32_t per_core_N,
@@ -152,9 +154,10 @@ static NamedRuntimeArgs build_in1_sender_writer_args(
         // padding args (READER)
         {"last_block_w", last_col ? pad.last_out_block_w : pad.out_block_w},
         // padding args (WRITER)
-        {"out_num_nonzero_subblocks_h", pad.out_block_h / pad.out_subblock_h},
-        {"out_last_subblock_h", pad.out_subblock_h},
-        {"padded_block_tiles_h_skip", 0u},
+        {"out_num_nonzero_subblocks_h",
+         last_row ? pad.last_block_num_nonzero_subblocks_h : pad.out_block_h / pad.out_subblock_h},
+        {"out_last_subblock_h", last_row ? pad.last_subblock_of_last_block_h : pad.out_subblock_h},
+        {"padded_block_tiles_h_skip", last_row ? pad.last_block_padded_block_tiles_h_skip : 0u},
         {"out_num_nonzero_subblocks_w", pad.out_block_w / pad.out_subblock_w},
         {"out_last_num_nonzero_subblocks_w",
          last_col ? pad.last_block_num_nonzero_subblocks_w : pad.out_block_w / pad.out_subblock_w},
@@ -204,6 +207,50 @@ static NamedRuntimeArgs build_in1_receiver_writer_args(
     if (!output_is_sharded) {
         args.emplace_back("last_num_blocks_h_dim", last_row ? pad.last_out_num_blocks_h : pad.out_num_blocks_y);
         args.emplace_back("last_num_blocks_w_dim", last_col ? pad.last_out_num_blocks_w : pad.out_num_blocks_x);
+    }
+    return args;
+}
+
+// Diagonal in1 senders (MatmulMultiCoreReuseMultiCastProgramConfig::diagonal_in1_senders). By default every in1 sender
+// sits on one line of cores (top row, or left column under transpose_mcast), and their interleaved-DRAM reads share
+// that line's NoC links. The diagonal layout gives each sender its own row and column. Only the in1 roles move; a
+// core's in0 role is unchanged.
+struct DiagonalIn1Senders {
+    uint32_t start_core_x;
+    uint32_t start_core_y;
+    uint32_t num_blocks_y;
+    uint32_t half_core;
+    bool split_half;
+    bool transpose_mcast;
+
+    // M-block index (in0_idx) of the sender for N block `in1_idx`. With split_half, the right half of the grid below
+    // the first row runs in0 on in1_noc; an in1 sender always uses in1_noc, so it must stay in the left half or on the
+    // first row.
+    uint32_t sender_in0_idx(uint32_t in1_idx) const {
+        if (!split_half) {
+            return in1_idx % num_blocks_y;
+        }
+        if (transpose_mcast) {
+            return in1_idx % std::min(num_blocks_y, half_core + 1);
+        }
+        return in1_idx <= half_core ? in1_idx % num_blocks_y : 0u;
+    }
+
+    CoreCoord sender_core(uint32_t in1_idx) const {
+        const uint32_t in0_idx = sender_in0_idx(in1_idx);
+        return transpose_mcast ? CoreCoord{start_core_x + in0_idx, start_core_y + in1_idx}
+                               : CoreCoord{start_core_x + in1_idx, start_core_y + in0_idx};
+    }
+};
+
+// With diagonal in1 senders one kernel runs both in1 roles, and every node of a kernel carries the same named runtime
+// args: a node's own role's args, the role (0 sender, 1 receiver), and the other role's args zeroed.
+static NamedRuntimeArgs merge_in1_role_args(uint32_t role, NamedRuntimeArgs args, const NamedRuntimeArgs& other_role) {
+    args.emplace_back("in1_role", role);
+    for (const auto& other : other_role) {
+        if (std::none_of(args.begin(), args.end(), [&](const auto& arg) { return arg.first == other.first; })) {
+            args.emplace_back(other.first, 0u);
+        }
     }
     return args;
 }
@@ -342,7 +389,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     tt::DataFormat output_data_format,
     bool untilize_out,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    bool diag_in1_senders = false) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -609,6 +657,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         out_block_w % out_subblock_w == 0 and out_block_w >= out_subblock_w,
         "out_block_w must be multiple of out_subblock_w");
 
+    const DiagonalIn1Senders diag_in1{start_core_x, start_core_y, num_blocks_y, half_core, split_half, transpose_mcast};
+    if (diag_in1_senders) {
+        // A sender reads in1 for its own N block, so a sharded in1 would have to live on the diagonal.
+        TT_FATAL(!in1_is_sharded, "diagonal_in1_senders requires an interleaved in1");
+        // The sender writer applies one h padding to all of a core's output blocks.
+        TT_FATAL(
+            out_num_blocks_y == 1 || M % per_core_M == 0,
+            "diagonal_in1_senders requires out_block_h == per_core_M when M ({}) is not a multiple of per_core_M ({})",
+            M,
+            per_core_M);
+    }
+
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
     uint32_t batches_per_bank = 0;
@@ -761,7 +821,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     ////////////////////////////////////////////////////////////////////////////
     const bool has_in0_mcast_no_work_kernel =
         in0_block_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value();
-    const bool has_in1_receiver_writer_kernel = in1_receiver.num_cores() > 0;
+    // With diagonal in1 senders the left-half in1 receivers run the in1 sender/writer kernel.
+    const bool has_in1_receiver_writer_kernel = !diag_in1_senders && in1_receiver.num_cores() > 0;
     const bool has_in0_receiver_kernel = !in0_block_sharded and in0_receiver_interleaved.num_cores() > 0;
     const bool has_other_noc_kernels = in0_receiver_in1_receiver_interleaved_other_cores.has_value();
 
@@ -1044,6 +1105,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        const bool is_in1_sender = in0_idx == (diag_in1_senders ? diag_in1.sender_in0_idx(in1_idx) : 0u);
+        if (diag_in1_senders) {
+            // The sender sits inside its line, so its multicast covers the whole line (the NoC skips the source core)
+            // instead of the line minus its first core. Applied after the transpose swap so only in1 is affected.
+            const CoreCoord first = transpose_mcast ? left_core_physical : top_core_physical;
+            const CoreCoord first_plus_one = transpose_mcast ? left_core_plus_one_physical : top_core_plus_one_physical;
+            if (in1_mcast_start == first_plus_one) {
+                in1_mcast_start = first;
+            }
+            if (in1_mcast_end == first_plus_one) {
+                in1_mcast_end = first;
+            }
+            in1_mcast_sender = device->worker_core_from_logical_core(diag_in1.sender_core(in1_idx));
+        }
 
         // in0 sender
         if (in0_block_sharded) {
@@ -1119,21 +1194,38 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
+            NamedRuntimeArgs sender_args = build_in1_sender_writer_args(
+                pad,
+                in0_idx,
+                in1_idx,
+                /*last_row=*/diag_in1_senders && in0_idx == in0_end_idx,
+                /*last_col=*/in1_idx == in1_end_idx,  // right cores when no transpose_mcast
+                per_core_M,
+                per_core_N,
+                N,
+                in1_tensor_start_tile_id_stride,
+                in1_mcast_start,
+                in1_mcast_end,
+                /*has_bias=*/bias_mesh.has_value(),
+                output_is_sharded);
+            // bottom-right / bottom / right / interior core when no transpose_mcast
+            NamedRuntimeArgs receiver_args = build_in1_receiver_writer_args(
+                pad,
+                in0_idx,
+                in1_idx,
+                /*last_row=*/in0_idx == in0_end_idx,
+                /*last_col=*/in1_idx == in1_end_idx,
+                per_core_M,
+                per_core_N,
+                N,
+                in1_mcast_sender,
+                output_is_sharded);
+            const bool left_half = (core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y);
+
             // in1 sender
-            if (in0_idx == 0) {
-                NamedRuntimeArgs args = build_in1_sender_writer_args(
-                    pad,
-                    in0_idx,
-                    in1_idx,
-                    /*last_col=*/in1_idx == in1_end_idx,  // right cores when no transpose_mcast
-                    per_core_M,
-                    per_core_N,
-                    N,
-                    in1_tensor_start_tile_id_stride,
-                    in1_mcast_start,
-                    in1_mcast_end,
-                    /*has_bias=*/bias_mesh.has_value(),
-                    output_is_sharded);
+            if (is_in1_sender) {
+                NamedRuntimeArgs args =
+                    diag_in1_senders ? merge_in1_role_args(0u, sender_args, receiver_args) : sender_args;
 
                 // DRAM width-sharded in1 needs a per-node bank assignment; height-sharded needs none
                 // (bank and offset come from compile-time args plus the batch index).
@@ -1148,27 +1240,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 
                 // in1 receiver
             } else {
-                // bottom-right / bottom / right / interior core when no transpose_mcast
-                NamedRuntimeArgs args = build_in1_receiver_writer_args(
-                    pad,
-                    in0_idx,
-                    in1_idx,
-                    /*last_row=*/in0_idx == in0_end_idx,
-                    /*last_col=*/in1_idx == in1_end_idx,
-                    per_core_M,
-                    per_core_N,
-                    N,
-                    in1_mcast_sender,
-                    output_is_sharded);
-
                 // left half
-                if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    add_runtime_args(in1_receiver_writer_run_args.runtime_arg_values, core, args);
+                if (diag_in1_senders && left_half) {
+                    add_runtime_args(
+                        in1_sender_writer_run_args.runtime_arg_values,
+                        core,
+                        merge_in1_role_args(1u, receiver_args, sender_args));
+                    kernels_here.push_back(IN1_SENDER_WRITER);
+                } else if (left_half) {
+                    add_runtime_args(in1_receiver_writer_run_args.runtime_arg_values, core, receiver_args);
                     kernels_here.push_back(IN1_RECEIVER_WRITER);
                 }
                 // right half
                 else {
-                    add_runtime_args(in1_receiver_writer_other_run_args.runtime_arg_values, core, args);
+                    add_runtime_args(in1_receiver_writer_other_run_args.runtime_arg_values, core, receiver_args);
                     kernels_here.push_back(IN1_RECEIVER_WRITER_OTHER);
                 }
             }
@@ -1385,6 +1470,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 
     // in1 sender / writer
     {
+        // With diagonal in1 senders the in1 receivers are the grid minus a diagonal, which fragments into many core
+        // ranges, and dispatch sends a kernel's binaries and launch message once per range. So the (left-half)
+        // receivers run this kernel too, with the in1 role as a runtime arg, keeping the kernel group one rectangle.
+        if (diag_in1_senders) {
+            mm_kernel_in1_sender_writer_defines["IN1_UNIFIED_ROLE"] = "1";
+        }
         KernelSpec in1_sender_writer{
             .unique_id = IN1_SENDER_WRITER,
             .source =
@@ -1496,6 +1587,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
         if (!output_is_sharded) {
             in1_sender_rtas.emplace_back("last_num_blocks_w_dim");
+        }
+        if (diag_in1_senders) {
+            // the receiver role's args (merge_in1_role_args)
+            in1_sender_rtas.emplace_back("in1_role");
+            in1_sender_rtas.emplace_back("in1_mcast_sender_noc_x");
+            in1_sender_rtas.emplace_back("in1_mcast_sender_noc_y");
+            in1_sender_rtas.emplace_back("out_last_num_nonzero_subblocks_h");
+            if (!output_is_sharded) {
+                in1_sender_rtas.emplace_back("last_num_blocks_h_dim");
+            }
         }
         if (in1_is_sharded and in1_is_dram) {
             if (in1_is_width_sharded) {
@@ -3491,6 +3592,9 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
 
     auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
+    TT_FATAL(
+        !program_config.diagonal_in1_senders,
+        "diagonal_in1_senders is not supported by matmul_multi_core_reuse_mcast_2d_optimized_helper");
 
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
@@ -3858,7 +3962,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         output_data_format,
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        program_config.diagonal_in1_senders);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

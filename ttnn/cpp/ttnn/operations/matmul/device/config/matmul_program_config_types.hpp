@@ -35,6 +35,10 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Spread the in1 (weight) senders over a diagonal instead of one row / column of cores, and run in1 senders and
+    // receivers as one kernel (role = runtime arg). Helps when many interleaved-DRAM in1 readers share a line of NoC
+    // links, e.g. transpose_mcast on a full grid.
+    bool diagonal_in1_senders = false;
 };
 
 // 1D mcast matmul program config.
