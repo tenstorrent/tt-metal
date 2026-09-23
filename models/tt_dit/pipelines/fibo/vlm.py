@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 from typing import Any
@@ -41,6 +42,15 @@ _SCORES = (
     ("aesthetic_score", "aesthetic_score", (5.5, 6, 7, 7.6)),
 )
 _LEVELS = ("very low", "low", "medium", "high", "very high")
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class VlmOutput:
+    """What the model generated, with the token counts of the prompt and of the generation."""
+
+    text: str
+    prompt_tokens: int
+    completion_tokens: int
 
 
 class Vlm:
@@ -86,6 +96,15 @@ class Vlm:
         the default. Output that is not the expected JSON, as when it is cut off at ``max_length``,
         is returned as it is.
         """
+        text = self.generate_raw(prompt, seed=seed, traced=traced, max_length=max_length).text
+        caption = clean(text)
+        return json.dumps(caption, separators=(",", ":")) if caption is not None else text.strip()
+
+    def generate_raw(self, prompt: str, *, seed: int, traced: bool, max_length: int | None = None) -> VlmOutput:
+        """Generates what the model emits, before it is reduced to the fields FIBO takes.
+
+        The token counts are the model's own, which the reduced text no longer accounts for.
+        """
         if max_length is None:
             max_length = self._cache_length
         tokens = self._tokenize(prompt)
@@ -99,12 +118,7 @@ class Vlm:
         for stop in _STOP_SEQUENCES:
             text = text.split(stop, 1)[0]
 
-        text = text.strip()
-        try:
-            return _clean(json.loads(text))
-        except (ValueError, TypeError, AttributeError) as e:
-            logger.warning(f"VLM output is not the expected JSON, passing it on as it is: {e}")
-            return text
+        return VlmOutput(text=text, prompt_tokens=int(tokens.shape[1]), completion_tokens=int(generated.shape[0]))
 
     def warm_up(self, *, traced: bool) -> None:
         """Compiles the prefill and the decode step, tracing the latter, on two generated tokens."""
@@ -158,19 +172,21 @@ class Vlm:
             torch.set_num_threads(num_threads)
 
 
-def _clean(record: dict[str, Any]) -> str:
-    """Reduces the generated JSON to a minimal string.
+def clean(text: str) -> dict[str, Any] | None:
+    """Reduces generated output to the fields FIBO takes, or None when it is not in the expected format."""
+    try:
+        record = json.loads(text)
+        caption = _drop_empty({field: record[field] for field in _FIELDS if field in record})
 
-    A port of ``prepare_clean_caption`` from ``fibo_vlm_prompt_to_json.py`` in the Hub repo
-    ``briaai/FIBO-VLM-prompt-to-JSON``, which diffusers only loads as remote code.
-    """
-    caption = _drop_empty({field: record[field] for field in _FIELDS if field in record})
+        scores = {name: _level(record[key], thresholds) for key, name, thresholds in _SCORES if key in record}
+        if scores:
+            caption.setdefault("aesthetics", {}).update(scores)
 
-    scores = {name: _level(record[key], thresholds) for key, name, thresholds in _SCORES if key in record}
-    if scores:
-        caption.setdefault("aesthetics", {}).update(scores)
+    except (ValueError, TypeError, AttributeError) as e:
+        logger.warning(f"VLM output is not in the expected format: {e}")
+        return None
 
-    return json.dumps(caption, separators=(",", ":"))
+    return caption
 
 
 def _level(value: float, thresholds: tuple[float, ...]) -> str:
