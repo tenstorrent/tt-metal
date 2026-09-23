@@ -143,6 +143,13 @@ Device profiling shows cross-device collectives dominate: ~74% of MLP device tim
 (all-gather-matmul 48%, reduce-scatter 26%) against 25% for the matmuls themselves. That is
 the single-link constraint, and the first place to look for decode headroom.
 
+`FABRIC_1D_RING` has been tried and is **not** the answer, despite `ccl_topology()` returning
+`Topology.Ring` for a T3K: it measures +5.9% total device time (+6.1% all-gather, +11.6%
+reduce-scatter) on the default 2x4 descriptor, and forcing a genuine 1x8 ring descriptor fails to
+initialise (`TT_FATAL fabric.cpp:174 forwarding_direction.has_value()`) because a LoudBox is
+physically 2x4 and chips 0-7 do not form a cycle. See `_fabric_config()` in tests/test_factory.py
+for the full A/B; `QWEN36_FABRIC=ring` reproduces it.
+
 ## Known limitations
 
 * **Batch 32 at TP=8 returns wrong results.** Attention decode worst per-user PCC is 0.019,

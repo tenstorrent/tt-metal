@@ -270,6 +270,38 @@ def _resolve_mesh_shape(max_tp=8):
     return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
+def _fabric_config():
+    """Fabric topology for the TP collectives.
+
+    ModelArgs.ccl_topology() returns ttnn.Topology.Ring on a T3K with >= 8 devices, so every CCL
+    this model issues (all_gather, reduce_scatter, all_gather_minimal_matmul_async,
+    matmul_reduce_scatter_async) is already handed topology=Ring. The fabric it runs on should
+    agree: models/common/tests/demos/qwen3_32b/demo.py makes the rule explicit -- "the fixture
+    fabric must match the model's construction-time topology choice" -- and uses FABRIC_1D_RING
+    on the same (1,8) T3K mesh.
+
+    MEASURED on a T3K (2026-09-23, test_mlp_tp device profile) -- ring is WORSE, so linear stays
+    the default despite the topology hint:
+        FABRIC_1D (linear)                total device kernel 34.499 ms   <- baseline
+        FABRIC_1D_RING (2x4 descriptor)               36.546 ms  +5.9%
+            AllGatherMinimalMatmulAsync   16.751 -> 17.768 ms    +6.1%
+            ReduceScatterMinimalAsync      8.761 ->  9.782 ms   +11.6%
+            (matmul +0.1%, tilize -0.2% -- the regression is in the collectives only)
+        FABRIC_1D_RING + t3k_1x8_mesh_graph_descriptor.textproto: does not initialise,
+            TT_FATAL fabric.cpp:174 forwarding_direction.has_value()
+    PCC is bit-identical either way (0.999226834057354 / 0.9992292474201094), so this is purely a
+    perf question. A LoudBox is physically a 2x4 mesh: chips 0-7 do not form a 1x8 cycle, so the
+    closing hop a ring needs does not exist and ring routing just adds hops. Do not re-run this
+    A/B without new hardware or a new mesh descriptor.
+
+    QWEN36_FABRIC=ring|linear overrides, kept so the experiment is repeatable.
+    """
+    mode = os.environ.get("QWEN36_FABRIC", "linear").lower()
+    if mode == "ring":
+        return ttnn.FabricConfig.FABRIC_1D_RING
+    return ttnn.FabricConfig.FABRIC_1D
+
+
 def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
@@ -283,11 +315,13 @@ def parametrize_mesh_tp(max_tp=8):
     # Local import to keep this test helper's module load light (see module docstring).
     from models.demos.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
+    fabric = _fabric_config()
+
     def decorator(fn):
         fn = pytest.mark.parametrize(
             "device_params",
             # l1_small_size required by ttnn.conv1d in the GDN prefill path
-            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            [{"fabric_config": fabric, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
             indirect=True,
         )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(
