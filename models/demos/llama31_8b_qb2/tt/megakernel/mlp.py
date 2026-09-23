@@ -67,6 +67,8 @@ class FusedMLP:
             raise ValueError("Weight staging requires a complete GU8 loop with a tuned reader")
         if self.tuning.alias_projection_cbs and (not fuse_prepare or gu_workers != 8 or reuse_scratch):
             raise ValueError("Static projection aliasing requires the complete GU8 layer loop")
+        if self.tuning.custom_gu and gu_workers != 8:
+            raise ValueError("Custom GU requires eight projection workers")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch
@@ -398,7 +400,7 @@ class FusedMLP:
                     formats = list(item.format_descriptors)
                     for fmt in formats:
                         if fmt.buffer_index in (0, 4, 6, 16, 17, 24, 25):
-                            fmt.tile = ttnn.TileDescriptor(16, 32)
+                            fmt.tile = ttnn.TileDescriptor(8 if self.tuning.custom_gu and fmt.buffer_index == 0 else 16, 32)
                     item.format_descriptors = formats
         semaphores = [
             ttnn.SemaphoreDescriptor(

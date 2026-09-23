@@ -6,12 +6,12 @@
 #include "compact_rows.hpp"
 #endif
 
-#if QKV_CUSTOM_MM
+#if QKV_CUSTOM_MM || CUSTOM_GU
 // Custom unpack walks K faces contiguously, independent of CB page stride.
 // Compact each unpublished block to512-byte8-row tiles; ring blocks retain
 // original2048-byte page spacing. All non-row-zero lanes were zero upstream.
 template <uint32_t Tiles>
-void compact_qkv_input(uint32_t base) {
+void compact_custom_input(uint32_t base) {
     for (uint32_t tile = 0; tile < Tiles; ++tile) {
         auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + tile * 2048);
         auto* target = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + tile * 512);
@@ -147,9 +147,9 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                     a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
-#if QKV_CUSTOM_MM
-            if constexpr (N == 6 && Workers == 8) {
-                compact_qkv_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
+#if QKV_CUSTOM_MM || CUSTOM_GU
+            if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && N == 28 && Workers == 8)) {
+                compact_custom_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
             cb_push_back(A, KBlock);
@@ -174,9 +174,9 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                 a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
-#if QKV_CUSTOM_MM
-        if constexpr (N == 6 && Workers == 8) {
-            compact_qkv_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
+#if QKV_CUSTOM_MM || CUSTOM_GU
+        if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && N == 28 && Workers == 8)) {
+            compact_custom_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
         cb_push_back(A, KBlock);

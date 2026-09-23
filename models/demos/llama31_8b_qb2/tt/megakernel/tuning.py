@@ -35,6 +35,7 @@ class ProjectionTuning:
     norm_full_dst: bool = False
     norm_tile_height: int = 32
     projection_tile_height: int = 32
+    custom_gu: bool = False
     qkv_custom_mm: bool = False
     qkv_buffers: int = 0
     qkv_early_blocks: int = -1
@@ -45,6 +46,8 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.custom_gu and (self.projection_tile_height != 16 or self.reader != "pipelined" or not self.wide_subblocks or self.projection_full_dst != "off" or self.compact_activations != "off" or self.share_qkv_workers):
+            raise ValueError("Custom GU requires tiny16 wide ordinary pipelined projections")
         if self.qkv_custom_mm and (self.projection_tile_height != 16 or self.reader != "pipelined" or self.share_qkv_workers or self.compact_activations != "off" or self.prefetch_head_workers):
             raise ValueError("Custom QKV requires tiny16 ordinary separate-QKV pipelined readers")
         if self.head_early_blocks not in (0, 2, 3) or self.head_early_blocks > min(3, self.buffer_count):
@@ -117,6 +120,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("CUSTOM_GU", str(int(self.custom_gu))),
             ("INLINE_CB_RESET", str(int(self.inline_cb_reset))),
             ("QKV_CUSTOM_MM", str(int(self.qkv_custom_mm))),
             ("HEAD_EARLY_BLOCKS", str(self.head_early_blocks)),
