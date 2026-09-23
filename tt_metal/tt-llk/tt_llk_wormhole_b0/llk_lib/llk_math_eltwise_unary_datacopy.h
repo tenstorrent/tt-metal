@@ -203,6 +203,13 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         if constexpr (type == DataCopyType::A2D)
         {
+            // THROWAWAY: 32 idle cycles per tile, to see what the PR gate
+            // reports for a real slowdown. Never merge this.
+#pragma GCC unroll 32
+            for (int i = 0; i < 32; i++)
+            {
+                TTI_NOP;
+            }
             ckernel_template::run();
         }
         else if constexpr (type == DataCopyType::B2D)
