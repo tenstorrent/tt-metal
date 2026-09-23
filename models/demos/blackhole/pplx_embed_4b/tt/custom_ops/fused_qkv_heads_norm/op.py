@@ -37,6 +37,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     num_kv_heads: int,
     head_groups: int | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    rot_cos: ttnn.Tensor | None = None,
+    rot_sin: ttnn.Tensor | None = None,
+    trans_mat: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """``qkv_fused``: ``[B, 1, S, (num_heads + 2*num_kv_heads) * head_dim]`` TILE bf16/bfp8.
 
@@ -45,6 +48,11 @@ def nlp_create_qkv_heads_norm_headsplit(
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     device = qkv_fused.device()
+    fuse_rotary = rot_cos is not None
+    if fuse_rotary and (rot_sin is None or trans_mat is None):
+        raise ValueError("rot_cos, rot_sin and trans_mat must be given together")
+    # Placeholder bindings when rotary is off: the kernels never touch them (compile-time flag).
+    cos_t, sin_t, trans_t = (rot_cos, rot_sin, trans_mat) if fuse_rotary else (qkv_fused, qkv_fused, qkv_fused)
     plan = _Plan.from_input(qkv_fused, num_heads, num_kv_heads)
     if head_groups is None:
         _env = os.getenv("QWEN_HEADSPLIT_GROUPS_QKV")
@@ -93,6 +101,16 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(7, 1, ttnn.bfloat16, _BF16_TILE),  # rsqrt
         cb(8, Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
     ]
+    if fuse_rotary:
+        cbs += [
+            cb(9, Wt, ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
+            cb(10, Wt, ttnn.bfloat16, _BF16_TILE),  # sin tiles
+            cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
+            cb(12, Wt, ttnn.bfloat16, _BF16_TILE),  # x @ T
+            cb(13, Wt, ttnn.bfloat16, _BF16_TILE),  # (x @ T) * sin
+            cb(14, Wt, ttnn.bfloat16, _BF16_TILE),  # x * cos
+            cb(15, Wt, ttnn.bfloat16, _BF16_TILE),  # normalised head awaiting rotary
+        ]
 
     reader_ct = [
         plan.q_heads_per_kv,
@@ -102,10 +120,11 @@ def nlp_create_qkv_heads_norm_headsplit(
         plan.seq_tiles,
         head_groups,
         heads_per_group,
+        int(fuse_rotary),
     ]
-    for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile):
+    for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    compute_ct = [plan.q_heads_per_kv, heads_per_group, Wt]
+    compute_ct = [plan.q_heads_per_kv, heads_per_group, Wt, int(fuse_rotary)]
     writer_ct = [
         plan.seq_tiles,
         Wt,
@@ -133,6 +152,9 @@ def nlp_create_qkv_heads_norm_headsplit(
                     gamma_k_tiles.buffer_address(),
                     scaler_tile.buffer_address(),
                     eps_tile.buffer_address(),
+                    cos_t.buffer_address(),
+                    sin_t.buffer_address(),
+                    trans_t.buffer_address(),
                     n_units,
                     cursor,
                 ],
@@ -179,8 +201,8 @@ def nlp_create_qkv_heads_norm_headsplit(
         ],
         cbs=cbs,
     )
-    ttnn.generic_op(
-        [qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, q_tensor, k_tensor, v_tensor],
-        program_descriptor,
-    )
+    io = [qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile]
+    if fuse_rotary:
+        io += [cos_t, sin_t, trans_t]
+    ttnn.generic_op(io + [q_tensor, k_tensor, v_tensor], program_descriptor)
     return q_tensor, k_tensor, v_tensor
