@@ -10,6 +10,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -28,7 +29,8 @@ namespace ckernel::sfpu {
  * @param tile_idx_dst The index of the result tile in the Dest register where the result will be stored.
  */
 template <DataFormat format>
-inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx_1 = 0, const uint tile_idx_dst = 0) {
+inline void calculate_add_top_row(
+    const std::uint32_t tile_idx_0 = 0, const std::uint32_t tile_idx_1 = 0, const std::uint32_t tile_idx_dst = 0) {
     static_assert(
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
@@ -96,5 +98,18 @@ inline void init_add_top_row() {
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
     TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
 }
+
+// AddTopRow<DST_SYNC, DST_ACCUM, FORMAT>: sfpu_add_top_row / sfpu_add_top_row_init (compute_kernel_api.h).
+// Binary op over two input tiles and an output tile. FORMAT only affects the kernel (init is format
+// independent), so init can leave it defaulted.
+template <DstSync DST_SYNC, bool DST_ACCUM, DataFormat FORMAT = DataFormat::Float32>
+struct AddTopRow : SfpuBinaryOp<AddTopRow<DST_SYNC, DST_ACCUM, FORMAT>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        const std::uint32_t tile_idx_0, const std::uint32_t tile_idx_1, const std::uint32_t tile_idx_dst) {
+        calculate_add_top_row<FORMAT>(tile_idx_0, tile_idx_1, tile_idx_dst);
+    }
+
+    static void init_kernel() { init_add_top_row(); }
+};
 
 }  // namespace ckernel::sfpu

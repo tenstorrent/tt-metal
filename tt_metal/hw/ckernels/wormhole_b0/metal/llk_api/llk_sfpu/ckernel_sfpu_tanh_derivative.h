@@ -10,6 +10,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -62,7 +63,7 @@ template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     // A 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1, 1.5, 2, 3, evaluated
     // as 1 - lut(x)^2. Its consumer is not calculate_tanh_derivative above but tt-llk's
-    // _calculate_tanh_derivative_, paired with this init under SfpuType::tanh_derivative_lut;
+    // _calculate_tanh_derivative_, paired with this init under SfpuUnaryOp::tanh_derivative_lut;
     // the table crosses repositories in LReg0/1/2 (slopes) and LReg4/5/6 (intercepts) and is
     // the whole of that kernel's approximation. Fitted for sech^2, not tanh: tanh_init's own
     // table measures 0.0179 here and is not monotone once squared, against 0.0143 for this.
@@ -255,5 +256,17 @@ inline void tanh_derivative_sech2_init() {
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }
 
+// ---------------------------------------------------------------------------------------------------
+// TanhDerivative<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs tanh_derivative_tile / tanh_derivative_tile_init (sech^2 polynomial path;
+//   init_kernel -> tanh_derivative_sech2_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct TanhDerivative
+    : SfpuUnaryOp<TanhDerivative<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_tanh_derivative_sech2<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { tanh_derivative_sech2_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_trigonometry.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -15,7 +14,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sin_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Sine, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -33,19 +35,17 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_in
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sin_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sine,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Sine, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosine_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void cos_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Cosine, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -63,13 +63,8 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosin
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cos_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cosine,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Cosine, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
@@ -77,7 +72,7 @@ ALWI void cos_tile(uint32_t idst) {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, is_fp32_dest_acc_en)));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Acosh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -96,19 +91,21 @@ ALWI void acosh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_acosh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Acosh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
+
+#ifndef ARCH_QUASAR
+// Quasar does not implement tan / asin / acos / atan / cosh / sinh, so these entry points
+// are not available there.
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tan_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Tan, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -126,21 +123,17 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tan_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_tangent,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Tan, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asinh_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, is_fp32_dest_acc_en)));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Asinh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -159,20 +152,17 @@ ALWI void asinh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asinh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_asinh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Asinh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX, is_fp32_dest_acc_en))); }
+ALWI void atanh_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Atanh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -190,15 +180,11 @@ ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_atanh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Atanh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise computation of arcsine on each element of a tile
@@ -215,20 +201,17 @@ ALWI void atanh_tile(uint32_t idst) {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asin_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_asin,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Asin, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+ALWI void asin_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Asin, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -246,13 +229,8 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init,
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_atan,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Atan, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
@@ -260,7 +238,8 @@ ALWI void atan_tile(uint32_t idst) {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en)));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Atan, true /*APPROXIMATION_MODE*/, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              init()));
 }
 
 // clang-format off
@@ -279,26 +258,25 @@ ALWI void atan_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acos_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_acos,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Acos, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT_FN(acos, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+ALWI void acos_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Acos, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_init, (APPROX, is_fp32_dest_acc_en))); }
+ALWI void cosh_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Cosh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -316,20 +294,17 @@ ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_i
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cosh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Cosh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_init, (APPROX, is_fp32_dest_acc_en))); }
+ALWI void sinh_tile_init() {
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Sinh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -347,13 +322,9 @@ ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_i
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sinh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sinh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::Trigonometry<sfpu::TrigOp::Sinh, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

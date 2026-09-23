@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -21,7 +22,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 
     if constexpr (IS_MAX_OP) {
         // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9); // mod1=9 means set VD=max and VC=min
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9);  // mod1=9 means set VD=max and VC=min
     } else {
         // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
@@ -242,4 +243,42 @@ inline void unary_max_min_int32_init() {
     TTI_SFPCONFIG(0x330, 8, 1);
 #endif
 }
+// UnaryMaxMin<IS_MAX_OP, FORMAT, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: unary_max_tile / unary_min_tile
+// (Float16_b), unary_{max,min}_int32_tile (Int32), unary_{max,min}_uint32_tile (UInt32) and their *_init
+// entry points in compute_kernel_api.h. FORMAT selects the float or int32/uint32 kernel + init.
+template <
+    bool IS_MAX_OP,
+    DataFormat FORMAT,
+    bool APPROXIMATION_MODE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct UnaryMaxMin : SfpuUnaryOp<
+                         UnaryMaxMin<IS_MAX_OP, FORMAT, APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                         DST_SYNC,
+                         DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Float16_b || FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32,
+        "UnaryMaxMin supports Float16_b, Int32 and UInt32");
+
+    static constexpr bool is_unsigned = (FORMAT == DataFormat::UInt32);
+    static constexpr bool is_int = (FORMAT == DataFormat::Int32) || is_unsigned;
+
+    static void kernel(uint32_t value) {
+        if constexpr (is_int) {
+            calculate_unary_max_min_int32<IS_MAX_OP, is_unsigned, APPROXIMATION_MODE, ITERATIONS>(value);
+        } else {
+            calculate_unary_max_min<IS_MAX_OP, APPROXIMATION_MODE, ITERATIONS>(value);
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (is_int) {
+            unary_max_min_int32_init<IS_MAX_OP, is_unsigned>();
+        } else {
+            unary_max_min_init<IS_MAX_OP>();
+        }
+    }
+};
+
 }  // namespace ckernel::sfpu

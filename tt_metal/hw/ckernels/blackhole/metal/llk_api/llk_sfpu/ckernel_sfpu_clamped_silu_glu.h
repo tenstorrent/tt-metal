@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 // Clamped SwiGLU (DeepSeek-V4), a fused binary SFPU op:
 //
@@ -68,5 +69,20 @@ inline void clamped_silu_glu_init() {
     // _sfpu_sigmoid_'s own init: it owns the Prgm0 requirement noted above.
     sigmoid_init</*APPROXIMATION_MODE=*/false>();
 }
+
+// ---------------------------------------------------------------------------------------------------
+// ClampedSiluGlu<DST_SYNC, DST_ACCUM, ITERATIONS, Config>
+//   calculate(gate, up, out, vector_mode) -> calculate_clamped_silu_glu
+//   init()                                -> clamped_silu_glu_init
+// Backs clamped_silu_glu_tile[_init].
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8, class Config = ClampedSiluGluConfigDsV4>
+struct ClampedSiluGlu : SfpuBinaryOp<ClampedSiluGlu<DST_SYNC, DST_ACCUM, ITERATIONS, Config>, DST_SYNC, DST_ACCUM> {
+    static void kernel(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+        calculate_clamped_silu_glu<DST_ACCUM, ITERATIONS, Config>(gate_tile_idx, up_tile_idx, out_tile_idx);
+    }
+
+    static void init_kernel() { clamped_silu_glu_init(); }
+};
 
 }  // namespace ckernel::sfpu

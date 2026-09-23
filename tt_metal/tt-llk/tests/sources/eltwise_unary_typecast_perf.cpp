@@ -11,7 +11,7 @@
 // instead of a generic SFPU unary op.
 //
 // The typecast op is dispatched by the (IN, OUT) DataFormat pair via the shared
-// unary-SFPU entry points (call_unary_sfpu_operation under SfpuType::typecast),
+// unary-SFPU entry points (call_unary_sfpu_operation under SfpuUnaryOp::typecast),
 // exactly as the functional kernel sources/eltwise_unary_typecast_test.cpp does
 // and as the production compute API typecast_tile<IN, OUT> does. That routes to
 // the same calculate_typecast_* primitives whose SFPLOADMACRO fast path is
@@ -19,7 +19,7 @@
 // cost per tile.
 //
 // Compile-time configuration emitted by the Python harness:
-//   SFPU_UNARY_OPERATION : SfpuType::typecast   (from MATH_OP(Typecast))
+//   SFPU_UNARY_OPERATION : SfpuUnaryOp::typecast   (from MATH_OP(Typecast))
 //   TYPECAST_IN_FORMAT   : DataFormat of the typecast input  (typecast IN_DTYPE)
 //   TYPECAST_OUT_FORMAT  : DataFormat of the typecast output (typecast OUT_DTYPE)
 //   APPROX_MODE          : SFPU approximation mode
@@ -156,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Program the SFPU for this specific typecast pair, mirroring the
         // functional typecast kernel and production typecast_tile_init<IN, OUT>:
-        // SFPU_UNARY_OPERATION is SfpuType::typecast and the concrete init is
+        // SFPU_UNARY_OPERATION is SfpuUnaryOp::typecast and the concrete init is
         // selected from the (IN, OUT) format pair supplied as the trailing
         // template parameters.
         test_utils::call_unary_sfpu_operation_init<

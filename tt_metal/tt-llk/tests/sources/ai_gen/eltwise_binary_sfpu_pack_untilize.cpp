@@ -7,7 +7,6 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "llk_sfpu_types.h"
 #include "tensor_shape.h"
 
 // Globals

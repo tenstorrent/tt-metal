@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -134,5 +135,29 @@ inline void calculate_remainder() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Remainder<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_remainder (remainder_tile)
+//   init(value, recip)                -> init_remainder      (remainder_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Remainder : SfpuUnaryOp<Remainder<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_remainder<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static void init_kernel(uint32_t value, uint32_t recip) { init_remainder<APPROXIMATION_MODE>(value, recip); }
+};
+
+// ---------------------------------------------------------------------------------------------------
+// RemainderUint32<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, divisor) -> calculate_remainder_uint32_scalar (remainder_tile_uint32)
+//   init()                                     -> remainder_uint32_init             (remainder_tile_uint32_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct RemainderUint32
+    : SfpuUnaryOp<RemainderUint32<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t scalar) { calculate_remainder_uint32_scalar<APPROXIMATION_MODE, ITERATIONS>(scalar); }
+
+    static void init_kernel() { remainder_uint32_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

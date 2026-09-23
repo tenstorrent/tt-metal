@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -142,5 +143,13 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm2 = 0x1.c6afd8p-5f;
     }
 }
+
+// Exp2<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: exp2_tile / exp2_tile_init (compute_kernel_api.h).
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Exp2 : SfpuUnaryOp<Exp2<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_exp2<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { exp2_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 
 }  // namespace ckernel::sfpu

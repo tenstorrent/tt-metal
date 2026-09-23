@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -15,28 +16,28 @@ namespace sfpu {
 
 template <int max_input_bits = 31>
 inline void calculate_sfpu_gcd_body() {
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // c = a
-    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0); // c |= b
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // c = a
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);   // c |= b
 
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0); // d = c
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
-    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0); // d &= c (isolate LSB)
-    TTI_SFPLZ(0, p_sfpu::LREG3, p_sfpu::LREG3, 0); // d = clz(d)
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                                                            // d = c
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // d = -d
+    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);  // d &= c (isolate LSB)
+    TTI_SFPLZ(0, p_sfpu::LREG3, p_sfpu::LREG3, 0);   // d = clz(d)
 
     // Ensure that b is odd: if LSB is zero, then swap with a.
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, SFPSHFT2_MOD1_SHFT_LREG); // c = b << d
-    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6); // if c == 0 then b is even
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0); // swap(a, b)
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, SFPSHFT2_MOD1_SHFT_LREG);  // c = b << d
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);                                                // if c == 0 then b is even
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                                     // swap(a, b)
     TTI_SFPENCC(0, 0, 0, 0);
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0); // a = abs(a)
-    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0); // b = abs(b)
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);  // a = abs(a)
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);  // b = abs(b)
 
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = -a
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // a = -a
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // d = -d
 
     int iterations = max_input_bits - 1;
 
-    #pragma GCC unroll 7
+#pragma GCC unroll 7
     while (iterations / 4 > 0) {
         TTI_REPLAY(0, 7 * 4, 0, 0);
         iterations -= 4;
@@ -69,18 +70,40 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
 
 inline void calculate_sfpu_gcd_init() {
     TTI_REPLAY(0, 7 * 4, 0, 1);
-    #pragma GCC unroll 4
+#pragma GCC unroll 4
     for (int i = 0; i < 4; ++i) {
         // We store {-a, a} in {LREG0, LREG2}, which is convenient for isolating the LSB of a.
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // LREG2 = +a
-        TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0); // LREG0 &= a (isolate LSB and overwrite -a)
-        TTI_SFPLZ(0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0); // LREG0 = clz(LREG0), disable lanes where a == 0
-        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE); // LREG0 += d
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, SFPSHFT2_MOD1_SHFT_LREG); // LREG0 = a >> -LREG0, making a definitely odd (now both a and b are odd)
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX); // ensure b < a
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = b - a (now a is even)
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // LREG2 = +a
+        TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // LREG0 &= a (isolate LSB and overwrite -a)
+        TTI_SFPLZ(
+            0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0);  // LREG0 = clz(LREG0), disable lanes where a == 0
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);  // LREG0 += d
+        TTI_SFPSHFT2(
+            p_sfpu::LREG2,
+            p_sfpu::LREG0,
+            p_sfpu::LREG0,
+            SFPSHFT2_MOD1_SHFT_LREG);  // LREG0 = a >> -LREG0, making a definitely odd (now both a and b are odd)
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX);  // ensure b < a
+        TTI_SFPIADD(
+            0,
+            p_sfpu::LREG1,
+            p_sfpu::LREG0,
+            SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // a = b - a (now a is even)
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Gcd<DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_gcd;  init() -> calculate_sfpu_gcd_init
+//   Backs gcd_tile / gcd_tile_init (api/compute/gcd.h).
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Gcd : SfpuBinaryOp<Gcd<DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        calculate_sfpu_gcd<ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { calculate_sfpu_gcd_init(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

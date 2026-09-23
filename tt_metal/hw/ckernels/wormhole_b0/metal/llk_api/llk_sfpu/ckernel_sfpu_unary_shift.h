@@ -8,11 +8,10 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
-
-inline void left_shift_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // Left shift by an immediate scalar amount. If shift amount is >= 32, the result is 0.
 template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
@@ -36,8 +35,6 @@ inline void calculate_left_shift(const uint shift_amt) {
         sfpi::dst_reg++;
     }
 }
-
-inline void right_shift_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // Right shift by an immediate scalar amount. Signed data uses an arithmetic
 // shift; unsigned data uses a logical shift.
@@ -69,5 +66,30 @@ inline void calculate_right_shift(const uint shift_amt) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// UnaryShift<APPROX, IS_LEFT_SHIFT, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, shift_amt) -> calculate_left_shift / calculate_right_shift
+//                                                   (left_shift_tile, right_shift_tile)
+//   init()                                       -> bare init (left_shift_tile_init, right_shift_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    bool IS_LEFT_SHIFT,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct UnaryShift : SfpuUnaryOp<
+                        UnaryShift<APPROXIMATION_MODE, IS_LEFT_SHIFT, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                        DST_SYNC,
+                        DST_ACCUM> {
+    static void kernel(uint32_t shift_amt) {
+        if constexpr (IS_LEFT_SHIFT) {
+            calculate_left_shift<APPROXIMATION_MODE, FORMAT, ITERATIONS>(shift_amt);
+        } else {
+            calculate_right_shift<APPROXIMATION_MODE, FORMAT, ITERATIONS>(shift_amt);
+        }
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel

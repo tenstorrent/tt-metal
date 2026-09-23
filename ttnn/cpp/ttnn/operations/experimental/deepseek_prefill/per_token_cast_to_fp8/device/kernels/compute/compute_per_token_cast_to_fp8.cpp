@@ -55,8 +55,8 @@ inline void calculate_ceil_power_of_two() {
 }  // namespace ckernel::sfpu
 
 inline void ceil_power_of_two_tile(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
+    SfpuUnaryFn<sfpu::calculate_ceil_power_of_two<8 /* ITERATIONS */>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        idst, VectorMode::RC);
 }
 #endif
 

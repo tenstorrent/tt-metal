@@ -6,8 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_threshold.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_threshold.h"
 #endif
 
 namespace ckernel {
@@ -27,21 +26,18 @@ namespace ckernel {
 * | param1          | The value to replace the input with if it is less than or equal to the threshold    | uint32_t |                                                       | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_threshold_,
-        (APPROX, 8 /* ITERATIONS */, std::uint32_t),
-        idst,
-        VectorMode::RC,
-        param0,
-        param1));
+    MATH(
+        (sfpu::Threshold<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, param0, param1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void threshold_tile_init() { MATH(SFPU_UNARY_INIT(threshold)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void threshold_tile_init() {
+    MATH((sfpu::Threshold<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

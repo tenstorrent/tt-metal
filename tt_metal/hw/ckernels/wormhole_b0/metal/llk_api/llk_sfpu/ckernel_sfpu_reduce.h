@@ -16,6 +16,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -1521,7 +1522,8 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16>
-inline void calculate_reduce_max_min([[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce_max_min(
+    [[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
             ((pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_ROW),
@@ -1830,6 +1832,24 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
     }
 }
+
+// Reduce<POOL_TYPE, FORMAT, DST_SYNC, DST_ACCUM, REDUCE_DIMENSION>: sfpu_reduce / sfpu_reduce_init
+// (compute_kernel_api.h). REDUCE_DIMENSION only affects the kernel (init is shared by COL and ROW), so init can
+// leave it defaulted. init(block_ct_dim) forwards to init_reduce. The parameter is deliberately not named
+// REDUCE_DIM: reduce kernels #define REDUCE_DIM before including the compute API.
+template <
+    PoolType POOL_TYPE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    ReduceDim REDUCE_DIMENSION = ReduceDim::REDUCE_COL>
+struct Reduce : SfpuUnaryOp<Reduce<POOL_TYPE, FORMAT, DST_SYNC, DST_ACCUM, REDUCE_DIMENSION>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+        calculate_reduce<POOL_TYPE, REDUCE_DIMENSION, FORMAT, DST_ACCUM>(block_ct_dim, block_rt_dim);
+    }
+
+    static void init_kernel(std::uint32_t block_ct_dim) { init_reduce<POOL_TYPE, FORMAT, DST_ACCUM>(block_ct_dim); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

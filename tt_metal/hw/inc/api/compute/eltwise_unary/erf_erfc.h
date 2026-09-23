@@ -10,7 +10,6 @@
 #include "ckernel_sfpu_erf.h"
 #include "ckernel_sfpu_erfc.h"
 #endif
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -19,9 +18,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void erf_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (fast_and_approx)));
+    MATH((sfpu::Erf<fast_and_approx, false /*IS_ERFC*/, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -38,9 +37,10 @@ ALWI void erf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (fast_and_approx), idst, VectorMode::RC));
+    MATH((sfpu::Erf<fast_and_approx, false /*IS_ERFC*/, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /************** ERFC *****************/
@@ -48,7 +48,10 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void erfc_tile_init() {
+    MATH((sfpu::Erf<true /*APPROXIMATION_MODE*/, true /*IS_ERFC*/, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -64,8 +67,10 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
+    MATH((sfpu::Erf<true /*APPROXIMATION_MODE*/, true /*IS_ERFC*/, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 #endif

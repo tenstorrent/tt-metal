@@ -9,12 +9,14 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_negative.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void negative_tile_init() {
+    MATH((sfpu::Negative<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 // clang-format off
 /**
  * Performs element-wise computation of the negative on each element of a tile
@@ -29,16 +31,18 @@ ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void negative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Negative<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 #ifndef ARCH_QUASAR
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void negative_tile_int32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Negative<APPROX, DataFormat::Int32, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 #endif

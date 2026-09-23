@@ -184,14 +184,13 @@ The core of this example is the custom SFPI function ``my_add_tile``. It's imple
 
     // High-level API function
     void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-            DST_SYNC_MODE, DST_ACCUM_MODE, my_add_tile_face, idx_dst0, idx_dst1, idx_out0, VectorMode::RC));
+        MATH((SfpuBinaryFn<sfpu::my_add_tile_face, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(idx_dst0, idx_dst1, idx_out0, VectorMode::RC)));
     }
 
 
 Here's a breakdown of the layers. The ``my_add_tile_face`` callable lives in an architecture-local ``llk_api/experimental`` header and is included only for the math thread, since it uses math-thread-specific code that will not compile for other RISC-V cores.
 
-1.  **`my_add_tile`**: This is the main function called by the compute kernel. It wraps ``SFPU_BINARY_CALL_NO_TEMPLATE_ARGS`` with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core. The macro sets up the SFPU, iterates over all faces of a tile, calls ``my_add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
+1.  **`my_add_tile`**: This is the main function called by the compute kernel. It wraps ``SfpuBinaryFn<sfpu::my_add_tile_face, ...>::calculate(...)`` with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core. The ``SfpuBinaryFn`` adapter sets up the SFPU, iterates over all faces of a tile, calls ``my_add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
 
 2.  **`my_add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers. The number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
@@ -209,15 +208,15 @@ This layered structure keeps high-level logic separate from hardware-specific de
 
 .. note::
 
-    Use the SFPU macro wrappers to invoke custom SFPI functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
+    Use the generic SFPU adapters from ``llk_math_eltwise_sfpu_op.h`` to invoke custom SFPI functions, depending on the number of input tiles. The face function (fully specialised if it is a template) is the first template argument, followed by ``DST_SYNC_MODE`` and the fp32-dest-accumulation flag. Please view the header file for the most up-to-date information.
 
-    *  ``SFPU_UNARY_CALL_NO_TEMPLATE_ARGS``: For non-templated functions with one input tile.
-    *  ``SFPU_BINARY_CALL_NO_TEMPLATE_ARGS``: For non-templated functions with two input tiles.
-    *  ``SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS``: For non-templated functions with three input tiles.
+    *  ``SfpuUnaryFn<sfpu::fn, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(idst, vector_mode, args...)``: one input tile, in place.
+    *  ``SfpuBinaryFn<sfpu::fn, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(idst0, idst1, odst, vector_mode, args...)``: two input tiles.
+    *  ``SfpuTernaryFn<sfpu::fn, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(idst0, idst1, idst2, odst, vector_mode, args...)``: three input tiles.
 
 .. warning::
 
-    SFPU macro wrappers and LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
+    SFPU adapters and LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
 
 Runtime Arguments and Execution
 -------------------------------
@@ -274,7 +273,7 @@ This example demonstrated how to create a custom SFPI kernel for vector addition
 
 *   The layered approach to SFPI kernel development (high-level API, LLK wrapper, low-level face function).
 *   The use of destination registers (``dst_reg``) for SFPU computations.
-*   The role of the LLK SFPU macro API (e.g., ``SFPU_BINARY_CALL_NO_TEMPLATE_ARGS``) in simplifying SFPI programming by handling tile face iteration.
+*   The role of the LLK SFPU dispatch layer (e.g., ``SfpuBinaryFn``) in simplifying SFPI programming by handling tile face iteration.
 *   The standard pipeline of reader, compute, and writer kernels for processing data on Tensix cores.
 
 By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads while leveraging the distributed programming capabilities of the Mesh API.

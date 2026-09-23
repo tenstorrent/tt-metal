@@ -9,13 +9,19 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_mask.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mask_tile_init() {
-    MATH(SFPU_UNARY_INIT(mask));  // TODO(AP): move out init
+    // TODO(AP): move out init
+    MATH((sfpu::Mask<
+          true /* APPROXIMATE */,
+          DataFormat::Float16_b,
+          false /*FILL_POSINF*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -40,19 +46,33 @@ ALWI void mask_tile_init() {
  * | data_format    | The format of the data and mask (supports Float16, Float16_b, and Int32)   | DataFormat | Must be a valid data format                           | False    |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+        MATH((sfpu::Mask<
+              true /* APPROXIMATE */,
+              DataFormat::Float16_b,
+              false /*FILL_POSINF*/,
+              DST_SYNC_MODE,
+              is_fp32_dest_acc_en>::calculate(idst_data, VectorMode::RC)));
     } else if (data_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_int_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+        MATH((sfpu::Mask<
+              true /* APPROXIMATE */,
+              DataFormat::Int32,
+              false /*FILL_POSINF*/,
+              DST_SYNC_MODE,
+              is_fp32_dest_acc_en>::calculate(idst_data, VectorMode::RC)));
     }
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask_posinf, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+    MATH((sfpu::Mask<
+          true /* APPROXIMATE */,
+          DataFormat::Float16_b,
+          true /*FILL_POSINF*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst_data, VectorMode::RC)));
 }
 
 }  // namespace ckernel

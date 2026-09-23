@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // single dest section (NUM_BLOCKS == 1 is enforced by the Python harness).
     const std::uint32_t num_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+    _llk_math_eltwise_sfpu_init_();
 
     // SINGLE shared init for both reduce passes (the crux of the multi-axis regression: the row
     // pass below trusts SFPU state established here / by the column pass, with no re-init between).

@@ -8,6 +8,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_relu.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -49,4 +50,21 @@ void hardsigmoid_init() {
     sfpi::vConstFloatPrgm1 = 0.5f;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Activation<APPROX, ACTIVATION_TYPE, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs hardsigmoid_tile / hardsigmoid_tile_pack and their inits (ActivationType::Hardsigmoid). op and the
+//   init routine follow ACTIVATION_TYPE; Hardsigmoid is the only ActivationImpl specialisation today.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Activation : SfpuUnaryOp<
+                        Activation<APPROXIMATION_MODE, ACTIVATION_TYPE, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                        DST_SYNC,
+                        DST_ACCUM> {
+    static_assert(
+        ACTIVATION_TYPE == ActivationType::Hardsigmoid, "Activation: only ActivationType::Hardsigmoid is implemented");
+
+    static void kernel() { calculate_activation<APPROXIMATION_MODE, ACTIVATION_TYPE, ITERATIONS>(); }
+
+    static void init_kernel() { hardsigmoid_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

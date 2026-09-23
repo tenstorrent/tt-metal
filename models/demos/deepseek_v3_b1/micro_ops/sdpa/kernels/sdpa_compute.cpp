@@ -48,10 +48,7 @@ void kernel_main() {
     PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
 
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-    PACK(SFPU_UNARY_INIT_FN(
-        exponential,
-        sfpu::exp_init,
-        (true /*APPROXIMATION_MODE*/, scale_fp32, true /*CLAMP_NEGATIVE*/, DST_ACCUM_MODE)));
+    PACK((sfpu::Exp<true, true, DST_SYNC_MODE, DST_ACCUM_MODE, false, 8, scale_fp32>::init()));
     sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     pack_block_contiguous_init(cb_out);
 

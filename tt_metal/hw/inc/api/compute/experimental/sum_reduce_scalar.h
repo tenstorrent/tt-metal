@@ -6,6 +6,9 @@
 
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_fill.h"  // sfpu::Fill used by sum_reduce_scalar_tile
+#endif
 
 namespace ckernel {
 
@@ -66,6 +69,7 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  * Return value: None
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
     // Step 1: Copy each input tile into its own DEST slot
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -76,31 +80,19 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
-    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
 
     // Step 4: Move dest[0] (first copied tile) to srcA
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with the scaler value
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
-        0 /*dst_index*/,
-        VectorMode::RC_custom,
-        scaler));
+    MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en, 2 /*ITERATIONS*/>::calculate(
+        0 /*dst_index*/, VectorMode::RC_custom, scaler)));
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
-        0 /*dst_index*/,
-        VectorMode::RC_custom,
-        0.0f));
+    MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en, 2 /*ITERATIONS*/>::calculate(
+        0 /*dst_index*/, VectorMode::RC_custom, 0.0f)));
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));

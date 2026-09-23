@@ -332,7 +332,7 @@ enum class BinaryOp : std::uint8_t
     ISCLOSE         = 32,
     LOGSIGMOID      = 33,
     // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
-    // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
+    // corresponding SFPU kernel names so the coverage guard maps them 1:1.
     EQ_INT           = 34,
     NE_INT           = 35,
     MAX_INT32        = 36,

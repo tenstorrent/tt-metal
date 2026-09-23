@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "tensix_types.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -40,7 +41,8 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const ui
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = sfpi::vFloat(sfpi::dst_reg[dst_index_in * dst_tile_size_sfpi]);
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] =
+            sfpi::vFloat(sfpi::dst_reg[dst_index_in * dst_tile_size_sfpi]);
         dst_reg++;
     }
 }
@@ -49,5 +51,27 @@ void copy_dest_value_init() {
     // No initialization required
 }
 
+// ---------------------------------------------------------------------------------------------------
+// CopyDestValues<DATA_FORMAT, DST_SYNC, DST_ACCUM, APPROXIMATION_MODE, ITERATIONS>
+//   calculate(in, out, 0 /*unused*/, vector_mode) -> copy_dest_value<DATA_FORMAT, ..>;  init() -> copy_dest_value_init
+//   DATA_FORMAT = DataFormat::Invalid selects the deprecated format-agnostic copy_dest_value<APPROXIMATION_MODE, ..>
+//   overload (sfpi::vFloat path) used by the deprecated non-templated copy_dest_values().
+//   Backs copy_dest_values<DataFormat>, copy_dest_values, copy_dest_values_init (api/compute/copy_dest_values.h).
+// ---------------------------------------------------------------------------------------------------
+template <DataFormat DATA_FORMAT, DstSync DST_SYNC, bool DST_ACCUM, bool APPROXIMATION_MODE = false, int ITERATIONS = 8>
+struct CopyDestValues : SfpuBinaryOp<
+                            CopyDestValues<DATA_FORMAT, DST_SYNC, DST_ACCUM, APPROXIMATION_MODE, ITERATIONS>,
+                            DST_SYNC,
+                            DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t unused) {
+        if constexpr (DATA_FORMAT == DataFormat::Invalid) {
+            copy_dest_value<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out, unused);
+        } else {
+            copy_dest_value<DATA_FORMAT, APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out, unused);
+        }
+    }
+
+    static void init_kernel() { copy_dest_value_init(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

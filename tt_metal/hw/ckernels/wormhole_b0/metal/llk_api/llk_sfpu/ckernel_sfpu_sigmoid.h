@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -70,6 +71,15 @@ inline void sigmoid_init() {
         sigmoid_appx_init();
     }
 }
+
+// Sigmoid<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: sigmoid_tile / sigmoid_tile_init and the
+// sigmoid_tile_pack / sigmoid_tile_init_pack pack-thread variants (compute_kernel_api.h).
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Sigmoid : SfpuUnaryOp<Sigmoid<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_sigmoid<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { sigmoid_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

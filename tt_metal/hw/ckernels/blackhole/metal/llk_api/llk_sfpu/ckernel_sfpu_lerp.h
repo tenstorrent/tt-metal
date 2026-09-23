@@ -7,6 +7,7 @@
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -37,4 +38,16 @@ inline void calculate_lerp(
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Lerp<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, in2, out, vector_mode) -> calculate_lerp   (lerp_tile)
+//   init()                                     -> bare ternary init (lerp_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Lerp : SfpuTernaryOp<Lerp<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_in2, uint32_t dst_index_out) {
+        calculate_lerp<APPROXIMATION_MODE, DST_ACCUM, FORMAT, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+};
 }  // namespace ckernel::sfpu

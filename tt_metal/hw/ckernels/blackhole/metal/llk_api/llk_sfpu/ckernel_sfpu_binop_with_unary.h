@@ -13,6 +13,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -109,5 +110,39 @@ void calculate_sub_int32(std::uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// BinopWithScalar<APPROX, BINOP_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   BINOP_MODE is one of ADD/SUB/MUL/DIV/RSUB (== the compute API's ADD_UNARY..RSUB_UNARY).
+//   float formats : calculate(dst_index, vector_mode, scalar) -> calculate_binop_with_scalar
+//   Int32         : ADD -> calculate_add_int32, SUB -> calculate_sub_int32
+//   init()        -> bare init (mode-independent)
+// Backs {add,sub,mul,div,rsub}_unary_tile, {add,sub}_unary_tile_int32, rsub_tile, binop_with_scalar_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    int BINOP_MODE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct BinopWithScalar : SfpuUnaryOp<
+                             BinopWithScalar<APPROXIMATION_MODE, BINOP_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                             DST_SYNC,
+                             DST_ACCUM> {
+    static constexpr bool is_int32 = FORMAT == DataFormat::Int32;
+    static_assert(
+        !is_int32 || BINOP_MODE == ADD || BINOP_MODE == SUB, "Int32 binop_with_scalar supports ADD and SUB only");
+
+    static void kernel(std::uint32_t param) {
+        if constexpr (!is_int32) {
+            calculate_binop_with_scalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, DST_ACCUM>(param);
+        } else if constexpr (BINOP_MODE == ADD) {
+            calculate_add_int32<APPROXIMATION_MODE, ITERATIONS>(param);
+        } else {
+            calculate_sub_int32<APPROXIMATION_MODE, ITERATIONS>(param);
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

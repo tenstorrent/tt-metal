@@ -12,7 +12,6 @@
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_situ_glu.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -45,22 +44,18 @@ namespace ckernel {
  * | vector_mode    | The vector mode of the operation                                       | int      | Must be one of the VectorMode values                  | False    |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_situ_glu,
-        (DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::SituGluConfigKimi),
-        idst0,
-        idst1,
-        odst,
-        vector_mode)));
+    MATH((sfpu::SituGlu<DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, vector_mode)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void situ_glu_tile_init() {
+    MATH((sfpu::SituGlu<DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel
 

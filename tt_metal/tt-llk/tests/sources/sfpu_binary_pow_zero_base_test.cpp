@@ -56,7 +56,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -71,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // The init sfpu_operations.h routes rpow to: it primes vConstFloatPrgm0/1/2, which the
     // log2/exp2 pair in _sfpu_binary_power_ reads.
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rpow>(sfpu::sfpu_binary_pow_init<APPROX_MODE>);
+    sfpu::Rpow<APPROX_MODE, DST_SYNC, is_fp32_dest_acc_en, 8 /* ITERATIONS */>::init();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
@@ -84,14 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
     // ITERATIONS=8 at VectorMode::RC is what rpow_tile dispatches.
-    SFPU_UNARY_CALL(
-        DST_SYNC,
-        is_fp32_dest_acc_en,
-        calculate_rpow,
-        (APPROX_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        0 /* dst_index */,
-        VECTOR_MODE,
-        SFPU_UNARY_SCALAR);
+    sfpu::Rpow<APPROX_MODE, DST_SYNC, is_fp32_dest_acc_en, 8 /* ITERATIONS */>::calculate(0 /* dst_index */, VECTOR_MODE, SFPU_UNARY_SCALAR);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

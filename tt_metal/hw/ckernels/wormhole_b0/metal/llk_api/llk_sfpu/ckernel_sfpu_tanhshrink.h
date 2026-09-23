@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_tanh.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -95,4 +96,15 @@ inline void tanhshrink_init() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Tanhshrink<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs tanhshrink_tile / tanhshrink_tile_init (init_kernel -> tanhshrink_init). The kernel itself has no
+//   approximation mode; APPROXIMATION_MODE only feeds the init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Tanhshrink : SfpuUnaryOp<Tanhshrink<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_tanhshrink<DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { tanhshrink_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 }  // namespace ckernel::sfpu

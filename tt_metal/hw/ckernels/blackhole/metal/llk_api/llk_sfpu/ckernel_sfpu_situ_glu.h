@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_softcap.h"
 #include "ckernel_sfpu_tanh.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 // SiTU-GLU activation, a fused binary SFPU op:
 //
@@ -99,4 +100,17 @@ inline void situ_glu_init() {
     tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// SituGlu<DST_SYNC, DST_ACCUM, ITERATIONS, Config>
+//   calculate(gate, up, out, vector_mode) -> calculate_situ_glu<DST_ACCUM, ITERATIONS, Config>;  init() ->
+//   situ_glu_init Backs situ_glu_tile / situ_glu_tile_init (api/compute/situ_glu.h).
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8, class Config = SituGluConfigKimi>
+struct SituGlu : SfpuBinaryOp<SituGlu<DST_SYNC, DST_ACCUM, ITERATIONS, Config>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t gate_tile_idx, uint32_t up_tile_idx, uint32_t out_tile_idx) {
+        calculate_situ_glu<DST_ACCUM, ITERATIONS, Config>(gate_tile_idx, up_tile_idx, out_tile_idx);
+    }
+
+    static void init_kernel() { situ_glu_init(); }
+};
 }  // namespace ckernel::sfpu

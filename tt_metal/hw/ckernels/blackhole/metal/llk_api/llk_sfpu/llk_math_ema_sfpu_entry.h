@@ -13,7 +13,7 @@ namespace ckernel {
 
 inline void llk_math_ema_sfpu_init() {
     SAN_HOOK(unsupported());
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 }
 
 inline void llk_math_ema_sfpu_load_alpha_beta(std::uint32_t alpha, std::uint32_t beta) {

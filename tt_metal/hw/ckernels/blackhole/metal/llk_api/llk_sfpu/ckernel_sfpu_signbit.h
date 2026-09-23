@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 using namespace sfpi;
 
 namespace ckernel::sfpu {
@@ -135,5 +136,27 @@ inline void signbit_int32_init() {
     TTI_SFPCONFIG(0x110, 8, 1);
 #endif
 }
+
+// Signbit<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>: signbit_tile / signbit_tile_init (Float16_b) and
+// signbit_tile_int32 / signbit_tile_int32_init (Int32) in compute_kernel_api.h.
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Signbit
+    : SfpuUnaryOp<Signbit<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() {
+        if constexpr (FORMAT == DataFormat::Int32) {
+            calculate_signbit_int32<APPROXIMATION_MODE, ITERATIONS>();
+        } else {
+            calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (FORMAT == DataFormat::Int32) {
+            signbit_int32_init();
+        } else {
+            signbit_init();
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

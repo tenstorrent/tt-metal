@@ -36,6 +36,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -173,5 +174,18 @@ inline void log1p_init() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Log1p<APPROX, FAST_APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_log1p
+//   init()                            -> log1p_init
+// Backs log1p_tile / log1p_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Log1p
+    : SfpuUnaryOp<Log1p<APPROXIMATION_MODE, FAST_APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_log1p<APPROXIMATION_MODE, FAST_APPROX, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { log1p_init<APPROXIMATION_MODE, FAST_APPROX, DST_ACCUM>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

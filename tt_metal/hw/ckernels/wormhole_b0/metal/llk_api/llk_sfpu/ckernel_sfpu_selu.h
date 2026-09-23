@@ -9,13 +9,12 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
 // selu(x) = scale * x for x>=0, scale * alpha * (exp(x)-1) for x<0
 // scale ≈ 1.0507, alpha ≈ 1.6733, scale*alpha ≈ 1.7581
-
-inline void selu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
@@ -39,4 +38,14 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Selu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, scale, alpha)
+//   backs selu_tile / selu_tile_pack and their inits (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Selu : SfpuUnaryOp<Selu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t scale, uint32_t alpha) {
+        calculate_selu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(scale, alpha);
+    }
+};
 }  // namespace ckernel::sfpu

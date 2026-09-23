@@ -72,64 +72,6 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
-enum class SfpuType : std::uint32_t
-{
-    tanh,
-    gelu,
-    exponential,
-    reciprocal,
-    sqrt,
-    rsqrt,
-    relu,
-    lrelu,
-    relu_min,
-    relu_max,
-    stochround,
-    typecast,
-    add,
-    square,
-    sigmoid,
-    silu,
-    abs,
-    clamp,
-    negative,
-    softplus,
-    sine,
-    cosine,
-    acosh,
-    asinh,
-    atanh,
-    fill,
-    floor,
-    ceil,
-    trunc,
-    frac,
-    round,
-    swiglu,
-    where,
-    unused,
-    lt,
-    gt,
-    le,
-    ge,
-    lt_int,
-    gt_int,
-    le_int,
-    ge_int,
-    mul_int,
-    topk_local_sort,
-    topk_merge,
-    topk_rebuild,
-    equal_zero,
-    not_equal_zero,
-    less_than_zero,
-    greater_than_zero,
-    less_than_equal_zero,
-    greater_than_equal_zero,
-    cumsum,
-    reduce,
-};
-
 enum class DstSync : std::uint8_t
 {
     SyncHalf,
@@ -218,6 +160,3 @@ private:
 constexpr std::uint32_t SFPU_ITERATIONS = 8; // Number of iterations to unroll for SFPU loops
 
 } // namespace ckernel
-
-// Make SfpuType available in global namespace for compatibility with test infrastructure
-using SfpuType = ckernel::SfpuType;

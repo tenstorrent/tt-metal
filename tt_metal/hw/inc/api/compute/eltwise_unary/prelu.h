@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_prelu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -25,13 +24,17 @@ namespace ckernel {
  * | param0          | Constant value that is being multiplied if the input is lesser than 0      | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void prelu_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_prelu, (APPROX), idst, VectorMode::RC, param0));
+    MATH((sfpu::Prelu<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void prelu_tile_init() { MATH(SFPU_UNARY_INIT(prelu)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void prelu_tile_init() {
+    MATH((sfpu::Prelu<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

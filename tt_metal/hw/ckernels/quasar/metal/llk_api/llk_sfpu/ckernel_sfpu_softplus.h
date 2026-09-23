@@ -12,8 +12,8 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -134,4 +134,14 @@ inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Softplus<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, beta, beta_recip, threshold)
+//   backs softplus_tile / softplus_tile_pack and their inits (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct Softplus : SfpuUnaryOp<Softplus<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
+        calculate_softplus<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(beta, beta_reciprocal, threshold);
+    }
+};
 }  // namespace ckernel::sfpu

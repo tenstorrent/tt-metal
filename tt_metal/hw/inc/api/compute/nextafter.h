@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binary.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -50,22 +49,16 @@ ALWI void nextafter_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         is_fp32_dest_acc_en,
         "nextafter_binary_tile steps one float32 ULP and requires a float32 DEST; use "
         "nextafter_bf16_binary_tile whenever the tile is bfloat16, regardless of DEST width");
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, BinaryOp::NEXTAFTER, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::SfpuBinary<APPROX, BinaryOp::NEXTAFTER, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::NEXTAFTER))));
+    MATH((sfpu::SfpuBinary<APPROX, BinaryOp::NEXTAFTER, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -83,22 +76,16 @@ ALWI void nextafter_binary_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_bf16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, BinaryOp::NEXTAFTER_BF16, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::SfpuBinary<APPROX, BinaryOp::NEXTAFTER_BF16, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_bf16_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::NEXTAFTER_BF16))));
+    MATH((sfpu::SfpuBinary<APPROX, BinaryOp::NEXTAFTER_BF16, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 }  // namespace ckernel

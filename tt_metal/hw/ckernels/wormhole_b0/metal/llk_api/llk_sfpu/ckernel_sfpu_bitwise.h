@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -29,12 +30,6 @@ inline Vec compute_unary_bitwise(Vec v, Vec scalar) {
         return v ^ scalar;
     }
 }
-
-inline void bitwise_and_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void bitwise_or_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void bitwise_xor_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <
     bool APPROXIMATION_MODE,
@@ -66,5 +61,27 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Bitwise<APPROX, BITWISE_OP, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, value) -> calculate_sfpu_unary_bitwise
+//                                               (bitwise_and_tile, bitwise_or_tile, bitwise_xor_tile)
+//   init()                                   -> bare init (bitwise_{and,or,xor}_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    UnaryBitwiseOp BITWISE_OP,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct Bitwise : SfpuUnaryOp<
+                     Bitwise<APPROXIMATION_MODE, BITWISE_OP, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                     DST_SYNC,
+                     DST_ACCUM> {
+    static void kernel(std::uint32_t value) {
+        calculate_sfpu_unary_bitwise<APPROXIMATION_MODE, BITWISE_OP, FORMAT, ITERATIONS>(value);
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel

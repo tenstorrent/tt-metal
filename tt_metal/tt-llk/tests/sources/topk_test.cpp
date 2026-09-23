@@ -228,7 +228,7 @@ using namespace ckernel;
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 #include "llk_sfpu/ckernel_sfpu_topk.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
@@ -276,21 +276,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // After Datacopy, we do topk SFPU.
     // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    if constexpr (TOPK_FUSED_STABLE)
-    {
-        // Fused keys carry the index inside the packed word: index tracking stays OFF.
-        ckernel::sfpu::_init_topk_fused_();
-    }
-    else if constexpr (TOPK_RANK_STAMPED)
-    {
-        // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
-        ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
-    }
-    else
-    {
-        ckernel::sfpu::_init_topk();
-    }
+    // FUSED selects the fused-key init (index tracking OFF: the packed word carries the index); RANK_STAMPED the
+    // rank-stamped init (rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking).
+    sfpu::TopkLocalSort<APPROX, NETWORK_STABLE_SORT, dest_sync, is_fp32_dest_acc_en, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, TOPK_TAG_BITS>::
+        init();
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
@@ -353,7 +342,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Pack [bf16 value | u16 index'] keys once per freshly loaded slab, with the
                     // GLOBAL sort order's polarity; the network calls below run plain unstable on
                     // the packed words.
-                    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_topk_fuse, (APPROX, TOPK_LARGEST), dst_index, vector_mode);
+                    SfpuUnaryFn<sfpu::calculate_topk_fuse<APPROX, TOPK_LARGEST>, dest_sync, is_fp32_dest_acc_en>::calculate(dst_index, vector_mode);
                 }
 
                 if constexpr (TOPK_RANK_STAMPED)
@@ -362,8 +351,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // fold -0.0 into +0.0) so the unstable network below sorts distinct keys
                     // whose tie order is the torch-stable index order; the merge re-stamps its
                     // runs internally.
-                    SFPU_UNARY_CALL(
-                        dest_sync, is_fp32_dest_acc_en, calculate_topk_stamp_local_positions, (APPROX, TOPK_LARGEST, TOPK_TAG_BITS), dst_index, vector_mode);
+                    SfpuUnaryFn<sfpu::calculate_topk_stamp_local_positions<APPROX, TOPK_LARGEST, TOPK_TAG_BITS>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                        dst_index, vector_mode);
                 }
 
                 // Pick the first operation.
@@ -372,73 +361,63 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
                     if constexpr (NETWORK_STABLE_SORT)
                     {
-                        SFPU_UNARY_CALL(
-                            dest_sync, is_fp32_dest_acc_en, calculate_topk_canonicalize_negzero, (APPROX, is_fp32_dest_acc_en), dst_index, vector_mode);
+                        SfpuUnaryFn<sfpu::calculate_topk_canonicalize_negzero<APPROX, is_fp32_dest_acc_en>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                            dst_index, vector_mode);
                     }
-                    SFPU_UNARY_CALL(
+                    SfpuUnaryFn<
+                        sfpu::calculate_bitonic_topk_phases_steps<
+                            APPROX,
+                            is_fp32_dest_acc_en,
+                            NETWORK_STABLE_SORT,
+                            TOPK_FUSED_STABLE,
+                            TOPK_RANK_STAMPED,
+                            TOPK_TIE_ORDER>,
                         dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        end_phase,
-                        start_phase,
-                        end_step,
-                        start_step);
+                        is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, TOPK_SORT_DIRECTION, end_phase, start_phase, end_step, start_step);
                 }
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_UNARY_CALL(
+                    SfpuUnaryFn<
+                        sfpu::calculate_bitonic_topk_rebuild<
+                            APPROX,
+                            is_fp32_dest_acc_en,
+                            NETWORK_STABLE_SORT,
+                            TOPK_FUSED_STABLE,
+                            TOPK_RANK_STAMPED,
+                            TOPK_TIE_ORDER>,
                         dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        0 /*skip_second*/);
+                        is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 0 /*skip_second*/);
                 }
 
                 // Always a second operation.
-                SFPU_UNARY_CALL(
+                SfpuUnaryFn<
+                    sfpu::calculate_bitonic_topk_merge<
+                        APPROX,
+                        is_fp32_dest_acc_en,
+                        TOPK_SORT_DIRECTION,
+                        NETWORK_STABLE_SORT,
+                        TOPK_FUSED_STABLE,
+                        TOPK_RANK_STAMPED,
+                        TOPK_TIE_ORDER,
+                        TOPK_TAG_BITS>,
                     dest_sync,
-                    is_fp32_dest_acc_en,
-                    calculate_bitonic_topk_merge,
-                    (APPROX,
-                     is_fp32_dest_acc_en,
-                     TOPK_SORT_DIRECTION,
-                     NETWORK_STABLE_SORT,
-                     TOPK_FUSED_STABLE,
-                     TOPK_RANK_STAMPED,
-                     TOPK_TIE_ORDER,
-                     TOPK_TAG_BITS),
-                    dst_index,
-                    vector_mode,
-                    current_iteration,
-                    TOPK_K);
+                    is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, current_iteration, TOPK_K);
 
                 // Additional last operation.
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_UNARY_CALL(
+                    SfpuUnaryFn<
+                        sfpu::calculate_bitonic_topk_rebuild<
+                            APPROX,
+                            is_fp32_dest_acc_en,
+                            NETWORK_STABLE_SORT,
+                            TOPK_FUSED_STABLE,
+                            TOPK_RANK_STAMPED,
+                            TOPK_TIE_ORDER>,
                         dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        1 /*skip_second*/);
+                        is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 1 /*skip_second*/);
                 }
 
                 if constexpr (TOPK_RANK_STAMPED)
@@ -461,14 +440,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Split the packed keys back into [bf16|0x0000] value words (DEST tiles
                         // 0,1) and u16 indices (tiles 2,3). Mode-9 index store: the packer reads
                         // UInt16 from the HIGH half of a 32-bit DEST word.
-                        SFPU_UNARY_CALL(
+                        SfpuUnaryFn<
+                            sfpu::calculate_topk_defuse<APPROX, TOPK_LARGEST, ckernel::sfpu::TOPK_SFPSTORE_MODE_PACK_UINT16>,
                             dest_sync,
-                            is_fp32_dest_acc_en,
-                            calculate_topk_defuse,
-                            (APPROX, TOPK_LARGEST, ckernel::sfpu::TOPK_SFPSTORE_MODE_PACK_UINT16),
-                            dst_index,
-                            vector_mode,
-                            2 /*num_tiles*/);
+                            is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, 2 /*num_tiles*/);
                     }
                 }
 

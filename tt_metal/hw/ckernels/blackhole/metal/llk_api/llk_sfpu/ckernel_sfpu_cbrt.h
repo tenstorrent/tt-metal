@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -77,4 +78,16 @@ inline void cube_root_init() {
     sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Cbrt<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_cube_root
+//   init()                            -> cube_root_init
+// Backs cbrt_tile / cbrt_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Cbrt : SfpuUnaryOp<Cbrt<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_cube_root<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { cube_root_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

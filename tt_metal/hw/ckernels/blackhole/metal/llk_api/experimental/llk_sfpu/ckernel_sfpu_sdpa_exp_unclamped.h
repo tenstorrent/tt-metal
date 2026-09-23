@@ -21,7 +21,8 @@ namespace ckernel::sfpu {
  *
  * Wraps @ref _ckernel_sfpu_exp_accurate_upper_unclamped_ in the dst_reg walk the SFPU dispatch
  * expects, so the kernel can be driven through @ref _llk_math_eltwise_unary_sfpu_params_ /
- * SFPU_UNARY_CALL like any other unary op. VectorMode::RC repeats it over the four faces.
+ * SfpuUnaryFn<calculate_sdpa_exp_unclamped<...>, DST_SYNC, DST_ACCUM>::calculate like any other
+ * unary op. VectorMode::RC repeats it over the four faces.
  *
  * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first, values = <true/false>
  * @param exp_base_scale_factor: Scale as a raw bf16 bit pattern; ignored when SCALE_EN is false.

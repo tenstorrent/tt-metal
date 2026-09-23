@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_reverseops.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 namespace ckernel {
@@ -40,6 +40,6 @@ ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_una
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::rsub_init, (APPROX))); }
+ALWI void rsub_tile_init() { MATH(_llk_math_eltwise_sfpu_init_(); sfpu::rsub_init<APPROX>();) }
 
 }  // namespace ckernel

@@ -9,6 +9,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -87,4 +88,19 @@ inline void snake_beta_init() {
     sfpu_reciprocal_init<APPROXIMATE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// SnakeBeta<APPROX, DATA_FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(x, alpha, beta, out, vector_mode)
+//   backs snake_beta_tile<data_format> / snake_beta_tile_init (init_kernel -> snake_beta_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct SnakeBeta
+    : SfpuTernaryOp<SnakeBeta<APPROXIMATION_MODE, DATA_FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        uint32_t dst_index_x, uint32_t dst_index_alpha, uint32_t dst_index_beta, uint32_t dst_index_out) {
+        calculate_snake_beta<APPROXIMATION_MODE, DST_ACCUM, DATA_FORMAT, ITERATIONS>(
+            dst_index_x, dst_index_alpha, dst_index_beta, dst_index_out);
+    }
+
+    static void init_kernel() { snake_beta_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

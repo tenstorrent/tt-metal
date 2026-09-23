@@ -8,13 +8,12 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-inline void bitwise_not_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_not() {
@@ -26,5 +25,14 @@ inline void calculate_bitwise_not() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// BitwiseNot<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_bitwise_not (bitwise_not_tile)
+//   init()                            -> bare init             (bitwise_not_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct BitwiseNot : SfpuUnaryOp<BitwiseNot<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_bitwise_not<APPROXIMATION_MODE, ITERATIONS>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

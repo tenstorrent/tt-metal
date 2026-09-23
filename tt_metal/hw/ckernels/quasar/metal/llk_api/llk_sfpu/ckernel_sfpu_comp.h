@@ -11,9 +11,12 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
+
+enum class ZeroCompMode { EqZ, NeZ, LtZ, GeZ, GtZ, LeZ };
 
 /**
  * @brief sfpi container type for an *integer* dst_reg[0] format (vInt→SMAG32, vSMag16→SMAG16,
@@ -103,31 +106,30 @@ struct zero_comp_traits {
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
- *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
+ *         <EqZ/NeZ/LtZ/GtZ/GeZ/LeZ>
  */
-template <SfpuType COMP_MODE>
+template <ZeroCompMode COMP_MODE>
 inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v) {
     static_assert(
-        COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
-            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
-            COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
-        "_zero_comp_pred_: COMP_MODE must be one of the six comparison-to-zero SfpuType modes "
-        "(equal_zero/not_equal_zero/less_than_zero/greater_than_zero/less_than_equal_zero/greater_than_equal_zero)");
+        COMP_MODE == ZeroCompMode::EqZ || COMP_MODE == ZeroCompMode::NeZ || COMP_MODE == ZeroCompMode::LtZ ||
+            COMP_MODE == ZeroCompMode::GtZ || COMP_MODE == ZeroCompMode::LeZ || COMP_MODE == ZeroCompMode::GeZ,
+        "_zero_comp_pred_: COMP_MODE must be one of the six ZeroCompMode enumerators "
+        "(EqZ/NeZ/LtZ/GtZ/LeZ/GeZ)");
     // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
     // reinterprets are free (no instruction).
     const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
 
-    if constexpr (COMP_MODE == SfpuType::equal_zero) {
+    if constexpr (COMP_MODE == ZeroCompMode::EqZ) {
         return mag == 0;  // ±0
-    } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+    } else if constexpr (COMP_MODE == ZeroCompMode::NeZ) {
         return mag != 0;
-    } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+    } else if constexpr (COMP_MODE == ZeroCompMode::LtZ) {
         return (v < 0) && (mag != 0);  // sign set and nonzero -> excludes -0.0
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+    } else if constexpr (COMP_MODE == ZeroCompMode::GtZ) {
         return (v >= 0) && (mag != 0);  // sign clear and nonzero
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+    } else if constexpr (COMP_MODE == ZeroCompMode::GeZ) {
         return (v < 0) && (mag != 0);   // strict-negative (ltz) lanes; loop defaults 1 and writes 0 here -> gtez
-    } else {                            // less_than_equal_zero
+    } else {                            // LeZ
         return (v >= 0) && (mag != 0);  // strict-positive (gtz) lanes; loop defaults 1 and writes 0 here -> ltez
     }
 }
@@ -141,9 +143,9 @@ inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v)
  * explicit OR-combine. ±0 (magnitude 0) is in neither strict set, so it keeps the default 1 (true)
  * for both, matching IEEE.
  */
-template <SfpuType COMP_MODE>
+template <ZeroCompMode COMP_MODE>
 inline constexpr bool _zero_comp_writes_zero_() {
-    return COMP_MODE == SfpuType::greater_than_equal_zero || COMP_MODE == SfpuType::less_than_equal_zero;
+    return COMP_MODE == ZeroCompMode::GeZ || COMP_MODE == ZeroCompMode::LeZ;
 }
 
 /**
@@ -181,7 +183,7 @@ inline void init_zero_comp() {
  * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32×16 face).
  * @note Requires @ref init_zero_comp to have programmed @c ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, DataFormat FMT, SfpuType COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, DataFormat FMT, ZeroCompMode COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_zero_comp() {
     constexpr bool is_int_fmt = FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 ||
                                 FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8;
@@ -208,6 +210,33 @@ inline void calculate_zero_comp() {
         traits::store(result);
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// ZeroComp<APPROX, FORMAT, COMP_OP, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode)
+//   backs eqz/nez/ltz/gtz/lez/gez_tile and their *_tile_init entry points. Same interface as WH/BH;
+//   on Quasar every mode/format goes through calculate_zero_comp and init programs ADDR_MOD_6 via
+//   init_zero_comp. COMP_OP is one of the six ZeroCompMode enumerators.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat FORMAT,
+    ZeroCompMode COMP_OP,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct ZeroComp
+    : SfpuUnaryOp<ZeroComp<APPROXIMATION_MODE, FORMAT, COMP_OP, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    // calculate_zero_comp takes Float32 for every float width (the DEFAULT sfpmem mode resolves the real
+    // width from the dest format config); integer formats pass through unchanged.
+    static constexpr DataFormat kernel_format =
+        (FORMAT == DataFormat::Float32 || FORMAT == DataFormat::Float16 || FORMAT == DataFormat::Float16_b)
+            ? DataFormat::Float32
+            : FORMAT;
+
+    static void kernel() { calculate_zero_comp<APPROXIMATION_MODE, kernel_format, COMP_OP, ITERATIONS>(); }
+
+    static void init_kernel() { init_zero_comp(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

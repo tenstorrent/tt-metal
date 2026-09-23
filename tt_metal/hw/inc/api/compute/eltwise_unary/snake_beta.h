@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_snake_beta.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -26,21 +25,16 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_beta, uint32_t idst_out) {
-    MATH((SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_snake_beta,
-        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
-        idst_x,
-        idst_alpha,
-        idst_beta,
-        idst_out,
-        VectorMode::RC)));
+    MATH((sfpu::SnakeBeta<APPROX, data_format, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst_x, idst_alpha, idst_beta, idst_out, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void snake_beta_tile_init() { MATH((SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX)))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void snake_beta_tile_init() {
+    MATH((sfpu::SnakeBeta<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

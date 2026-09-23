@@ -750,10 +750,7 @@ struct FlashMLADecode {
             reconfig_full_operand(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-            PACK(SFPU_UNARY_INIT_FN(
-                exponential,
-                sfpu::exp_init,
-                (true /*APPROXIMATION_MODE*/, scale_fp32, true /*CLAMP_NEGATIVE*/, DST_ACCUM_MODE)));
+            PACK((sfpu::Exp<true, true, DST_SYNC_MODE, DST_ACCUM_MODE, false, 8, scale_fp32>::init()));
             sdpa_custom_mm_block_init_pack_short();
 
             std::uint32_t cur_pos = args.local_cur_pos;

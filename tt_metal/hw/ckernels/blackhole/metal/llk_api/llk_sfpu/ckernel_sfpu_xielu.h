@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -177,4 +178,16 @@ void xielu_init() {
     sfpi::vConstFloatPrgm2 = -0.0000009999995427f;  // expm1(eps)
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Xielu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, alpha_p, alpha_n) / init()
+//   backs xielu_tile / xielu_tile_init (init_kernel -> xielu_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Xielu : SfpuUnaryOp<Xielu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t param0, uint32_t param1) {
+        calculate_xielu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(param0, param1);
+    }
+
+    static void init_kernel() { xielu_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

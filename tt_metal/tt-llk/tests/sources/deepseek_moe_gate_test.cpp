@@ -148,7 +148,7 @@ using namespace ckernel;
 #endif
 #pragma GCC diagnostic pop
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 
 // The sigmoid front-end leaves its result in DEST, so the binary after it has to be RELOAD.
 // That is the only combination the op ever instantiates RELOAD in.
@@ -156,8 +156,9 @@ constexpr DeepseekMoeGateEltwiseBinaryMode BINARY_MODE =
     (DMG_RELOAD || DMG_SIGMOID) ? DeepseekMoeGateEltwiseBinaryMode::RELOAD : DeepseekMoeGateEltwiseBinaryMode::COPY;
 
 // One SFPU call on DEST tile 0; each gate functor walks its own region offsets from there.
+#define DMG_SFPU_EXPAND(...) __VA_ARGS__
 #define DMG_SFPU_CALL(FN, TEMPLATES, ...) \
-    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
+    SfpuUnaryFn<sfpu::FN<DMG_SFPU_EXPAND TEMPLATES>, dest_sync, is_fp32_dest_acc_en>::calculate(0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 // Reset dst_index to zero. The MOPs operate on whatever it was set to.
 static inline void mop_dest_reset()
@@ -325,14 +326,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 PackMode::Default>(params.num_faces, formats.math);
             copy_to_dest_tile(SCORES_TILE, formats.math);
 
-            SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
-            SFPU_UNARY_CALL(
-                dest_sync,
-                is_fp32_dest_acc_en,
-                calculate_sigmoid,
-                (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-                0,
-                VectorMode::RC_custom);
+            sfpu::Sigmoid<false /* fast_and_approx */, dest_sync, is_fp32_dest_acc_en, 8>::init();
+            SfpuUnaryFn<sfpu::calculate_sigmoid<false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */>, dest_sync, is_fp32_dest_acc_en>::
+                calculate(0, VectorMode::RC_custom);
         }
     }
 
@@ -346,7 +342,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DMG_MODE != MODE_BINARY)
     {
         _llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init_<IS_32BIT>();
-        SFPU_UNARY_INIT_FN(unused, sfpu::deepseek_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
+        _llk_math_eltwise_sfpu_init_();
+        sfpu::deepseek_moe_gate_topk_init<APPROX_MODE, is_fp32_dest_acc_en>();
     }
 
     if constexpr (DMG_MODE == MODE_GATE)

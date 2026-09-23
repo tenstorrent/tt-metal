@@ -21,7 +21,8 @@ ALWI void seed_sdpa_recip_cached_sums() {
     PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
     // Seed the cached row sums consumed by the public compute_sdpa_recip API.
     // The guarded LLK initializer rejects unsupported sanitizer builds.
-    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+    PACK(SAN_HOOK(unsupported()));
+    PACK((_llk_math_eltwise_sfpu_init_()));
     PACK((sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vFloat(2.0f)));
     PACK((sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat(2.0f)));
 }

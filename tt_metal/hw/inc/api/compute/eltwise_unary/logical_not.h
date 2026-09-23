@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logical_not.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -28,7 +27,7 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat DATA_FORMAT>
+template <DataFormat DATA_FORMAT, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void logical_not_tile(uint32_t idst) {
     static_assert(
         DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
@@ -43,18 +42,16 @@ ALWI void logical_not_tile(uint32_t idst) {
         : (DATA_FORMAT == DataFormat::UInt16)                                     ? InstrModLoadStore::LO16
         : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32
                                                                                   : InstrModLoadStore::DEFAULT;
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_logical_not,
-        (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::LogicalNot<APPROX, INSTRUCTION_MODE, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logical_not_tile_init() { MATH(SFPU_UNARY_INIT(logical_not_unary)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void logical_not_tile_init() {
+    MATH((sfpu::LogicalNot<APPROX, InstrModLoadStore::DEFAULT, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

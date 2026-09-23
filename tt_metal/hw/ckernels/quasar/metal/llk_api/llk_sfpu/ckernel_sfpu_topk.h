@@ -8,6 +8,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 // Quasar TopK keeps the SFPSWAP bodies inline. TEN-4690 forbids record-and-execute
 // replay (`execute_while_loading=true`), and replaying recorded SFPSWAP sequences
@@ -774,6 +775,138 @@ inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index
 template <std::uint32_t TAG_BITS = 16>
 inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t /*dst_tile_index*/) {}
+
+// TopkLocalSort / TopkMerge / TopkRebuild <APPROX, ..., DST_SYNC, DST_ACCUM, FUSED, RANK_STAMPED, TIE_ORDER,
+// TAG_BITS>: topk_local_sort, topk_merge, topk_rebuild and topk_tile_init (api/compute/topk.h). All three stages
+// share topk_init. Same interface as WH/BH; STABLE_SORT, FUSED and RANK_STAMPED must be false on Quasar
+// (asserted by the kernels).
+template <
+    bool APPROXIMATION_MODE,
+    bool STABLE_SORT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
+struct TopkLocalSort
+    : SfpuUnaryOp<
+          TopkLocalSort<APPROXIMATION_MODE, STABLE_SORT, DST_SYNC, DST_ACCUM, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS>,
+          DST_SYNC,
+          DST_ACCUM> {
+    static void kernel(
+        const int initial_sort_dir,
+        const int i_end_phase,
+        const int i_start_phase,
+        const int i_end_step,
+        const int i_start_step) {
+        calculate_bitonic_topk_phases_steps<APPROXIMATION_MODE, DST_ACCUM, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
+            initial_sort_dir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE, FUSED, RANK_STAMPED, TAG_BITS>(); }
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    bool IDIR,
+    bool STABLE_SORT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
+struct TopkMerge : SfpuUnaryOp<
+                       TopkMerge<
+                           APPROXIMATION_MODE,
+                           IDIR,
+                           STABLE_SORT,
+                           DST_SYNC,
+                           DST_ACCUM,
+                           FUSED,
+                           RANK_STAMPED,
+                           TIE_ORDER,
+                           TAG_BITS>,
+                       DST_SYNC,
+                       DST_ACCUM> {
+    static void kernel(const int m_iter, const int k) {
+        calculate_bitonic_topk_merge<
+            APPROXIMATION_MODE,
+            DST_ACCUM,
+            IDIR,
+            STABLE_SORT,
+            FUSED,
+            RANK_STAMPED,
+            TIE_ORDER,
+            TAG_BITS>(m_iter, k);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE, FUSED, RANK_STAMPED, TAG_BITS>(); }
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    bool STABLE_SORT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
+struct TopkRebuild
+    : SfpuUnaryOp<
+          TopkRebuild<APPROXIMATION_MODE, STABLE_SORT, DST_SYNC, DST_ACCUM, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS>,
+          DST_SYNC,
+          DST_ACCUM> {
+    static void kernel(
+        const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second) {
+        calculate_bitonic_topk_rebuild<APPROXIMATION_MODE, DST_ACCUM, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
+            initial_sort_dir, m_iter, k, logk, skip_second);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE, FUSED, RANK_STAMPED, TAG_BITS>(); }
+};
+
+// Per-slab key sweeps (api/compute/topk.h). Same interface as WH/BH; the fused-key and rank-stamped
+// sweeps are compile-time errors on Quasar and canonicalize-negzero is a no-op.
+template <bool APPROXIMATION_MODE, bool LARGEST, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkFuse : SfpuUnaryOp<TopkFuse<APPROXIMATION_MODE, LARGEST, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_topk_fuse<APPROXIMATION_MODE, LARGEST>(); }
+};
+
+template <bool APPROXIMATION_MODE, bool LARGEST, std::uint32_t INDEX_STORE_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkDefuse
+    : SfpuUnaryOp<TopkDefuse<APPROXIMATION_MODE, LARGEST, INDEX_STORE_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t num_tiles) {
+        calculate_topk_defuse<APPROXIMATION_MODE, LARGEST, INDEX_STORE_MODE>(num_tiles);
+    }
+};
+
+template <bool APPROXIMATION_MODE, bool LARGEST, std::uint32_t TAG_BITS, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkStampLocalPositions
+    : SfpuUnaryOp<
+          TopkStampLocalPositions<APPROXIMATION_MODE, LARGEST, TAG_BITS, DST_SYNC, DST_ACCUM>,
+          DST_SYNC,
+          DST_ACCUM> {
+    static void kernel() { calculate_topk_stamp_local_positions<APPROXIMATION_MODE, LARGEST, TAG_BITS>(); }
+};
+
+template <bool APPROXIMATION_MODE, bool LARGEST, std::uint32_t TAG_BITS, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkStampTileRankRange : SfpuUnaryOp<
+                                    TopkStampTileRankRange<APPROXIMATION_MODE, LARGEST, TAG_BITS, DST_SYNC, DST_ACCUM>,
+                                    DST_SYNC,
+                                    DST_ACCUM> {
+    static void kernel(std::uint32_t dst_tile_index, std::uint32_t rank_base) {
+        calculate_topk_stamp_tile_rank_range<APPROXIMATION_MODE, LARGEST, TAG_BITS>(dst_tile_index, rank_base);
+    }
+};
+
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkCanonicalizeNegzero
+    : SfpuUnaryOp<TopkCanonicalizeNegzero<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_topk_canonicalize_negzero<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

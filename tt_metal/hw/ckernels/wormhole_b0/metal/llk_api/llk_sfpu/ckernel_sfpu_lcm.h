@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_gcd.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -98,10 +99,10 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);
         TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
-	// Convert a/gcd(a, b) to int32
+        // Convert a/gcd(a, b) to int32
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
 
-	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
+        // Finally, compute lcm(a, b) = a/gcd(a, b) * b
         calculate_sfpu_mul_u16_to_u32_body();
 
         TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, 3, dst_index_out * dst_tile_size);
@@ -109,8 +110,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
     }
 }
 
-inline void calculate_sfpu_lcm_init()
-{
+inline void calculate_sfpu_lcm_init() {
     calculate_sfpu_gcd_init();
 
     // constants for reciprocal calculation
@@ -118,5 +118,18 @@ inline void calculate_sfpu_lcm_init()
     sfpi::vConstFloatPrgm1 = 32.0f / 17.0f;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Lcm<DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_lcm;  init() -> calculate_sfpu_lcm_init
+//   Backs lcm_tile / lcm_tile_init (api/compute/lcm.h).
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Lcm : SfpuBinaryOp<Lcm<DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        calculate_sfpu_lcm<ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { calculate_sfpu_lcm_init(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

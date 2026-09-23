@@ -12,6 +12,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -157,6 +158,46 @@ inline void _relu_max_(T threshold) {
                                                                                    // 2 rows)
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Relu / ReluClamp dispatch structs. Same interface as WH/BH; the Quasar kernels are float-only.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct Relu : SfpuUnaryOp<Relu<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Float16_b || FORMAT == DataFormat::Float32, "Quasar relu supports float dest only");
+
+    static void kernel() { _relu_min_<sfpi::vFloat, APPROXIMATION_MODE, ITERATIONS>(std::uint32_t{0}); }
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    bool IS_LOWER_BOUND,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct ReluClamp : SfpuUnaryOp<
+                       ReluClamp<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                       DST_SYNC,
+                       DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Float16_b || FORMAT == DataFormat::Float32,
+        "Quasar relu_min/relu_max support float dest only");
+
+    static void kernel(std::uint32_t threshold) {
+        if constexpr (IS_LOWER_BOUND) {
+            _relu_min_<sfpi::vFloat, APPROXIMATION_MODE, ITERATIONS>(threshold);
+        } else {
+            _relu_max_<sfpi::vFloat, APPROXIMATION_MODE, ITERATIONS>(threshold);
+        }
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

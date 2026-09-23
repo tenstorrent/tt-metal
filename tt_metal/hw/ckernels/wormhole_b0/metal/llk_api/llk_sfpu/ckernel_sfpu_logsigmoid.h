@@ -10,6 +10,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -60,5 +61,16 @@ inline void calculate_logsigmoid(
 template <bool APPROXIMATION_MODE>
 void logsigmoid_init() {}
 
+// ---------------------------------------------------------------------------------------------------
+// Logsigmoid<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0 (x), in1 (exp(-x)), out, vector_mode) -> calculate_logsigmoid; init() is the shared bare init.
+//   Backs logsigmoid_tile / logsigmoid_tile_init (api/compute/logsigmoid.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Logsigmoid : SfpuBinaryOp<Logsigmoid<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel

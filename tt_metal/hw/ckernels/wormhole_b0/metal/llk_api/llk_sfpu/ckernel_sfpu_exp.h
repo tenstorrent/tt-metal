@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -704,15 +705,11 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    std::uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    // _llk_math_eltwise_sfpu_init_() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -1048,5 +1045,32 @@ void exp_init() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch struct (prototype).
+// Exp<APPROX, CLAMP_NEGATIVE, DST_SYNC, DST_ACCUM, SCALE_EN, ITERATIONS, INIT_SCALE>
+//   calculate(dst_index, vector_mode, scale) -> calculate_exponential   (uses SCALE_EN, ITERATIONS)
+//   init()                                   -> exp_init                (uses INIT_SCALE)
+// The struct carries the union of the calculate and init template parameters, so each call site names
+// only the ones it cares about and leaves the rest defaulted.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    bool CLAMP_NEGATIVE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool SCALE_EN = false,
+    int ITERATIONS = 8,
+    std::uint32_t INIT_SCALE = 0x3F800000>
+struct Exp : SfpuUnaryOp<
+                 Exp<APPROXIMATION_MODE, CLAMP_NEGATIVE, DST_SYNC, DST_ACCUM, SCALE_EN, ITERATIONS, INIT_SCALE>,
+                 DST_SYNC,
+                 DST_ACCUM> {
+    static void kernel(std::uint32_t exp_base_scale_factor) {
+        calculate_exponential<APPROXIMATION_MODE, DST_ACCUM, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>(
+            exp_base_scale_factor);
+    }
+
+    static void init_kernel() { exp_init<APPROXIMATION_MODE, INIT_SCALE, CLAMP_NEGATIVE, DST_ACCUM>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

@@ -8,10 +8,9 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
-
-inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_hardshrink(std::uint32_t param0) {
@@ -42,4 +41,12 @@ inline void calculate_hardshrink(std::uint32_t param0) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Hardshrink<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, lambda)
+//   backs hardshrink_tile / hardshrink_tile_init (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Hardshrink : SfpuUnaryOp<Hardshrink<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t param0) { calculate_hardshrink<APPROXIMATION_MODE, ITERATIONS>(param0); }
+};
 }  // namespace ckernel::sfpu

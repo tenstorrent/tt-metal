@@ -8,26 +8,25 @@
 #include "ckernel_sfpu_where.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 
 namespace ckernel {
 
 /**
  * @brief Initializes the SFPU for ternary where operations.
  *
- * Programs shared SFPU state (ADDR_MOD_7) via the common ternary init
+ * Runs the shared SFPU init and Where's own init_kernel (ADDR_MOD_6) via the op struct.
  *
  * @tparam APPROXIMATE  Unused for where; kept for API parity with other SFPU ops.
  */
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
+    sfpu::Where<APPROXIMATE, DataFormat::Float16_b, DST_SYNC_MODE, DST_ACCUM_MODE>::init();
 }
 
 /**
  * @brief Executes a ternary per-lane where select over DEST tiles.
  *
- * Dispatches @c calculate_where face-by-face via the ternary params wrapper.
+ * Dispatches @c calculate_where face-by-face via the @c sfpu::Where op struct.
  * Per-lane result: @c out = (cond != 0) ? true_val : false_val.
  *
  * @tparam APPROXIMATE   Unused for where; kept for API parity with other SFPU ops.
@@ -47,16 +46,8 @@ inline void llk_math_eltwise_ternary_sfpu_where(
     std::uint32_t odst,
     int vector_mode = (int)VectorMode::RC) {
     LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
-    SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_where,
-        (APPROXIMATE, SFPU_ITERATIONS),
-        dst_index0,
-        dst_index1,
-        dst_index2,
-        odst,
-        VectorMode::RC);
+    sfpu::Where<APPROXIMATE, data_format, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        dst_index0, dst_index1, dst_index2, odst, VectorMode::RC);
 }
 
 }  // namespace ckernel

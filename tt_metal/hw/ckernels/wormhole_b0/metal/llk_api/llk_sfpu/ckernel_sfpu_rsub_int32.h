@@ -9,6 +9,7 @@
 #include "sfpi.h"
 #include <type_traits>
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "llk_math_eltwise_sfpu_op.h"
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
@@ -23,9 +24,10 @@ inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in
     // the subtrahend, matching the original TTI_SFPIADD(..., 2SCOMP_LREG_DST). The load/store DataLayout
     // is chosen so its SFP load/store format byte equals the original InstrModLoadStore value:
     //   INT32 (4) -> I32 (sign-mag<->2's-comp conversion), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (raw).
-    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
-                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
-                                                                                                 : sfpi::DataLayout::I32;
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16
+                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
+                                            ? sfpi::DataLayout::SM32
+                                            : sfpi::DataLayout::I32;
     using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
 #pragma GCC unroll 8
@@ -47,5 +49,38 @@ void calculate_rsub_scalar_int32(uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// RsubInt<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_rsub_int (LO16 loads for UInt16, INT32 otherwise)
+//   init()                                -> bare init
+// Backs rsub_int_tile / rsub_int_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct RsubInt
+    : SfpuBinaryOp<RsubInt<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16,
+        "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");
+    static constexpr InstrModLoadStore instruction_mode =
+        (FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        calculate_rsub_int<APPROXIMATION_MODE, instruction_mode, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------
+// RsubScalarInt32<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, scalar) -> calculate_rsub_scalar_int32
+//   init()                                    -> bare init
+// Backs rsub_unary_int32_tile / rsub_unary_int32_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct RsubScalarInt32
+    : SfpuUnaryOp<RsubScalarInt32<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t scalar) { calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>(scalar); }
+};
 
 }  // namespace ckernel::sfpu

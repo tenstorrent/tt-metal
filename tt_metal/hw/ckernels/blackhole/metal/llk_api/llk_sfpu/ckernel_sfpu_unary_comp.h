@@ -9,11 +9,11 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_comp.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
-
-inline void unary_ne_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ne(uint value) {
@@ -33,8 +33,6 @@ inline void calculate_unary_ne(uint value) {
     }
 }
 
-inline void unary_eq_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_eq(uint value) {
     // SFPU microcode
@@ -52,8 +50,6 @@ inline void calculate_unary_eq(uint value) {
         sfpi::dst_reg++;
     }
 }
-
-inline void unary_gt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_gt(uint value) {
@@ -73,8 +69,6 @@ inline void calculate_unary_gt(uint value) {
     }
 }
 
-inline void unary_lt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_lt(uint value) {
     // SFPU microcode
@@ -92,8 +86,6 @@ inline void calculate_unary_lt(uint value) {
         sfpi::dst_reg++;
     }
 }
-
-inline void unary_ge_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ge(uint value) {
@@ -113,8 +105,6 @@ inline void calculate_unary_ge(uint value) {
     }
 }
 
-inline void unary_le_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_le(uint value) {
     // SFPU microcode
@@ -132,6 +122,36 @@ inline void calculate_unary_le(uint value) {
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// UnaryComp<APPROX, COMP_OP, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, value)
+//   backs unary_ne/eq/gt/ge/lt/le_tile (float compare of each element against the fp32 bit pattern
+//   `value`) and unary_*_tile_init. COMP_OP is one of UnaryCompMode::Ne/Eq/Gt/Ge/Lt/Le.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, UnaryCompMode COMP_OP, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct UnaryComp
+    : SfpuUnaryOp<UnaryComp<APPROXIMATION_MODE, COMP_OP, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        COMP_OP == UnaryCompMode::Ne || COMP_OP == UnaryCompMode::Eq || COMP_OP == UnaryCompMode::Gt ||
+            COMP_OP == UnaryCompMode::Ge || COMP_OP == UnaryCompMode::Lt || COMP_OP == UnaryCompMode::Le,
+        "UnaryComp supports only UnaryCompMode::Ne/Eq/Gt/Ge/Lt/Le");
+
+    static void kernel(uint32_t value) {
+        if constexpr (COMP_OP == UnaryCompMode::Ne) {
+            calculate_unary_ne<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_OP == UnaryCompMode::Eq) {
+            calculate_unary_eq<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_OP == UnaryCompMode::Gt) {
+            calculate_unary_gt<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_OP == UnaryCompMode::Ge) {
+            calculate_unary_ge<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_OP == UnaryCompMode::Lt) {
+            calculate_unary_lt<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else {
+            calculate_unary_le<APPROXIMATION_MODE, ITERATIONS>(value);
+        }
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -13,8 +13,14 @@
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
+
+// The three quant-family binary ops, selected at compile time by the Quant op struct at the end of
+// this file. Mirrors the Quasar enum of the same name so the compute API names the variant
+// identically on every arch.
+enum class QuantVariant : std::uint8_t { Quant, Requant, Dequant };
 
 // Replay-buffer slots for the per-iteration register-only compute bodies of
 // the quant / requant / dequant kernels. The body is recorded once by each
@@ -377,7 +383,8 @@ void dequant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_quant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
@@ -413,7 +420,8 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_requant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
     // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
     // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
@@ -490,7 +498,8 @@ inline void calculate_requant_int32_int8_pack(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_dequant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
     // Operand B[LREG1] is scaling factor (fp32).
@@ -525,5 +534,80 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);  // store fp32 + dst_reg += 2
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Quant<VARIANT, APPROXIMATION_MODE, OUTPUT_FORMAT, INT8_INPUT, DST_SYNC, DST_ACCUM, ITERATIONS, SIGN_MAGNITUDE_FORMAT>
+//   Backs quant_tile / quant_int8_tile / requant_tile / requant_int8_tile / requant_int8_in_tile /
+//   requant_int8_in_int8_out_tile / dequant_tile / dequant_int8_tile and every *_tile_init of quantization.h.
+//   VARIANT picks quant / requant / dequant. OUTPUT_FORMAT is Int32 (int8-range value in an int32
+//   container), UInt8 or Int8 (true int8 byte via the offset-128 pack) for quant / requant and Float32
+//   for dequant. INT8_INPUT selects the UInt8-unpacked int8 operand path of requant / dequant.
+//   calculate(in0, in1, out, vector_mode) -> calculate_{quant,requant,dequant}_int32[_int8_pack]
+//   init(zero_point)                      -> {quant,requant,dequant}_init
+// ---------------------------------------------------------------------------------------------------
+template <
+    QuantVariant VARIANT,
+    bool APPROXIMATION_MODE,
+    DataFormat OUTPUT_FORMAT,
+    bool INT8_INPUT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8,
+    bool SIGN_MAGNITUDE_FORMAT = false>
+struct Quant : SfpuBinaryOp<
+                   Quant<
+                       VARIANT,
+                       APPROXIMATION_MODE,
+                       OUTPUT_FORMAT,
+                       INT8_INPUT,
+                       DST_SYNC,
+                       DST_ACCUM,
+                       ITERATIONS,
+                       SIGN_MAGNITUDE_FORMAT>,
+                   DST_SYNC,
+                   DST_ACCUM> {
+    static constexpr bool is_dequant = VARIANT == QuantVariant::Dequant;
+    static constexpr bool int8_output = OUTPUT_FORMAT == DataFormat::Int8;
+    static_assert(
+        is_dequant ? OUTPUT_FORMAT == DataFormat::Float32
+                   : (OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || int8_output),
+        "Quant OUTPUT_FORMAT must be Int32, UInt8 or Int8 for quant / requant and Float32 for dequant");
+    static_assert(
+        !(VARIANT == QuantVariant::Quant && INT8_INPUT),
+        "quant takes an fp32 operand; INT8_INPUT applies to requant / dequant only");
+
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        if constexpr (VARIANT == QuantVariant::Quant) {
+            if constexpr (int8_output) {
+                calculate_quant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS>(
+                    dst_index_in0, dst_index_in1, dst_index_out);
+            } else {
+                calculate_quant_int32<APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(
+                    dst_index_in0, dst_index_in1, dst_index_out);
+            }
+        } else if constexpr (VARIANT == QuantVariant::Requant) {
+            if constexpr (int8_output) {
+                calculate_requant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS, INT8_INPUT>(
+                    dst_index_in0, dst_index_in1, dst_index_out);
+            } else {
+                calculate_requant_int32<APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT, INT8_INPUT>(
+                    dst_index_in0, dst_index_in1, dst_index_out);
+            }
+        } else {
+            calculate_dequant_int32<APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT, INT8_INPUT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel(std::uint32_t zero_point) {
+        if constexpr (VARIANT == QuantVariant::Quant) {
+            quant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>(zero_point);
+        } else if constexpr (VARIANT == QuantVariant::Requant) {
+            requant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT, INT8_INPUT>(zero_point);
+        } else {
+            dequant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, INT8_INPUT>(zero_point);
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

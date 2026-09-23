@@ -85,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Programs ADDR_MOD_7, which the merge and the probe both use. Also reloads the
     // constant file, so it must stay ahead of the poison.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
     // Raw TTI, not `x - 1.0f`: the compiler may otherwise materialize the -1.0 elsewhere and
     // never read LCONST_neg1. Same idiom as _floor_body_.

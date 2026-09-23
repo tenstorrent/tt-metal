@@ -11,4 +11,3 @@
 #include "ckernel_globals.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "llk_sfpu_types.h"

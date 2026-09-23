@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Invariant SFPU config only -- see the scope note above on why neither family's
     // init is called here.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

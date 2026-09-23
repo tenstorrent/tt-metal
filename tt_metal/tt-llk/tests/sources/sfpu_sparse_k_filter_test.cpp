@@ -52,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #include "sfpu/experimental/ckernel_sfpu_sparse_k_filter.h"
 
 using namespace ckernel;
@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
@@ -79,13 +79,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             0 /* dst_index */, formats.math, formats.math);
 
-        SFPU_UNARY_CALL(
+        SfpuUnaryFn<
+            sfpu::_sparse_k_filter_tile_<
+                SPARSE_K_ITERATIONS,
+                SPARSE_K_BANK_MASK,
+                SPARSE_K_MY_BANK,
+                SPARSE_K_GLOBAL_BANK_SHIFT,
+                SPARSE_K_WITHIN_BANK_MASK,
+                SPARSE_K_OUT_SHIFT>,
             DST_SYNC,
-            is_fp32_dest_acc_en,
-            _sparse_k_filter_tile_,
-            (SPARSE_K_ITERATIONS, SPARSE_K_BANK_MASK, SPARSE_K_MY_BANK, SPARSE_K_GLOBAL_BANK_SHIFT, SPARSE_K_WITHIN_BANK_MASK, SPARSE_K_OUT_SHIFT),
-            0 /* dst_index */,
-            VectorMode::RC_custom);
+            is_fp32_dest_acc_en>::calculate(0 /* dst_index */, VectorMode::RC_custom);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

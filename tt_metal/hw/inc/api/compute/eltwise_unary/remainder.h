@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_remainder.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -27,15 +26,17 @@ namespace ckernel {
  * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+    MATH((sfpu::Remainder<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_INIT_FN_ARGS(remainder, sfpu::init_remainder, (APPROX), param0, param1));
+    MATH((sfpu::Remainder<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init(param0, param1)));
 }
 
 // clang-format off
@@ -53,22 +54,18 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
  * | param0         | The unsigned divisor                                                        | uint32_t | [1, 4294967295]                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_remainder_uint32_scalar,
-        (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*divisor*/));
+    MATH((sfpu::RemainderUint32<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC, param0 /*divisor*/)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile_uint32_init() {
-    MATH(SFPU_UNARY_INIT_FN(remainder_uint32, sfpu::remainder_uint32_init, (APPROX)));
+    MATH((sfpu::RemainderUint32<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 }  // namespace ckernel

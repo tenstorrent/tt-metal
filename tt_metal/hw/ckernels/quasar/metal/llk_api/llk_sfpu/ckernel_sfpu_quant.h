@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -184,5 +185,47 @@ inline void quant_family(
         TT_SFPSTORE(p_sfpu::LREG0, OUT_FORMAT, ADDR_MOD_7, 0, out_offset + (d << 1));  // store result
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Quant<VARIANT, APPROXIMATION_MODE, OUTPUT_FORMAT, INT8_INPUT, DST_SYNC, DST_ACCUM, ITERATIONS, SIGN_MAGNITUDE_FORMAT>
+//   Backs quant_tile / requant_tile / dequant_tile and quant_tile_init / requant_tile_init / dequant_tile_init
+//   of quantization.h. Same name and template list as WH/BH; Quasar has one kernel per variant and no
+//   int8 / uint8 paths, so APPROXIMATION_MODE is unused, OUTPUT_FORMAT must be the variant's native
+//   output (Int32 for quant / requant, Float32 for dequant) and INT8_INPUT must be false.
+//   calculate(in0, in1, out, vector_mode) -> quant_family<VARIANT, ...>
+//   init(zero_point)                      -> quant_family_init<VARIANT, ...>
+// ---------------------------------------------------------------------------------------------------
+template <
+    QuantVariant VARIANT,
+    bool APPROXIMATION_MODE,
+    DataFormat OUTPUT_FORMAT,
+    bool INT8_INPUT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool SIGN_MAGNITUDE_FORMAT = false>
+struct Quant : SfpuBinaryOp<
+                   Quant<
+                       VARIANT,
+                       APPROXIMATION_MODE,
+                       OUTPUT_FORMAT,
+                       INT8_INPUT,
+                       DST_SYNC,
+                       DST_ACCUM,
+                       ITERATIONS,
+                       SIGN_MAGNITUDE_FORMAT>,
+                   DST_SYNC,
+                   DST_ACCUM> {
+    static_assert(
+        OUTPUT_FORMAT == (VARIANT == QuantVariant::Dequant ? DataFormat::Float32 : DataFormat::Int32),
+        "Quasar quant / requant write Int32 and dequant writes Float32; there is no int8 / uint8 output path");
+    static_assert(!INT8_INPUT, "Quasar quant kernels have no int8 input path");
+
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        quant_family<VARIANT, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel(std::uint32_t zero_point) { quant_family_init<VARIANT, SIGN_MAGNITUDE_FORMAT>(zero_point); }
+};
 
 }  // namespace ckernel::sfpu

@@ -7,8 +7,7 @@
 #include "api/compute/common_globals.h"
 
 #if defined(TRISC_MATH) && (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE))
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "ckernel_sfpu_binary_bcast.h"
 #endif
 
 namespace ckernel {
@@ -31,8 +30,11 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_bcast_col_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
+    // The init only depends on the broadcast dim; the binop is selected per call.
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              init()));
 }
 
 ALWI void sfpu_sub_bcast_col_init() { sfpu_bcast_col_init(); }
@@ -77,41 +79,20 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // `_sfpu_binary_check_`.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_col_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_col_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_col_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 // ============================================================================
@@ -127,8 +108,11 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  * Return value: None
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_bcast_row_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+    // The init only depends on the broadcast dim; the binop is selected per call.
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              init()));
 }
 
 ALWI void sfpu_sub_bcast_row_init() { sfpu_bcast_row_init(); }
@@ -168,41 +152,20 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW),
-        dst_data_idx,
-        dst_row_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_row_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
-        dst_data_idx,
-        dst_row_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_row_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW),
-        dst_data_idx,
-        dst_row_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+    MATH((sfpu::BinaryBcast<ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(dst_data_idx, dst_row_vec_idx, dst_data_idx, VectorMode::None)));
 }
 
 // ============================================================================

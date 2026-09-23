@@ -11,6 +11,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -93,8 +94,6 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
@@ -172,4 +171,14 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Softplus<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, beta, beta_recip, threshold)
+//   backs softplus_tile / softplus_tile_pack and their inits (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Softplus : SfpuUnaryOp<Softplus<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
+        calculate_softplus<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(param0, param1, param2);
+    }
+};
 }  // namespace ckernel::sfpu

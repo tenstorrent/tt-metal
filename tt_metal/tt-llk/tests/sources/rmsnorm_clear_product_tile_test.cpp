@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             // Leave a nonuniform SFPU write immediately before the clear, so its
             // WAIT_SFPU transition is exercised as well as ZEROACC addressing.
-            SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_negative_, (false, 8), target, VectorMode::RC);
+            ckernel::SfpuUnaryFn<ckernel::sfpu::_calculate_negative_<false, 8>, dest_sync, is_fp32_dest_acc_en>::calculate(target, VectorMode::RC);
             _llk_math_rmsnorm_clear_product_tile_<RMSNORM_CAPACITY, is_fp32_dest_acc_en>(target);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }

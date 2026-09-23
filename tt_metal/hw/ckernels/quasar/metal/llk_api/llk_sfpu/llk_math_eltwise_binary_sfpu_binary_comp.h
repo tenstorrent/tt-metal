@@ -7,8 +7,7 @@
 #include <cstdint>
 #ifdef ARCH_QUASAR
 
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_binary_comp.h"
+#include "ckernel_sfpu_binary_comp.h"
 
 namespace ckernel {
 
@@ -21,7 +20,7 @@ namespace ckernel {
 template <bool APPROXIMATE, DataFormat DATA_FORMAT>
 inline void llk_math_eltwise_binary_sfpu_gt_int_init() {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
-    _llk_math_eltwise_sfpu_init_();
+    sfpu::BinaryComp<APPROXIMATE, sfpu::BinaryCompMode::Gt, DATA_FORMAT, DST_SYNC_MODE, DST_ACCUM_MODE>::init();
 }
 
 /**
@@ -45,15 +44,14 @@ template <
 inline void llk_math_eltwise_binary_sfpu_gt_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
-    SFPU_BINARY_CALL(
+    sfpu::BinaryComp<
+        APPROXIMATE,
+        sfpu::BinaryCompMode::Gt,
+        DATA_FORMAT,
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        calculate_binary_comp_int32,
-        (APPROXIMATE, ITERATIONS, SfpuType::gt, SIGN_MAGNITUDE_FORMAT),
-        idst0,
-        idst1,
-        odst,
-        vector_mode);
+        SIGN_MAGNITUDE_FORMAT,
+        ITERATIONS>::calculate(idst0, idst1, odst, vector_mode);
 }
 
 }  // namespace ckernel

@@ -20,7 +20,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 #endif
 
@@ -148,17 +148,17 @@ struct Matmul {
             if constexpr (fuse_activation) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
-                    PACK(SFPU_UNARY_INIT_FN(
-                        sigmoid, ckernel::sfpu::sigmoid_init, (CTArgs::fused_activation_approx_mode)));
+                    PACK((sfpu::Sigmoid<CTArgs::fused_activation_approx_mode, DST_SYNC_MODE, DST_ACCUM_MODE>::init()));
                 } else {
-                    PACK(SFPU_UNARY_INIT_FN(silu, ckernel::sfpu::silu_init, (CTArgs::fused_activation_approx_mode)));
+                    PACK((sfpu::Silu<CTArgs::fused_activation_approx_mode, DST_SYNC_MODE, DST_ACCUM_MODE>::init()));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
                 for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
 
-                    custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
+                    custom_mm_block<finalize, read_transposed>(
+                        args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
                     tile_regs_commit();
 
@@ -171,21 +171,18 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK(SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
-                            calculate_sigmoid,
-                            (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
-                            0 /*dst_index*/,
-                            VectorMode::R));
+                        PACK((SfpuUnaryFn<
+                              sfpu::calculate_sigmoid<
+                                  CTArgs::fused_activation_approx_mode,
+                                  false /*is_fp32_dest_acc_en*/,
+                                  2 /*ITERATIONS*/>,
+                              DST_SYNC_MODE,
+                              DST_ACCUM_MODE>::calculate(0 /*dst_index*/, VectorMode::R)));
                     } else {
-                        PACK(SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
-                            calculate_silu,
-                            (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
-                            0 /*dst_index*/,
-                            VectorMode::R));
+                        PACK((SfpuUnaryFn<
+                              sfpu::calculate_silu<false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/>,
+                              DST_SYNC_MODE,
+                              DST_ACCUM_MODE>::calculate(0 /*dst_index*/, VectorMode::R)));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

@@ -5,7 +5,7 @@
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 #include "sanitizer/api.h"
@@ -15,7 +15,8 @@ namespace sfpu {
 
 inline void llk_math_sfpu_generic_moe_gate_topk_init() {
     SAN_HOOK(unsupported());
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(_init_generic_moe_gate_topk_);
+    _llk_math_eltwise_sfpu_init_();
+    _init_generic_moe_gate_topk_();
 }
 
 template <

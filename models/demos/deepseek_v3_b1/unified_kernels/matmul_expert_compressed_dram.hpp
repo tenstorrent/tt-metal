@@ -40,7 +40,7 @@
 using namespace ckernel;
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_silu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 #endif
 
@@ -983,13 +983,10 @@ struct MatmulExpertCompressedDRAM {
                         cb_reserve_back(CTArgs::cb_out_silu, 1);
                         tile_regs_acquire();
                         copy_tile(CTArgs::cb_out_silu, 0, 0);
-                        MATH(SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
-                            calculate_silu,
-                            (DST_ACCUM_MODE, silu_iterations),
-                            0 /*dst_index*/,
-                            VectorMode::R));
+                        MATH((SfpuUnaryFn<
+                              sfpu::calculate_silu<DST_ACCUM_MODE, silu_iterations>,
+                              DST_SYNC_MODE,
+                              DST_ACCUM_MODE>::calculate(0 /*dst_index*/, VectorMode::R)));
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(0, CTArgs::cb_out_silu, 0);
@@ -1012,7 +1009,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t num_dram_pushed = 0;
 
                 if constexpr (CTArgs::fuse_silu) {
-                    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
+                    PACK((sfpu::Silu<true /*APPROXIMATE*/, DST_SYNC_MODE, DST_ACCUM_MODE>::init()));
                 }
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
@@ -1085,13 +1082,10 @@ struct MatmulExpertCompressedDRAM {
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                PACK(SFPU_UNARY_CALL(
-                                    DST_SYNC_MODE,
-                                    DST_ACCUM_MODE,
-                                    calculate_silu,
-                                    (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
-                                    sn /*dst_index*/,
-                                    VectorMode::R));
+                                PACK((SfpuUnaryFn<
+                                      sfpu::calculate_silu<false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/>,
+                                      DST_SYNC_MODE,
+                                      DST_ACCUM_MODE>::calculate(sn /*dst_index*/, VectorMode::R)));
                             }
                             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                         } else {

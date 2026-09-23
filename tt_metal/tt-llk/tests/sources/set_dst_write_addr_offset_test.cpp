@@ -119,7 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logsigmoid.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -25,16 +24,10 @@ namespace ckernel {
  * | idst_out       | Index of tile in DST for output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_logsigmoid,
-        (APPROX, 8 /* ITERATIONS */),
-        idst_in0,
-        idst_in1,
-        idst_out,
-        VectorMode::RC)));
+    MATH((sfpu::Logsigmoid<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst_in0, idst_in1, idst_out, VectorMode::RC)));
 }
 
 /**
@@ -43,6 +36,9 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void logsigmoid_tile_init() {
+    MATH((sfpu::Logsigmoid<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

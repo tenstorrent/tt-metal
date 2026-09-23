@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -495,6 +496,25 @@ inline void calculate_reduce(
         reduce_row_block<POOL_TYPE, FORMAT>(block_ct_dim, block_rt_dim);
     }
 }
+
+// Reduce<POOL_TYPE, FORMAT, DST_SYNC, DST_ACCUM, REDUCE_DIMENSION>: sfpu_reduce / sfpu_reduce_init
+// (compute_kernel_api.h). REDUCE_DIMENSION only affects the kernel (init is shared by COL and ROW), so init can
+// leave it defaulted. init(block_ct_dim) forwards to init_reduce. DST_SYNC also sizes calculate_reduce's Dest
+// section. The parameter is deliberately not named REDUCE_DIM: reduce kernels #define REDUCE_DIM before
+// including the compute API.
+template <
+    PoolType POOL_TYPE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    ReduceDim REDUCE_DIMENSION = ReduceDim::REDUCE_COL>
+struct Reduce : SfpuUnaryOp<Reduce<POOL_TYPE, FORMAT, DST_SYNC, DST_ACCUM, REDUCE_DIMENSION>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+        calculate_reduce<POOL_TYPE, REDUCE_DIMENSION, FORMAT, DST_ACCUM, DST_SYNC>(block_ct_dim, block_rt_dim);
+    }
+
+    static void init_kernel(std::uint32_t block_ct_dim) { init_reduce<POOL_TYPE, FORMAT, DST_ACCUM>(block_ct_dim); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

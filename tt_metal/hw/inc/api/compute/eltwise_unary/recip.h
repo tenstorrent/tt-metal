@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +15,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, is_fp32_dest_acc_en, legacy_compat)));
+    MATH((sfpu::Recip<APPROX, legacy_compat, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 // clang-format off
 /**
@@ -36,12 +35,6 @@ ALWI void recip_tile_init() {
 // clang-format on
 template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_reciprocal,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
-        idst,
-        vector_mode));
+    MATH((sfpu::Recip<APPROX, legacy_compat, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, vector_mode)));
 }
 }  // namespace ckernel

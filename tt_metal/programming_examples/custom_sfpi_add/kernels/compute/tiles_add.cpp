@@ -36,8 +36,8 @@
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, my_add_tile_face, idx_dst0, idx_dst1, idx_out0, VectorMode::RC));
+    MATH((SfpuBinaryFn<sfpu::my_add_tile_face, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        idx_dst0, idx_dst1, idx_out0, VectorMode::RC)));
 }
 
 void kernel_main() {

@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -48,4 +49,24 @@ void init_addcdiv() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Addcdiv<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, in2, out, vector_mode, value) -> calculate_addcdiv   (addcdiv_tile)
+//   init()                                            -> init_addcdiv        (addcdiv_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Addcdiv
+    : SfpuTernaryOp<Addcdiv<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        std::uint32_t dst_index_in0,
+        std::uint32_t dst_index_in1,
+        std::uint32_t dst_index_in2,
+        std::uint32_t dst_index_out,
+        std::uint32_t value) {
+        calculate_addcdiv<APPROXIMATION_MODE, DST_ACCUM, FORMAT, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value);
+    }
+
+    static void init_kernel() { init_addcdiv<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

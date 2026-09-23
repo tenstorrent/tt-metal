@@ -10,6 +10,7 @@
 #include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -114,5 +115,24 @@ inline void calculate_binary_max_min(
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch struct (prototype). Same interface as WH/BH. Quasar has one kernel parameterised
+// by DataFormat, and init is the shared SFPU init only.
+// ---------------------------------------------------------------------------------------------------
+template <bool IS_MAX_OP, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct BinaryMaxMin
+    : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Float16_b || FORMAT == DataFormat::Float32 || FORMAT == DataFormat::Int32,
+        "Quasar binary max/min supports float and signed int32 dest only (no unsigned int32 kernel)");
+    // Float dest formats all take the DEFAULT sfpmem path; keep the existing Float32 selector.
+    static constexpr DataFormat kernel_format = FORMAT == DataFormat::Int32 ? DataFormat::Int32 : DataFormat::Float32;
+
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        calculate_binary_max_min<kernel_format, IS_MAX_OP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { _init_binary_max_min_(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

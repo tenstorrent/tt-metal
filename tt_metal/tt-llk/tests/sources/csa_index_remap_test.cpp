@@ -37,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_csa_index_remap.h"
 
@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         // Model a prior fused operation that changed the shared address modifier.
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7);
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+        _llk_math_eltwise_sfpu_init_();
         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_csa_index_remap_<32, CSA_ROW_OFFSET>, params.DST_INDEX, VectorMode::RC_custom);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

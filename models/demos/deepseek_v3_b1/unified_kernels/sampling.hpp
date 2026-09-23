@@ -140,71 +140,46 @@ ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     // Programs the Newton-Raphson constant the legacy_compat=false path reads from
     // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
     ckernel::sfpu::sampling_recip_init<legacy_compat>();
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_recip_scalar,
-        (legacy_compat, DST_ACCUM_MODE),
-        idst,
-        VectorMode::None);
+    SfpuUnaryFn<sfpu::calculate_sampling_recip_scalar<legacy_compat, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+        calculate(idst, VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
+    SfpuUnaryFn<sfpu::calculate_sampling_clamp_max_scalar, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        idst, VectorMode::None, param);
 }
 
 ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL(
+    SfpuBinaryFn<
+        sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Le>,
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::le),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_ACCUM_MODE>::calculate(idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL(
+    SfpuBinaryFn<
+        sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Lt>,
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::lt),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_ACCUM_MODE>::calculate(idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL(
+    SfpuBinaryFn<
+        sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Ge>,
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::ge),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_ACCUM_MODE>::calculate(idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
+    SfpuUnaryFn<sfpu::calculate_sampling_mul_unary_scalar_first_column, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        idst, VectorMode::C, param);
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL(
+    SfpuBinaryFn<
+        sfpu::calculate_sampling_binary_first_column<ckernel::sfpu::SamplingBinaryOp::add>,
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_first_column,
-        (ckernel::sfpu::SamplingBinaryOp::add),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_ACCUM_MODE>::calculate(idst0, idst1, odst, VectorMode::C);
 }
 #endif
 
@@ -574,44 +549,24 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     MATH((llk_math_top32_rm_init(in_indices_cb)));
     MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles, num_faces)));
 
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
+    MATH((SfpuUnaryFn<
+          sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>,
+          DST_SYNC_MODE,
+          DST_ACCUM_MODE,
+          sfpu::_top32_rm_init_>::init()));
     if constexpr (presorted) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            decreasing,
-            false /*skip_second*/));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles, VectorMode::RC_custom, decreasing, false /*skip_second*/)));
     } else {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_phases_steps_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            decreasing));
+        MATH((SfpuUnaryFn<sfpu::_bitonic_top32_phases_steps_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+                  calculate(value_offset_tiles, VectorMode::RC_custom, decreasing)));
     }
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _bitonic_top32_merge_,
-        (false, DST_ACCUM_MODE, false /*idir*/),
-        value_offset_tiles,
-        VectorMode::RC_custom,
-        false /*across_tiles*/));
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _bitonic_top32_rebuild_,
-        (false, DST_ACCUM_MODE),
-        value_offset_tiles,
-        VectorMode::RC_custom,
-        decreasing,
-        true /*skip_second*/));
+    MATH((
+        SfpuUnaryFn<sfpu::_bitonic_top32_merge_<false, DST_ACCUM_MODE, false /*idir*/>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+            calculate(value_offset_tiles, VectorMode::RC_custom, false /*across_tiles*/)));
+    MATH((SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        value_offset_tiles, VectorMode::RC_custom, decreasing, true /*skip_second*/)));
 
     for (uint32_t i = 64; i < row_elements; i += 64) {
         if (i + 64 > row_elements) {
@@ -634,60 +589,28 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
         if constexpr (presorted) {
-            MATH(SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                _bitonic_top32_rebuild_,
-                (false, DST_ACCUM_MODE),
-                value_offset_tiles + 1,
-                VectorMode::RC_custom,
-                decreasing,
-                false /*skip_second*/));
+            MATH((SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+                      calculate(value_offset_tiles + 1, VectorMode::RC_custom, decreasing, false /*skip_second*/)));
         } else {
-            MATH(SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                _bitonic_top32_phases_steps_,
-                (false, DST_ACCUM_MODE),
-                value_offset_tiles + 1,
-                VectorMode::RC_custom,
-                decreasing));
+            MATH(
+                (SfpuUnaryFn<sfpu::_bitonic_top32_phases_steps_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+                     calculate(value_offset_tiles + 1, VectorMode::RC_custom, decreasing)));
         }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_merge_,
-            (false, DST_ACCUM_MODE, false /*idir*/),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            false /*across_tiles*/));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            increasing,
-            true /*skip_second*/));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_merge_<false, DST_ACCUM_MODE, false /*idir*/>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles + 1, VectorMode::RC_custom, false /*across_tiles*/)));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles + 1, VectorMode::RC_custom, increasing, true /*skip_second*/)));
 
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_merge_,
-            (false, DST_ACCUM_MODE, false /*idir*/),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            true /*across_tiles*/));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            decreasing,
-            true /*skip_second*/));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_merge_<false, DST_ACCUM_MODE, false /*idir*/>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles, VectorMode::RC_custom, true /*across_tiles*/)));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles, VectorMode::RC_custom, decreasing, true /*skip_second*/)));
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -758,15 +681,15 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     transpose_tile(in_indices_cb, 0, index_offset_tiles);
 
     // Step 2: prepare first chunk for pre-sorted combine pipeline.
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _bitonic_top32_of_1024_rm_pre_sorted_prep_,
-        (false, DST_ACCUM_MODE, decreasing),
-        value_offset_tiles,
-        VectorMode::RC_custom,
-        value_offset_tiles));
+    MATH((SfpuUnaryFn<
+          sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>,
+          DST_SYNC_MODE,
+          DST_ACCUM_MODE,
+          sfpu::_top32_rm_init_>::init()));
+    MATH((SfpuUnaryFn<
+          sfpu::_bitonic_top32_of_1024_rm_pre_sorted_prep_<false, DST_ACCUM_MODE, decreasing>,
+          DST_SYNC_MODE,
+          DST_ACCUM_MODE>::calculate(value_offset_tiles, VectorMode::RC_custom, value_offset_tiles)));
 
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
     for (uint32_t i = 1; i < num_chunks; ++i) {
@@ -778,33 +701,21 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         transpose_init(in_indices_cb);
         transpose_tile(in_indices_cb, i, index_offset_tiles + 1);
 
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_of_1024_rm_pre_sorted_prep_,
-            (false, DST_ACCUM_MODE, increasing),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            value_offset_tiles + 1));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_of_1024_rm_pre_sorted_combine_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            value_offset_tiles));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_of_1024_rm_pre_sorted_prep_<false, DST_ACCUM_MODE, increasing>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles + 1, VectorMode::RC_custom, value_offset_tiles + 1)));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_of_1024_rm_pre_sorted_combine_<false, DST_ACCUM_MODE>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles, VectorMode::RC_custom, value_offset_tiles)));
     }
 
     // Step 6: collapse per-face top-32 to a single top-32.
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _bitonic_top32_of_1024_rm_pre_sorted_final_,
-        (false, DST_ACCUM_MODE),
-        value_offset_tiles,
-        VectorMode::RC_custom,
-        value_offset_tiles));
+    MATH((SfpuUnaryFn<
+          sfpu::_bitonic_top32_of_1024_rm_pre_sorted_final_<false, DST_ACCUM_MODE>,
+          DST_SYNC_MODE,
+          DST_ACCUM_MODE>::calculate(value_offset_tiles, VectorMode::RC_custom, value_offset_tiles)));
 
     // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
     uint32_t num_faces = 4;
@@ -824,50 +735,24 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         MATH((llk_math_top32_rm_init(in_indices_cb)));
         MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            decreasing,
-            false /*skip_second*/));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_merge_,
-            (false, DST_ACCUM_MODE, false /*idir*/),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            false /*across_tiles*/));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles + 1,
-            VectorMode::RC_custom,
-            increasing,
-            true /*skip_second*/));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles + 1, VectorMode::RC_custom, decreasing, false /*skip_second*/)));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_merge_<false, DST_ACCUM_MODE, false /*idir*/>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles + 1, VectorMode::RC_custom, false /*across_tiles*/)));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles + 1, VectorMode::RC_custom, increasing, true /*skip_second*/)));
 
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_merge_,
-            (false, DST_ACCUM_MODE, false /*idir*/),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            true /*across_tiles*/));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _bitonic_top32_rebuild_,
-            (false, DST_ACCUM_MODE),
-            value_offset_tiles,
-            VectorMode::RC_custom,
-            decreasing,
-            true /*skip_second*/));
+        MATH((SfpuUnaryFn<
+              sfpu::_bitonic_top32_merge_<false, DST_ACCUM_MODE, false /*idir*/>,
+              DST_SYNC_MODE,
+              DST_ACCUM_MODE>::calculate(value_offset_tiles, VectorMode::RC_custom, true /*across_tiles*/)));
+        MATH((
+            SfpuUnaryFn<sfpu::_bitonic_top32_rebuild_<false, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+                value_offset_tiles, VectorMode::RC_custom, decreasing, true /*skip_second*/)));
     }
     tile_regs_commit();
     tile_regs_wait();

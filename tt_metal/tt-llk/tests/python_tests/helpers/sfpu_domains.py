@@ -1085,7 +1085,7 @@ _NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = _SFPU_BINARY_OPS | frozenset(
         MathOperation.ReduceRow,
         MathOperation.ReduceScalar,
         # Applied by the packer (STACC_RELU): Relu has a domain and looks unary, but is not
-        # a member of SfpuType, so driving it through the unary test fails to compile.
+        # a member of SfpuUnaryOp, so driving it through the unary test fails to compile.
         MathOperation.Relu,
     }
 )
@@ -1684,7 +1684,7 @@ _ZERO_EDGE_OPS = (
     MathOperation.Signbit,  # true for -0.0, false for +0.0
     MathOperation.Heaviside,  # returns the dispatch value 0.5 at exactly 0
     # Relu is deliberately absent: its knee is at 0 like the rest, but relu is applied by
-    # the packer (STACC_RELU) and is not a member of SfpuType, so no SFPU probe can reach
+    # the packer (STACC_RELU) and is not a member of SfpuUnaryOp, so no SFPU probe can reach
     # it. See _NON_SFPU_UNARY_OPS.
     MathOperation.Lrelu,  # LRELU_NEGATIVE_SLOPE applies below 0
     MathOperation.Prelu,  # PRELU_SLOPE applies below 0

@@ -8,7 +8,7 @@
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 /**
@@ -433,12 +433,14 @@ inline void _top8_merge_() {
 }  // namespace sfpu
 
 inline void _llk_math_top8_merge_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top8_merge_configure_addrmod_);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_top8_merge_configure_addrmod_();
 }
 
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _top8_merge_, (column_idx), 0 /*DST_IDX*/, VectorMode::RC_custom);
+    SfpuUnaryFn<sfpu::_top8_merge_<column_idx>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        0 /*DST_IDX*/, VectorMode::RC_custom);
 }
 
 #endif

@@ -9,10 +9,9 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
-
-inline void elu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
@@ -35,4 +34,12 @@ inline void calculate_elu(uint slope) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Elu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, alpha)
+//   backs elu_tile / elu_tile_init (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Elu : SfpuUnaryOp<Elu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t slope) { calculate_elu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(slope); }
+};
 }  // namespace ckernel::sfpu

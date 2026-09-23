@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_sfpu/ckernel_sfpu_reduce.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -170,30 +170,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // A column lives inside one tile, so each tile reduces onto its own row 0.
                     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
                     {
-                        SFPU_UNARY_CALL(
+                        SfpuUnaryFn<
+                            calculate_reduce<POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync>,
                             dest_sync,
-                            is_fp32_dest_acc_en,
-                            calculate_reduce,
-                            (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
-                            params.DST_INDEX + tile,
-                            VectorMode::RC_custom,
-                            1 /*block_ct_dim: unused by the column reduce*/,
-                            1 /*block_rt_dim: unused by the column reduce*/);
+                            is_fp32_dest_acc_en>::
+                            calculate(
+                                params.DST_INDEX + tile,
+                                VectorMode::RC_custom,
+                                1 /*block_ct_dim: unused by the column reduce*/,
+                                1 /*block_rt_dim: unused by the column reduce*/);
                     }
                 }
                 else
                 {
                     // A row spans the whole tile row, so one call handles the entire block, walking
                     // Dest itself from the tile-0 base.
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_reduce,
-                        (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
-                        params.DST_INDEX,
-                        VectorMode::RC_custom,
-                        BLOCK_CT_DIM,
-                        BLOCK_RT_DIM);
+                    SfpuUnaryFn<calculate_reduce<POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync>, dest_sync, is_fp32_dest_acc_en>::
+                        calculate(params.DST_INDEX, VectorMode::RC_custom, BLOCK_CT_DIM, BLOCK_RT_DIM);
                 }
 
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

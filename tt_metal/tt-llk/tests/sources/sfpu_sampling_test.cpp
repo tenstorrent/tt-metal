@@ -116,11 +116,11 @@ inline void run_sampling_op()
 #elif defined(SAMPLING_OP_MUL_UNARY_SCALAR)
     ckernel::sfpu::calculate_sampling_mul_unary_scalar_first_column(SFPU_UNARY_SCALAR);
 #elif defined(SAMPLING_OP_LE)
-    ckernel::sfpu::calculate_sampling_binary_comp_first_column<SfpuType::le>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Le>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_LT)
-    ckernel::sfpu::calculate_sampling_binary_comp_first_column<SfpuType::lt>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Lt>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_GE)
-    ckernel::sfpu::calculate_sampling_binary_comp_first_column<SfpuType::ge>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_comp_first_column<ckernel::sfpu::BinaryCompMode::Ge>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_ADD)
     ckernel::sfpu::calculate_sampling_binary_first_column<ckernel::sfpu::SamplingBinaryOp::add>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_SUB)
@@ -147,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The header's own init: programs vConstFloatPrgm0 for the non-legacy reciprocal
     // path and is a no-op for legacy_compat. Everything else needs only the invariant
     // SFPU config + ADDR_MOD_7 from the LLK init.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
 #if defined(SAMPLING_POLLUTE_PRGM0)
     // Stand in for an earlier op in the same kernel that owns vConstFloatPrgm0. log_init

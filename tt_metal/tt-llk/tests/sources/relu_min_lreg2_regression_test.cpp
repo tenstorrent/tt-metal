@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // relu_min needs only the invariant SFPU config + ADDR_MOD_7 and a dest RWC reset,
     // which is what the production relu_min_tile_init reduces to -- so the bare init is
     // the faithful one here, exactly as sfpu_operations.h routes relu_min.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

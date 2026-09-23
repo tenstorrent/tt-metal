@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -37,8 +38,6 @@ namespace sfpu {
  *
  * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
-inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE>
 inline void calculate_reshuffle_rows(uint idx_addr) {
     constexpr std::uint32_t output_tile_offset = 64;
@@ -114,5 +113,15 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// ReshuffleRows<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>
+//   calculate(dst_index, VectorMode::RC_custom, idx_addr) -> calculate_reshuffle_rows
+//   init() is the shared SFPU init only.
+//   Backs reshuffle_rows_tile / reshuffle_rows_tile_init (api/compute/reshuffle.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct ReshuffleRows : SfpuUnaryOp<ReshuffleRows<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t idx_addr) { calculate_reshuffle_rows<APPROXIMATION_MODE>(idx_addr); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

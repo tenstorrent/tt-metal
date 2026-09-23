@@ -10,6 +10,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -77,6 +78,16 @@ inline void calculate_square(
         calculate_square_rows(load_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
     }
 }
+
+// Square<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: square_tile / square_tile_init (compute_kernel_api.h).
+// The Quasar kernel takes only an iteration count, so APPROXIMATION_MODE and DST_ACCUM are accepted for
+// interface parity with WH/BH and ignored here; init runs init_square to program ADDR_MOD_6.
+template <bool APPROXIMATION_MODE /*maybe_unused*/, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct Square : SfpuUnaryOp<Square<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_square<ITERATIONS>(); }
+
+    static void init_kernel() { init_square(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

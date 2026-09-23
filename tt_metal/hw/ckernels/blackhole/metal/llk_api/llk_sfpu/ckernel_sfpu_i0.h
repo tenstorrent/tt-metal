@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -23,8 +24,6 @@ namespace sfpu {
            t4) *                                                                                                  \
           t4) *                                                                                                   \
      t4)
-inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {
 #pragma GCC unroll 0
@@ -53,5 +52,15 @@ inline void calculate_i0() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// I0<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_i0
+//   init()                            -> shared SFPU init only
+// Backs i0_tile / i0_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct I0 : SfpuUnaryOp<I0<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_i0<APPROXIMATION_MODE, ITERATIONS>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel
