@@ -25,6 +25,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "hd_socket_test_utils.hpp"
+#include "leg_benchmark_common.hpp"
 
 #include "tt_metal/distributed/host_d2h_leg.hpp"
 #include "tt_metal/distributed/host_l1_map.hpp"
@@ -36,6 +37,7 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 namespace dist = tt::tt_metal::distributed;
 namespace mh = tt::tt_metal::distributed::multihost;
+using namespace leg_bench;
 
 namespace {
 
@@ -54,92 +56,12 @@ const std::vector<int64_t> kVerify = {0, 1};
 // is sized for the sweep's largest case; provision() then pins only each case's prefix.
 const uint32_t kReservedCores = static_cast<uint32_t>(*std::max_element(kCores.begin(), kCores.end()));
 
-// Fail rather than spin: a kernel parked in socket_barrier makes Finish() unbounded.
-constexpr auto kStall = std::chrono::seconds(30);
-
-// SkipWithError does not set the exit status; main() returns this instead.
-bool g_run_failed = false;
-
-void fail(benchmark::State& state, const std::string& why) {
-    g_run_failed = true;
-    state.SkipWithError(why);
-}
-
-// Copied from benchmark_hd_sockets.cpp:159-190 and :518-528; those symbols are file-local.
-struct LatencySummary {
-    double avg_us = 0.0;
-    double min_us = 0.0;
-    double max_us = 0.0;
-    double p50_us = 0.0;
-    double p99_us = 0.0;
-    double avg_cycles = 0.0;
-    uint64_t min_cycles = 0;
-    uint64_t max_cycles = 0;
-};
-
-LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycles, double cycles_per_us) {
-    if (cycles.empty() || cycles_per_us <= 0.0) {
-        return {};
-    }
-    auto sorted = cycles;
-    std::sort(sorted.begin(), sorted.end());
-    double avg_c = 0.0;
-    for (const uint64_t c : cycles) {
-        avg_c += static_cast<double>(c);
-    }
-    avg_c /= static_cast<double>(cycles.size());
-
-    auto to_us = [&](double c) { return c / cycles_per_us; };
-    return {
-        .avg_us = to_us(avg_c),
-        .min_us = to_us(static_cast<double>(sorted.front())),
-        .max_us = to_us(static_cast<double>(sorted.back())),
-        .p50_us = to_us(static_cast<double>(sorted[sorted.size() / 2])),
-        .p99_us = to_us(static_cast<double>(sorted[(sorted.size() * 99) / 100])),
-        .avg_cycles = avg_c,
-        .min_cycles = sorted.front(),
-        .max_cycles = sorted.back(),
-    };
-}
-
-// `prefix` is the one addition: analyze_hd_sockets.py reads the unprefixed set.
-void set_latency_counters(
-    benchmark::State& state, const LatencySummary& s, uint64_t num_iterations, const std::string& prefix = "") {
-    state.counters[prefix + "num_iterations"] = static_cast<double>(num_iterations);
-    state.counters[prefix + "avg_us"] = s.avg_us;
-    state.counters[prefix + "min_us"] = s.min_us;
-    state.counters[prefix + "max_us"] = s.max_us;
-    state.counters[prefix + "p50_us"] = s.p50_us;
-    state.counters[prefix + "p99_us"] = s.p99_us;
-    state.counters[prefix + "avg_cycles"] = s.avg_cycles;
-    state.counters[prefix + "min_cycles"] = static_cast<double>(s.min_cycles);
-    state.counters[prefix + "max_cycles"] = static_cast<double>(s.max_cycles);
-}
-
 // Pre-registered so a skipped case keeps the CSV shape.
 void init_counters(benchmark::State& state) {
     state.counters["throughput_gbps"] = 0;
     state.counters["frames"] = 0;
     set_latency_counters(state, LatencySummary{}, 0);
     set_latency_counters(state, LatencySummary{}, 0, "slot_wait_");
-}
-
-// One bringup per process: Fixture::SetUp runs once per arg case.
-struct DeviceFixture {
-    std::shared_ptr<dist::MeshDevice> mesh_device;
-
-    DeviceFixture() : mesh_device(dist::MeshDevice::create_unit_mesh(kDeviceId)) {}
-};
-
-DeviceFixture& get_device_fixture() {
-    static DeviceFixture fixture;
-    return fixture;
-}
-
-// As test_kernel_put.cpp:64-68 writes it.
-uint32_t pattern_word(uint32_t core) {
-    const uint32_t b = 0x40u + (core & 0x1Fu);
-    return b | (b << 8) | (b << 16) | (b << 24);
 }
 
 class D2HLegFixture : public benchmark::Fixture {
@@ -160,7 +82,7 @@ public:
             return;
         }
 
-        mesh_ = get_device_fixture().mesh_device;
+        mesh_ = unit_mesh(kDeviceId);
         if (!dist::is_device_coord_mmio_mapped(mesh_, dist::MeshCoordinate(0, 0))) {
             fail(state, "device " + std::to_string(kDeviceId) + " is not MMIO-mapped");
             return;
@@ -222,11 +144,7 @@ public:
         }
         try {
             region.provision(
-                mesh_,
-                /*chip=*/0,
-                cores_,
-                experimental::HostTopology{0, 1, 1},
-                HostRegion::Grid{grid_width_, grid_height_});
+                mesh_, /*chip=*/0, cores_, HostTopology{0, 1, 1}, HostRegion::Grid{grid_width_, grid_height_});
         } catch (const std::exception& ex) {
             fail(state, std::string("host region unavailable: ") + ex.what());
             return;
