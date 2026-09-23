@@ -15,8 +15,8 @@ from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, m
 
 @pytest.fixture(scope="module")
 def recipe_ring_device():
-    if not is_blackhole() or ttnn.GetNumAvailableDevices() < 2:
-        pytest.skip("Ring recipes require two connected Blackholes")
+    if not is_blackhole() or ttnn.GetNumAvailableDevices() != 2:
+        pytest.skip("This ring suite requires exactly two connected Blackholes")
     mesh = None
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_1D,
@@ -74,7 +74,7 @@ def recipe_ring_device():
                 id=f"perf-{name}",
                 marks=pytest.mark.skipif(os.getenv("TEST_SDPA_RECIPE_PERF") != "1", reason="Opt-in ring timing"),
             )
-            for name, grid in [("resident-state", (8, 4)), ("staged-state", (8, 1))]
+            for name, grid in [("resident-state", (8, 8)), ("staged-two", (8, 4)), ("staged-eight", (8, 1))]
         ],
     ],
 )
@@ -285,7 +285,7 @@ def test_recipe_ring_rejection(recipe_ring_device, case):
         "window": dict(sliding_window_size=128),
         "cache": dict(kv_cache_batch_idx=0),
         "scale": dict(scale=0.125),
-        "compute": dict(compute_kernel_config=ttnn.BlackholeComputeKernelConfig()),
+        "compute": dict(compute_kernel_config=ttnn.init_device_compute_kernel_config(mesh.arch())),
         "exp": dict(
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(1, 1), q_chunk_size=256, k_chunk_size=512, exp_approx_mode=False
