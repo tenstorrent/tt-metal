@@ -119,7 +119,7 @@ def parse_args():
     parser.add_argument("--hoist-pack-config", action="store_true")
     parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
-    parser.add_argument("--single-layer-barrier", action="store_true")
+    parser.add_argument("--single-layer-barrier", action="store_true", help="Unqualified experiment: known full2048 hang; excluded from the selected candidate")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
     parser.add_argument("--cache-layer-table", action="store_true")
     parser.add_argument("--inline-cb-reset", action="store_true")

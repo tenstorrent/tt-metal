@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class ProjectionTuning:
     reader: str = "original"
     wide_subblocks: bool = False
+    # Unqualified: full2048 hung despite short/four-layer passes; see EXPERIMENT2_REPORT.md.
     single_layer_barrier: bool = False
     bounded_barrier: bool = False
     multicast_barrier: bool = False

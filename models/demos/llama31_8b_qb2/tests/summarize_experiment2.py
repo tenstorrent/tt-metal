@@ -48,6 +48,9 @@ def summarize(artifacts):
         d = json.loads(path.read_text())
         record = json.loads(run_path.read_text())
         assert record["returncode"] == 0 and not record.get("timed_out")
+        assert not any(record["selected_environment"].get(key) for key in (
+            "TT_METAL_WATCHER", "TT_METAL_DEVICE_PROFILER", "TT_METAL_PROFILER_SUM", "TT_METAL_DEVICE_PROFILER_NOC_EVENTS"
+        )), "Instrumented run cannot enter headline statistics"
         assert not d["profile_run"] and not d["watcher_enabled"] and d["headline_latency_eligible"]
         assert d["comparison_checks_passed"] and d["agreement_policy"] == "exact"
         assert d["teacher_logits"]["exact"] and all(x["exact"] for x in d["teacher_step_metrics"])
