@@ -115,10 +115,9 @@ constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
 constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
 constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
-constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 4;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
-constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
 constexpr uint32_t kRingDirectionCount = 2;
 

@@ -449,7 +449,6 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(batch_head_count);
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
-            writer_args.push_back(range_start_page);
             halo_input_Wt.push_back(input_Wt);
         }
 

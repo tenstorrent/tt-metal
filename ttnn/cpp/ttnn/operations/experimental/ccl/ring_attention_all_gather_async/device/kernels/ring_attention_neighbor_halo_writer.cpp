@@ -61,14 +61,12 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
-    std::array<uint32_t, num_inputs> input_origin_page;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         output_batch_head_stride_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     if constexpr (has_halo_metadata) {
@@ -99,7 +97,6 @@ void kernel_main() {
             const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
             input_tile_id_start[input_idx] = range.start;
             input_tile_id_end[input_idx] = range.end;
-            input_origin_page[input_idx] = 0;
         }
     }
 
@@ -144,7 +141,7 @@ void kernel_main() {
                 const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                 cb_output.wait_front(packet_size_in_pages);
                 const size_t l1_read_addr = cb_output.get_read_ptr();
-                const uint32_t tile_id = output_batch_head_base + tiles_read - input_origin_page[input_idx];
+                const uint32_t tile_id = output_batch_head_base + tiles_read;
 
                 if (num_pages_to_read == 2) {
                     const uint32_t second_tile_id = tile_id + 1;

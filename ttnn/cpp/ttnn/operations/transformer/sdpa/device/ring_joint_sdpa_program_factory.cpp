@@ -749,9 +749,9 @@ void apply_ring_joint_scalar_runtime_args(
                                                  in * neighbor_reader_tensor_descriptor_field_count;
                     const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
                                                  in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
-                    const uint32_t writer_origin_idx = writer_base + ag_rt::kNeighborWriterInputOriginPageFieldOffset;
                     TT_FATAL(
-                        writer_args.size() > writer_origin_idx, "Directional gather writer descriptor is incomplete");
+                        writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
+                        "Directional gather writer descriptor is incomplete");
                     const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
                     const uint32_t halo_pages = runtime_chunked_sliding_layout.halo_tile_rows * input_Wt;
                     const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
@@ -768,7 +768,6 @@ void apply_ring_joint_scalar_runtime_args(
                     reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
                     writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
                     writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
-                    writer_args[writer_origin_idx] = 0;
                 }
             }
         }
