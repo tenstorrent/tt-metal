@@ -6,26 +6,12 @@
 
 #include "unified_routed_expert_ffn_types.hpp"
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
-struct UnifiedRoutedExpertFfnSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-};
-
 struct UnifiedRoutedExpertFfnProgramFactory {
-    using shared_variables_t = UnifiedRoutedExpertFfnSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const UnifiedRoutedExpertFfnParams& operation_attributes,
-        const UnifiedRoutedExpertFfnInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const UnifiedRoutedExpertFfnParams& operation_attributes,
         const UnifiedRoutedExpertFfnInputs& tensor_args,
         Tensor& tensor_return_value);
