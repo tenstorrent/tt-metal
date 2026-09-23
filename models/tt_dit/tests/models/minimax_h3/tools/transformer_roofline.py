@@ -1065,6 +1065,20 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
             name = f"MinimalMatmul {OPS_BY_NAME['ff2'].name}" if m_rows > 32 else f"MinimalMatmul M={m_rows} (adaLN)"
             klass = "compute" if tc >= td else "dram"
             formula = f"2·{m_rows}·{k}·{n} FLOP on {cores} cores; {_bytes(ins + outs) / 1e6:.0f} MB DRAM"
+        elif code == "MinimalMatmulStridedReduceScatterAsync":
+            # ff2 fused with its reduce-scatter (linear.py's RowParallelLinear fused branch). The matmul runs on
+            # the grid in the attributes; the reduce-scatter workers occupy the rows between it and the device
+            # grid, so the reported CORE COUNT is the whole device, not the matmul's cores.
+            m_rows, k, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
+            g = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", r0.get("ATTRIBUTES", ""))
+            mm_cores = int(g.group(1)) * int(g.group(2)) if g else cores
+            tc = 2.0 * m_rows * k * n / (mm_cores * per_cycle * arch.clock_hz)
+            b = BF16_BYTES * m_rows * n  # the [M, N] partial, reduce-scattered to N/R columns per device
+            tf = (R - 1) * (b / R) / (2 * L) / link_bw
+            td = _bytes(ins + outs) / dram_bw
+            klass = max((("compute", tc), ("dram", td), ("fabric", tf)), key=lambda kv: kv[1])[0]
+            name = "MM+RS ff2 (fused)"
+            formula = f"2·{m_rows}·{k}·{n} FLOP on {mm_cores} cores; RS (R−1)·(2B·M·N/R)/(2·{L})"
         elif code == "ReduceScatterMinimalAsyncDeviceOperation":
             b = _bytes(ins[:1])
             tf = (R - 1) * (b / R) / (2 * L) / link_bw
@@ -1113,10 +1127,12 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
     total = sum(o.measured for o in ops)
     keep, other = [], BlockOp("other (small ops)", "", 0, 0.0, "other")
     for o in sorted(ops, key=lambda o: -o.measured):
-        if o.measured < OTHER_SHARE * total or o.klass == "other":
+        if o.measured < OTHER_SHARE * total:
             other.calls += o.calls
             other.measured += o.measured
         else:
+            if o.klass == "other" and not o.formula:
+                o.formula = "no bound model for this op code"
             keep.append(o)
     if other.calls:
         other.formula = "below 1% of the block each"
