@@ -49,7 +49,7 @@ FABRIC_CONFIGS = {
 }
 
 # Per link per direction, GB/s
-LINE_RATE_GBPS = {"wormhole_b0": 12.5, "blackhole": 50.0}
+LINE_RATE_GBPS = {"wormhole_b0": 12.5, "blackhole": 25.0}
 
 # Largest fabric packet payload each architecture accepts. Over it, the conftest
 # skips the whole run.

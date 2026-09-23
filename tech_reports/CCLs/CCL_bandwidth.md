@@ -90,7 +90,7 @@ A single DRAM channel delivers bandwidth of the same order as a single link. Sum
 
 The fabric limits a collective because the collective only gets a few links. It communicates along one axis, while the entire memory system is available locally. The headroom between the two is small enough that memory could also limit the operation on a system with many fast links. The L1 versus DRAM section measures whether it does.
 
-The Blackhole aggregate above is derived from device specifications, not measured. No per-bank breakdown for Blackhole was available.
+Wormhole's channel figure is the peak the `ttnn` performance model uses. Blackhole's is the device specification, and a per-bank measurement of 64 GB/s agrees with it.
 
 ## What sets the floor
 
@@ -176,6 +176,8 @@ Each run lands in `data/runs/<timestamp>/`. The runs are merged, keeping the lat
 
 ## Results
 
+NOTE: Blackhole links currently run at half their rated speed, so the Blackhole figures and tables normalize against 25 GB/s per link per direction.
+
 ### Wormhole LoudBox
 
 ![](images/bw_wormhole_b0_bfloat16_6144_n8.png)
@@ -184,10 +186,9 @@ Additionally, figures for two and four devices: [`n2`](images/bw_wormhole_b0_bfl
 
 ### Blackhole Galaxy
 
-<!--
-  TODO(data): rerun ./tech_reports/CCLs/run_bench.sh galaxy, then embed
-  images/bw_blackhole_bfloat16_<packet>_n8.png with a caption as above.
--->
+![](images/bw_blackhole_bfloat16_8192_n8.png)
+
+Additionally, figures for two and four devices: [`n2`](images/bw_blackhole_bfloat16_8192_n2.png), [`n4`](images/bw_blackhole_bfloat16_8192_n4.png). They have no ring panel, because the wraparound link exists only across all eight devices.
 
 ## Interpreting the curve
 
@@ -208,9 +209,9 @@ In our data, every curve keeps falling as size shrinks, and none of them flatten
 
 **Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, ring `reduce_scatter` dips at 512 KiB and jumps at 1 MiB. Up to 512 KiB per device it uses a one-shot direct algorithm, which sends about 2.3× the bytes.
 
-**The asymptote.** Fixed costs are negligible here. In our data, lines flatten at 84–94% of line rate, close to the payload ceiling. Rings flatten at 67–83%. The next section rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
+**The asymptote.** Fixed costs are negligible here. In our data, on Wormhole, lines flatten at 84–94% of line rate, close to the payload ceiling, and rings at 66–83%. On Blackhole topology makes no difference: lines reach 66–96% and rings 68–95%. The next section rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
 
-**Line versus ring.** In our data, at eight devices a ring runs `all_gather`, `reduce_scatter` and `all_reduce` 1.5 to 1.8 times faster than a line, short of the ideal 2×. Besides the fabric cost of a ring, the ops behave differently:
+**Line versus ring.** A ring halves both the bytes per link and the distance, so at eight devices it should finish twice as fast. In our data, Blackhole reaches that: every collective lands within a few percent of 2×. Wormhole does not, running 1.5 to 1.8 times faster. Besides the fabric cost of a ring, the ops behave differently there:
 
 - `all_gather` relays each chunk through worker cores, hop by hop. On a line it multicasts, and the routers forward.
 - `reduce_scatter` synchronizes with its neighbor every 4 chunks on a ring, against every 20 on a line.
@@ -220,11 +221,13 @@ In our data, every curve keeps falling as size shrinks, and none of them flatten
 
 ![](images/memcfg_wormhole_b0_bfloat16_6144_n8.png)
 
-Moving the tensors from DRAM into L1 does not change collective bandwidth. In our data, the two curves overlay wherever both exist. L1 cannot hold the largest tensors, so its sweep stops earlier.
+![](images/memcfg_blackhole_bfloat16_8192_n8.png)
+
+Moving the tensors from DRAM into L1 does not change collective bandwidth. In our data, the two curves overlay wherever both exist, on either machine. L1 cannot hold the largest tensors, so its sweep stops earlier.
 
 ## All data
 
-Every measured cell is tabulated in `results/`:
+Every measured cell is tabulated in `results/`. `SUMMARY` keeps one configuration per collective and device count, ring over line and DRAM over L1. `FULL` has every topology and memory configuration.
 
-- [`SUMMARY_wormhole_b0_bfloat16_6144.md`](results/SUMMARY_wormhole_b0_bfloat16_6144.md): one configuration per collective and device count, ring over line and DRAM over L1.
-- [`FULL_wormhole_b0_bfloat16_6144.md`](results/FULL_wormhole_b0_bfloat16_6144.md): every topology and memory configuration.
+- Wormhole LoudBox: [`SUMMARY`](results/SUMMARY_wormhole_b0_bfloat16_6144.md), [`FULL`](results/FULL_wormhole_b0_bfloat16_6144.md)
+- Blackhole Galaxy: [`SUMMARY`](results/SUMMARY_blackhole_bfloat16_8192.md), [`FULL`](results/FULL_blackhole_bfloat16_8192.md)
