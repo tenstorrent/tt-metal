@@ -6,7 +6,6 @@
 #include <vector>
 #include <map>
 #include <ostream>
-#include <algorithm>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
