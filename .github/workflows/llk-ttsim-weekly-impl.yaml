@@ -9,14 +9,25 @@ name: "[internal] LLK ttsim weekly impl"
 # failed job status, and no GitHub check is published (a pass/fail check would mislead either
 # way while ttsim ISA coverage grows in). The uploaded HTML report is the deliverable; the job
 # summary carries the current pass/fail/skip counts.
+#
+# Quasar builds libttsim.so from ttsim-private in the test job
 
 on:
   workflow_call:
+    secrets:
+      TTSIM_TOKEN:
+        required: false
+        description: "PAT with contents:read on tenstorrent/ttsim-private. Only the Quasar leg uses it."
     inputs:
       docker-image:
         required: true
         type: string
         description: "LLK CI image to run the suite in"
+      quasar-ttsim-ref:
+        required: false
+        type: string
+        default: ""
+        description: "ttsim-private branch or SHA for Quasar libttsim.so (empty = pin file)"
       enabled-skus:
         required: false
         type: string
@@ -37,10 +48,12 @@ env:
 
 jobs:
   load-test-matrix:
+    if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
+      public-sim-libs: ${{ steps.split-libs.outputs.public-sim-libs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_ttsim_weekly.yaml
     steps:
@@ -62,15 +75,30 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      # Exclude libttsim_qsr.so — Quasar is built in the test job, not fetched.
+      - name: Split public vs Quasar ttsim libs
+        id: split-libs
+        env:
+          SIM_LIBS: ${{ steps.build-matrix.outputs.sim-libs }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          libs = json.loads(os.environ.get("SIM_LIBS") or "[]")
+          public = [lib for lib in libs if lib != "libttsim_qsr.so"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"public-sim-libs={json.dumps(public)}\n")
+          PY
 
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    if: ${{ github.repository == 'tenstorrent/tt-metal' && needs.load-test-matrix.outputs.public-sim-libs != '[]' }}
     runs-on: ubuntu-slim
     strategy:
       fail-fast: false
       matrix:
-        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.public-sim-libs) }}
     concurrency:
       group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
       cancel-in-progress: false
@@ -95,7 +123,16 @@ jobs:
 
   llk-ttsim-weekly:
     needs: [load-test-matrix, fetch-ttsim]
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && needs.fetch-ttsim.result == 'success' }}
+    # fetch-ttsim is skipped when the matrix has no public (WH/BH) libs.
+    if: >-
+      ${{
+        always()
+        && !cancelled()
+        && github.repository == 'tenstorrent/tt-metal'
+        && needs.load-test-matrix.result == 'success'
+        && needs.load-test-matrix.outputs.matrix != '[]'
+        && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped')
+      }}
     strategy:
       fail-fast: false
       matrix:
@@ -147,16 +184,105 @@ jobs:
         shell: bash
         run: echo "path=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
 
+      - name: Require TTSIM_TOKEN
+        if: ${{ steps.arch.outputs.name == 'quasar' }}
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.TTSIM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$REPO" != "tenstorrent/tt-metal" ]]; then
+            echo "::error::The Quasar leg uses TTSIM_TOKEN and only runs on tenstorrent/tt-metal, not on '${REPO}'."
+            exit 1
+          fi
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::Secret TTSIM_TOKEN is empty. Add a PAT with contents:read on tenstorrent/ttsim-private to this repository's secrets. GITHUB_TOKEN cannot clone another private repo."
+            exit 1
+          fi
+
+      - name: Resolve ttsim-private ref
+        if: ${{ steps.arch.outputs.name == 'quasar' }}
+        id: pin
+        shell: bash
+        env:
+          OVERRIDE: ${{ inputs.quasar-ttsim-ref }}
+        run: |
+          set -euo pipefail
+          pin_file="${{ env.LLK_PATH }}/tests/ttsim-quasar-ref"
+          if [[ -n "${OVERRIDE}" ]]; then
+            ref="${OVERRIDE}"
+            echo "Using workflow input ref: ${ref}"
+          else
+            if [[ ! -f "$pin_file" ]]; then
+              echo "::error::${pin_file} not found and no quasar-ttsim-ref input was given."
+              exit 1
+            fi
+            ref=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$pin_file" | sed '/^$/d' | head -n 1)
+            if [[ -z "$ref" ]]; then
+              echo "::error::${pin_file} is empty; expected a tenstorrent/ttsim-private branch or SHA."
+              exit 1
+            fi
+            echo "Using pin file ref: ${ref}"
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      # actions/checkout's includeIf.gitdir auth does not apply in this container.
+      - name: Checkout ttsim-private
+        if: ${{ steps.arch.outputs.name == 'quasar' }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          TOKEN: ${{ secrets.TTSIM_TOKEN }}
+          REF: ${{ steps.pin.outputs.ref }}
+        run: |
+          set -euo pipefail
+          TOKEN="${TOKEN//$'\r'/}"
+          TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
+          # Actions masks the secret exactly as stored. If it was saved with stray
+          # whitespace the trimmed value is a different string and would print in the
+          # clear, so re-register it before it ever reaches a command line.
+          echo "::add-mask::$TOKEN"
+          mkdir -p ttsim-private
+          git -C ttsim-private init
+          git -C ttsim-private fetch --depth 1 \
+            "https://x-access-token:${TOKEN}@github.com/tenstorrent/ttsim-private.git" \
+            "${REF}"
+          git -C ttsim-private checkout --detach FETCH_HEAD
+
+      - name: Build Quasar libttsim.so
+        if: ${{ steps.arch.outputs.name == 'quasar' }}
+        shell: bash
+        working-directory: ttsim-private
+        env:
+          REF: ${{ steps.pin.outputs.ref }}
+        run: |
+          set -euo pipefail
+          ./make.py src/_out/release_qsr/libttsim.so
+          test -f src/_out/release_qsr/libttsim.so
+          sha=$(git rev-parse --short HEAD)
+          # WH/BH report a bare tag here (e.g. v1.10.2), so keep Quasar's string in the
+          # same ballpark — a 40-char SHA stretches the summary table and the Slack line.
+          # A SHA pin collapses to its short form (the full ref added nothing the short
+          # SHA doesn't say); a branch keeps its name plus the SHA it resolved to.
+          if [[ "$REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            version="ttsim-private@${sha}"
+          else
+            version="ttsim-private@${REF} (${sha})"
+          fi
+          printf '%s\n' "$version" > "$GITHUB_WORKSPACE/ttsim-quasar-version"
+
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
-      # download, so the simulator comes from tt_metal/ttsim-version like every other sim
-      # pipeline rather than from tt_metal/tt-llk/tests/ttsim-version.
+      # download, so WH/BH come from tt_metal/ttsim-version and Quasar from local-lib.
       - name: ⬇️  Setup TTSim
         uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ steps.workspace.outputs.path }}
+          local-lib: ${{ steps.arch.outputs.name == 'quasar' && format('{0}/ttsim-private/src/_out/release_qsr/libttsim.so', steps.workspace.outputs.path) || '' }}
 
       # continue-on-error: ttsim is WIP and many tests are expected to fail; the HTML report is
       # the deliverable, not a green check.
@@ -198,7 +324,11 @@ jobs:
             wc -l < "${RESULTS_DIR}/latest.collected.txt" | tr -d ' ' \
               > "${ARTIFACT_DIR}/ttsim-${ARCH}.enumerated"
           fi
-          cp "${GITHUB_WORKSPACE}/tt_metal/ttsim-version" "${ARTIFACT_DIR}/ttsim-version"
+          if [[ -f "${GITHUB_WORKSPACE}/ttsim-quasar-version" ]]; then
+            cp "${GITHUB_WORKSPACE}/ttsim-quasar-version" "${ARTIFACT_DIR}/ttsim-version"
+          else
+            cp "${GITHUB_WORKSPACE}/tt_metal/ttsim-version" "${ARTIFACT_DIR}/ttsim-version"
+          fi
           ls -la "${ARTIFACT_DIR}/"
 
       - name: Upload ttsim report
@@ -222,7 +352,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          TTSIM_VERSION="$(tr -d '[:space:]' < "${GITHUB_WORKSPACE}/tt_metal/ttsim-version")"
+          TTSIM_VERSION="$(cat "ttsim-report-${ARCH}/ttsim-version" 2>/dev/null \
+            || cat "${GITHUB_WORKSPACE}/tt_metal/ttsim-version")"
+          TTSIM_VERSION="${TTSIM_VERSION%"${TTSIM_VERSION##*[![:space:]]}"}"
 
           if [[ ! -f "$XML_PATH" ]]; then
             echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"

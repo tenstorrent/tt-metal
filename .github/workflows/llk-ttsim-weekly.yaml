@@ -9,11 +9,20 @@ name: 🗓️ LLK ttsim Weekly
 # success/failure banners. The deliverable is the HTML report uploaded
 # as a per-arch artifact.
 #
+# Quasar builds libttsim.so from ttsim-private in the test job.
+# Pin: tt_metal/tt-llk/tests/ttsim-quasar-ref
+#
 # Triggers:
 #   - on-demand via the Actions tab (workflow_dispatch)
 #   - weekly cron at 02:00 UTC every Friday
 on:
   workflow_dispatch:
+    inputs:
+      quasar-ttsim-ref:
+        description: "ttsim-private branch or SHA for Quasar libttsim.so (empty = pin file)"
+        required: false
+        type: string
+        default: ""
   schedule:
     # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
     # runs can lag by a few minutes during peak load — don't rely on
@@ -30,23 +39,28 @@ permissions:
 jobs:
   build-images:
     name: "🐳️ Docker setup"
+    if: github.repository == 'tenstorrent/tt-metal'
     uses: ./.github/workflows/build-docker-artifact.yaml
 
   ttsim-weekly:
     name: "🧪 LLK ttsim regression"
+    if: github.repository == 'tenstorrent/tt-metal'
     needs: build-images
     uses: ./.github/workflows/llk-ttsim-weekly-impl.yaml
-    secrets: inherit
+    secrets:
+      TTSIM_TOKEN: ${{ secrets.TTSIM_TOKEN }}
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      quasar-ttsim-ref: ${{ inputs.quasar-ttsim-ref || '' }}
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
     runs-on: ubuntu-latest
     # Only broadcast on scheduled runs — manual triggers are typically
     # ad-hoc debugging and don't need Slack noise. `always()` so the job
-    # still runs when the regression reports failures (it's expected to).
-    if: always() && github.event_name == 'schedule'
+    # still runs when the regression reports failures (it's expected to);
+    # that also means it would survive a skipped `needs`, hence the repo pin.
+    if: always() && github.event_name == 'schedule' && github.repository == 'tenstorrent/tt-metal'
     needs: ttsim-weekly
     steps:
       - name: Download blackhole report
@@ -122,17 +136,25 @@ jobs:
 
           RUN_URL = f"{SERVER}/{REPO}/actions/runs/{RUN_ID}"
 
-          # Read ttsim version from the pin file bundled in any artifact.
-          TTSIM_VERSION = "unknown"
-          for candidate in (Path("reports/blackhole/ttsim-version"),
-                            Path("reports/wormhole/ttsim-version"),
-                            Path("reports/quasar/ttsim-version")):
-              if candidate.is_file():
-                  # tt_metal/ttsim-version holds a bare release tag (e.g. v1.10.2).
-                  tag = candidate.read_text().strip()
-                  if tag:
-                      TTSIM_VERSION = tag
-                      break
+          def read_version(path: Path):
+              try:
+                  tag = path.read_text().strip()
+              except OSError:
+                  return None
+              return tag or None
+
+          archs = [
+              ("Blackhole", Path("reports/blackhole/ttsim-blackhole.xml"),
+                            Path("reports/blackhole/ttsim-blackhole.enumerated"),
+                            Path("reports/blackhole/ttsim-version")),
+              ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml"),
+                            Path("reports/wormhole/ttsim-wormhole.enumerated"),
+                            Path("reports/wormhole/ttsim-version")),
+              ("Quasar",    Path("reports/quasar/ttsim-quasar.xml"),
+                            Path("reports/quasar/ttsim-quasar.enumerated"),
+                            Path("reports/quasar/ttsim-version")),
+          ]
+          versions = {label: read_version(ver) for label, _, _, ver in archs}
 
           def read_enumerated(enum_path: Path):
               # The regression job stages a tiny count file next to the XML
@@ -169,22 +191,15 @@ jobs:
                           skipped=skipped, pass_pct=pct, finished=finished,
                           enumerated=enumerated, crashed=crashed)
 
-          archs = [
-              ("Blackhole", Path("reports/blackhole/ttsim-blackhole.xml"),
-                            Path("reports/blackhole/ttsim-blackhole.enumerated")),
-              ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml"),
-                            Path("reports/wormhole/ttsim-wormhole.enumerated")),
-              ("Quasar",    Path("reports/quasar/ttsim-quasar.xml"),
-                            Path("reports/quasar/ttsim-quasar.enumerated")),
-          ]
-
           lines = []
-          for label, xml, enum in archs:
+          for label, xml, enum, _ver in archs:
               s = summarize(xml, enum)
               if s is None:
                   lines.append(f"• *{label}*: no report produced (infra error — see run logs).")
               else:
                   crashed_txt = "n/a" if s["crashed"] is None else str(s["crashed"])
+                  ver = versions.get(label)
+                  ver_txt = f" · `{ver}`" if ver else ""
                   lines.append(
                       f"• *{label}*: "
                       f"✅ {s['passed']}/{s['ran']} passing "
@@ -193,9 +208,10 @@ jobs:
                       f"⏩ {s['skipped']} skipped · "
                       f"🏁 {s['finished']} finished · "
                       f"💥 {crashed_txt} crashed"
+                      f"{ver_txt}"
                   )
 
-          header = f"📊 *LLK ttsim weekly digest ({TTSIM_VERSION})* 📊"
+          header = "📊 *LLK ttsim weekly digest* 📊"
           if REG_RESULT != "success":
               # Only flag infra-level issues — ttsim test failures are expected
               # and are reflected in the counts below, not in this banner.
