@@ -40,31 +40,31 @@ def pytest_collection_modifyitems(config, items):
 # Host capability checks
 # ---------------------------------------------------------------------------
 #
-# A host that is too small for the mesh a test wants should skip it. A host that
-# has the devices but still fails to open the mesh must fail.
+# A system that is too small for the mesh a test wants should skip it. A system
+# that has the devices but still fails to open the mesh must fail.
 
 
 def _num_available_devices() -> Optional[int]:
-    """Chips visible to this host, or ``None`` if the cluster can't be queried."""
+    """Chips in the global system mesh (all hosts), or ``None`` if it can't be queried."""
     try:
-        return int(ttnn.get_num_devices())
+        return math.prod(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
     except Exception:  # noqa: BLE001
         return None
 
 
 def _host_supports_mesh(shape: Sequence[int]) -> bool:
-    """Checks whether this host has enough chips for ``shape``."""
+    """Checks whether the system has enough chips for ``shape``."""
     available = _num_available_devices()
     return available is None or available >= math.prod(shape)
 
 
 def _skip_if_host_too_small(shape: Sequence[int], what: str) -> None:
-    """Skip when the host is too small for ``shape``, otherwise return normally."""
+    """Skip when the system is too small for ``shape``, otherwise return normally."""
 
     if _host_supports_mesh(shape):
         return
     pytest.skip(
-        f"{what} needs a {tuple(shape)} mesh with ({math.prod(shape)} devices); this host has {_num_available_devices()}"
+        f"{what} needs a {tuple(shape)} mesh with ({math.prod(shape)} devices); the system has {_num_available_devices()}"
     )
 
 
