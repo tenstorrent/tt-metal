@@ -12,6 +12,8 @@
 namespace tt::tt_fabric {
 namespace {
 
+constexpr std::array<tt::ARCH, 2> kArchs = {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE};
+
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWorkerInjection) {
     constexpr size_t channel_buffer_size = 14432;
     constexpr size_t available_space = 360800;
@@ -19,36 +21,38 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
     const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
 
-    for (const auto topology : {Topology::Mesh, Topology::Torus}) {
-        const FabricStaticSizedChannelsAllocator allocator(
-            topology,
-            FabricEriscDatamoverOptions{},
-            sender_channels,
-            receiver_channels,
-            channel_buffer_size,
-            available_space,
-            memory_regions);
+    for (const auto arch : kArchs) {
+        for (const auto topology : {Topology::Mesh, Topology::Torus}) {
+            const FabricStaticSizedChannelsAllocator allocator(
+                topology,
+                FabricEriscDatamoverOptions{.arch = arch},
+                sender_channels,
+                receiver_channels,
+                channel_buffer_size,
+                available_space,
+                memory_regions);
 
-        EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 7);
-        for (size_t channel = 1; channel < sender_channels[0]; ++channel) {
-            EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, channel), 2);
-        }
-        for (size_t channel = 0; channel < sender_channels[1]; ++channel) {
-            EXPECT_EQ(allocator.get_sender_channel_number_of_slots(1, channel), 2);
-        }
-        EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 4);
-        EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(1, 0), 2);
+            EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 7);
+            for (size_t channel = 1; channel < sender_channels[0]; ++channel) {
+                EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, channel), 2);
+            }
+            for (size_t channel = 0; channel < sender_channels[1]; ++channel) {
+                EXPECT_EQ(allocator.get_sender_channel_number_of_slots(1, channel), 2);
+            }
+            EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 4);
+            EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(1, 0), 2);
 
-        size_t allocated_slots = 0;
-        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            for (size_t channel = 0; channel < sender_channels[vc]; ++channel) {
-                allocated_slots += allocator.get_sender_channel_number_of_slots(vc, channel);
+            size_t allocated_slots = 0;
+            for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+                for (size_t channel = 0; channel < sender_channels[vc]; ++channel) {
+                    allocated_slots += allocator.get_sender_channel_number_of_slots(vc, channel);
+                }
+                for (size_t channel = 0; channel < receiver_channels[vc]; ++channel) {
+                    allocated_slots += allocator.get_receiver_channel_number_of_slots(vc, channel);
+                }
             }
-            for (size_t channel = 0; channel < receiver_channels[vc]; ++channel) {
-                allocated_slots += allocator.get_receiver_channel_number_of_slots(vc, channel);
-            }
+            EXPECT_EQ(allocated_slots, available_space / channel_buffer_size);
         }
-        EXPECT_EQ(allocated_slots, available_space / channel_buffer_size);
     }
 }
 
@@ -60,16 +64,18 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) 
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
     const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
 
-    const FabricStaticSizedChannelsAllocator allocator(
-        Topology::Torus,
-        FabricEriscDatamoverOptions{},
-        sender_channels,
-        receiver_channels,
-        channel_buffer_size,
-        available_space,
-        memory_regions);
+    for (const auto arch : kArchs) {
+        const FabricStaticSizedChannelsAllocator allocator(
+            Topology::Torus,
+            FabricEriscDatamoverOptions{.arch = arch},
+            sender_channels,
+            receiver_channels,
+            channel_buffer_size,
+            available_space,
+            memory_regions);
 
-    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), MAX_CHANNEL_BUFFER_SLOTS);
+        EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), MAX_CHANNEL_BUFFER_SLOTS);
+    }
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
@@ -79,18 +85,20 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 0, 0};
     const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
 
-    const FabricStaticSizedChannelsAllocator allocator(
-        Topology::Ring,
-        FabricEriscDatamoverOptions{},
-        sender_channels,
-        receiver_channels,
-        channel_buffer_size,
-        available_space,
-        memory_regions);
+    for (const auto arch : kArchs) {
+        const FabricStaticSizedChannelsAllocator allocator(
+            Topology::Ring,
+            FabricEriscDatamoverOptions{.arch = arch},
+            sender_channels,
+            receiver_channels,
+            channel_buffer_size,
+            available_space,
+            memory_regions);
 
-    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 8);
-    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 1), 8);
-    EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 8);
+        EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 8);
+        EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 1), 8);
+        EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 8);
+    }
 }
 
 }  // namespace
