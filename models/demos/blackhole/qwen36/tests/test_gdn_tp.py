@@ -547,6 +547,24 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"
 
 
+# Largest OUTER_CHUNK_SIZE at which the MMRS reference arm below can still run.
+#
+# matmul_reduce_scatter_async hands its reduce-scatter only the cores below the (0,8) core-grid offset
+# (the matmul takes rows 0-7), i.e. 22 on an 11x10 grid, but the reduce-scatter sizes its worker count
+# from the data moved per link and never sees that offset (#57519). The out-proj matmul output is fp32
+# [T, 5120], so a chunk moves T * 3840 B per link; past 1 MiB the Blackhole heuristic goes from 2
+# workers per direction to 8, wants 2 links * 2 directions * (1 mux + 8) = 36 cores, and
+# choose_worker_cores FATALs. 1 MiB / 3840 B = 273 tokens.
+#
+# This was latent until #57053 (2026-09-22) lowered the Blackhole ring threshold from 50 MiB to 1 MiB:
+# at T=2048 (7.5 MiB per link) the heuristic used to pick 4 workers per direction = 20 cores, which
+# fit. Measured on 4x p300c: 64 and 256 pass, 288 and up FATAL.
+#
+# The column-parallel arm under test has no such limit; it is only the reference arm that cannot run.
+# Raise this (or drop it) once #57519 is fixed — the cases stay parametrized so they come back on.
+_MMRS_MAX_OUTER_CHUNK = 273
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @pytest.mark.parametrize(
@@ -562,12 +580,18 @@ def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure
     64 covers a short prefill that is not a multiple of 128 (reachable: the TP paged prefill passes the
     raw prompt length). T <= TILE_SIZE is not tested: on TP such a prefill already fails in the QKV
     in-proj, whose S <= TILE_SIZE branch needs a full-width x while prefill hands GDN a K-sharded one.
+    Sizes above _MMRS_MAX_OUTER_CHUNK skip: the reference arm, not the arm under test, cannot run there.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
     nd = mesh_device.get_num_devices()
     if nd == 1:
         pytest.skip("TP-only")
+    if OUTER_CHUNK_SIZE > _MMRS_MAX_OUTER_CHUNK:
+        pytest.skip(
+            f"the MMRS reference arm cannot run at OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}: its reduce-scatter needs "
+            f"36 cores but has 22 below the (0,8) offset (#57519, live since #57053)"
+        )
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     sd = load_gdn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
