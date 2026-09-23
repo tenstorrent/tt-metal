@@ -43,7 +43,15 @@ using Fu2Fn = fu2::function_base<
     /*IsThrowing=*/true,
     /*HasStrongExceptGuarantee=*/false,
     void()>;
-using ZooFn = zoo::VTableFunction<kInlinePointers, void()>;
+// zoo::VTableFunction is deliberately not used: AnyContainer provides no operator bool and no
+// has_value(), so it cannot stand in for std::move_only_function. operator bool lives on
+// zoo::Function, and the RTTI affordance is what makes it reliable -- without it the fallback
+// compares destructor pointers against Destroy::noOp, which identical-code folding can merge for a
+// trivially destructible target, making an engaged function report itself empty.
+template <typename Signature>
+using ZooFunction = zoo::
+    Function<zoo::AnyContainer<zoo::Policy<void* [kInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>, Signature>;
+using ZooFn = ZooFunction<void()>;
 
 // Captures sized to sit either side of kInlineBytes.
 struct SmallCapture {

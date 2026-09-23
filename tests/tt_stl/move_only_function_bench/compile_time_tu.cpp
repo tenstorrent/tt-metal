@@ -31,7 +31,8 @@ template <typename Sig>
 using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, false, Sig>;
 #elif defined(CANDIDATE_ZOO)
 template <typename Sig>
-using Fn = zoo::VTableFunction<kInlinePointers, Sig>;
+using Fn =
+    zoo::Function<zoo::AnyContainer<zoo::Policy<void* [kInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>, Sig>;
 #else
 #error "define one of CANDIDATE_STD / CANDIDATE_ZOO / CANDIDATE_FU2"
 #endif

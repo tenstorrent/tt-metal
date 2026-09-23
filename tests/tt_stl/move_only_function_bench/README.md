@@ -16,8 +16,25 @@ so no side gets a bigger buffer than the baseline. That capacity varies by stand
 | Name | Type |
 | --- | --- |
 | `StdFn` | `std::function<void()>` |
-| `ZooFn` | `zoo::VTableFunction<kInlinePointers, void()>` — move-only policy (`Destroy, Move, CallableViaVTable`); capacity is in **pointers** |
+| `ZooFn` | `zoo::Function<zoo::AnyContainer<zoo::Policy<void*[N], Destroy, Move, RTTI>>, void()>` — capacity is in **pointers** |
 | `Fu2Fn` | `fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, false, void()>` — `unique_function` with the capacity pinned rather than defaulted |
+
+### Why this zoo spelling
+
+`zoo::VTableFunction` is the more obvious alias, but `AnyContainer` provides no `operator bool` and
+no `has_value()`, so it cannot stand in for `std::move_only_function`. Both live on `zoo::Function`.
+
+The `RTTI` affordance is what makes `operator bool` trustworthy: without it the fallback compares
+the vtable's destroy pointer against `Destroy::noOp`, and for a trivially destructible target — a
+captureless lambda, a function pointer — those can be merged by identical code folding (MSVC
+`/OPT:ICF`, `lld`/`gold --icf=all`), so an engaged function reports itself empty. With the
+affordance, `operator bool` routes through `type()`, which cannot collapse.
+
+It costs nothing per object: the affordance adds one pointer to the per-type static vtable, not to
+the instance. It does emit `typeid` for every erased callable, which is binary size. It does not
+cost `-fno-rtti` compatibility, because zoo does not compile under `-fno-rtti` regardless — the
+`typeid` tokens in `VTablePolicy.h` and `FunctionPolicy.h` are rejected at parse time by both gcc
+and clang even with a plain `Destroy, Move` policy.
 
 ## What each scenario measures
 
