@@ -837,3 +837,50 @@ jobs:
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
+
+  # ── Consolidate test_reports_* artifacts (produce-data API-cost POC) ──
+  # Each test leg uploads its JUnit XML as its own `test_reports_<uuid>` artifact, so a
+  # Sanity run produces dozens (~56 measured). produce-data then spends one GitHub REST
+  # ZIP download per artifact — the single largest slice of its API budget. This job packs
+  # them into ONE `test_reports_merged` artifact so produce-data downloads once.
+  #
+  # The merge runs same-run via the Actions artifact backend, which is NOT metered by the
+  # REST rate limit, so the 56 downloads collapse to 1 REST call rather than moving cost
+  # elsewhere. separate-directories keeps each job's XMLs under its own test_reports_<uuid>/
+  # subdir, so no filenames collide and produce-data's uuid->job->reports mapping is
+  # unchanged (it now globs the uuid dir one level deeper; see
+  # get_workflow_run_uuids_to_test_reports_paths_). delete-merged removes the per-job
+  # originals so nothing is double-counted. The job is continue-on-error and !cancelled():
+  # a merge failure must never fail the run (which would trip the sanity auto-retry) — it
+  # just leaves the per-job artifacts in place and produce-data falls back to the old path
+  # with no data loss.
+  merge-test-reports:
+    name: "Merge test report artifacts"
+    needs:
+      - ttnn-sanity-tests
+      - t3000-sanity-tests
+      - fabric-sanity-tests
+      - ops-sanity-tests
+      - umd-sanity-tests
+      - ttsim-sanity-tests
+      - runtime-sim-sanity-tests
+      - blackhole-multi-card-fast-sanity-tests
+      - models-sanity-tests
+      - llk-sanity-tests
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Only actions:write (merge downloads and, with delete-merged, deletes the source
+    # artifacts). Naming one scope drops every other workflow-wide grant to none, which is
+    # what we want for this job.
+    permissions:
+      actions: write
+    # A failed consolidation must degrade to the per-job artifacts, never fail the run.
+    continue-on-error: true
+    steps:
+      - uses: actions/upload-artifact/merge@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        continue-on-error: true
+        with:
+          name: test_reports_merged
+          pattern: test_reports_*
+          separate-directories: true
+          delete-merged: true

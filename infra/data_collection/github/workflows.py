@@ -320,7 +320,14 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
 def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow_run_id: int):
     artifacts_dir = workflow_outputs_dir / str(workflow_run_id) / "artifacts"
 
-    test_report_dirs = artifacts_dir.glob("test_reports_*")
+    # Match the per-job report directory in either layout, keyed the same way (uuid -> xmls):
+    #   legacy (one artifact per job):      artifacts/test_reports_<uuid>/*.xml
+    #   consolidated (one merged artifact): artifacts/test_reports_merged/test_reports_<uuid>/*.xml
+    # Consolidation packs every job's report artifact into a single downloadable artifact to
+    # save produce-data one REST download per job (a Sanity run had 56). rglob finds the leaf
+    # <uuid> directories at either depth; the merged container has no *.xml of its own, so the
+    # empty-xml case below leaves it as an orphan uuid that no job log ever maps to.
+    test_report_dirs = (path for path in artifacts_dir.rglob("test_reports_*") if path.is_dir())
 
     workflow_run_test_reports_path = {}
     for test_report_dir in test_report_dirs:
