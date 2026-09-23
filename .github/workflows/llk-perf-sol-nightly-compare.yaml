@@ -1,0 +1,50 @@
+name: "LLK perf: 22 Sep vs 23 Sep SoL nightly"
+
+on:
+  push:
+    branches:
+      - "perf-trial/sol-n22-n23"
+  workflow_dispatch:
+    inputs:
+      perf_run_id:
+        description: "Run holding the CURRENT side"
+        required: false
+        default: "35813164420"
+        type: string
+      baseline_run_id:
+        description: "Run holding the BASELINE side"
+        required: false
+        default: "35682071787"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  gate:
+    name: "SoL nightly diff (${{ matrix.arch }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: blackhole
+            threshold: "0.02"
+            run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
+          - arch: wormhole
+            threshold: "0.06"
+            run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      perf_run_id: ${{ inputs.perf_run_id || '35813164420' }}
+      baseline_run_id: ${{ inputs.baseline_run_id || '35682071787' }}
+      speed_of_light: "true"
+      run_types: ${{ matrix.run_types }}
+      threshold: ${{ matrix.threshold }}
+      min_cycles: "30"
+      fail_on_regression: false
+    secrets: inherit
