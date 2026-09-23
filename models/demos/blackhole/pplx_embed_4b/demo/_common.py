@@ -418,11 +418,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size > 1 and os.getenv("QWEN_SDPA_BATCHED_WIDE", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
-    # Fused-SwiGLU minimal_matmul blocks at bs16 (M=8192): 4,8,8 with 1x4 subblocks is 6% faster
-    # than the 8,8,8 / 1x8 default standalone (2945 vs 3133 us) and -2.2% e2e (237.0 -> 231.8 on
-    # chip 8). bs8's default is already the best of the sweep; bs32 runs the unfused path.
+    # Fused-SwiGLU minimal_matmul blocks at bs16 (M=8192): 4,8,8 / 1x4 was -6% standalone and
+    # -2.2% e2e vs the 8,8,8 / 1x8 default (237.0 -> 231.8, chip 8); a wider sweep then found
+    # K_block 20 (4 K steps over the 80 K tiles) another -3.8% standalone (2988 -> 2874 us) and
+    # -1.9% e2e (232.8 -> 228.3, chip 8). bs8's default is already the best of the sweep; bs32
+    # runs the unfused path, where larger K steps are slower for every projection.
     if batch_size == 16 and seq_len == 512:
-        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "4,8,8")
+        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "4,20,8")
         os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,4")
     # Plain minimal_matmul blocks at bs8 (M=4096), same sweep: FF2 16,8,8 (-16% standalone),
     # QKV 8,4,8 (-15%), WO 16,8,8 (-12%); e2e 126.4 -> 123.4 ms (-2.4%, chip 7). At bs16/bs32
