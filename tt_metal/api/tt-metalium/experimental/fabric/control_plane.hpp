@@ -263,9 +263,6 @@ public:
 
     void clear_fabric_context();
 
-    // Initialize fabric tensix config (call after routing tables are configured)
-    void initialize_fabric_tensix_datamover_config();
-
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;
 

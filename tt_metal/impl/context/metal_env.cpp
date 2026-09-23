@@ -32,6 +32,8 @@
 #include <system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -371,7 +373,7 @@ void MetalEnvImpl::initialize_fabric_config() {
     cp.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
-void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
+void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
@@ -379,8 +381,7 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
     // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
     // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        auto& cp = this->get_control_plane();
-        cp.initialize_fabric_tensix_datamover_config();
+        this->get_control_plane().get_fabric_context().get_builder_context().initialize_tensix_config(inputs);
     }
 }
 
