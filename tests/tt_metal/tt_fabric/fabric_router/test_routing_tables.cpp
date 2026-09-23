@@ -2687,6 +2687,35 @@ TEST(ExpressLinkRoutingTest, IntraMesh32x4DeadlockFree) {
     assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
 }
 
+TEST(ExpressLinkRoutingTest, IntraMesh4x32ExpressOnDim1) {
+    if (!express_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "express_links_4x32 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_4x32_mesh_graph_descriptor.textproto", mg);
+    ASSERT_EQ(intra.size(), 1u);
+    ASSERT_EQ(intra[0].size(), 128u);
+
+    using D = tt::tt_fabric::RoutingDirection;
+    const auto& t = intra[0];
+    // chip = row*32 + col. These mirror the 32x4 checks with row and column transposed.
+    EXPECT_EQ(t[0][7], D::Z);    // col0->col7: ex8 chord
+    EXPECT_EQ(t[0][8], D::Z);    // col0->col8: ex8 chord then connector
+    EXPECT_EQ(t[0][15], D::Z);   // col0->col15: ride ex8
+    EXPECT_EQ(t[2][9], D::Z);    // col2->col9: ex4 chord
+    EXPECT_EQ(t[0][1], D::E);    // adjacent base edge
+    EXPECT_EQ(t[0][2], D::E);    // ex8->ex4 crossover starts on the base edge
+    EXPECT_EQ(t[0][0], D::C);    // self
+
+    // Dimension order is unchanged: N/S completes before the E/W express phase.
+    EXPECT_EQ(t[0][39], D::S);   // (0,0)->(1,7)
+    EXPECT_EQ(t[32][39], D::Z);  // then col0->col7 on row 1
+}
+
 // Verify representative direct hops lower to physical channels.
 TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering8x4) {
     if (!express_link_cluster_available()) {

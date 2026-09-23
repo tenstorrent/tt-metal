@@ -90,8 +90,10 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
         const int declared_axis = static_cast<int>(express.dim_idx());
         TT_FATAL(
             axis == kNone || axis == declared_axis,
-            "AxisRouteTopology: mesh M{} declares express links on more than one dimension",
-            *mesh_id);
+            "AxisRouteTopology: a mesh must not define express links on multiple axes; mesh M{} uses dims {} and {}",
+            *mesh_id,
+            axis,
+            declared_axis);
         axis = declared_axis;
         Pattern pattern;
         pattern.step = static_cast<int>(express.pattern().step());
@@ -356,11 +358,6 @@ std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& m
     if (!has_realized_express_edges(mesh_graph, mesh_id)) {
         return std::nullopt;  // the selected FabricConfig downgraded this descriptor to base routing
     }
-    TT_FATAL(
-        axis == 0,
-        "AxisRouteTopology: mesh M{} declares express links along dimension {}; this cut supports dimension 0 only",
-        *mesh_id,
-        axis);
     TT_FATAL(
         patterns.size() <= 2,
         "AxisRouteTopology: mesh M{} declares {} express patterns; only one or two are defined",
@@ -648,13 +645,9 @@ AxisRouteTopology derive_line_axis_topology(const MeshGraph& mesh_graph, MeshId 
 // Express topology takes precedence only on the chord axis; the orthogonal axis derives independently
 // as an ordinary ring or line.
 AxisRouteTopology derive_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
-    // Express chords are supported only on axis 0. Probing axis 1 would validate an unrelated
-    // dimension-0 declaration before deriving its ring-or-line topology.
-    if (axis == 0) {
-        if (auto express = derive_express_ring_topology(mesh_graph, mesh_id);
-            express.has_value() && express->axis_dim == axis) {
-            return std::move(*express);
-        }
+    if (auto express = derive_express_ring_topology(mesh_graph, mesh_id);
+        express.has_value() && express->axis_dim == axis) {
+        return std::move(*express);
     }
     if (auto ring = derive_ordinary_ring_topology(mesh_graph, mesh_id, axis); ring.has_value()) {
         return std::move(*ring);
