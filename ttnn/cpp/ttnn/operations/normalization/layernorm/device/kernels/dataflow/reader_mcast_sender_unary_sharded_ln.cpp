@@ -300,9 +300,11 @@ void kernel_main() {
             }
         }
 
-        // The combined-result buffer is waited before the gather and read (locally and by the other
-        // all-to-all workers) while building the global result; the multicast above is the last
-        // reader of it, so pop the waited count here to leave the buffer balanced.
+        // The combined-result buffer is waited before the gather, which reads this core's copy and,
+        // over the NOC, the copies held by the other all-to-all workers. That gather finishes at the
+        // read barrier above; the multicast that follows sends the global buffer, not this one, and
+        // does not run at all for a single block. Nothing reads this buffer after the barrier, so
+        // release the waited count here.
         dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_per_worker * num_tiles_scaler));
     };
 
