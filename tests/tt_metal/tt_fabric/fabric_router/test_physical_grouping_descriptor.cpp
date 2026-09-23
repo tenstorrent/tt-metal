@@ -3310,6 +3310,54 @@ utils::TopologyMappingConfig no_rank_config() {
     return config;
 }
 
+// Regression(no-pgd-n150): a single-chip WH mesh with NO PGD must map via the MGD placement fallback
+// (identity), the way a plain n150 control-plane init does. Guards the merge-gate smoke failure
+// "SAT joint placement session was not ready (a mesh has no grouping variants)" -- a 1x1 mesh has no
+// edges, so its adjacency graph must still register the single isolated node.
+TEST(AdjacencyGuidedPlacement, NoPgdSingleDevice1x1) {
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)")};
+    auto psd = build_mock_psd(std::vector<std::string>(1, "host0"), std::vector<MockLink>{});
+    const auto mapping =
+        ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(psd, mgd, no_rank_config());
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+}
+
+TEST(AdjacencyGuidedPlacement, NoPgdSingleDevice1x2) {
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)")};
+    auto psd = build_mock_psd(std::vector<std::string>(2, "host0"), std::vector<std::pair<int, int>>{{0, 1}});
+    const auto mapping =
+        ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(psd, mgd, no_rank_config());
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+}
+
 struct PinnedHost {
     std::vector<std::pair<int, int>> cells;
     int dim_r = 1;

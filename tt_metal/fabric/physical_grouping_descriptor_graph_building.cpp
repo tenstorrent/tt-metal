@@ -116,6 +116,13 @@ AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
             instance_ids.size());
     }
 
+    // Register every node up front so isolated nodes survive. A 1x1 mesh (a single chip, e.g. an n150)
+    // has no edges, so without this the AdjacencyGraph would have zero nodes and the MGD-fallback
+    // placement would have nothing to embed ("a mesh has no grouping variants").
+    for (const GroupingChipId id : instance_ids) {
+        adj_map[id];
+    }
+
     // One-sided +direction walk so each undirected edge is inserted once (STRICT matching
     // treats multiplicity as channel count). processed_edges is a backstop if wrap and LINE
     // ever name the same pair.
