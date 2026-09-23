@@ -10,7 +10,6 @@ cannot wait on a driver held by earlier Python tests in the same session.
 
 from pathlib import Path
 import subprocess
-import pytest
 
 
 def test_host_cpp_contract():
@@ -24,10 +23,17 @@ def test_host_cpp_contract():
     )
 
 
-@pytest.mark.parametrize("case", ["Smoke", "Matrix"])
-def test_mcast_spec_device(case):
+def test_mcast_spec_device_smoke():
     repo = Path(__file__).resolve().parents[4]
     subprocess.run(
-        [str(repo / "build/test/ttnn/unit_tests_ttnn"), f"--gtest_filter=McastHostFixture.SpecDevice{case}"],
+        [str(repo / "build/test/ttnn/unit_tests_ttnn"), "--gtest_filter=McastHostFixture.SpecDeviceSmoke"],
+        check=True,
+    )
+
+
+def test_mcast_spec_device_matrix():
+    repo = Path(__file__).resolve().parents[4]
+    subprocess.run(
+        [str(repo / "build/test/ttnn/unit_tests_ttnn"), "--gtest_filter=McastHostFixture.SpecDeviceMatrix"],
         check=True,
     )

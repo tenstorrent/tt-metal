@@ -145,20 +145,18 @@ void kernel_main() {
     constexpr auto mc_b = McastArgs<
         get_named_compile_time_arg_val("b_ct_offset"),
         get_named_compile_time_arg_val("b_rt_offset")>();
-    constexpr uint32_t S = 2;
-    constexpr uint32_t Mloc = get_compile_time_arg_val(S + 0);
-    constexpr uint32_t Nloc = get_compile_time_arg_val(S + 1);
-    constexpr uint32_t Kt   = get_compile_time_arg_val(S + 2);
-    constexpr uint32_t Nt   = get_compile_time_arg_val(S + 3);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(S + 4);
-    constexpr auto a_args = TensorAccessorArgs<S + 5>();
+    constexpr uint32_t Mloc = get_compile_time_arg_val(2);
+    constexpr uint32_t Nloc = get_compile_time_arg_val(3);
+    constexpr uint32_t Kt   = get_compile_time_arg_val(4);
+    constexpr uint32_t Nt   = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
+    constexpr auto a_args = TensorAccessorArgs<7>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 
     const uint32_t a_addr = get_arg_val<uint32_t>(0);
     const uint32_t b_addr = get_arg_val<uint32_t>(1);
-    constexpr uint32_t scalars = 2;
-    const uint32_t m0 = get_arg_val<uint32_t>(scalars + 0);  // this core's first output tile-row
-    const uint32_t n0 = get_arg_val<uint32_t>(scalars + 1);  // this core's first output tile-col
+    const uint32_t m0 = get_arg_val<uint32_t>(2);  // this core's first output tile-row
+    const uint32_t n0 = get_arg_val<uint32_t>(3);  // this core's first output tile-col
 
     Noc noc;
     CircularBuffer a_buf(cb_a), b_buf(cb_b);

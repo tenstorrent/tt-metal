@@ -44,6 +44,7 @@ class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixt
 CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 CoreRangeSet cores(const std::vector<CoreCoord>& values) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(values.size());
     for (auto core : values) {
         ranges.emplace_back(core, core);
     }
@@ -394,6 +395,7 @@ TEST_F(McastHostFixture, WrapperRowsColumnsFixedAndRotating) {
                     std::vector<GroupInput> groups;
                     for (uint32_t i = 0; i < lines; ++i) {
                         std::vector<CoreCoord> senders;
+                        senders.reserve(span + uint32_t(outside));
                         for (uint32_t j = 0; j < span + uint32_t(outside); ++j) {
                             senders.emplace_back(row ? 2 + j : 2 + i, row ? 2 + i : 2 + j);
                         }
@@ -686,7 +688,8 @@ TEST_F(McastHostFixture, InvalidGroupsAndWrappers) {
     EXPECT_ANY_THROW(make_family(device_, {fixed}, cfg));
     EXPECT_ANY_THROW(Mcast1D(device_, receivers, Mcast1DShape::PerRow, Mcast1DFixedSenderConfig{}, cfg));
     EXPECT_ANY_THROW(Mcast2D(device_, receivers, Mcast2DFixedSenderConfig{{2, 2}}, cfg));
-    for (auto ids : {std::vector<uint32_t>{}, std::vector<uint32_t>{0}, std::vector<uint32_t>{0, UNUSED_SEM_ID}}) {
+    for (const auto& ids :
+         {std::vector<uint32_t>{}, std::vector<uint32_t>{0}, std::vector<uint32_t>{0, UNUSED_SEM_ID}}) {
         cfg = {};
         cfg.sem_ids = ids;
         EXPECT_ANY_THROW(make_family(device_, {fixed}, cfg));
@@ -1004,7 +1007,7 @@ TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
         EXPECT_EQ(semaphores[i].initial_value, 0u);
         EXPECT_EQ(semaphores[i].core_ranges, family.participating_cores());
     }
-    for (auto ids : std::vector<std::vector<uint32_t>>{
+    for (const auto& ids : std::vector<std::vector<uint32_t>>{
              {3, 4}, {3, 4, UNUSED_SEM_ID}, {3, 4, 3}, {3, 4, 4}, {3, 3, 5}, {UNUSED_SEM_ID, 4, 5}}) {
         cfg.sem_ids = ids;
         EXPECT_ANY_THROW(make_family(device_, {group}, cfg));
@@ -1047,9 +1050,14 @@ TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     ASSERT_EQ(kernel.runtime_args.size(), 3u);
     for (size_t i = 0; i < kernel.runtime_args.size(); ++i) {
         const auto& [core, args] = kernel.runtime_args[i];
-        auto expected = i == 0   ? std::vector<uint32_t>{21, 0, 0}
-                        : i == 1 ? std::vector<uint32_t>{31, 33, 35}
-                                 : std::vector<uint32_t>{0, 0, 0};
+        std::vector<uint32_t> expected;
+        if (i == 0) {
+            expected = {21, 0, 0};
+        } else if (i == 1) {
+            expected = {31, 33, 35};
+        } else {
+            expected = {0, 0, 0};
+        }
         const auto payload = runtime_args(family, core);
         expected.insert(expected.end(), payload.begin(), payload.end());
         EXPECT_EQ(args, expected);
@@ -1386,7 +1394,7 @@ TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
 
 TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
     auto family = make_family(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
-    for (const auto violation :
+    for (const auto* const violation :
          {"missing-prefix",
           "trailing-values",
           "duplicate-run-entry",
@@ -1533,9 +1541,14 @@ void run_spec_device_contract(
     SCOPED_TRACE(
         ::testing::Message() << "noc=" << noc << " counter=" << counter << " rotating=" << rotating << " control="
                              << control << " chain=" << chain << " handshake=" << handshake << " local=" << local);
-    const std::vector<CoreCoord> active = local   ? std::vector<CoreCoord>{{0, 0}}
-                                          : chain ? std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 1}}
-                                                  : std::vector<CoreCoord>{{0, 0}, {1, 0}, {2, 0}};
+    std::vector<CoreCoord> active;
+    if (local) {
+        active = {{0, 0}};
+    } else if (chain) {
+        active = {{0, 0}, {1, 0}, {0, 1}};
+    } else {
+        active = {{0, 0}, {1, 0}, {2, 0}};
+    }
     auto placed = active;
     placed.push_back({3, 0});  // Placed kernel outside either family must get inactive role data.
     const auto participants = cores(active);
@@ -1607,7 +1620,10 @@ void run_spec_device_contract(
             ASSERT_EQ(result.size(), 12u);
             const bool inside = node != CoreCoord{3, 0};
             for (uint32_t round = 0; round < rounds; ++round) {
-                const uint32_t expected = control ? (counter ? round + 1 : 1) : 136 * (seed + round * 100) + 1360;
+                uint32_t expected = 136 * (seed + round * 100) + 1360;
+                if (control) {
+                    expected = counter ? round + 1 : 1;
+                }
                 EXPECT_EQ(result[round], inside ? expected : 0u);
             }
             EXPECT_EQ(result[8], inside ? 136 * (seed + 1000) + 1360 : 0u);

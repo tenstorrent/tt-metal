@@ -100,9 +100,9 @@ struct McastConfig {
 
 void attach_absent(tt::tt_metal::KernelDescriptor& kernel, std::string_view prefix);
 void attach_absent(
-    tt::tt_metal::experimental::ProgramSpec&,
+    tt::tt_metal::experimental::ProgramSpec& spec,
     std::string_view prefix,
-    std::span<const tt::tt_metal::experimental::KernelSpecName> kernels);
+    std::span<const tt::tt_metal::experimental::KernelSpecName> targets);
 
 namespace detail {
 
@@ -154,9 +154,9 @@ public:
 
     // ProgramDescriptor path: attach resources and complete argument blocks to already placed kernels.
     void attach(
-        tt::tt_metal::ProgramDescriptor&,
+        tt::tt_metal::ProgramDescriptor& descriptor,
         std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
+        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> targets) const;
     void attach(
         tt::tt_metal::ProgramDescriptor& descriptor,
         std::string_view prefix,
@@ -167,11 +167,11 @@ public:
 
     // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
     void attach(
-        tt::tt_metal::experimental::ProgramSpec&,
-        tt::tt_metal::experimental::ProgramRunArgs&,
+        tt::tt_metal::experimental::ProgramSpec& spec,
+        tt::tt_metal::experimental::ProgramRunArgs& run_args,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
+        std::span<const tt::tt_metal::experimental::KernelSpecName> targets,
+        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
     void append_semaphores(tt::tt_metal::Program& program);

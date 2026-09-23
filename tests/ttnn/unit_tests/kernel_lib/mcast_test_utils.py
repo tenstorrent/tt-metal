@@ -74,6 +74,12 @@ def run_family_case(
 ):
     """Build a real family, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
+    all_coords = {coord for receivers, senders in specs for coord in receivers + senders}
+    required_width = max(x for x, _ in all_coords) + 2
+    required_height = max(y for _, y in all_coords) + 1
+    grid_size = device.compute_with_storage_grid_size()
+    if required_width > grid_size.x or required_height > grid_size.y:
+        pytest.skip("requires a larger worker grid")
     chained = chain_link and any(
         len(receivers)
         != (max(x for x, _ in receivers) - min(x for x, _ in receivers) + 1)

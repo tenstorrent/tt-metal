@@ -31,6 +31,7 @@
 namespace ttnn::mcast_host {
 
 namespace kh = ttnn::kernel_lib::host;
+namespace m2 = tt::tt_metal::experimental;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
@@ -61,7 +62,6 @@ void bind_descriptor_attach(nb::class_<Family> cls) {
 // Keep attachment in C++ so the native transaction updates the Python-owned value objects.
 template <typename Family>
 void bind_spec_attach(nb::class_<Family> cls) {
-    namespace m2 = tt::tt_metal::experimental;
     cls.def(
         "attach",
         [](const Family& family,
@@ -107,7 +107,6 @@ void py_module_types(nb::module_& mod) {
 }
 
 void py_module(nb::module_& mod) {
-    namespace m2 = tt::tt_metal::experimental;
     bind_spec_attach(static_cast<nb::class_<kh::McastFamily>>(mod.attr("McastFamily")));
     bind_spec_attach(static_cast<nb::class_<kh::Mcast1D>>(mod.attr("Mcast1D")));
     bind_spec_attach(static_cast<nb::class_<kh::Mcast2D>>(mod.attr("Mcast2D")));
