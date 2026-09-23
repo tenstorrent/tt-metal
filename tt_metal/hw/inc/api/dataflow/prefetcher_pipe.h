@@ -221,7 +221,8 @@ public:
     FORCE_INLINE PrefetcherPipe(DramSenderConfigPage page, uint32_t entry_size) {
         ASSERT(static_cast<bool>(load_prefetcher_pipe_config_word(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page.config_page_addr), REMOTE_DFB_CFG_IS_SENDER)));
-        init(page.config_page_addr, entry_size, pack_prefetcher_pipe_slot_relay_word(RELAY_DFB_INVALID, 1));
+        init</*known_sender=*/true>(
+            page.config_page_addr, entry_size, pack_prefetcher_pipe_slot_relay_word(RELAY_DFB_INVALID, 1));
     }
 
     // Metal 2.0: construct from a `pipe::<accessor>` token (kernel_bindings_generated.h). The
@@ -785,9 +786,11 @@ private:
 #endif
 
     // Everything past locating the config page, shared by the Program-slot and DRAM-sender
-    // constructors.
+    // constructors. `known_sender` is set when the caller already knows the page is a sender's, so
+    // the receiver-only setup compiles out of that constructor.
+    template <bool known_sender = false>
     FORCE_INLINE void init(uint32_t config_page_addr, uint32_t dense_entry_size, uint32_t relay_word) {
-        setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_word);
+        setup_prefetcher_pipe_interface<known_sender>(interface_, config_page_addr, dense_entry_size, relay_word);
 
         // Fixed for the kernel's lifetime; read once here so the credit hot path never
         // re-loads them from the (uncached) config page.
@@ -805,7 +808,8 @@ private:
 
 #if !defined(COMPILE_FOR_TRISC)
 
-        const bool is_sender = static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
+        const bool is_sender =
+            known_sender || static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
         const uint32_t applied_entry_size =
             load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
         // Same-epoch relaunch: setup already restored the checkpoint + this program's
@@ -837,7 +841,8 @@ private:
             }
             sync_threads();
             if (get_my_thread_id() != 0) {
-                setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_word);
+                setup_prefetcher_pipe_interface<known_sender>(
+                    interface_, config_page_addr, dense_entry_size, relay_word);
             }
         }
         if (!is_sender) {

@@ -41,7 +41,9 @@ FORCE_INLINE void store_prefetcher_pipe_config_word(
 // Populate a kernel-owned PrefetcherPipe interface from
 // [config_page_addr, entry_size, relay_dfb_id].
 // Loads fifo_wr/rd_ptr from PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT (durable
-// sender wr / receiver rd cursor stored by commit()).
+// sender wr / receiver rd cursor stored by commit()). `known_sender` is set when the caller already
+// knows the page is a sender's, so the receiver setup compiles out.
+template <bool known_sender = false>
 FORCE_INLINE void setup_prefetcher_pipe_interface(
     CrossNodeDFBInterface& interface, uint32_t config_page_addr, uint32_t entry_size_word, uint32_t relay_dfb_id_word) {
     ASSERT(config_page_addr != 0);
@@ -53,7 +55,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
 
     volatile tt_l1_ptr uint32_t* l1_config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_ptr);
 
-    const bool is_sender = static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
+    const bool is_sender =
+        known_sender || static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
     const uint32_t num_receivers = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_NUM_RECEIVERS);
     const uint32_t fifo_start_addr = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_START);
     const uint32_t fifo_size = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_SIZE);
