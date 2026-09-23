@@ -88,7 +88,8 @@ class FusedMLP:
         if grid.x < 8 or grid.y < (6 if fuse_norm else 5 if fuse_reduce else 4):
             raise ValueError("Fused MLP needs eight columns and four worker rows (five with reduction)")
         from .placement import ProjectionPlacement
-        self.placement = ProjectionPlacement(self.mesh, self.tuning.projection_placement, gu_workers)
+        self.placement = ProjectionPlacement(self.mesh, self.tuning.projection_placement, gu_workers,
+            ttnn.corerange_to_cores(layers[0].decode_inputs["gate_up"].shard_spec.grid, row_wise=True))
         self.projection_cores = self.placement.map(
             [ttnn.CoreCoord(x, y) for y in range(4 - gu_workers // 8, 4) for x in range(8)])
         self.sfpu_cores = self.placement.map(

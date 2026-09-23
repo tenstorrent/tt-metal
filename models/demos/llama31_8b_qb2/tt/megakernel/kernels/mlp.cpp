@@ -130,7 +130,8 @@ void QB2_ENTRY() {
     const auto product = TensorAccessor(product_args, get_arg_val<uint32_t>(3), 2048);
     {
         DeviceZoneScopedN("MLP-GU-READ");
-        stream_projection<0, 1, 8, gu_width, 128, GU_WORKERS>(input, gu, bank);
+        const uint32_t gu_column = DRAM_NEAR_PROJECTION && GU_WORKERS == 16 ? 2 * (bank % 8) + bank / 8 : bank;
+        stream_projection<0, 1, 8, gu_width, 128, GU_WORKERS>(input, gu, gu_column);
     }
     {
         DeviceZoneScopedN("MLP-WAIT-PRODUCT");
@@ -166,8 +167,9 @@ void QB2_ENTRY() {
     cb_wait_front(16, gu_width);
 #if DRAM_NEAR_PROJECTION
     const auto packed_output = TensorAccessor(packed_args, get_arg_val<uint32_t>(2), 2048);
+    const uint32_t gu_column = GU_WORKERS == 16 ? 2 * (bank % 8) + bank / 8 : bank;
     for (uint32_t tile = 0; tile < gu_width; ++tile) {
-        noc_async_write_page(bank * gu_width + tile, packed_output, get_read_ptr(16) + tile * 2048);
+        noc_async_write_page(gu_column * gu_width + tile, packed_output, get_read_ptr(16) + tile * 2048);
     }
     noc_async_write_barrier();
 #endif

@@ -55,9 +55,16 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         const uint32_t a = get_write_ptr(A);
         const uint32_t b = get_write_ptr(B);
 #endif
+#if PROJECTION_COALESCE_INPUT
+        // Selected BF16 width shards contain a whole number of K blocks:
+        // QKV16/GU8 divide16 tiles, O4 divides4, down7 divides7, head4 divides16.
+        // All tiles of this block are contiguous on one source worker.
+        noc_async_read<KBlock * 2048>(input.get_noc_addr(block * KBlock), a, KBlock * 2048);
+#else
         for (uint32_t row = 0; row < KBlock; ++row) {
             noc_async_read_page(block * KBlock + row, input, a + row * 2048);
         }
+#endif
         if (block < prefetched_blocks) {
             noc_async_read<KBlock * N * WeightBytes>(
                 prefetched_base + block * KBlock * N * WeightBytes, b, KBlock * N * WeightBytes);
