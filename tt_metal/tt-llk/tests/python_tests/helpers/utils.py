@@ -688,39 +688,26 @@ def passed_test(
 
     With *max_ulp* set the gate becomes "every element is within *max_ulp* representable
     steps of the reference", and both the tolerance check and PCC are skipped. That is
-    not a loosening for a budget small enough to be worth having: ``atol=0.05`` is ~6
-    bf16 steps at 1.0 and ~0.01 at 512, so a tolerance loose enough to pass the tail is
-    blind in the middle, and PCC is a shape metric that stays above 0.99 through error
-    levels no consumer would accept. The bound is the ``rtol`` half rather than the
-    ``atol`` one -- ``rtol * 2**mantissa_bits`` steps at large magnitude, ~6 for bf16 and
-    ~51 for fp16 -- and the gate warns when a budget crosses it. This mirrors the MX
-    path, which has always returned on its lattice verdict without consulting PCC.
+    not a loosening: ``atol=0.05`` is ~6 bf16 steps at 1.0 and ~0.01 at 512, so a
+    tolerance loose enough to pass the tail is blind in the middle. The budget must stay
+    under the ``rtol`` half it replaces -- ``rtol * 2**mantissa_bits`` steps, ~6 for bf16
+    and ~51 for fp16 -- and the gate warns when it does not.
 
-    *mask* narrows the gate to the lanes it selects, for a caller that has already
-    settled the rest. The exhaustive ULP sweep is what needs it: it feeds every value a
-    format has, and the subnormals the unpack path flushes are not the op's accuracy.
+    * *mask* narrows the gate to the lanes it selects. The exhaustive sweep needs it:
+      the subnormals the unpack path flushes are not the op's accuracy.
+    * *near_zero_atol* is the floor under the budget where the reference crosses zero;
+      see :func:`helpers.ulp.ulp_elementwise_valid`.
+    * *flush_subnormals* overrides the metric's per-dtype default. It matters for an fp16
+      output and nowhere else: an fp16 golden keeps its subnormal band while a
+      ``dest_acc=No`` Dest flushes, so the two disagree by up to 1023 steps. This layer
+      cannot see ``dest_acc``, so the default is the answer that cannot hide error.
 
-    *near_zero_atol* is the floor under that budget for the lanes where the reference
-    crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`.
+    All three are read only by the ULP arm and are refused without *max_ulp* rather than
+    silently ignored, as is a negative *near_zero_atol*.
 
-    *flush_subnormals* overrides the metric's per-dtype default, for a caller that knows
-    the producing Dest flushed. It matters for an fp16 output and nowhere else: an fp16
-    golden keeps its whole subnormal band, while a ``dest_acc=No`` Dest flushes, so the
-    two number systems disagree by up to 1023 steps over what the datapath calls a 0-step
-    agreement. This layer cannot see ``dest_acc``, so the default is the answer that
-    cannot hide error.
-
-    *mask*, *near_zero_atol* and *flush_subnormals* are read only by the ULP arm -- the
-    tolerance arm is ``torch.isclose``, which has no flush concept and no lane
-    selection -- so each is rejected without *max_ulp* rather than silently ignored, as
-    is a negative *near_zero_atol*, which would make the floor inert by a different
-    route.
-
-    *max_ulp* is the enforced maximum for every format it accepts, with nothing ORed in
-    beside it. For ``Bfp8_b`` that has a price: the budget is denominated in bf16 steps
-    (two to one Bfp8_b step) and charges for block quantization the format is entitled
-    to, which *near_zero_atol* cannot absorb because its band is relative to the tensor
-    rather than to each block. See ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
+    *max_ulp* is the enforced maximum, with nothing ORed in beside it -- so a ``Bfp8_b``
+    budget charges for block quantization the format is entitled to. See
+    ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
 
     ``max_ulp=None`` is bit-for-bit the previous behaviour.
     """
@@ -779,9 +766,8 @@ def passed_test(
         displaced = gate_tolerance.rtol * (1 << MANTISSA_BITS_FOR_ULP[gate_dtype])
         if max_ulp > displaced:
             logger.warning(
-                # One decimal, not rounded to whole steps: Bfp8_b's displaced is 25.6, and
-                # "{:.0f}" printed the minimal triggering budget of 26 as looser than
-                # "~26 steps" -- a budget called looser than a figure shown equal to it.
+                # One decimal: Bfp8_b's displaced figure is 25.6, and rounding printed
+                # the triggering budget of 26 as looser than "~26 steps".
                 "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.1f} "
                 "steps at large magnitude) and PCC no longer backs it up. Tighten the "
                 "budget, or keep the op on the tolerance metric.",
@@ -790,12 +776,10 @@ def passed_test(
                 displaced,
             )
         if near_zero_atol is not None and near_zero_atol > gate_tolerance.atol:
-            # The symmetric bound: near_zero_atol *is* the atol half of the isclose this
-            # arm replaces, reintroduced inside the band, so a floor above it is strictly
-            # looser than what it displaced -- measured, a bf16 lane at golden 0.5 vs
-            # result 0.7 (51 steps) rescued where isclose would have rejected it at
-            # 0.085. The absolute cut cannot close it: both intervals scale with the atol
-            # and are anchored at zero, so they always overlap.
+            # near_zero_atol *is* the atol half of the isclose this arm replaces, so a
+            # floor above it is strictly looser than what it displaced. The absolute cut
+            # cannot close the gap: both intervals scale with the atol and are anchored
+            # at zero, so they always overlap.
             logger.warning(
                 "near_zero_atol={} is looser than the atol={} half of the tolerance it "
                 "replaces, so every lane in the near-zero band is judged more loosely "
@@ -853,16 +837,14 @@ def passed_test(
         )
 
     if max_ulp is not None:
-        # Lanes the caller has already settled are not this gate's to judge. The
-        # exhaustive sweep is the case that needs it: it feeds every value the format
-        # has, including the subnormals the unpack path flushes and the golden does not,
-        # and a flushed lane is worth ~16,000 steps of something that is not the op's
-        # accuracy. Validated by `_selection`, so a wrong shape or a non-boolean mask is
-        # an error rather than a silent reshape.
+        # Lanes the caller has already settled are not this gate's to judge -- a
+        # subnormal the unpack path flushed is worth ~16,000 steps of something that is
+        # not the op's accuracy. Validated by `_selection`, so a wrong shape or a
+        # non-boolean mask is an error rather than a silent reshape.
         #
-        # Resolved before the verdict, not after it, so the near-zero band sizes its
-        # dynamic range over the judged lanes only -- otherwise a large masked-out golden
-        # widens the relative cut and the floor rescues a lane that should have failed.
+        # Resolved *before* the verdict, so the near-zero band sizes its dynamic range
+        # over the judged lanes only; otherwise a large masked-out golden widens the
+        # relative cut and the floor rescues a lane that should have failed.
         from .ulp import _selection
 
         ulp_selected = _selection(mask, golden_tensor, "passed_test")
@@ -876,10 +858,9 @@ def passed_test(
         )
         is_valid = is_valid | ~ulp_selected
         # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
-        # block-aware compare in would mean max_ulp was not the enforced maximum, since a
-        # lane many bf16 steps out would pass a 0-step budget on the lattice's say-so. So
-        # a Bfp8_b budget charges for block quantization too, and is usable only where
-        # that quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
+        # block-aware compare in would mean max_ulp was not the enforced maximum. So a
+        # Bfp8_b budget charges for block quantization too, and is usable only where that
+        # quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
     elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
@@ -950,17 +931,14 @@ def passed_test(
     is_within_tolerance = torch.all(is_valid)
 
     if ulp_distances is not None:
-        # Ahead of the tile dump below, so the worst lane leads the log rather than
-        # trailing it. Logged on a pass too -- which turns every enrolled test into an
-        # accuracy datapoint -- but at debug level, and CI runs at WARNING, so collecting
-        # them needs --logging-level=DEBUG.
+        # Ahead of the tile dump, so the worst lane leads the log. Logged on a pass too,
+        # at debug level, so collecting those datapoints needs --logging-level=DEBUG.
         #
-        # Lazily, because the message is several full-tensor reductions and on a normal
-        # run no sink accepts the pass line; `logger.opt(lazy=True)` calls the thunk only
-        # once one has. The error path is not lazy: it is always wanted.
+        # Lazily: the message is several full-tensor reductions and on a normal run no
+        # sink accepts the pass line. The error path is not lazy; it is always wanted.
         #
-        # Ranked without the lanes the floor accepted -- they hold the largest step counts
-        # by construction, so ranking every lane names one that passed.
+        # Ranked without the lanes the floor accepted -- they hold the largest step
+        # counts by construction, so ranking every lane names one that passed.
         ranked = ulp_selected & ~ulp_rescued
         _record_ulp_measurement(
             ulp_distances, mask=ranked, output_data_format=output_data_format

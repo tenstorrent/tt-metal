@@ -13,13 +13,8 @@ def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     """Gap from each golden value to the next representable number in *out_fmt*'s
     measurement dtype."""
     golden = np.asarray(golden, dtype=np.float64)
-    # Asked through helpers.ulp, so the proxy formats it gates are measured here too; a
-    # private copy of the native set left the sweep writing NaN for exactly the format
-    # the gate can judge. For Bfp8_b the step returned is a *bfloat16* one -- Bfp8_b has 6
-    # fractional bits against bfloat16's 7, so it is at most *half* a native Bfp8_b step,
-    # and far less where a shared block exponent coarsens a small element. The
-    # `signed_ulp_error` column therefore reads in bf16 steps for that format, and a
-    # budget derived from it is finer-grained than the format it names.
+    # Bfp8_b is measured in *bfloat16* steps, so a step here is at most half a native
+    # Bfp8_b one -- and far less where a shared block exponent coarsens a small element.
     if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 
@@ -27,11 +22,9 @@ def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     abs_g = torch.tensor(np.abs(golden), dtype=torch_dtype)
     nxt = torch.nextafter(abs_g, torch.tensor(float("inf"), dtype=torch_dtype))
     step = (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
-    # The same finfo.max fixup local_step carries: nextafter from the largest finite goes
-    # to Inf, and the binade downward is the same size. Taken from the converted tensor
-    # rather than the float64 input, because a golden that *rounds* to the format maximum
-    # is at the top of the range too -- an fp16 65503 rounds to 65504, which a float64
-    # compare misses, leaving the gap at infinity.
+    # At the largest finite, nextafter goes to Inf; the binade downward is the same size.
+    # Compared on the converted tensor, because a golden that *rounds* to the format
+    # maximum is at the top of the range too and a float64 compare misses it.
     largest = float(torch.finfo(torch_dtype).max)
     at_max = (abs_g == largest).numpy()
     if at_max.any():
