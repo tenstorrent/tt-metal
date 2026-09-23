@@ -362,9 +362,11 @@ bank and pumps them to the host FIFO over a D2H socket.
   a second core — the relay's own bank, its own DMA engine, no NoC read of another core's ring.
 - **Placement.** One relay per DRAM view, `boot_device` refusing two relays on one physical core (two DRAM
   views can resolve to the same NoC core, §N+40). The NIU has to be in stream mode to initiate NoC traffic
-  at all; all relays' NIUs are flipped in **one** launch of `kernels/drisc_niu_mode.cpp` before any relay is
-  resident (§N+34 — one launch per flip ran a `dram_barrier` across an already-stream-mode core and hung
-  the box).
+  at all, and that is boot state now: DRISC firmware puts every NIU that is no DRAM view's preferred
+  endpoint into stream mode and nothing changes it afterwards (`hw/inc/experimental/drisc_mode.h`). So the
+  profiler sets no modes — it checks the ones it needs, and turns capture off for a device whose relay core
+  is some other view's endpoint, because firmware holds such an NIU in NOC2AXI where the relay's reads
+  would never issue. §N+32/§N+34's bring-up hangs came from the flip launches this replaced.
 - **Launch.** `detail::LaunchProgram(..., force_slow_dispatch=true)`, outside the command queue: a
   DRAM-only program touches no fast-dispatch resource, so it stays resident across every workload, while
   going through the CQ would deadlock the first `Finish()`.
@@ -385,7 +387,7 @@ bank and pumps them to the host FIFO over a D2H socket.
   outstanding. A light workload that never reaches the occupancy bands is still shipped within ~50 ms
   (`kSpoolFreshCycles`), so host staleness is bounded.
 - **Teardown** talks to a relay through its stop word: 1 = quiesce (every wait holds while the last frames
-  drain, up to 1 s), 2 = kill switch (abandon waits, free the NIU). The relay publishes `0xD09E****` in its
+  drain, up to 1 s), and the relay returns once they are out. The relay publishes `0xD09E****` in its
   done word once its last page is out. Producers boot unarmed and are armed (`PROFILER_ARMED`) only on the
   cores a relay drains, once every relay is up; a path where a relay does not come up leaves them unarmed, so a
   missing relay can never wedge the workload (§N+24).
@@ -477,7 +479,7 @@ Names in the historical text and what they are today:
 | `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `streaming_profiler_tracy.{hpp,cpp}` |
 | the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `streaming_profiler_receiver.{hpp,cpp}` |
 | host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |
-| `drisc_niu_mode.cpp` | `tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp` (same job) |
+| `drisc_niu_mode.cpp` | gone: DRISC firmware sets each NIU's mode once per boot (`hw/inc/experimental/drisc_mode.h`) |
 | `test_perf_debug_zones` | `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` |
 | `TT_METAL_PERF_DEBUG_*` | `TT_METAL_STREAMING_PROFILER_*` — full table at the top of §6 |
 | `TT_METAL_STREAMING_PROFILER_{DRISC_ZONES,ROLE_RING_MB,SHIP_REPEAT}` as they appear in §3.1 and §3.3 | mechanical renames of `TT_METAL_PERF_DEBUG_*` knobs of the fillers/movers kernel; removed with it, no current equivalent |

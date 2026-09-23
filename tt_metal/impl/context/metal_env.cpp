@@ -192,7 +192,8 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_));
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
+        this->rtoptions_->get_eth_ptp_trace());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -201,11 +202,13 @@ void MetalEnvImpl::initialize_base_objects() {
 void MetalEnvImpl::verify_fw_capabilities() {
     FirmwareCapabilityRequest req;
     req.enable_2_erisc_mode = this->rtoptions_->get_enable_2_erisc_mode();
+    req.eth_ptp_trace = this->rtoptions_->get_eth_ptp_trace();
 
     FirmwareCapabilityResult res;
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
     if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
         this->rtoptions_->set_enable_2_erisc_mode(res.enable_2_erisc_mode);
+        this->rtoptions_->set_eth_ptp_trace(res.eth_ptp_trace);
     }
 }
 
