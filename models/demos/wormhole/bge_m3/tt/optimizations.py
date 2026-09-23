@@ -526,29 +526,23 @@ def _mlp_wi_program_config(mesh_device, max_seq_len, max_batch_size, *, hidden_s
 
 
 def _b16s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
-    grid_x, grid_y = 11, 10
+    # In-model sweep with the L1 output: the full 13x10 grid, ibw8, 1x5 and a
+    # 13-tile M block take the B16 forward from 25.133 ms to 24.356 ms. The whole
+    # 26-tile M block's circular buffers overlapped the L1 output by 136 KB.
+    grid_x, grid_y = 13, 10
     if mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
-    try:
-        g = mesh_device.compute_with_storage_grid_size()
-        if int(g.x) < grid_x or int(g.y) < grid_y:
-            return None
-    except Exception:
+    g = mesh_device.compute_with_storage_grid_size()
+    if int(g.x) < grid_x or int(g.y) < grid_y:
         return None
     m_tiles = (16 * 512) // 32  # 256
     hidden_tiles = hidden_size // 32
     intermediate_tiles = intermediate_size // 32
-    # NOTE: 1D mcast_in1 (per_core_N=full 128 tiles) overflows L1 (2.6MB > 1.57MB)
-    # for N=4096. All in0_block_w=8 variants also overflow L1 regardless of
-    # subblock size (8 K-tiles x per_core_N too big). ibw=4 sub=2x4 is the best
-    # feasible 2D mcast config for B16 MLP-wi.
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=min(4, hidden_tiles),
-        # out_block_h=13 splits the 26-tile M block in two. With the output in
-        # L1, the full block's circular buffers overlapped it by 136 KB.
+        in0_block_w=min(8, hidden_tiles),
         out_subblock_h=1,
-        out_subblock_w=6,
+        out_subblock_w=5,
         out_block_h=13,
         per_core_M=(m_tiles + grid_y - 1) // grid_y,
         per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
@@ -736,6 +730,29 @@ def _mlp_wo_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
 def _qkv_program_config(max_seq_len, max_batch_size, hidden_size, qkv_out_dim, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if (
+        max_seq_len == 512
+        and max_batch == 16
+        and hidden_size == 1024
+        and qkv_out_dim == 3072
+        and mesh_device is not None
+        and ttnn_is_blackhole(mesh_device)
+    ):
+        # In-model sweep with L1 heads: 12x10 ibw8 1x8 and a 13-tile M block take
+        # the B16 forward from 25.116 ms to 24.881 ms against ttnn.linear's choice.
+        return _tuned_mm2d_program_config(
+            mesh_device,
+            grid_x=12,
+            grid_y=10,
+            M=16 * 512,
+            K=hidden_size,
+            N=qkv_out_dim,
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            fused_activation=None,
+            out_block_h=13,
+        )
+    if (
         max_seq_len != 512
         or max_batch != 32
         or hidden_size != 1024
@@ -765,10 +782,6 @@ def _qkv_program_config(max_seq_len, max_batch_size, hidden_size, qkv_out_dim, m
     )
 
 
-# NOTE: B16 QKV (M=8192 K=1024 N=3072) explicit 2D mcast configs were tried
-# (ibw8 sub2x1 overflows L1; ibw4 sub2x1 runs 51.22ms, worse than the 50.88ms
-# default routing). The default ttnn.linear path is best for B16 QKV — not
-# overridden.
 def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if (
@@ -861,6 +874,7 @@ def _tuned_mm2d_program_config(
     out_subblock_h,
     out_subblock_w,
     fused_activation,
+    out_block_h=None,
 ):
     if mesh_device is None:
         return None
@@ -875,6 +889,7 @@ def _tuned_mm2d_program_config(
     N_tiles = N // 32
     per_core_M = (M_tiles + grid_y - 1) // grid_y
     per_core_N = (N_tiles + grid_x - 1) // grid_x
+    extra = {} if out_block_h is None else {"out_block_h": out_block_h}
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=in0_block_w,
@@ -884,6 +899,7 @@ def _tuned_mm2d_program_config(
         per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=fused_activation,
+        **extra,
     )
 
 
@@ -957,6 +973,8 @@ def _b8_tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_si
 
 
 def _b16_tuned_attention_output_program_config(mesh_device, *, hidden_size):
+    # In-model sweep with the L1 output: 11x10 ibw8 1x3 and a 13-tile M block
+    # take the B16 forward from 25.114 ms to 24.949 ms.
     return _tuned_mm2d_program_config(
         mesh_device,
         grid_x=11,
@@ -965,13 +983,16 @@ def _b16_tuned_attention_output_program_config(mesh_device, *, hidden_size):
         K=hidden_size,
         N=hidden_size,
         in0_block_w=8,
-        out_subblock_h=2,
-        out_subblock_w=1,
+        out_subblock_h=1,
+        out_subblock_w=3,
         fused_activation=None,
+        out_block_h=13,
     )
 
 
 def _b16_tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size):
+    # In-model sweep with the L1 output: 11x10 ibw16 1x3 and a 13-tile M block
+    # take the B16 forward from 25.116 ms to 24.740 ms.
     return _tuned_mm2d_program_config(
         mesh_device,
         grid_x=11,
@@ -979,10 +1000,11 @@ def _b16_tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_s
         M=16 * 512,
         K=intermediate_size,
         N=hidden_size,
-        in0_block_w=8,
-        out_subblock_h=2,
-        out_subblock_w=1,
+        in0_block_w=16,
+        out_subblock_h=1,
+        out_subblock_w=3,
         fused_activation=None,
+        out_block_h=13,
     )
 
 
