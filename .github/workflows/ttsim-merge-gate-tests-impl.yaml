@@ -73,7 +73,7 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "ALL_SKUS_IN_TESTS"
           sku-config: ./.github/sku_config.yaml
-          extra-args: --event "${{ github.event_name }}"
+          event: ${{ github.event_name }}
 
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:

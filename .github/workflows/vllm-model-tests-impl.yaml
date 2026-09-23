@@ -78,7 +78,7 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
           sku-config: ./.github/sku_config.yaml
-          extra-args: --allow-missing-cmd
+          allow-missing-cmd: "true"
       - name: Apply tier and model filters
         id: apply-filters
         run: |

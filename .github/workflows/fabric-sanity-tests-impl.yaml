@@ -70,7 +70,7 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
           sku-config: ./.github/sku_config.yaml
-          extra-args: --event "${{ github.event_name }}"
+          event: ${{ github.event_name }}
 
   fabric-sanity-tests:
     needs: load-test-matrix

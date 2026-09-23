@@ -74,10 +74,8 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
           sku-config: ./.github/sku_config.yaml
-          # "*" (default) = omit --sku-allowlist (no filter). Empty = skip all. Else CSV.
-          extra-args: >-
-            --event ${{ github.event_name }}
-            ${{ inputs.sku-allowlist != '*' && format('--sku-allowlist {0}', inputs.sku-allowlist) || '' }}
+          event: ${{ github.event_name }}
+          sku-allowlist: ${{ inputs.sku-allowlist }}
 
   llk-smoke-exec:
     needs: load-test-matrix

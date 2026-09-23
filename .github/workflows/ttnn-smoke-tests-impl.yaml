@@ -76,7 +76,7 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "ALL_SKUS_IN_TESTS"
           sku-config: ./.github/sku_config.yaml
-          extra-args: --event "${{ github.event_name }}"
+          event: ${{ github.event_name }}
 
       # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
       # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the
