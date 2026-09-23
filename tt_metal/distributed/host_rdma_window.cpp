@@ -61,7 +61,7 @@ struct RdmaWindow::Impl {
 
 RdmaWindow::RdmaWindow() : impl_(std::make_unique<Impl>()) {}
 
-bool RdmaWindow::agree(const bool local_ok, std::string& err) {
+bool RdmaWindow::agree(bool local_ok, std::string& err) {
     const uint8_t mine = local_ok ? 1 : 0;
     uint8_t all = 0;
     if (const int rc = MPI_Allreduce(&mine, &all, 1, MPI_UINT8_T, MPI_MIN, MPI_COMM_WORLD); rc != MPI_SUCCESS) {

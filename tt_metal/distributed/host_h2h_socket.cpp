@@ -207,10 +207,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         return 0;
     }
 
-    // Retire first, so a completed put frees its slot before the start pass looks. Front
-    // only, per core: bytes_acked is one counter and can only cross a contiguous prefix.
-    // LOAD-BEARING: flush_dirty() below ran a pass earlier, so a put that tests complete here
-    // is already remotely complete. tt_uva_quiet()'s guarantee is exactly that ordering.
+    // Front only, per core: bytes_acked is one counter and can only cross a contiguous
+    // prefix. LOAD-BEARING: flush_dirty() ran a pass earlier, so a test here is remote.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
         while (!im.tx_flight[c].empty() && im.win->test(im.tx_flight[c].front().op)) {
             im.tx_flight[c].pop_front();
