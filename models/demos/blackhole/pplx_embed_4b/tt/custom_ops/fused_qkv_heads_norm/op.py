@@ -40,10 +40,15 @@ def nlp_create_qkv_heads_norm_headsplit(
     rot_cos: ttnn.Tensor | None = None,
     rot_sin: ttnn.Tensor | None = None,
     trans_mat: ttnn.Tensor | None = None,
+    q_dtype: ttnn.DataType | None = None,
+    kv_dtype: ttnn.DataType | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """``qkv_fused``: ``[B, 1, S, (num_heads + 2*num_kv_heads) * head_dim]`` TILE bf16/bfp8.
 
-    Returns ``(q, k, v)`` as ``[B, H, S, head_dim]`` with Q and K RMS-normalised per head.
+    Returns ``(q, k, v)`` as ``[B, H, S, head_dim]`` with Q and K RMS-normalised per head
+    (and rotated when ``rot_cos``/``rot_sin``/``trans_mat`` are given). ``q_dtype`` /
+    ``kv_dtype`` (default: input dtype) pick the output dtypes; the packer converts, so
+    e.g. ``q_dtype=bfloat8_b`` hands SDPA its Q operand without a Typecast op.
     """
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -62,11 +67,16 @@ def nlp_create_qkv_heads_norm_headsplit(
     heads_per_group = plan.num_kv_heads // head_groups
 
     out_dtype = qkv_fused.dtype
+    q_dtype = q_dtype or out_dtype
+    kv_dtype = kv_dtype or out_dtype
+    if q_dtype not in _TILE_BYTES or kv_dtype not in _TILE_BYTES:
+        raise ValueError(f"unsupported output dtype q={q_dtype} kv={kv_dtype}")
+    separate_q = q_dtype != kv_dtype  # Q gets its own output CB (17) with its own tile size
     q_shape = (plan.batch, plan.num_q_heads, plan.seq_len, plan.head_dim)
     kv_shape = (plan.batch, plan.num_kv_heads, plan.seq_len, plan.head_dim)
-    q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(q_shape), out_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), out_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), out_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(q_shape), q_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config)
 
     grid = device.compute_with_storage_grid_size()
     num_cores, per_core = _split_work_to_cores(plan.num_blocks_total * head_groups, int(grid.x), int(grid.y))
@@ -81,6 +91,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     group_kv_tiles = heads_per_group * Wt
     unit_tiles = group_q_tiles + 2 * group_kv_tiles
     tile_size = _TILE_BYTES[out_dtype]
+    out_tiles = 2 * group_kv_tiles if separate_q else unit_tiles
 
     def cb(index, tiles, dtype, tsize):
         return ttnn.CBDescriptor(
@@ -91,7 +102,7 @@ def nlp_create_qkv_heads_norm_headsplit(
 
     cbs = [
         cb(0, unit_tiles * 2, out_dtype, tile_size),  # fused QKV in (double-buffered unit)
-        cb(16, unit_tiles * 2, out_dtype, tile_size),  # normalised Q|K|V out
+        cb(16, out_tiles * 2, kv_dtype, _TILE_BYTES[kv_dtype]),  # normalised Q|K|V out (K|V when separate_q)
         cb(1, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_q tiles (resident)
         cb(2, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_k tiles (resident)
         cb(3, 1, ttnn.bfloat16, _BF16_TILE),  # 1/head_dim scaler (resident)
@@ -101,6 +112,8 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(7, 1, ttnn.bfloat16, _BF16_TILE),  # rsqrt
         cb(8, Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
     ]
+    if separate_q:
+        cbs.append(cb(17, group_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
     if fuse_rotary:
         cbs += [
             cb(9, Wt, ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
@@ -124,7 +137,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     ]
     for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    compute_ct = [plan.q_heads_per_kv, heads_per_group, Wt, int(fuse_rotary)]
+    compute_ct = [plan.q_heads_per_kv, heads_per_group, Wt, int(fuse_rotary), int(separate_q)]
     writer_ct = [
         plan.seq_tiles,
         Wt,
@@ -135,6 +148,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         head_groups,
         heads_per_group,
         plan.seq_tiles,
+        int(separate_q),
     ]
     for t in (q_tensor, k_tensor, v_tensor):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -187,7 +201,8 @@ def nlp_create_qkv_heads_norm_headsplit(
                     math_approx_mode=False,
                     fp32_dest_acc_en=True,
                     dst_full_sync_en=False,
-                    bfp8_pack_precise=False,
+                    # Only matters when an output is bfp8; the stock Typecast packs precise.
+                    bfp8_pack_precise=os.getenv("QWEN_FUSED_BFP8_PRECISE", "1") == "1",
                 ),
             ),
             ttnn.KernelDescriptor(

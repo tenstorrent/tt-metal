@@ -26,6 +26,7 @@ namespace {
 constexpr uint32_t cb_in = 0, cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
 constexpr uint32_t cb_x2 = 5, cb_red = 6, cb_inv = 7, cb_tmp = 8, cb_out = 16;
 constexpr uint32_t cb_cos = 9, cb_sin = 10, cb_trans = 11, cb_rot = 12, cb_si = 13, cb_ci = 14, cb_norm = 15;
+constexpr uint32_t cb_qsep = 17;  // Q output when it has its own dtype (e.g. bfp8 for SDPA); K|V stay in cb_out
 
 template <uint32_t Wt, uint32_t cb_dst>
 inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
@@ -124,7 +125,7 @@ inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
 
 // RoPE on one normalised head sitting in cb_norm: out = x*cos + (x @ T)*sin, where T is the
 // single 32x32 tile-local rotation the model's rotary_embedding_llama applies to every tile.
-template <uint32_t Wt>
+template <uint32_t Wt, uint32_t cb_dst>
 inline void rotary_head(uint32_t out_off) {
     CircularBuffer nrm(cb_norm), rot(cb_rot), si(cb_si), ci(cb_ci);
     nrm.wait_front(Wt);
@@ -177,7 +178,7 @@ inline void rotary_head(uint32_t out_off) {
     ci.push_back(Wt);
     nrm.pop_front(Wt);
     reconfig_data_format(cb_ci, cb_si);
-    pack_reconfig_data_format(cb_out);
+    pack_reconfig_data_format(cb_dst);
     add_init(cb_ci, cb_si);
     ci.wait_front(Wt);
     si.wait_front(Wt);
@@ -188,7 +189,7 @@ inline void rotary_head(uint32_t out_off) {
     tile_regs_commit();
     tile_regs_wait();
     for (uint32_t j = 0; j < Wt; ++j) {
-        pack_tile(j, cb_out, out_off + j);
+        pack_tile(j, cb_dst, out_off + j);
     }
     tile_regs_release();
     ci.pop_front(Wt);
@@ -201,14 +202,20 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);  // head_dim_tiles
     constexpr uint32_t fuse_rotary = get_compile_time_arg_val(3);
+    constexpr uint32_t separate_q = get_compile_time_arg_val(4);  // Q -> cb_qsep (own dtype), K|V -> cb_out
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
     constexpr uint32_t group_q_tiles = q_heads_per_group * Wt;
     constexpr uint32_t group_kv_tiles = heads_per_group * Wt;
     constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
+    constexpr uint32_t cb_qout = separate_q ? cb_qsep : cb_out;
+    constexpr uint32_t kv_base = separate_q ? 0 : group_q_tiles;  // K|V offset inside cb_out
+    constexpr uint32_t out_tiles = separate_q ? 2 * group_kv_tiles : unit_tiles;
+    constexpr uint32_t cb_qnorm = fuse_rotary ? cb_norm : cb_qout;
+    constexpr uint32_t cb_knorm = fuse_rotary ? cb_norm : cb_out;
 
-    CircularBuffer in(cb_in), out(cb_out), gq(cb_gq), gk(cb_gk), sc(cb_scaler), ep(cb_eps);
+    CircularBuffer in(cb_in), out(cb_out), qout(cb_qout), gq(cb_gq), gk(cb_gk), sc(cb_scaler), ep(cb_eps);
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
     gq.wait_front(Wt);
     gk.wait_front(Wt);
@@ -221,28 +228,31 @@ void kernel_main() {
 
     for (uint32_t w = 0; w < num_work_units; ++w) {
         in.wait_front(unit_tiles);
-        out.reserve_back(unit_tiles);
+        out.reserve_back(out_tiles);
+        if constexpr (separate_q) {
+            qout.reserve_back(group_q_tiles);
+        }
         if constexpr (fuse_rotary) {
             CircularBuffer ccos(cb_cos), csin(cb_sin);
             ccos.wait_front(Wt);
             csin.wait_front(Wt);
-            for (uint32_t h = 0; h < q_heads_per_group; ++h) {
-                norm_head<Wt, cb_norm>(h * Wt, h * Wt, cb_gq);
-                rotary_head<Wt>(h * Wt);
+        }
+        for (uint32_t h = 0; h < q_heads_per_group; ++h) {
+            norm_head<Wt, cb_qnorm>(h * Wt, h * Wt, cb_gq);
+            if constexpr (fuse_rotary) {
+                rotary_head<Wt, cb_qout>(h * Wt);
             }
-            for (uint32_t h = 0; h < heads_per_group; ++h) {
-                norm_head<Wt, cb_norm>(group_q_tiles + h * Wt, group_q_tiles + h * Wt, cb_gk);
-                rotary_head<Wt>(group_q_tiles + h * Wt);
+        }
+        for (uint32_t h = 0; h < heads_per_group; ++h) {
+            norm_head<Wt, cb_knorm>(group_q_tiles + h * Wt, kv_base + h * Wt, cb_gk);
+            if constexpr (fuse_rotary) {
+                rotary_head<Wt, cb_out>(kv_base + h * Wt);
             }
+        }
+        if constexpr (fuse_rotary) {
+            CircularBuffer ccos(cb_cos), csin(cb_sin);
             ccos.pop_front(Wt);
             csin.pop_front(Wt);
-        } else {
-            for (uint32_t h = 0; h < q_heads_per_group; ++h) {
-                norm_head<Wt, cb_out>(h * Wt, h * Wt, cb_gq);
-            }
-            for (uint32_t h = 0; h < heads_per_group; ++h) {
-                norm_head<Wt, cb_out>(group_q_tiles + h * Wt, group_q_tiles + h * Wt, cb_gk);
-            }
         }
         // V passes through
         reconfig_data_format(cb_in, cb_in);
@@ -257,11 +267,14 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < n; ++j) {
-                pack_tile(j, cb_out, group_q_tiles + group_kv_tiles + t0 + j);
+                pack_tile(j, cb_out, kv_base + group_kv_tiles + t0 + j);
             }
             tile_regs_release();
         }
-        out.push_back(unit_tiles);
+        if constexpr (separate_q) {
+            qout.push_back(group_q_tiles);
+        }
+        out.push_back(out_tiles);
         in.pop_front(unit_tiles);
     }
 }

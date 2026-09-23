@@ -278,6 +278,13 @@ def apply_recommended_env(batched_l1: bool) -> None:
     # the two rotary_embedding_llama ops per layer. E2E: bs1 25.0->23.9 (-4.4%), bs8
     # 144.7->143.4, bs16 276.8->263.5 (-4.8%), bs32 519.2->495.0 (-4.7%); STS-B 0.8134.
     os.environ.setdefault("QWEN_FUSED_ROTARY", "1")
+    # ...and emit Q and K/V in bfp8 straight from that op (precise bfp8 packing, same
+    # error as the stock Typecast), deleting the per-layer Q Typecast and halving the
+    # SDPA operand bytes. "force" = bfp8 Q at bs1 too (the bs1 shortcut used bf16 Q).
+    # E2E: bs1 23.9->23.7, bs8 143.4->135.3 (-5.6%), bs16 263.5->250.4 (-5.0%),
+    # bs32 495.0->474.3 (-4.2%); STS-B 0.8134->0.8190 (Q-only 0.8164).
+    os.environ.setdefault("QWEN_FUSED_Q_BFP8", "force")
+    os.environ.setdefault("QWEN_FUSED_KV_BFP8", "1")
     # The block-sharded LN path aims for an 8x8 grid, which is inherited from
     # BGE-M3 / 0.6B. On 4B that silently disables it: k_tiles = dim/32 = 80, so
     # gx=8 gives block_w=10 and block_h*block_w = 20, over the 16-tile per-core
