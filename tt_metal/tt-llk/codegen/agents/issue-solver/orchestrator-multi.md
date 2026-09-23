@@ -43,25 +43,44 @@ Bootstrap state differs from the single-architecture run only in:
 
 The setup commands from `orchestrator.md` are mode-aware and remain unchanged.
 
-## Analyze and Scope
+## Solve: analyse, scope and apply one shared fix in one session
 
-Spawn `issue-analyzer.md` once for the full `TARGET_ARCHES_JSON`. For each
+Analysis, architecture research and the shared fix run as **one** agent
+session, for the same reason as in `orchestrator.md`: they share nearly all
+their discovery and were paying the per-stage cost three times over.
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_solve
+```
+
+Spawn a single agent with both contracts, in this order, in one session:
+
+```text
+Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-analyzer.md
+to produce the analysis artifact for the full TARGET_ARCHES_JSON. Then, in this
+same session, read and follow
+{WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-worker.md
+in initial-fix mode to apply the one shared fix it calls for.
+WORKTREE_DIR={WORKTREE_DIR}
+```
+
+Both playbooks keep their contracts, artifacts and result markers. The worker
+half reads `RUN_MODE=multi` from state; its plan must describe the shared
+contract once and separate only genuine architecture differences.
+
+Take the analyser half's scope decisions before the fix half's marker. For each
 requested architecture, read `arch_scope` from the analysis artifact:
 
 - Set `arch_results.<arch>.verdict=SKIPPED` for `out_of_scope`.
 - Keep `in_scope` architectures pending.
 - If all requested architectures are out of scope, run
-  `execute_step_finalize_out_of_scope` and stop without spawning another agent.
+  `execute_step_finalize_out_of_scope` and stop without entering a later stage.
 
-Run one `arch-lookup.md` only when the shared analysis requests architecture
-research. It must answer the recorded questions for every architecture named
-by each question.
-
-## Apply One Shared Fix
-
-Call `execute_step_advance_writer`, then spawn `issue-worker.md` once; it reads
-`RUN_MODE=multi` from state. The plan must describe the shared contract once
-and separate only genuine architecture differences.
+Architecture research is answered inside the same session and recorded in the
+analysis artifact, covering every architecture named by each question. Spawn
+`arch-lookup.md` separately only when the session returns `BLOCKED` on a
+hardware question it could not settle from the repository.
 
 Handle `FIX_APPLIED`, `BLOCKED`, and `HYPOTHESIS_REFUTED` exactly as in
 `orchestrator.md`, including sealing explicit performance requirements before
