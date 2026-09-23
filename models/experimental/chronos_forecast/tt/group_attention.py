@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import torch
 from einops import rearrange
 
-from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights
+from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights, maybe_upload_mask
 
 
 @dataclass(frozen=True)
@@ -32,9 +32,7 @@ class TtGroupAttentionWeights:
     def from_torch_layer(cls, layer) -> "TtGroupAttentionWeights":
         """Extract weights from a reference ``GroupSelfAttention`` (or matching module)."""
         mha = layer.self_attention
-        wqkv = torch.cat(
-            [mha.q.weight.detach(), mha.k.weight.detach(), mha.v.weight.detach()], dim=0
-        ).clone()
+        wqkv = torch.cat([mha.q.weight.detach(), mha.k.weight.detach(), mha.v.weight.detach()], dim=0).clone()
         return cls(
             wqkv=wqkv,
             wo=mha.o.weight.detach().clone(),
@@ -91,25 +89,23 @@ class TtGroupAttention:
         )
         # Transpose batch/time: attention runs along the batch axis.
         x_flip = ttnn.permute(x, (1, 0, 2))
-        mask = ttnn.from_torch(
-            mask_host.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Group attention runs along batch, so its seq length is B.
+        mask = maybe_upload_mask(self.device, mask_host, seq_len=b)
         out = self.core(x_flip, mask)
         ttnn.deallocate(x_flip)
-        ttnn.deallocate(mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         # Flip back; residual against the ORIGINAL (B, T, d).
         back = ttnn.permute(out, (1, 0, 2))
         ttnn.deallocate(out)
         if back.memory_config() != x.memory_config():
             back = ttnn.to_memory_config(back, x.memory_config())
         y = ttnn.add(x, back, memory_config=x.memory_config())
-        ttnn.deallocate(x)
-        ttnn.deallocate(back)
-        # Drop seq tile padding on host; return float for PCC.
-        return ttnn.to_torch(y).float()[:, :t, :]
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,d),
+        # drop seq tile padding on host; return float for PCC.
+        host = ttnn.to_torch(y).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        return host[:, :t, :]
 
     __call__ = forward

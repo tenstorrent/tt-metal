@@ -124,6 +124,10 @@ class TtResidualBlock:
         out = ttnn.add(main, skip, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(main)
         ttnn.deallocate(skip)
-        return ttnn.to_torch(out).float()
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,C).
+        host = ttnn.to_torch(out).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        return host
 
     __call__ = forward

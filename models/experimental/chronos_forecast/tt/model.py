@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import torch
 from einops import rearrange
 
-from models.experimental.chronos_forecast.tt.encoder import TtEncoder
+from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
 from models.experimental.chronos_forecast.tt.group_attention import build_group_mask
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     instance_norm_inverse,
@@ -128,9 +128,7 @@ class TtChronos:
         if cfg.use_reg_token:
             reg = self.weights.shared_weight[self.weights.reg_token_id].reshape(1, 1, -1).expand(batch_size, -1, -1)
             input_embeds = torch.cat([input_embeds, reg], dim=-2)
-            attention_mask = torch.cat(
-                [attention_mask, torch.ones(batch_size, 1, dtype=attention_mask.dtype)], dim=-1
-            )
+            attention_mask = torch.cat([attention_mask, torch.ones(batch_size, 1, dtype=attention_mask.dtype)], dim=-1)
 
         patched_future, _ = prepare_patched_future(
             future_covariates,
@@ -192,9 +190,7 @@ class TtChronos:
             q=cfg.num_quantiles,
             p=cfg.output_patch_size,
         )
-        quantile_preds = rearrange(
-            quantile_preds, "b q h -> b (q h)", b=batch_size, q=cfg.num_quantiles
-        )
+        quantile_preds = rearrange(quantile_preds, "b q h -> b (q h)", b=batch_size, q=cfg.num_quantiles)
         quantile_preds = instance_norm_inverse(quantile_preds, loc_scale)
         return rearrange(quantile_preds, "b (q h) -> b q h", q=cfg.num_quantiles)
 

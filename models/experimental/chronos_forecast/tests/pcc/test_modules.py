@@ -20,7 +20,8 @@ from models.experimental.chronos_forecast.tt.residual_block import (
     "shape",
     [pytest.param((2, 4, 48), id="tiny_2x4x48"), pytest.param((2, 2, 48), id="real_2x2x48")],
 )
-def test_residual_block_pcc(request, shape):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_residual_block_pcc(mesh_device, shape):
     """TT ResidualBlock (48d patched input) vs reference oracle.
 
     tiny covers the golden stub geometry (tests/test_residual.py); real covers
@@ -29,7 +30,6 @@ def test_residual_block_pcc(request, shape):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -47,7 +47,8 @@ def test_residual_block_pcc(request, shape):
     assert_with_pcc(expected, got, pcc=0.99)
 
 
-def test_time_attention_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_time_attention_pcc(mesh_device):
     """TT TimeSelfAttention (tiny golden dims) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -62,7 +63,6 @@ def test_time_attention_pcc(request):
         build_rope_cache,
     )
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -88,7 +88,8 @@ def test_time_attention_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_group_attention_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_group_attention_pcc(mesh_device):
     """TT GroupSelfAttention (tiny golden dims) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -102,7 +103,6 @@ def test_group_attention_pcc(request):
         TtGroupAttentionWeights,
     )
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -122,7 +122,8 @@ def test_group_attention_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_encoder_block_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_encoder_block_pcc(mesh_device):
     """TT Chronos2EncoderBlock (tiny golden dims) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -137,7 +138,6 @@ def test_encoder_block_pcc(request):
     )
     from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -164,7 +164,8 @@ def test_encoder_block_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_encoder_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_encoder_pcc(mesh_device):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -175,7 +176,6 @@ def test_encoder_pcc(request):
     from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
     from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -190,7 +190,7 @@ def test_encoder_pcc(request):
     position_ids = torch.arange(8).unsqueeze(0).expand(2, -1)
     expected = encoder(
         inputs_embeds=x,
-        group_ids=torch.arange(2),
+        group_ids=torch.zeros(2, dtype=torch.long),
         attention_mask=torch.ones(2, 8),
     ).last_hidden_state
 
@@ -202,7 +202,8 @@ def test_encoder_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_output_embedding_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_output_embedding_pcc(mesh_device):
     """TT output patch embedding (TtResidualBlock reuse, dummy 6->336) vs oracle."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -210,7 +211,6 @@ def test_output_embedding_pcc(request):
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -227,7 +227,8 @@ def test_output_embedding_pcc(request):
     assert_with_pcc(expected, got, pcc=0.99)
 
 
-def test_tt_encode_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_tt_encode_pcc(mesh_device):
     """TT Chronos encode (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -236,7 +237,6 @@ def test_tt_encode_pcc(request):
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
     from models.experimental.chronos_forecast.tt.model import TtChronos
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -254,7 +254,8 @@ def test_tt_encode_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_tt_forward_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_tt_forward_pcc(mesh_device):
     """TT Chronos forward (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -263,7 +264,6 @@ def test_tt_forward_pcc(request):
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
     from models.experimental.chronos_forecast.tt.model import TtChronos
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
@@ -280,7 +280,8 @@ def test_tt_forward_pcc(request):
     assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
-def test_tt_forward_pretrained_pcc(request):
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_tt_forward_pretrained_pcc(mesh_device):
     """TT forward with real amazon/chronos-2 weights via preprocess_model_parameters.
 
     Skipped when weights/chronos-2 is absent. Short context (C=512 -> 32
@@ -299,7 +300,6 @@ def test_tt_forward_pretrained_pcc(request):
     if not (ckpt / "config.json").is_file():
         pytest.skip("weights/chronos-2 absent")
 
-    mesh_device = request.getfixturevalue("mesh_device")
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 

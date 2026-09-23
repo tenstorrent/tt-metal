@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import torch
 
-from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights
+from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights, maybe_upload_mask
 
 
 @dataclass(frozen=True)
@@ -32,9 +32,7 @@ class TtTimeAttentionWeights:
     def from_torch_layer(cls, layer) -> "TtTimeAttentionWeights":
         """Extract weights from a reference ``TimeSelfAttention`` (or matching module)."""
         mha = layer.self_attention
-        wqkv = torch.cat(
-            [mha.q.weight.detach(), mha.k.weight.detach(), mha.v.weight.detach()], dim=0
-        ).clone()
+        wqkv = torch.cat([mha.q.weight.detach(), mha.k.weight.detach(), mha.v.weight.detach()], dim=0).clone()
         return cls(
             wqkv=wqkv,
             wo=mha.o.weight.detach().clone(),
@@ -57,9 +55,7 @@ class TtTimeAttentionWeights:
         )
 
 
-def build_rope_cache(
-    position_ids: torch.Tensor, inv_freq: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
+def build_rope_cache(position_ids: torch.Tensor, inv_freq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Host RoPE cos/sin (fp32). position_ids (B,T), inv_freq (Dh//2) -> (cos, sin) (B,T,Dh)."""
     with torch.no_grad():
         inv_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
@@ -116,23 +112,22 @@ class TtTimeAttention:
             ),
             1,
         )
-        mask = ttnn.from_torch(
-            mask_host.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Upload the mask unless it is an all-zero small-seq identity (see
+        # maybe_upload_mask); callers must guard the deallocate below.
+        mask = maybe_upload_mask(self.device, mask_host, seq_len=t)
         out = self.core(x, mask, cos, sin)
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
-        ttnn.deallocate(mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         if out.memory_config() != x.memory_config():
             out = ttnn.to_memory_config(out, x.memory_config())
         y = ttnn.add(x, out, memory_config=x.memory_config())
-        ttnn.deallocate(x)
-        ttnn.deallocate(out)
-        # Drop seq tile padding on host; return float for PCC.
-        return ttnn.to_torch(y).float()[:, :t, :]
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,d),
+        # drop seq tile padding on host; return float for PCC.
+        host = ttnn.to_torch(y).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        return host[:, :t, :]
 
     __call__ = forward

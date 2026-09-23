@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import torch
 
 from models.experimental.chronos_forecast.tt.encoder_block import TtEncoderBlock, TtEncoderBlockWeights
+from models.experimental.chronos_forecast.tt.mha_core import maybe_upload_mask
 
 
 @dataclass(frozen=True)
@@ -91,16 +92,23 @@ class TtEncoder:
         x = _upload(x_host)
         cos = ttnn.unsqueeze(_upload(cos_host), 1)
         sin = ttnn.unsqueeze(_upload(sin_host), 1)
-        time_mask = _upload(time_mask_host)
-        group_mask = _upload(group_mask_host)
+        # Time masks attend over T; group masks attend over B (post-flip seq).
+        time_mask = maybe_upload_mask(self.device, time_mask_host, seq_len=t)
+        group_mask = maybe_upload_mask(self.device, group_mask_host, seq_len=_b)
 
         x = self.forward_device(x, cos, sin, time_mask, group_mask)
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
-        ttnn.deallocate(time_mask)
-        ttnn.deallocate(group_mask)
+        if time_mask is not None:
+            ttnn.deallocate(time_mask)
+        if group_mask is not None:
+            ttnn.deallocate(group_mask)
 
-        host = ttnn.to_torch(x).float()[:, :t, :]
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,d).
+        host = ttnn.to_torch(x).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        host = host[:, :t, :]
         ttnn.deallocate(x)
         return host
 
