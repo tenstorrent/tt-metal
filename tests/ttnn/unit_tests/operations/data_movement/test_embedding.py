@@ -672,6 +672,42 @@ def test_embedding_oom(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+def test_embedding_chunked_two_blocks_partial_last_chunk(device):
+    # 8224 columns leaves a 1-tile last chunk. 4096 tokens is two blocks on one core.
+    torch.manual_seed(0)
+    vocabulary_size = 4
+    hidden_embedding_dim = 8224
+    sentence_size = 4096
+
+    torch_input_tensor = torch.randint(0, vocabulary_size, (1, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32), device)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), device)
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT)
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
+
+
+def test_embedding_bf16_indices_with_pad_token(device):
+    torch.manual_seed(0)
+    vocabulary_size = 32
+    pad_token = 1
+    torch_input_tensor = torch.randint(0, vocabulary_size, (1, 32))
+    torch_input_tensor[0, ::4] = pad_token
+    torch_input_tensor[0, 1] = 5
+    torch_weights = torch_random((vocabulary_size, 64), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+    )
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), device)
+    output_tensor = ttnn.embedding(input_tensor, weights, padding_idx=pad_token, layout=ttnn.TILE_LAYOUT)
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
+
+
 # Regression for the chunked-tilize embedding path with non-multiple-of-cap
 # tile counts (i.e. partial trailing chunk). The chunked reader/compute path
 # previously assumed each chunk had the same tile count and read
