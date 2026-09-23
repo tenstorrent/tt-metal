@@ -42,6 +42,8 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.silu_mul import silu_mul
+from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.silu_mul import supported as _silu_mul_supported
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import Mode, OpGroup
 
@@ -58,6 +60,46 @@ def _pack_gate_up_tile_pairs(gate: torch.Tensor, up: torch.Tensor) -> torch.Tens
     g = gate.reshape(k, n // TILE, TILE)
     u = up.reshape(k, n // TILE, TILE)
     return torch.stack([g, u], dim=2).reshape(k, 2 * n)
+
+
+def _wrap_silu_mul(original_mul, min_rows):
+    """Route the stock ``ttnn.mul(a, b, input_tensor_a_activations=[SILU])`` (the SwiGLU product
+    on the unfused path) to ``custom_ops.silu_mul`` for large M. Standalone at the bs32 shape
+    (``[1,32,512,9728]`` bfp8): 1591 -> 1373 us (-13.7%) and closer to torch (PCC 0.99941 vs
+    0.99897). At bs1 the generic op is slower (62 vs 59 us), hence the row threshold."""
+
+    def wrapper(a, b, *args, **kwargs):
+        acts = kwargs.get("input_tensor_a_activations")
+        if (
+            not args
+            and acts is not None
+            and len(acts) == 1
+            and acts[0] == ttnn.UnaryOpType.SILU
+            and kwargs.get("input_tensor_b_activations") is None
+            and kwargs.get("activations") is None
+            and hasattr(a, "padded_shape")
+            and _silu_mul_supported(a, b)
+            and int(a.padded_shape[-2]) * int(a.padded_shape[-3]) * int(a.padded_shape[0]) >= min_rows
+        ):
+            out = silu_mul(a, b, out_dtype=kwargs.get("dtype"), memory_config=kwargs.get("memory_config"))
+            if os.getenv("QWEN_SILU_MUL_VERIFY", "0") == "1":
+                import torch
+
+                ref = original_mul(a, b, *args, **kwargs)
+                o, r = ttnn.to_torch(out).float().flatten(), ttnn.to_torch(ref).float().flatten()
+                aq, bq = ttnn.to_torch(a).float().flatten(), ttnn.to_torch(b).float().flatten()
+                gold = torch.nn.functional.silu(aq) * bq
+                pcc = lambda x, y: torch.corrcoef(torch.stack([x, y]))[0, 1].item()
+                print(
+                    f"[verify silu_mul] pcc(fused,stock)={pcc(o, r):.6f} pcc(fused,torch)={pcc(o, gold):.6f} "
+                    f"pcc(stock,torch)={pcc(r, gold):.6f}",
+                    flush=True,
+                )
+                ttnn.deallocate(ref)
+            return out
+        return original_mul(a, b, *args, **kwargs)
+
+    return wrapper
 
 
 class PplxFusedSwigluMLP(MLP):
@@ -138,6 +180,14 @@ class PplxFusedSwigluMLP(MLP):
         if not self._can_fuse(x, mode, seq_len):
             if self._can_silu_in_ff1(mode, seq_len):
                 return self._forward_silu_in_ff1(x, mode, seq_len)
+            if mode == Mode.PREFILL and os.getenv("QWEN_SILU_MUL", "1") == "1":
+                # Unfused SwiGLU path (bs32): the silu(a)*b product as one model-local generic_op.
+                _orig_mul = ttnn.mul
+                ttnn.mul = _wrap_silu_mul(_orig_mul, int(os.getenv("QWEN_SILU_MUL_MIN_ROWS", "8192")))
+                try:
+                    return super().forward(x, mode)
+                finally:
+                    ttnn.mul = _orig_mul
             return super().forward(x, mode)
 
         layer = max(self.layer_num, 0)
