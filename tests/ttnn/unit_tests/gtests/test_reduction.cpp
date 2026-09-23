@@ -343,7 +343,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             block.resident_output_tiles = 16;
             const ReduceValidShape shape =
                 dim == ReduceOpDim::W ? ReduceValidShape{65, 135, 1} : ReduceValidShape{135, 65, 1};
-            block.tail = ReduceTailConfig{shape, 5};
+            block.tail = ReduceTailConfig{shape};
             const ReduceCallConfig config{
                 block,
                 ReduceOpMath::AVG,
@@ -362,7 +362,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             EXPECT_EQ(full.logical_h, 256U);
             EXPECT_EQ(full.logical_w, 256U);
             EXPECT_EQ(full.batches, 2U);
-            EXPECT_EQ(full.get_runtime_shape_args(false), (std::vector<uint32_t>{0, 0, 0}));
+            EXPECT_EQ(full.get_runtime_shape_args(false), (std::vector<uint32_t>{0}));
             if (!add) {
                 EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, 1.0F / 256);
             }
@@ -374,12 +374,17 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             EXPECT_EQ(tail.reduce_factor, add ? 135U : 1U);
             EXPECT_NEAR(tail.post_scale, 1.0F, 1e-6F);
             if (!add) {
-                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, 1.0F / 135);
-                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[1].value, 1.0F / 135);
+                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, static_cast<float>(bfloat16(1.0F / 135)));
+                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[1].value, static_cast<float>(bfloat16(1.0F / 135)));
             }
             const auto words = ReduceCallArgs(full, {0, 1, 16}).get_compile_time_args();
             ASSERT_EQ(words.size(), 2U * args::call_compile_time_arg_count());
-            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)], 5U);
+            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)], 0U);
+            std::vector<uint32_t> runtime_args(5, 999);
+            EXPECT_EQ(full.append_runtime_args(runtime_args), 5U);
+            EXPECT_EQ(
+                runtime_args,
+                (std::vector<uint32_t>{999, 999, 999, 999, 999, shape.height, shape.width, shape.batches}));
             const auto tail_offset = args::call_compile_time_arg_count();
             EXPECT_EQ(words[tail_offset + static_cast<uint32_t>(args::CallWord::LogicalHeight)], shape.height);
             EXPECT_EQ(words[tail_offset + static_cast<uint32_t>(args::CallWord::LogicalWidth)], shape.width);
@@ -585,15 +590,6 @@ TEST(ReduceHostPlanner, TailShapesAreValidatedBeforePlanning) {
             hardware,
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     }
-    block.tail = ReduceTailConfig{{63, 135, 1}, std::numeric_limits<uint32_t>::max()};
-    EXPECT_ANY_THROW(make_reduce_plan(
-        block,
-        ReduceOpMath::SUM,
-        ReduceOpDim::W,
-        1.0F,
-        ReduceFp32Mode::Fast,
-        hardware,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     // Even if a tail writes one output tile, the shared plan must fit full work.
     block.tail = ReduceTailConfig{{31, 135, 1}};
     block.resident_output_tiles = 1;
@@ -614,7 +610,7 @@ TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
     auto block = ReduceBlockSpec::tiled(96, 256, DataType::BFLOAT16, DataType::FLOAT32);
     block.resident_input_tiles = 24;
     block.resident_output_tiles = 3;
-    block.tail = ReduceTailConfig{{65, 231, 1}, 2};
+    block.tail = ReduceTailConfig{{65, 231, 1}};
     const ReduceCallConfig first{
         block,
         ReduceOpMath::SUM,
@@ -623,23 +619,50 @@ TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
         ReduceFp32Mode::Fast,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop};
     auto second = first;
-    second.block.tail = ReduceTailConfig{{65, 233, 1}, 5};
+    second.block.tail = ReduceTailConfig{{65, 233, 1}};
     const auto distinct = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
     EXPECT_GT(distinct.auxiliary.tiles.size(), 4U);
     EXPECT_NE(distinct.calls[0].auxiliary_tile_offset, distinct.calls[1].auxiliary_tile_offset);
+    EXPECT_EQ(distinct.calls[0].plan.tail_plan->tail_runtime_arg_offset, 0U);
+    EXPECT_EQ(distinct.calls[1].plan.tail_plan->tail_runtime_arg_offset, 3U);
+    for (const auto& call : distinct.calls) {
+        // All calls select full/tail work using the first record.
+        EXPECT_EQ(call.plan.tail_runtime_arg_offset, 0U);
+        const auto words = ReduceCallArgs(call).get_compile_time_args();
+        namespace args = ttnn::kernel_lib::reduce_plan_args;
+        EXPECT_EQ(
+            words[args::call_compile_time_arg_count() + static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)],
+            call.plan.tail_plan->tail_runtime_arg_offset);
+    }
+    std::vector<uint32_t> runtime_args{111, 222};
+    EXPECT_EQ(distinct.append_runtime_args(runtime_args), 2U);
+    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 65, 231, 1, 65, 233, 1}));
+    runtime_args = {111, 222};
+    EXPECT_EQ(distinct.append_runtime_args(runtime_args, false), 2U);
+    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0}));
     second.block.tail->shape.width = 231;
     const auto shared = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
     EXPECT_EQ(shared.auxiliary.tiles.size(), 4U);
     EXPECT_EQ(shared.calls[0].auxiliary_tile_offset, shared.calls[1].auxiliary_tile_offset);
-    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
-    second.block.tail->shape.width = 233;
-    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
-    second.block.tail->compute_runtime_arg_offset = first.block.tail->compute_runtime_arg_offset;
-    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
-    second.block.tail->shape = first.block.tail->shape;
-    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
-    ++second.block.tail->compute_runtime_arg_offset;
-    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
+    EXPECT_EQ(shared.calls[1].plan.tail_plan->tail_runtime_arg_offset, 0U);
+    EXPECT_EQ(shared.get_runtime_shape_args(), (std::vector<uint32_t>{65, 231, 1}));
+
+    auto static_first = first;
+    static_first.block.tail.reset();
+    // A static call accumulated with a tail must produce the same valid output rows.
+    static_first.block.logical_h = 65;
+    second.block.logical_h = 65;
+    const auto mixed = make_reduce_sequence_plan({{0, static_first}, {3, second}}, {1, 2, 16}, hardware);
+    EXPECT_EQ(mixed.calls[0].plan.tail_runtime_arg_offset, 0U);
+    EXPECT_EQ(mixed.calls[1].plan.tail_plan->tail_runtime_arg_offset, 0U);
+    EXPECT_EQ(mixed.get_runtime_shape_args(), (std::vector<uint32_t>{65, 231, 1}));
+
+    second.block.tail.reset();
+    const auto static_sequence = make_reduce_sequence_plan({{0, static_first}, {3, second}}, {1, 2, 16}, hardware);
+    EXPECT_TRUE(static_sequence.get_runtime_shape_args().empty());
+    EXPECT_TRUE(static_sequence.get_runtime_shape_args(false).empty());
+    EXPECT_EQ(static_sequence.append_runtime_args(runtime_args), 3U);
+    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0}));
 }
 
 TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
@@ -676,7 +699,9 @@ TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
                     EXPECT_FLOAT_EQ(call.plan.post_scale, 1.0F);
                 } else {
                     EXPECT_FLOAT_EQ(call.plan.auxiliary_tiles[0].value, 1.0F / (256 + 256));
-                    EXPECT_FLOAT_EQ(call.plan.tail_plan->auxiliary_tiles[0].value, 1.0F / (256 + 135));
+                    EXPECT_FLOAT_EQ(
+                        call.plan.tail_plan->auxiliary_tiles[0].value,
+                        static_cast<float>(bfloat16(1.0F / (256 + 135))));
                 }
             }
             const auto& tail_plan = *sequence.calls.back().plan.tail_plan;
@@ -728,7 +753,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         EXPECT_EQ(tail.Ht, full.Ht);
         EXPECT_EQ(tail.partial_mode, compute_kernel_lib::ReducePartialMode::None);
         if (algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile) {
-            EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, std::sqrt(1.0F / (160 * 64)));
+            EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, static_cast<float>(bfloat16(std::sqrt(1.0F / (160 * 64)))));
             EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, std::sqrt(1.0F / (64 * 64)));
         } else {
             EXPECT_EQ(full.reduce_factor, 160U * 64);

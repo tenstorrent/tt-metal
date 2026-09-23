@@ -388,7 +388,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
             if (plan.tail_plan) {
                 plan.tail_plan->reconfig_mode = plan.reconfig_mode;
-                config.reduce_tail_runtime_args = plan.get_runtime_shape_args();
+                plan.append_runtime_args(config.reduce_tail_runtime_args);
             }
             rh::ReduceCallPlan call{
                 .input_cb_id = 0,

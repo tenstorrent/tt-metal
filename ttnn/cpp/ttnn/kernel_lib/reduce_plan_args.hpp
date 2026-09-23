@@ -49,7 +49,7 @@ struct ReduceRuntimeShape {
     std::uint32_t width = 0;
     std::uint32_t batches = 0;
 
-    bool has_override() const { return height != 0 || width != 0 || batches != 0; }
+    bool has_override() const { return height != 0; }
     bool matches(std::uint32_t h, std::uint32_t w, std::uint32_t b) const {
         return height == h && width == w && batches == b;
     }
@@ -231,8 +231,13 @@ public:
     // its per-core override. reduce<Call>() consumes this view internally.
     static ReduceRuntimeShape runtime_shape() {
         if constexpr (tail_runtime_arg_offset != reduce_plan_args::no_runtime_arg) {
+            const auto height = get_arg_val<std::uint32_t>(tail_runtime_arg_offset);
+            // A zero height selects full work; the remaining words need not exist.
+            if (height == 0) {
+                return {};
+            }
             return {
-                get_arg_val<std::uint32_t>(tail_runtime_arg_offset),
+                height,
                 get_arg_val<std::uint32_t>(tail_runtime_arg_offset + 1),
                 get_arg_val<std::uint32_t>(tail_runtime_arg_offset + 2)};
         } else {
@@ -242,14 +247,15 @@ public:
     static bool use_tail() {
         if constexpr (has_tail_variant) {
             const auto override = runtime_shape();
-            const bool selected = override.has_override();
+            if (!override.has_override()) {
+                return false;
+            }
             if constexpr (Tail::is_tail) {
                 const auto local =
                     Tail::tail_runtime_arg_offset == tail_runtime_arg_offset ? override : Tail::runtime_shape();
-                ASSERT(
-                    selected ? local.matches(Tail::logical_h, Tail::logical_w, Tail::batches) : !local.has_override());
+                ASSERT(local.matches(Tail::logical_h, Tail::logical_w, Tail::batches));
             }
-            return selected;
+            return true;
         } else {
             return false;
         }

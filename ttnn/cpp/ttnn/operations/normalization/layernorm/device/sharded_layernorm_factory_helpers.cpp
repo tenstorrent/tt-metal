@@ -1363,8 +1363,8 @@ void add_kernel_and_work_unit_specs(
     auto compute_schema = [&](bool is_all_to_all_worker) {
         m2::KernelSpec::RuntimeArgSchema schema;
         if (!c.reduce_tail_runtime_args.empty()) {
-            // ReduceCallArgs<0, 0> reads this shape directly. Named kernel
-            // arguments follow it and retain their generated accessors.
+            // ReduceCallArgs<0, 0> reads this shape directly. Keep all three slots
+            // even for a zero height marker so following named arguments retain fixed offsets.
             schema.runtime_arg_names = {"reduce_valid_height", "reduce_valid_width", "reduce_valid_batches"};
         }
         schema.runtime_arg_names.push_back("num_reduce_tiles_per_block_h");

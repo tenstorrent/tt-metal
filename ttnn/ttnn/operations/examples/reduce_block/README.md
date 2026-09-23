@@ -131,9 +131,12 @@ Aligned edges need no mask. The full plan is exposed in `ReducePlan`; `tail_plan
 exposes its alternative. Streamed paths use a common padded packet geometry.
 
 Install that same compute kernel and compile-time arguments on the whole grid.
-Initialize its shape runtime slots on every core: `plan.get_runtime_shape_args(False)`
-returns `[0, 0, 0]` for full work, and `plan.get_runtime_shape_args()` returns the
-known tail shape for a tail core. The kernel calls `reduce<Call>()` once;
+Append the runtime section on each core with
+`sequence.append_runtime_args(runtime_args, use_tail)`. It appends `[0]` for full
+work or the planned `[height, width, batches]` records for tail work, and returns
+the section's starting offset. Static sequences append nothing. The planner
+assigns each record's relative offset automatically and shares identical shapes;
+`ReduceTailConfig` only takes the shape. The kernel calls `reduce<Call>()` once per call;
 `ReduceCallArgs` reads and validates the override, and the helper selects
 traversal, masks and normalization internally. Changing which core is a tail
 requires only runtime arguments.
@@ -143,7 +146,9 @@ Introducing a different tail geometry requires replanning its auxiliary recipe.
 Both offsets are template parameters, and the kernel only calls `reduce<Call>()`.
 The runtime offset locates the planner's runtime argument section; offsets encoded
 in each call are relative to that section. It defaults to zero for existing callers.
-The helper reads the shape, validates it and selects the planned variant internally.
+Use the base returned by `append_runtime_args()` for `runtime_args_offset`, keeping
+the same prefix length on every core sharing the kernel. A zero height selects full
+work without reading further; otherwise the helper reads and validates the tail shape.
 No descriptor object or caller-side shape decoding is needed. For a single call
 starting at zero in both argument lists, use `ReduceCallArgs<0, 0>`.
 

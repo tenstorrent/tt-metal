@@ -130,6 +130,12 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 }
 
 static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
+    // Argument lengths fix the per-core layout and Watcher bounds at program creation.
+    auto runtime_args_schema = kernel.runtime_args.size();
+    for (const auto& [core, args] : kernel.runtime_args) {
+        ttsl::hash::hash_combine(runtime_args_schema, core);
+        ttsl::hash::hash_combine(runtime_args_schema, args.size());
+    }
     return ttsl::hash::hash_objects_with_default_seed(
         kernel.kernel_source,
         kernel.source_type,
@@ -141,7 +147,7 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.opt_level.value_or(KernelBuildOptLevel{}),
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
-        kernel.runtime_args.size(),
+        runtime_args_schema,
         // Blaze-only experimental named args (issue #50953): hash compile-time names/values
         // and the runtime-arg schema. Runtime values do not affect the JIT build.
         experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),

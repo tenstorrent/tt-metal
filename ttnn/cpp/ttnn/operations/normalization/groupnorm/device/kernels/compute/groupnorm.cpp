@@ -415,7 +415,7 @@ void kernel_main() {
             for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
                 average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
-            average_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
+            average_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
@@ -565,7 +565,7 @@ void kernel_main() {
             for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
                 variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
-            variance_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
+            variance_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {

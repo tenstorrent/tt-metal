@@ -72,9 +72,9 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         configure(plan);
         if (plan.tail_plan) {
             configure(*plan.tail_plan);
-            result.local_runtime_args = plan.get_runtime_shape_args(false);
-            const auto tail_args = plan.get_runtime_shape_args();
-            result.local_runtime_args.insert(result.local_runtime_args.end(), tail_args.begin(), tail_args.end());
+            // Full blocks read the marker at offset 0; the final block reads the tail at offset 1.
+            plan.append_runtime_args(result.local_runtime_args, false);
+            plan.append_runtime_args(result.local_runtime_args);
         }
         const rh::ReduceCallPlan call{
             .input_cb_id = 0,

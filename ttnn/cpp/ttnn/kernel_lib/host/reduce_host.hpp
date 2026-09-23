@@ -60,12 +60,11 @@ struct ReduceValidShape {
     std::uint32_t batches = 1;
 };
 
-// Plan both the ordinary block and this exact tail. At runtime [0, 0, 0]
-// selects the ordinary block; this shape selects the tail on any core using
+// Plan both the ordinary block and this exact tail. At runtime [0] selects
+// the ordinary block; [height, width, batches] selects the tail on any core using
 // the same compiled kernel. Both auxiliary recipes are prepared upfront.
 struct ReduceTailConfig {
     ReduceValidShape shape;
-    std::uint32_t compute_runtime_arg_offset = 0;
 };
 
 enum class ReduceCbRole : std::uint8_t {
@@ -150,7 +149,8 @@ struct ReducePlan {
     std::shared_ptr<ReducePlan> tail_plan;
     std::uint32_t full_auxiliary_tile_count = 0;
     std::uint32_t tail_auxiliary_tile_offset = 0;
-    std::uint32_t tail_selector_arg_offset = reduce_plan_args::no_runtime_arg;
+    // Assigned by the planner within the sequence's runtime section.
+    std::uint32_t tail_runtime_arg_offset = reduce_plan_args::no_runtime_arg;
     std::uint32_t logical_h = 0;
     std::uint32_t logical_w = 0;
 
@@ -171,8 +171,11 @@ struct ReducePlan {
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
     // Use the same compiled plan on full and tail cores. Initialize the runtime
-    // slots on all cores: zero selects full work, the known shape selects tail.
+    // marker on all cores: [0] selects full work, [height, width, batches] selects tail.
+    // Callers must preserve fixed offsets if other runtime arguments follow.
     std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
+    // Append a standalone plan's record and return its base for ReduceCallArgs<CTA_OFFSET, RTA_OFFSET>.
+    std::uint32_t append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail = true) const;
 };
 
 // The block consumed by one reduce invocation on one core. Shapes are in elements;
@@ -271,6 +274,13 @@ struct ReduceCallPlan {
 struct ReduceSequencePlan {
     std::vector<ReduceCallPlan> calls;
     ReduceAuxiliaryPlan auxiliary;
+    // Contiguous, deduplicated tail records; call descriptors carry their relative offsets.
+    std::vector<std::uint32_t> tail_runtime_args;
+
+    // Static sequences return no arguments; full work returns [0]; tail work returns all records.
+    std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
+    // Append after caller-owned arguments and return the section base for RTA_OFFSET.
+    std::uint32_t append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail = true) const;
 
     // Append the compute-kernel suffix: call count followed by every call in
     // execution order. Existing caller-owned arguments remain at the front.

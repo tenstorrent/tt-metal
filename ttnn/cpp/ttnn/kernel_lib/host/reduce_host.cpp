@@ -94,13 +94,6 @@ void validate_block(const ReduceBlockSpec& block, ReduceOpDim dim, ReduceInputPo
         TT_FATAL(
             block.input_tile == tt::tt_metal::Tile{} && block.output_tile == tt::tt_metal::Tile{},
             "Reduce planner: runtime tail masks require standard 32x32 input and output tiles");
-        // Metal validates the complete kernel's runtime-argument allocation,
-        // including caller-owned/common arguments. Here only prevent overflow
-        // and collision with the serialized "no runtime argument" sentinel.
-        constexpr auto max_offset = reduce_plan_args::no_runtime_arg - 3U;
-        TT_FATAL(
-            block.tail->compute_runtime_arg_offset <= max_offset,
-            "Reduce planner: tail-shape runtime argument offsets overflow the argument record");
     }
     const auto ht = div_up_u32(block.padded_h, tile_h);
     const auto wt = div_up_u32(block.padded_w, tile_w);
@@ -484,7 +477,14 @@ ReducePlan make_tiled_plan(
 std::vector<std::uint32_t> ReducePlan::get_runtime_shape_args(bool use_tail) const {
     TT_FATAL(tail.has_value(), "Reduce planner: a static core does not take runtime shape arguments");
     return use_tail ? std::vector<std::uint32_t>{tail->shape.height, tail->shape.width, tail->shape.batches}
-                    : std::vector<std::uint32_t>{0, 0, 0};
+                    : std::vector<std::uint32_t>{0};
+}
+
+std::uint32_t ReducePlan::append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail) const {
+    const auto offset = checked_u32(runtime_args.size(), "runtime argument offset");
+    const auto shape = get_runtime_shape_args(use_tail);
+    runtime_args.insert(runtime_args.end(), shape.begin(), shape.end());
+    return offset;
 }
 
 const ReduceCbRequirement* ReducePlan::find_cb(ReduceCbRole role) const {
@@ -914,24 +914,6 @@ ReduceSequencePlan make_reduce_sequence_plan(
         const auto& config = reductions[i].second;
         validate_block(config.block, config.reduce_dim, config.input_policy);
         full_reductions[i].second.block.tail.reset();
-        if (!config.block.tail) {
-            continue;
-        }
-        // Calls may share an override, or use distinct triples. Overlapping
-        // triples must describe the same shape at the same offset.
-        const auto& a = *config.block.tail;
-        for (std::size_t j = 0; j < i; ++j) {
-            if (const auto& other = reductions[j].second.block.tail) {
-                const auto& b = *other;
-                const bool overlap = a.compute_runtime_arg_offset < b.compute_runtime_arg_offset + 3 &&
-                                     b.compute_runtime_arg_offset < a.compute_runtime_arg_offset + 3;
-                TT_FATAL(
-                    !overlap || (a.compute_runtime_arg_offset == b.compute_runtime_arg_offset &&
-                                 a.shape.height == b.shape.height && a.shape.width == b.shape.width &&
-                                 a.shape.batches == b.shape.batches),
-                    "Reduce planner: overlapping runtime overrides must describe the same tail");
-            }
-        }
     }
 
     auto full = make_fixed_reduce_sequence_plan(full_reductions, cb_ids, hardware, algorithm);
@@ -944,10 +926,26 @@ ReduceSequencePlan make_reduce_sequence_plan(
         auto& call = full.calls[i];
         auto& plan = call.plan;
         auto& alternative = tail.calls[i].plan;
+        if (alternative.tail) {
+            const auto shape = alternative.get_runtime_shape_args();
+            std::size_t offset = 0;
+            while (offset < full.tail_runtime_args.size() &&
+                   !std::equal(shape.begin(), shape.end(), full.tail_runtime_args.begin() + offset)) {
+                offset += shape.size();
+            }
+            TT_FATAL(
+                offset <= reduce_plan_args::no_runtime_arg - 3U,
+                "Reduce planner: tail-shape runtime argument offsets overflow the argument record");
+            if (offset == full.tail_runtime_args.size()) {
+                alternative.append_runtime_args(full.tail_runtime_args);
+            }
+            alternative.tail_runtime_arg_offset = static_cast<std::uint32_t>(offset);
+        }
         plan.full_auxiliary_tile_count = auxiliary_tile_count(plan);
         plan.tail_auxiliary_tile_offset = append_auxiliary_recipe(plan.auxiliary_tiles, alternative.auxiliary_tiles);
         plan.tail = reductions[i].second.block.tail.value_or(selector);
-        plan.tail_selector_arg_offset = selector.compute_runtime_arg_offset;
+        // The first tail record selects full/tail work for the whole accumulated sequence.
+        plan.tail_runtime_arg_offset = 0;
         plan.tail_plan = std::make_shared<ReducePlan>(std::move(alternative));
         call.auxiliary_tile_offset = append_auxiliary_recipe(full.auxiliary.tiles, plan.auxiliary_tiles);
         call.auxiliary_cb_id = plan.auxiliary_tiles.empty() ? no_cb_id : cb_ids.auxiliary_cb_id;
@@ -1168,8 +1166,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         encode_chunk_and_auxiliary(call),
         std::bit_cast<std::uint32_t>(plan.post_scale),
         call.accumulation_index,
-        plan.tail_plan ? plan.tail_selector_arg_offset
-                       : (plan.tail ? plan.tail->compute_runtime_arg_offset : reduce_plan_args::no_runtime_arg),
+        plan.tail_runtime_arg_offset,
         plan.logical_h,
         plan.logical_w,
     };
@@ -1229,6 +1226,20 @@ std::vector<std::uint32_t> ReduceSequencePlan::get_compile_time_args() const {
     std::vector<std::uint32_t> compile_time_args;
     append_to(compile_time_args);
     return compile_time_args;
+}
+
+std::vector<std::uint32_t> ReduceSequencePlan::get_runtime_shape_args(bool use_tail) const {
+    if (tail_runtime_args.empty()) {
+        return {};
+    }
+    return use_tail ? tail_runtime_args : std::vector<std::uint32_t>{0};
+}
+
+std::uint32_t ReduceSequencePlan::append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail) const {
+    const auto offset = checked_u32(runtime_args.size(), "runtime argument offset");
+    const auto shapes = get_runtime_shape_args(use_tail);
+    runtime_args.insert(runtime_args.end(), shapes.begin(), shapes.end());
+    return offset;
 }
 
 void ReduceSequencePlan::append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const {

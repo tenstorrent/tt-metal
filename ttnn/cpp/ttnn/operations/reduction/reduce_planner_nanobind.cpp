@@ -23,6 +23,16 @@ namespace {
 
 namespace host = ttnn::kernel_lib::host;
 
+template <typename Plan>
+std::uint32_t append_runtime_args(const Plan& plan, nb::list runtime_args, bool use_tail) {
+    auto args = nb::cast<std::vector<std::uint32_t>>(runtime_args);
+    const auto offset = plan.append_runtime_args(args, use_tail);
+    for (std::size_t i = offset; i < args.size(); ++i) {
+        runtime_args.append(nb::cast(args[i]));
+    }
+    return offset;
+}
+
 }  // namespace
 
 void bind_reduce_planner(nb::module_& mod) {
@@ -161,12 +171,8 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("width", &host::ReduceValidShape::width)
         .def_rw("batches", &host::ReduceValidShape::batches);
     nb::class_<host::ReduceTailConfig>(planner, "ReduceTailConfig")
-        .def(
-            nb::init<host::ReduceValidShape, std::uint32_t>(),
-            nb::arg("shape"),
-            nb::arg("compute_runtime_arg_offset") = 0)
-        .def_ro("shape", &host::ReduceTailConfig::shape)
-        .def_ro("compute_runtime_arg_offset", &host::ReduceTailConfig::compute_runtime_arg_offset);
+        .def(nb::init<host::ReduceValidShape>(), nb::arg("shape"))
+        .def_ro("shape", &host::ReduceTailConfig::shape);
 
     auto py_plan = nb::class_<host::ReducePlan>(planner, "ReducePlan");
     py_plan.def_ro("path", &host::ReducePlan::path)
@@ -190,10 +196,15 @@ void bind_reduce_planner(nb::module_& mod) {
             })
         .def_ro("full_auxiliary_tile_count", &host::ReducePlan::full_auxiliary_tile_count)
         .def_ro("tail_auxiliary_tile_offset", &host::ReducePlan::tail_auxiliary_tile_offset)
-        .def_ro("tail_selector_arg_offset", &host::ReducePlan::tail_selector_arg_offset)
+        .def_ro("tail_runtime_arg_offset", &host::ReducePlan::tail_runtime_arg_offset)
         .def_ro("logical_h", &host::ReducePlan::logical_h)
         .def_ro("logical_w", &host::ReducePlan::logical_w)
         .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args, nb::arg("use_tail") = true)
+        .def(
+            "append_runtime_args",
+            &append_runtime_args<host::ReducePlan>,
+            nb::arg("runtime_args"),
+            nb::arg("use_tail") = true)
         .def_ro("input_row_stride_tiles", &host::ReducePlan::input_row_stride_tiles)
         .def_ro("reduce_factor", &host::ReducePlan::reduce_factor)
         .def_ro("post_scale", &host::ReducePlan::post_scale)
@@ -353,6 +364,12 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::class_<host::ReduceSequencePlan>(planner, "ReduceSequencePlan")
         .def_ro("calls", &host::ReduceSequencePlan::calls)
         .def_ro("auxiliary", &host::ReduceSequencePlan::auxiliary)
+        .def("get_runtime_shape_args", &host::ReduceSequencePlan::get_runtime_shape_args, nb::arg("use_tail") = true)
+        .def(
+            "append_runtime_args",
+            &append_runtime_args<host::ReduceSequencePlan>,
+            nb::arg("runtime_args"),
+            nb::arg("use_tail") = true)
         .def_prop_ro("call_count", [](const host::ReduceSequencePlan& self) { return self.calls.size(); })
         .def_prop_ro(
             "compile_time_args",

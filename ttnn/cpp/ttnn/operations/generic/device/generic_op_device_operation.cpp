@@ -77,6 +77,12 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
+        // Argument lengths fix the per-core layout and Watcher bounds at program creation.
+        auto runtime_args_schema = kernel.runtime_args.size();
+        for (const auto& [core, args] : kernel.runtime_args) {
+            ttsl::hash::hash_combine(runtime_args_schema, core);
+            ttsl::hash::hash_combine(runtime_args_schema, args.size());
+        }
         return ttsl::hash::hash_objects_with_default_seed(
             kernel.kernel_source,
             kernel.source_type,
@@ -89,7 +95,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             // (names/lengths/dispatch across all 4 variants), NOT values. Replaces the previous
             // partial hashing that used .size() of only 3 of 4 variants and never the names.
             tt::tt_metal::experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
-            kernel.runtime_args.size(),
+            runtime_args_schema,
             kernel.config.index(),
             kernel.config);
     };

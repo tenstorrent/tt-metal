@@ -1134,7 +1134,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
             input_row_stride_tiles=row_stride,
             resident_input_tiles=allocation_rows * row_stride,
             resident_output_tiles=output_capacity,
-            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape), 2),
+            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)),
         )
         sequence = _PLANNER.make_reduce_sequence_plan(
             reductions=[
@@ -1157,6 +1157,8 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         )
         plan = sequence.calls[0].plan
         assert plan.tail_plan is not None
+        assert plan.get_runtime_shape_args(False) == [0]
+        assert plan.get_runtime_shape_args(True) == list(tail_shape)
         auxiliary_tiles = len(sequence.auxiliary.tiles)
 
         compute_args, auxiliary_args = _serialize_plan(sequence)
@@ -1187,10 +1189,11 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 core_expected.append(golden)
             expected.append(torch.stack(core_expected))
 
-        compute_runtime = [
-            (ttnn.CoreCoord(index, 0), [111, 222] + plan.get_runtime_shape_args(use_tail=index == tail_core))
-            for index in range(core_count)
-        ]
+        compute_runtime = []
+        for index in range(core_count):
+            runtime_args = [111, 222]
+            runtime_arg_offset = sequence.append_runtime_args(runtime_args, use_tail=index == tail_core)
+            compute_runtime.append((ttnn.CoreCoord(index, 0), runtime_args))
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
@@ -1203,6 +1206,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 core_ranges=grid,
                 compile_time_args=compute_args,
                 runtime_args=compute_runtime,
+                defines=[("RUNTIME_ARG_OFFSET", str(runtime_arg_offset))],
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest),
             ),
         ]
@@ -1428,19 +1432,20 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
 @pytest.mark.parametrize("algorithm", ("REDUCE_TILE", "ACCUMULATE_VIA_ADD"))
 @pytest.mark.parametrize("scalar", (None, 1 / 1024, 0.0, 1.0))
 @pytest.mark.parametrize("use_tail", (False, True))
-def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
+@pytest.mark.parametrize("distinct_tails", (False, True))
+def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, distinct_tails):
     """Use the combined valid extent only when no explicit scalar is supplied."""
-    runtime_arg_offset = 4
     height, width = (65, 256) if dim == "REDUCE_ROW" else (256, 65)
     tail_height, tail_width = (65, 135) if dim == "REDUCE_ROW" else (135, 65)
+    first_tail_shape = (65, 199) if dim == "REDUCE_ROW" else (199, 65)
+    planned_tails = (first_tail_shape if distinct_tails else None, (tail_height, tail_width))
     padded_h, padded_w = ((height + 31) // TILE) * TILE, ((width + 31) // TILE) * TILE
     input_tiles = padded_h * padded_w // (TILE * TILE)
     output_tiles = 3
     input_ids = (CB_INPUT, 3)
     tensors, reductions, sums = [], [], []
-    for index, (valid_h, valid_w) in enumerate(
-        ((height, width), (tail_height, tail_width) if use_tail else (height, width))
-    ):
+    for index, tail_shape in enumerate(planned_tails):
+        valid_h, valid_w = tail_shape if use_tail and tail_shape else (height, width)
         values = ((torch.arange(valid_h * valid_w).reshape(valid_h, valid_w) + index) % 13 - 6).to(torch.bfloat16)
         physical = torch.full((padded_h, padded_w), 128, dtype=torch.bfloat16)
         physical[:valid_h, :valid_w] = values
@@ -1464,7 +1469,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
             ttnn.float32,
             resident_input_tiles=input_tiles,
             resident_output_tiles=output_tiles,
-            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(tail_height, tail_width)) if index else None,
+            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)) if tail_shape else None,
         )
         config = _PLANNER.ReduceCallConfig(
             block, _PLANNER.ReduceMath.AVG, _REDUCE_DIM[dim], input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP
@@ -1485,6 +1490,11 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
         algorithm=_ALGORITHM[algorithm],
     )
     compute_args, auxiliary_args = _serialize_plan(sequence)
+    runtime_args = [999] * 4
+    runtime_arg_offset = sequence.append_runtime_args(runtime_args, use_tail=use_tail)
+    assert runtime_arg_offset == 4
+    expected_records = [v for shape in planned_tails if shape for v in (*shape, 1)] if use_tail else [0]
+    assert runtime_args == [999] * 4 + expected_records
     output_shape = (output_tiles * TILE, TILE)
     output = ttnn.from_torch(
         torch.full(output_shape, -999.0),
@@ -1507,13 +1517,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
                     kernel_source=PLAN_SEQUENCE_KERNEL,
                     core_ranges=_single_core(),
                     compile_time_args=compute_args,
-                    runtime_args=[
-                        (
-                            ttnn.CoreCoord(0, 0),
-                            [999] * runtime_arg_offset
-                            + sequence.calls[1].plan.get_runtime_shape_args(use_tail=use_tail),
-                        )
-                    ],
+                    runtime_args=[(ttnn.CoreCoord(0, 0), runtime_args)],
                     defines=[("RUNTIME_ARG_OFFSET", str(runtime_arg_offset))],
                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
                 ),
@@ -1529,14 +1533,16 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
     )
     tiles = ttnn.to_torch(result).reshape(output_tiles, TILE, TILE)
     lanes = (tiles[:, :, 0] if dim == "REDUCE_ROW" else tiles[:, 0, :]).reshape(-1)
-    scale = 1 / (256 + (135 if use_tail else 256)) if scalar is None else scalar
+    reduction_size = (199 if distinct_tails and use_tail else 256) + (135 if use_tail else 256)
+    scale = 1 / reduction_size if scalar is None else scalar
     torch.testing.assert_close(lanes[:65], (sums[0] + sums[1]) * scale, rtol=0.02, atol=0.02)
     if use_tail:
         assert torch.all(lanes[65:] == 0)
 
 
 @pytest.mark.parametrize("runtime_arg_offset", [0, 7])
-def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset):
+@pytest.mark.parametrize("full_runtime_suffix", [(), (123, 456)])
+def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset, full_runtime_suffix):
     """One call binds physical CBs for an additive full path and a masked native tail."""
     block = _PLANNER.ReduceBlockSpec(
         32,
@@ -1574,6 +1580,11 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset)
     assert plan.algorithm == _PLANNER.ReduceAlgorithm.ACCUMULATE_VIA_ADD
     compute_args, auxiliary_args = _serialize_plan(sequence)
     for use_tail in (False, True):
+        runtime_args = plan.get_runtime_shape_args(use_tail)
+        assert runtime_args == ([32, 17, 1] if use_tail else [0])
+        if not use_tail:
+            # Full work must neither require nor interpret words after its zero marker.
+            runtime_args += list(full_runtime_suffix)
         width = 17 if use_tail else 256
         values = (torch.arange(32 * width).reshape(32, width) % 7 - 3).to(torch.bfloat16)
         physical = torch.full((32, 256), 128, dtype=torch.bfloat16)
@@ -1609,7 +1620,7 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset)
                         runtime_args=[
                             (
                                 ttnn.CoreCoord(0, 0),
-                                [999] * runtime_arg_offset + plan.get_runtime_shape_args(use_tail),
+                                [999] * runtime_arg_offset + runtime_args,
                             )
                         ],
                         defines=[("RUNTIME_ARG_OFFSET", str(runtime_arg_offset))],
