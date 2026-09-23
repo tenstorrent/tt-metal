@@ -75,7 +75,7 @@ void kernel_main() {
     constexpr uint32_t q_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t k_chunks = get_compile_time_arg_val(1);
     constexpr uint32_t queries_per_head = get_compile_time_arg_val(2);
-    static_assert(q_tiles > 0 && q_tiles % 2 == 0);
+    static_assert(q_tiles > 0);
     static_assert(k_chunks > 0 && queries_per_head > 0);
     constexpr uint32_t q_primary_rows = get_compile_time_arg_val(3);
     constexpr uint32_t q_joint_rows = get_compile_time_arg_val(4);

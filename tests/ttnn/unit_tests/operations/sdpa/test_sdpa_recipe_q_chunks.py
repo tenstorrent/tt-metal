@@ -18,9 +18,10 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare, reference
 
-Q_CHUNKS = (128, 192, 320)
-# Odd tile counts need single-row groups in the compensated/FP32 state updates.
-UNSUPPORTED_Q_CHUNKS = (96, 160, 224, 288, 352)
+Q_CHUNKS = (128, 192, 224, 288, 320)
+UNSUPPORTED_Q_CHUNKS = (96, 100, 352)
+# Compensated BF16 state pairs query tile rows; odd tile counts are rejected for B/E.
+PAIRED_VARIANTS = ("B", "E_bf16", "E_bfp8", "E_bfp4")
 
 
 def options(variant, grid, q_chunk_size):
@@ -75,6 +76,10 @@ def test_recipe_q_chunk_preserves_accuracy(
             upload(device, [x[..., -rows:, :].contiguous() for x, rows in zip(host, joint_rows)], variant),
         ]
     expected = torch.cat([ttnn.to_torch(x) for x in invoke(segments, variant, grid, 256)], dim=2)
+    if variant in PAIRED_VARIANTS and (q_chunk_size // 32) % 2:
+        with pytest.raises(RuntimeError, match="multiple of 64"):
+            invoke(segments, variant, grid, q_chunk_size)
+        return
     try:
         outputs = invoke(segments, variant, grid, q_chunk_size)
     except RuntimeError as error:
@@ -108,5 +113,5 @@ def test_recipe_rejects_unsupported_q_chunk(device, q_chunk_size):
         pytest.skip("Named recipes initially target Blackhole")
     host = make_inputs(512, "normal", q_length=512)
     inputs = upload(device, host, "D")
-    with pytest.raises(RuntimeError, match="Q chunks of 128, 192, 256 or 320"):
+    with pytest.raises(RuntimeError, match="Q chunks from 128 to 320 rows"):
         invoke([inputs], "D", (2, 1), q_chunk_size)

@@ -36,10 +36,11 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
 
 uint32_t recipe_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
     const uint32_t q_chunk = program_config ? program_config->q_chunk_size : 256;
-    // Row groups pair query tile rows; five pairs bound the recurrent-state arrays.
+    // Ten query tile rows bound the recurrent-state arrays. Compensated BF16
+    // recipes additionally need an even tile count (checked with the policy).
     TT_FATAL(
-        q_chunk % 64 == 0 && q_chunk >= 128 && q_chunk <= 320,
-        "Named SDPA recipes support Q chunks of 128, 192, 256 or 320 rows, got {}",
+        q_chunk % 32 == 0 && q_chunk >= 128 && q_chunk <= 320,
+        "Named SDPA recipes support Q chunks from 128 to 320 rows in 32-row steps, got {}",
         q_chunk);
     return q_chunk / 32;
 }
@@ -221,6 +222,10 @@ static std::vector<Tensor> run_recipe_segments(
         "SDPA recipe compute grid must fit the device");
     const uint32_t q_tiles = recipe_q_tiles(program_config);
     const uint32_t q_chunk = q_tiles * 32;
+    TT_FATAL(
+        q_tiles % 2 == 0 || policy.recurrent_state != RecurrentState::CompensatedBF16,
+        "COMPENSATED and LOW_PRECISION recipes pair query tile rows and need a Q chunk that is a multiple of 64, got {}",
+        q_chunk);
     if (program_config) {
         TT_FATAL(program_config->k_chunk_size == 512, "Named SDPA recipes currently require K512 blocking");
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");

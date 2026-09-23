@@ -1319,6 +1319,7 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_RECIPE_FP32
         static_assert(
             Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && vDHt == 4 && qktv_h == 1);
+        // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
             CircularBuffer(prev.max).wait_front(Sq_chunk_t);
@@ -1506,7 +1507,6 @@ static void sdpa_inner_loop_step(
             // Rows are batched four at a time (the FP32 half-sync dest capacity). A Q
             // chunk that is not a multiple of four finishes with a two-row batch;
             // batching only changes which rows share a dest pass, not any element's sum.
-            static_assert(Sq_chunk_t % 2 == 0, "FP32 denominator batches whole row pairs");
             auto denominator_init = [&](uint32_t rows) {
                 MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, rows)));
 #ifdef SDPA_RECIPE_ACCURATE

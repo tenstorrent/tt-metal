@@ -32,7 +32,10 @@ void kernel_main() {
     constexpr uint32_t scale = get_compile_time_arg_val(1);
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
     const uint32_t jobs = get_arg_val<uint32_t>(0);
-    static_assert(q_tiles % 2 == 0 && q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320 in 64-row steps");
+    static_assert(q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320");
+    // Odd Q chunks use single-row QK/PV subblocks for FAST; subblock height only
+    // changes which rows share a dest pass, not any element's accumulation.
+    constexpr uint32_t bf16_subblock_h = q_tiles % 2 == 0 ? 2 : 1;
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 16);
     matmul_init(0, 1);
     cb_wait_front(0, q_tiles * 4);
@@ -55,9 +58,9 @@ void kernel_main() {
             1,
             4,
 #else
-            2,
+            bf16_subblock_h,
             4,
-            2,
+            bf16_subblock_h,
             4,
 #endif
 #ifdef SDPA_RECIPE_BASELINE
