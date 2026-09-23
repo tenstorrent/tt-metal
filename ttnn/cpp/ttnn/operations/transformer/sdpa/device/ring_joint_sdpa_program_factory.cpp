@@ -3002,23 +3002,42 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Hop 1's worker is where every hop of this halo delivers its ready-increment, so one reader
         // can gate on the whole halo.
         const CoreCoord halo_rendezvous = mesh_device->worker_core_from_logical_core(hop_first_cores.front());
-        // Probe whichever neighbour exists: the last device on a line has no forward one, and
-        // asking for links from a node to itself answers zero.
-        const auto link_probe_coord = forward_coord.has_value() ? forward_coord : backward_coord;
-        TT_FATAL(link_probe_coord.has_value(), "Sliding halo needs at least one fabric neighbour");
-        const uint32_t halo_links_available =
-            tt::tt_fabric::get_forwarding_link_indices(
-                mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(link_probe_coord.value()))
-                .size();
-        TT_FATAL(halo_links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
-        // Hop h runs on link (h-1) % span and, beyond the first span hops, waits for hop h-span to
-        // close its connection first. Queued hops still overlap their DRAM reads with the
-        // predecessor's send, so only the fabric transfer serialises.
-        const uint32_t halo_link_span = std::min(halo_remote_hops, halo_links_available);
+        // A linear topology has no physical wrap link, so a hop whose destination wraps goes backward
+        // (at hop 1, the device N-1 -> 0 case). Forward and backward are separate fabric connections,
+        // so each direction time-shares only its own links: within a direction, hop k (0-based) runs
+        // on link k % span and, beyond the first span hops, waits for hop k - span to close its
+        // connection first. Queued hops still overlap their DRAM reads with the predecessor's send,
+        // so only the fabric transfer serialises.
+        const auto hop_sends_backward = [&](uint32_t hop) {
+            return ag_attrs.topology == ttnn::ccl::Topology::Linear && transport_rank + hop >= ring_size;
+        };
+        std::array<std::vector<uint32_t>, 2> direction_hops;  // [0] forward, [1] backward
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            direction_hops[hop_sends_backward(hop)].push_back(hop);
+        }
+        std::array<uint32_t, 2> direction_link_span{0, 0};
+        for (uint32_t direction = 0; direction < 2; ++direction) {
+            if (direction_hops[direction].empty()) {
+                continue;
+            }
+            const auto& neighbour = direction == 0 ? forward_coord : backward_coord;
+            TT_FATAL(
+                neighbour.has_value(), "Sliding halo hop {} has no fabric neighbour", direction_hops[direction][0]);
+            const uint32_t links_available =
+                tt::tt_fabric::get_forwarding_link_indices(
+                    mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
+                    .size();
+            TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
+            // Never use more links than the caller asked for.
+            direction_link_span[direction] = std::min(
+                {static_cast<uint32_t>(direction_hops[direction].size()), ag_attrs.num_links, links_available});
+        }
+        const bool halo_links_shared =
+            direction_hops[0].size() > direction_link_span[0] || direction_hops[1].size() > direction_link_span[1];
         // One local semaphore, same id on every hop worker, carries the hand-off. It is allocated
         // before the helper's own per-core semaphores, so pick an id free on all hop workers.
         uint32_t halo_chain_semaphore_id = 0;
-        if (halo_remote_hops > halo_link_span) {
+        if (halo_links_shared) {
             // Per-core ids are handed out densely from 0, so the largest first-free id is free on
             // every hop core; asserted below, since a taken id would silently alias a semaphore.
             for (const auto& core : hop_first_cores) {
@@ -3054,10 +3073,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
             const uint32_t destination_rank = (transport_rank + hop) % ring_size;
-            const bool wraps_ring = transport_rank + hop >= ring_size;
-            // A linear topology has no physical wrap link: reach a wrapped destination by going
-            // backward instead (at hop 1, the device N-1 -> 0 case).
-            const bool send_backward = ag_attrs.topology == ttnn::ccl::Topology::Linear && wraps_ring;
+            const bool send_backward = hop_sends_backward(hop);
             const uint32_t unicast_hops = send_backward ? transport_rank - destination_rank : hop;
             const int32_t signed_hops =
                 send_backward ? -static_cast<int32_t>(unicast_hops) : static_cast<int32_t>(unicast_hops);
@@ -3070,13 +3086,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 hop,
                 destination_rank);
             const CoreCoord hop_core_grid_offset = halo_hop_core_grid_offset(hop);
-            // Hops beyond the link count queue up behind the hop `halo_link_span` earlier, which
-            // shares their link, and hand it on to the hop `halo_link_span` later.
-            const bool hop_waits = hop > halo_link_span;
-            const bool hop_signals = hop + halo_link_span <= halo_remote_hops;
+            // Hops beyond their direction's link count queue up behind the hop `span` earlier in the
+            // same direction, which shares their link, and hand it on to the hop `span` later.
+            const auto& lane = direction_hops[send_backward];
+            const uint32_t lane_span = direction_link_span[send_backward];
+            const uint32_t lane_index = std::find(lane.begin(), lane.end(), hop) - lane.begin();
+            const bool hop_waits = lane_index >= lane_span;
+            const bool hop_signals = lane_index + lane_span < lane.size();
             const CoreCoord hop_successor =
-                hop_signals ? mesh_device->worker_core_from_logical_core(hop_first_cores[hop + halo_link_span - 1])
-                            : CoreCoord{0, 0};
+                hop_signals
+                    ? mesh_device->worker_core_from_logical_core(hop_first_cores[lane[lane_index + lane_span] - 1])
+                    : CoreCoord{0, 0};
             // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
             // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
             // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
@@ -3089,7 +3109,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .unicast_hops = unicast_hops,
                 .hop = hop,
                 .dest_row_base = chunked_sliding_halo_layout.hop_dest_row(hop),
-                .link_base = (hop - 1) % halo_link_span,
+                .link_base = lane_index % lane_span,
                 .arrivals_expected = halo_remote_hops,
                 .rendezvous_noc_x = static_cast<uint32_t>(halo_rendezvous.x),
                 .rendezvous_noc_y = static_cast<uint32_t>(halo_rendezvous.y),
