@@ -57,13 +57,16 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                     size the sender pushes.
                 prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
                     from create_prefetcher_pipes_for_tensor_prefetcher.
+                hold_cycles (int): wall-clock cycles each receiver waits before its first pop,
+                    holding back every ack for at least that long. Defaults to 0.
         )doc",
         &test_tensor_prefetcher_pipe_consumer,
         nb::arg("mesh_device"),
         nb::arg("num_iters"),
         nb::arg("page_size_bytes"),
         nb::kw_only(),
-        nb::arg("prefetcher_pipes"));
+        nb::arg("prefetcher_pipes"),
+        nb::arg("hold_cycles") = 0);
 
     ttnn::bind_function<"test_dram_prefetcher_validator", "ttnn.experimental.">(
         mod,

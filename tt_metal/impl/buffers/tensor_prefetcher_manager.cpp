@@ -808,6 +808,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 ordinary_mpfe_weight,
                 static_cast<uint32_t>(dynamic_mpfe_weighting),
                 static_cast<uint32_t>(mpfe_policy.has_value()),
+                target_table_l1_addr_,
             };
 
             // WATCHER_NOINLINE only takes effect in watcher builds: it lets the compiler outline the
@@ -899,6 +900,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
     }
     enumerate_dram_senders();
+    targets_per_sender_.assign(num_senders_, {});
 
     // DRISC L1 layout: the kernel working region (above the GCB zone) is now
     // entirely the ping-pong stage ring. noc_xy table, config block, and the
@@ -931,7 +933,11 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     cq_signal_slot_stride_ = l1_alignment;
     const uint32_t cq_signal_bytes = kNumCqSignalSlots * cq_signal_slot_stride_;
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
-    socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
+    // Then the kernel's target table: the targets each sender has loaded since start, which the stop
+    // sentinel drains. Only the kernel reads or writes it.
+    target_table_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, l1_alignment);
+    const uint32_t target_table_bytes = kMaxTargetsPerSender * sizeof(uint32_t);
+    socket_config_l1_addr_ = align_up(target_table_l1_addr_ + target_table_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
     stage_ring_base_ = align_up(socket_data_l1_addr_ + socket_data_bytes, l1_alignment);
     const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
@@ -1333,7 +1339,6 @@ void TensorPrefetcherManager::queue_to_target(
         mesh_device_->id());
     const std::vector<uint32_t> target_sender_indices = sender_indices_for_target(target);
     TT_FATAL(!tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
-
     // A Queue call may span more tensors than fit in one socket page; serialize into one
     // or more pages, each an independent request. The per-target write cursor persists across
     // requests, so the split is invisible to the receiver. Each logical page is materialized once
@@ -1354,6 +1359,28 @@ void TensorPrefetcherManager::queue_to_target(
                 coord);
             target_devices.push_back(coord);
         }
+    }
+
+    // Each sender records every target it is sent a request for, so that stop can drain them all, in a
+    // table of kMaxTargetsPerSender entries. The request has passed every other check by now, so count
+    // this target against every sender it maps to, even when the request is only captured into a
+    // trace: a replay sends it.
+    for (size_t m = 0; m < target_sender_indices.size(); ++m) {
+        const uint32_t s = target_sender_indices[m];
+        auto& targets = targets_per_sender_[s];
+        const uint32_t state_addr = target.state_addr_per_sender[m];
+        if (std::find(targets.begin(), targets.end(), state_addr) != targets.end()) {
+            continue;
+        }
+        TT_FATAL(
+            targets.size() < kMaxTargetsPerSender,
+            "QueueTensorPrefetcherRequest would send DRAM sender core ({}, {}) requests for more than {} distinct "
+            "GlobalCircularBuffers and PrefetcherPipes since StartTensorPrefetcher. Reuse targets, or stop and restart "
+            "the prefetcher between groups of them.",
+            sender_logical_cores_[s].x,
+            sender_logical_cores_[s].y,
+            kMaxTargetsPerSender);
+        targets.push_back(state_addr);
     }
 
     // Engaged only when the caller named a queue that is mid trace-capture; that is what
@@ -1644,6 +1671,7 @@ void TensorPrefetcherManager::stop() {
     device_index_by_coord_.clear();
     sender_logical_cores_.clear();
     trace_requests_.clear();
+    targets_per_sender_.clear();
     num_senders_ = 0;
     num_banks_ = 0;
     active_ = false;
