@@ -5,10 +5,13 @@
 TILIZE_P2_CASES="0,7"            LOOSE_CASES indices (default "0", the perf focus)
 TILIZE_P2_VARIANTS="head,<dir>"  kernel dirs: "head" = the op's kernels/, else a path relative to
                                  ttnn/ttnn/operations/tilize/perf_experiments/ (or absolute)
+                                 A variant may carry descriptor-knob overrides after "@", joined
+                                 by "+": "head@CO_READ_SPLIT='positional'+ONEPOS_SUB_BLOCK_TILES=0"
 TILIZE_P2_CHECK=0                skip the golden contract check (ablated variants)
 Each (case, variant) runs the op once; the golden helper checks the contract unless disabled.
 Opt-in: TILIZE_PERF_EXPERIMENTS=1.
 """
+import ast
 import os
 from pathlib import Path
 
@@ -37,8 +40,13 @@ def _axes(case):
 @pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("idx", CASES)
 def test_loose_variant(device, monkeypatch, idx, variant):
-    if variant != "head":
-        d = Path(variant)
+    kernels, _, knobs = variant.partition("@")
+    for knob in filter(None, knobs.split("+")):
+        name, _, value = knob.partition("=")
+        assert hasattr(pd, name), name
+        monkeypatch.setattr(pd, name, ast.literal_eval(value))
+    if kernels != "head":
+        d = Path(kernels)
         monkeypatch.setattr(pd, "KERNEL_DIR", d if d.is_absolute() else EXP / d)
     case = LOOSE_CASES[idx]
     axes = _axes(case)

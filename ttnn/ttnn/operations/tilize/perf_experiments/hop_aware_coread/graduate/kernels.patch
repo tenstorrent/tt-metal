@@ -1,0 +1,171 @@
+diff -ru ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_reader.cpp
+--- ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp	2026-09-23 21:20:22.332202233 +0000
++++ ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_reader.cpp	2026-09-23 22:51:13.511701292 +0000
+@@ -343,6 +343,11 @@
+     constexpr uint32_t co_read = get_compile_time_arg_val(28);      // 0, else sticks per tile-row BRISC reads
+     constexpr uint32_t co_read_sem = get_compile_time_arg_val(29);  // co-read: the landed flag's semaphore id
+     constexpr auto input_args = TensorAccessorArgs<30>();
++#ifdef CO_READ_LISTED
++    constexpr bool co_read_listed = co_read != 0;  // Perf 2: the host's geometric stick lists
++#else
++    constexpr bool co_read_listed = false;
++#endif
+     static_assert(!padded || !split_reader, "the split reader has no pad path");
+     static_assert(
+         coalesce_depth == 0 || (!padded && !split_reader && pages_per_stick == 1),
+@@ -427,9 +432,15 @@
+         eager_publish,
+         bank_stride ? NUM_DRAM_BANKS : 0,
+         bank_stride == 2,
+-        co_read>
++        co_read,
++        co_read_listed>
+         producer(stick_rotation);
+     producer.prime(input_accessor, row_start * tile_h, stick_page_bytes);
++    if constexpr (co_read_listed) {
++        // RT arg 10..: the co-read stick lists (co-read excludes the padded path, the only other
++        // user of RT args >= 10)
++        producer.co_read_list_arg = tilize_dataflow::select_co_read_list<tile_h>(10);
++    }
+ 
+     const uint32_t num_positions = walk.num_positions();
+     if constexpr (padded) {
+diff -ru ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_stick_reads.hpp
+--- ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp	2026-09-23 21:20:22.332202233 +0000
++++ ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_stick_reads.hpp	2026-09-23 22:51:13.511701292 +0000
+@@ -254,6 +254,69 @@
+     }
+ }
+ 
++// Co-read stick lists (Perf 2, hop_aware_coread). Which sticks of the tile-row each RISC-V reads is
++// chosen on the host by DRAM-bank geometry (tilize_program_descriptor._co_read_lists): a read's DATA
++// path is bank -> core, east/south on NoC0 but west/north on NoC1, so the same bank can be a few
++// hops or most of the torus away depending on the NoC. The positional R8 cut sent half the sticks
++// down the long NoC1 path (BRISC's 16 reads took 2x NCRISC's 32 at 1 KiB segments).
++//
++// The host cannot see physical Tensix coordinates (the bindings return translated ones, and WH
++// row harvesting shifts the physical row), so it precomputes the lists for each physical row this
++// Tensix core can be on and the kernel picks by its own NoC0 node id. RT layout at `arg`: one word
++// of candidate physical NoC0 rows (row c in byte c, up to 3; unused bytes 0xFF), then one list block
++// per candidate of 1 + ceil(tile_h / 4) words: n, then n stick indices (0..tile_h-1) packed 4 per
++// word, low byte first, in issue order. Both RISC-Vs read the same NoC0 register, so they always
++// pick complementary lists. Compiled in only under CO_READ_LISTED (the host keeps R8's positional
++// cut, with HEAD's exact binaries, where its model predicts less than the list path's own overhead
++// to gain: CO_READ_LIST_MIN_GAIN_CYCLES). Raw register read (NOC_CMD_BUF_READ_REG(NOC_NODE_ID)): no dataflow API returns
++// the physical coordinate.
++template <uint32_t tile_h>
++FORCE_INLINE uint32_t select_co_read_list(uint32_t arg) {
++    constexpr uint32_t block_words = 1 + (tile_h + 3) / 4;
++    const uint32_t rows = get_arg_val<uint32_t>(arg);
++    const uint32_t my_row = (NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID) >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++    const uint32_t j = ((rows >> 8) & 0xFF) == my_row ? 1 : (((rows >> 16) & 0xFF) == my_row ? 2 : 0);
++    return arg + 1 + j * block_words;
++}
++
++// The stick reads of ONE tile-row named by a co-read list (select_co_read_list). The packed words
++// are loaded once per 4 sticks and unpacked in registers, so the per-read work matches
++// read_tile_row_sticks' (measured: a per-read L1 byte load costs ~8 cycles per read, a bit-mask walk
++// ~5.5 cycles per step -- both visible on the issue-bound one-position walks).
++template <uint32_t tile_h, uint32_t block_stick_bytes, uint32_t page_bytes, uint32_t pages_per_stick, typename Accessor>
++FORCE_INLINE void read_tile_row_sticks_listed(
++    const Accessor& accessor,
++    uint32_t first_stick,
++    uint32_t l1_base,
++    uint32_t segment_offset,
++    uint32_t segment_bytes,
++    uint32_t list_arg) {
++    auto read_one = [&](uint32_t stick) {
++        const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
++        if constexpr (pages_per_stick == 1) {
++            noc_async_read(accessor.get_noc_addr(first_stick + stick, segment_offset), l1_dst, segment_bytes);
++        } else {
++            read_paged_segment<page_bytes, pages_per_stick>(
++                accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
++        }
++    };
++    const uint32_t n = get_arg_val<uint32_t>(list_arg);
++    const uint32_t full = n >> 2;
++    for (uint32_t w = 0; w < full; ++w) {
++        uint32_t word = get_arg_val<uint32_t>(list_arg + 1 + w);
++#pragma GCC unroll 4
++        for (uint32_t k = 0; k < 4; ++k, word >>= 8) {
++            read_one(word & 0xFF);
++        }
++    }
++    if ((n & 3) != 0) {
++        uint32_t word = get_arg_val<uint32_t>(list_arg + 1 + full);
++        for (uint32_t k = 0; k < (n & 3); ++k, word >>= 8) {
++            read_one(word & 0xFF);
++        }
++    }
++}
++
+ // Co-read (Refinement 8, CO_READ_SHARE): on a Tensix core whose whole walk is ONE position, the
+ // writer RISC-V (BRISC, NoC1) would sit idle until compute finishes, so it issues the last
+ // co_read sticks of the tile-row straight into cb_input_sticks' first slot while NCRISC issues
+@@ -363,7 +426,8 @@
+     bool eager_publish = false,
+     uint32_t stride_banks = 0,
+     bool bank_major = false,
+-    uint32_t co_read = 0>
++    uint32_t co_read = 0,
++    bool co_read_listed = false>
+ struct StickProducer {
+     static_assert((tile_h & (tile_h - 1)) == 0, "tile_h must be a power of two");
+     static_assert(read_ahead >= 1 && read_ahead <= depth, "read_ahead must be in [1, depth]");
+@@ -390,6 +454,7 @@
+     uint64_t bank_addr[stride_banks != 0 ? stride_banks : 1];
+     uint32_t core_first_stick = 0;
+     uint32_t stick_stride_bytes = 0;
++    uint32_t co_read_list_arg = 0;  // co_read_listed: RT arg index of NCRISC's stick list
+ 
+     explicit StickProducer(uint32_t rotation) : base_addr(get_write_ptr(cb)), stick_rotation(rotation & (tile_h - 1)) {}
+ 
+@@ -506,6 +571,9 @@
+         const uint32_t first_stick = row * tile_h;
+         if constexpr (stride_banks != 0) {
+             issue_row_bank_stride(first_stick, l1_base, segment_offset, segment_bytes);
++        } else if constexpr (co_read_listed) {
++            read_tile_row_sticks_listed<tile_h, block_stick_bytes, page_bytes, pages_per_stick>(
++                accessor, first_stick, l1_base, segment_offset, segment_bytes, co_read_list_arg);
+         } else {
+             read_tile_row_sticks<tile_h, block_stick_bytes, page_bytes, pages_per_stick, noc_split>(
+                 accessor, first_stick, l1_base, segment_offset, segment_bytes, stick_rotation, 0, tile_h - co_read);
+diff -ru ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_writer.cpp
+--- ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp	2026-09-23 21:20:22.332202233 +0000
++++ ttnn/ttnn/operations/tilize/perf_experiments/hop_aware_coread/graduate/kernels/tilize_writer.cpp	2026-09-23 22:51:13.511701292 +0000
+@@ -26,7 +26,8 @@
+ //
+ // Co-read (CT `co_read`, Refinement 8): on a one-position walk this RISC-V first reads the last
+ // co_read sticks of the tile-row into cb_input_sticks' slot (NCRISC reads the rest and stays
+-// the CB's only producer), then raises the landed flag NCRISC waits on before its push.
++// the CB's only producer), then raises the landed flag NCRISC waits on before its push. Which
++// sticks is the host's geometric split (Perf 2: tilize_stick_reads.hpp select_co_read_list).
+ //
+ // Resident output (CT `output_resident`, sharded_resident regime):
+ // cb_output_tiles is backed on this Tensix core's own output shard and compute
+@@ -80,6 +81,16 @@
+         MaybeDeviceZoneScope("writer_coread");  // BRISC's share of the stick reads, issue + barrier
+         tilize_dataflow::Walker<block_width> load_walk(
+             row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
++#ifdef CO_READ_LISTED
++        // Perf 2: the host's geometric stick list for this RISC-V (RT arg 9..)
++        tilize_dataflow::read_tile_row_sticks_listed<tile_h, block_width * tile_col_bytes, page_bytes, pages_per_stick>(
++            TensorAccessor(input_args, src_addr, stick_page_bytes),
++            load_walk.row() * tile_h,
++            get_write_ptr(cb_input_sticks),
++            load_walk.first_col() * tile_col_bytes,
++            load_walk.valid_width() * tile_col_bytes,
++            tilize_dataflow::select_co_read_list<tile_h>(9));
++#else
+         tilize_dataflow::read_tile_row_sticks<tile_h, block_width * tile_col_bytes, page_bytes, pages_per_stick>(
+             TensorAccessor(input_args, src_addr, stick_page_bytes),
+             load_walk.row() * tile_h,
+@@ -89,6 +100,7 @@
+             stick_rotation & (tile_h - 1),
+             tile_h - co_read,
+             tile_h);
++#endif
+         noc_async_read_barrier();
+         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(co_read_sem)), 1);
+     }
