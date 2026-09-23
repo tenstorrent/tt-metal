@@ -474,6 +474,7 @@ enum Architecture {
     INVALID_ARCHITECTURE = 0;
     WORMHOLE_B0 = 1;
     BLACKHOLE = 2;
+    QUASAR = 3;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.

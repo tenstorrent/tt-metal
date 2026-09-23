@@ -66,6 +66,7 @@ uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
         case proto::Architecture::BLACKHOLE: return 3;
+        case proto::Architecture::QUASAR: return 3;  // blackhole-like (see SIMULATOR_QUASAR -> p150 descriptor)
         case proto::Architecture::INVALID_ARCHITECTURE:
         default: return 0;
     }
@@ -211,6 +212,10 @@ proto::Architecture proto_arch_from_arch(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return proto::Architecture::WORMHOLE_B0;
         case tt::ARCH::BLACKHOLE: return proto::Architecture::BLACKHOLE;
+        // QUASAR (blackhole-like) is generated the same way as the others; main handled it via the arch-tolerant
+        // MeshGraph::generate_mesh_graph_of_shape, so keep it representable here to avoid a regression on the
+        // QUASAR CPU tests that reach this through init_control_plane_auto_discovery.
+        case tt::ARCH::QUASAR: return proto::Architecture::QUASAR;
         default: TT_THROW("Unsupported architecture for generated MeshGraphDescriptor: {}", enchantum::to_string(arch));
     }
 }

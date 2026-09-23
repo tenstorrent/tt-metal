@@ -275,6 +275,7 @@ void MeshGraph::initialize_from_mgd(
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
+        {proto::Architecture::QUASAR, tt::ARCH::QUASAR},
     };
 
     // TODO: need to fix
