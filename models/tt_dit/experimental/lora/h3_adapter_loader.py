@@ -23,6 +23,11 @@ where LTX applies two:
 
 ``to_out`` and ``ff2`` are untouched by ``_prepare_torch_state``, so their adapters register directly.
 
+``LoRAMixin.register_lora`` takes ``B`` already in the destination weight's layout and does not
+transform it, so every transform above has to happen here. Its swiglu guard does not catch ``ff1``
+(``ColParallelLinear`` clears ``activation_fn`` once it sets ``fuse_swiglu``), which is why the pack
+below is mandatory rather than belt-and-braces.
+
 Scale
 -----
 ``alpha / rank``, taken from a per-target ``.alpha`` tensor when the file carries one (kohya) and
@@ -111,7 +116,7 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
         if transform == "swiglu":
             b = _pack_swiglu_rows(b)
         eff = scale * _scale_of(base, ab, alphas, file_alpha)
-        bank_idx = linear.register_lora(ab["A"], b, scale=eff, name=name, prepared=transform is not None)
+        bank_idx = linear.register_lora(ab["A"], b, scale=eff, name=name)
         handle.indices[f"{stack}.{idx}.{module}.{attr}"] = bank_idx
         bindings.append((linear, bank_idx))
 
@@ -224,7 +229,7 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
 
     alpha = alphas.get(f"{stack}.{idx}.attn.to_q", file_alpha)
     eff = scale * (1.0 if alpha is None else alpha / rank)
-    return attn.to_qkv.register_lora(a_fused, b_fused, scale=eff, name=name, prepared=True)
+    return attn.to_qkv.register_lora(a_fused, b_fused, scale=eff, name=name)
 
 
 def _permute_rotary_rows(tensor: torch.Tensor, num_heads: int, head_dim: int, perm: torch.Tensor) -> torch.Tensor:
