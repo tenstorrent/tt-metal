@@ -80,6 +80,33 @@ struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
 
+// LoFi no-MOP matmuls bake the reuse-side source clear into the recorded replay image
+// (reuse A when ct_dim >= rt_dim, else reuse B); mm_no_mop_reinit_short does not re-record it.
+// When a reinit changes the reuse side (a one-tile-wide QK subblock followed by a wider PV
+// subblock, or a single-row tail), MATH would clear the wrong source and UNPACK would wait
+// forever. Reuse-B shapes (only new narrow geometries) always re-record, since other matmul
+// inits (e.g. normalization) may have replaced the image; reuse-A shapes re-record only after a
+// reuse-B image, so every previously qualified build keeps its exact instruction stream.
+// HiFi replays clear outside the image and need none of this.
+#ifdef SDPA_RECIPE_LOFI
+static bool recipe_mm_reuse_a = true;
+#endif
+ALWI void recipe_mm_init(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+    mm_no_mop_init_short(in0, in1, transpose, ct, rt, kt);
+#ifdef SDPA_RECIPE_LOFI
+    recipe_mm_reuse_a = ct >= rt;
+#endif
+}
+ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+#ifdef SDPA_RECIPE_LOFI
+    if (ct < rt || !recipe_mm_reuse_a) {
+        recipe_mm_init(in0, in1, transpose, ct, rt, kt);
+        return;
+    }
+#endif
+    mm_no_mop_reinit_short(in0, in1, transpose, ct, rt, kt);
+}
+
 // Q chunks up to 1024 rows (32 tiles); row pairs bound the per-state validity flags.
 constexpr uint32_t kRecipeMaxQTiles = 32;
 constexpr uint32_t kRecipeMaxRowGroups = kRecipeMaxQTiles / 2;
@@ -1187,7 +1214,7 @@ static void sdpa_inner_loop_step(
 #else
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
 #endif
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
+        recipe_mm_init(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
         MATH((llk_math_matmul_init_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
@@ -1229,7 +1256,7 @@ static void sdpa_inner_loop_step(
 #else
                     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
 #endif
-                    mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
+                    recipe_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
                     MATH((llk_math_matmul_reinit_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
@@ -1485,7 +1512,7 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
+                        recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
 #ifdef SDPA_RECIPE_FP32
@@ -1764,7 +1791,7 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
