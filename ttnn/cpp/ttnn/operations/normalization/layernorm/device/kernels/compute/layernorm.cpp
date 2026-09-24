@@ -160,9 +160,6 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_dfb<block_size>(dfb_in_rm, dfb_in, Wt);
-#if !defined(FUSE_PRE_ADD) && !defined(RMSNORM)
-        pack_reconfig_data_format(dfb_xmm_id);
-#endif
 #endif
 /*
  * X + Y
