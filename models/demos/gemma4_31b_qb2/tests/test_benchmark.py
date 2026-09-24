@@ -3,6 +3,7 @@
 """Client timing includes reasoning; scoring receives only final-answer text."""
 
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -63,7 +64,7 @@ def test_truncated_stream_without_usage_fails(expect_error):
 
 
 def test_stream_error_is_not_scored_as_a_model_answer(expect_error):
-    with expect_error(RuntimeError, "engine stopped"):
+    with expect_error(RuntimeError, "response details withheld"):
         run_stream([{"error": "engine stopped"}])
 
 
@@ -85,6 +86,8 @@ def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
         active -= 1
         return {
             "usage": {"prompt_tokens": len(payload["prompt"]), "completion_tokens": 128},
+            "finish_reason": "length",
+            "elapsed_s": 4,
             "ttft_ms": 50,
             "decode_tokens_per_s": 40,
         }
@@ -99,3 +102,79 @@ def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
     inputs = json.loads((tmp_path / "performance-inputs.json").read_text())
     assert [len(row["prompt"]) for row in inputs] == [128, 1024]
     assert [r["prompt_sha256"] for r in rows] == [row["sha256"] for row in inputs]
+
+
+def gpqa_args(output_dir, *, prepare_only=False):
+    return SimpleNamespace(
+        output_dir=output_dir,
+        mode="gpqa",
+        server_capacity=32,
+        performance_input_lengths=(128,),
+        prepare_only=prepare_only,
+        base_url="http://test",
+    )
+
+
+def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, capsys):
+    # Invented sentinels, not dataset examples. Scoring must still receive text.
+    prompt, answer, reasoning = "PRIVATE_PROMPT_SENTINEL", "PRIVATE_ANSWER_SENTINEL", "PRIVATE_REASONING_SENTINEL"
+    cases = [{"id": i, "doc": {"question": prompt, "answer": answer}, "prompt": prompt} for i in range(10)]
+    scored = []
+
+    def score(doc, responses):
+        assert doc == {"question": prompt, "answer": answer}
+        assert responses == [answer]
+        scored.append(doc)
+        return {"exact_match": 1}
+
+    async def complete(client, payload, *, chat):
+        assert chat and payload["messages"][0]["content"] == prompt
+        return {
+            "text": answer,
+            "reasoning": reasoning,
+            "unexpected_response_field": prompt,
+            "usage": {"prompt_tokens": 20, "completion_tokens": 4, "unexpected_usage_field": answer},
+            "finish_reason": "stop",
+            "elapsed_s": 1,
+            "ttft_ms": 10,
+            "decode_tokens_per_s": 40,
+        }
+
+    monkeypatch.setattr(benchmark, "load_gpqa", lambda: (SimpleNamespace(process_results=score), cases))
+    monkeypatch.setattr(benchmark, "complete", complete)
+    assert benchmark.run(gpqa_args(tmp_path, prepare_only=True)) == 0
+    manifest = [json.loads(line) for line in (tmp_path / "inputs.jsonl").read_text().splitlines()]
+    assert manifest == [
+        {"id": case["id"], "sha256": hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()}
+        for case in cases
+    ]
+    assert benchmark.run(gpqa_args(tmp_path)) == 0
+    assert len(scored) == 10
+    rows = [json.loads(line) for line in (tmp_path / "gpqa-responses.jsonl").read_text().splitlines()]
+    assert len(rows) == 10 and all(row["correct"] == 1 for row in rows)
+    assert all(row["usage"] == {"prompt_tokens": 20, "completion_tokens": 4} for row in rows)
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["gpqa_result"]["accuracy"] == 1
+    assert summary["gpqa_result"]["mean_decode_tokens_per_s"] == 40
+    capture = capsys.readouterr()
+    public_output = capture.out + capture.err + "".join(p.read_text() for p in tmp_path.iterdir())
+    assert all(secret not in public_output for secret in (prompt, answer, reasoning))
+
+
+def test_benchmark_failure_withholds_exception_content(monkeypatch, tmp_path, capsys):
+    async def fail(args):
+        raise ValueError("PRIVATE_PROMPT_OR_RESPONSE_SENTINEL")
+
+    monkeypatch.setattr(benchmark, "main", fail)
+    assert benchmark.run(gpqa_args(tmp_path)) == 1
+    error = json.loads((tmp_path / "error.json").read_text())
+    assert error["error_type"] == "ValueError"
+    capture = capsys.readouterr()
+    assert "PRIVATE_PROMPT_OR_RESPONSE_SENTINEL" not in capture.out + capture.err + json.dumps(error)
+
+
+def test_stream_error_withholds_server_response(expect_error, capsys):
+    with expect_error(RuntimeError, "response details withheld"):
+        run_stream([{"error": {"message": "PRIVATE_SERVER_RESPONSE_SENTINEL"}}])
+    capture = capsys.readouterr()
+    assert "PRIVATE_SERVER_RESPONSE_SENTINEL" not in capture.out + capture.err

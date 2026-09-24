@@ -61,7 +61,7 @@ async def complete(client, payload, *, chat):
                 continue
             event = json.loads(line[6:])
             if event.get("error"):
-                raise RuntimeError(event["error"])
+                raise RuntimeError("Model server returned a streaming error; response details withheld")
             if event.get("usage"):
                 usage = event["usage"]
             for choice in event.get("choices", []):
@@ -107,6 +107,18 @@ def summarize(rows, start, end, elapsed):
     }
 
 
+def response_metrics(response):
+    """Only numeric metrics and a fixed finish category may leave the evaluator."""
+    return {
+        "usage": {key: int(response["usage"][key]) for key in ("prompt_tokens", "completion_tokens")},
+        "finish_reason": response["finish_reason"] if response["finish_reason"] in ("stop", "length") else "other",
+        **{
+            key: float(response[key]) if response[key] is not None else None
+            for key in ("elapsed_s", "ttft_ms", "decode_tokens_per_s")
+        },
+    }
+
+
 async def run_gpqa(client, output_dir, task, cases):
     payloads = [
         {
@@ -130,11 +142,11 @@ async def run_gpqa(client, output_dir, task, cases):
         async def generate(case, payload):
             response = await complete(client, payload, chat=True)
             score = task.process_results(case["doc"], [response["text"]])["exact_match"]
-            row = {"id": case["id"], **response, "correct": int(score)}
+            row = {"id": case["id"], **response_metrics(response), "correct": int(score)}
             rows.append(row)
             log.write(json.dumps(row) + "\n")
             log.flush()
-            print(f"GPQA {case['id']}: score={score}, tokens={response['usage']['completion_tokens']}", flush=True)
+            print(f"GPQA {case['id']}: score={row['correct']}, tokens={row['usage']['completion_tokens']}", flush=True)
 
         start, tick = utc_now(), time.perf_counter()
         await asyncio.gather(*(generate(case, payload) for case, payload in zip(cases, payloads)))
@@ -194,7 +206,7 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
                         "batch": batch,
                         "prompt_sha256": prompt_sha256,
                         "repeat": repeat,
-                        **result,
+                        **response_metrics(result),
                     }
                 )
         elapsed, end = time.perf_counter() - tick, utc_now()
@@ -221,7 +233,13 @@ async def main(args):
     args.output_dir.mkdir(parents=True, exist_ok=True)
     task, cases = load_gpqa() if args.mode != "performance" else (None, [])
     inputs = "".join(json.dumps(c, sort_keys=True) + "\n" for c in cases)
-    (args.output_dir / "inputs.jsonl").write_text(inputs)
+    # GPQA terms prohibit publishing examples. Keep reproducibility hashes,
+    # including the shuffled choices, without saving documents or prompts.
+    manifest = [
+        {"id": case["id"], "sha256": hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()}
+        for case in cases
+    ]
+    (args.output_dir / "inputs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in manifest))
     protocol = {
         "model": MODEL,
         "server_capacity": args.server_capacity,
@@ -274,6 +292,20 @@ async def main(args):
         raise AssertionError(f"GPQA CI accuracy below {GPQA_THRESHOLD}: {summary['gpqa_result']['accuracy']}")
 
 
+def run(args):
+    try:
+        asyncio.run(main(args))
+    except Exception as error:
+        # Library/server exceptions can include prompts or generated text.
+        # Preserve the failure category, never its message or chained traceback.
+        failure = {"error_type": type(error).__name__, "details": "Withheld to protect evaluation content"}
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        (args.output_dir / "error.json").write_text(json.dumps(failure) + "\n")
+        print(json.dumps(failure), flush=True)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -291,4 +323,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.server_capacity == 1 and args.mode != "performance":
         parser.error("The 10-question concurrent GPQA protocol requires --server-capacity 32")
-    asyncio.run(main(args))
+    raise SystemExit(run(args))

@@ -76,11 +76,12 @@
 - name: Gemma4 31B QB2 decoder, GPQA subset and serving
   cmd: |
     set -euo pipefail
+    umask 077
 
     cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
     model_dir=models/demos/gemma4_31b_qb2
     mkdir -p generated/test_logs generated/test_reports/gemma4_31b_qb2
-    work=$(mktemp -d "$PWD/generated/gemma4_31b_qb2.XXXXXX")
+    work=$(mktemp -d)
     results="$PWD/generated/test_reports/gemma4_31b_qb2"
     export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
     export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
@@ -88,6 +89,7 @@
     export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
     # tt-metal#56613: large mmap-backed weights can hang the pinned DMA path.
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
     unset HF_MODEL
     export HF_MODEL
     HF_MODEL=$(python -c 'from models.demos.gemma4_31b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
@@ -131,9 +133,11 @@
         wait "$server_pid" 2>/dev/null || true
         server_pid=
     }
-    trap cleanup EXIT
+    trap 'cleanup; rm -rf "$work"' EXIT
     trap 'exit 143' TERM
     trap 'exit 130' INT
+    # Server crash dumps may contain token IDs even with request logging off.
+    # Keep diagnostics outside public artifacts and AI-summary input directories.
     start_server() {
         local capacity=$1
         setsid python -u -m vllm.entrypoints.openai.api_server \
@@ -142,8 +146,9 @@
             --host 127.0.0.1 --port 8000 --block-size 128 --max-num-seqs "$capacity" \
             --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
             --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+            --no-enable-log-requests --no-enable-log-outputs \
             --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
-            --additional-config "$tt_config" > "generated/test_logs/gemma4_31b_qb2_server_${capacity}.log" 2>&1 &
+            --additional-config "$tt_config" > "$work/server_${capacity}.log" 2>&1 &
         server_pid=$!
     }
     wait_for_server() {
@@ -155,20 +160,30 @@
         curl -fsS http://127.0.0.1:8000/health
     }
 
+    run_benchmark() {
+        local status=0
+        # Dataset/scorer libraries may echo examples in diagnostics. Only the
+        # evaluator's metadata files are public; never print these private logs.
+        HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" "$@" \
+            > "$work/evaluator.log" 2>&1 || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "Benchmark failed (exit $status); see sanitized error.json in the test reports."
+        fi
+        return "$status"
+    }
+
     # A true batch-one trace needs a one-slot server, not just one active request.
     start_server 1
     # Install the CPU evaluator while the server loads its weights.
     uv venv --python 3.11 "$work/eval-env"
     UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
         -r "$model_dir/tests/requirements-eval.txt"
-    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
-        --prepare-only --output-dir "$results"
+    run_benchmark --prepare-only --output-dir "$results"
 
     wait_for_server
     # Weekly performance samples the headline 128/128 shapes to bound runtime.
     # The benchmark defaults retain the broader 128- and 1024-token sweep.
-    "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
-        --mode performance --server-capacity 1 --performance-input-lengths 128 --output-dir "$results/single-user"
+    run_benchmark --mode performance --server-capacity 1 --performance-input-lengths 128 --output-dir "$results/single-user"
     CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/single-user/summary.json"
     cleanup
 
@@ -190,8 +205,7 @@
     # Accuracy is ONLY the first 10/198 Diamond rows, one seed, at 32K output tokens.
     # This bounds weekly runtime; use the separate full-set run for published quality.
     status=0
-    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
-        --server-capacity 32 --performance-input-lengths 128 --output-dir "$results" || status=$?
+    run_benchmark --server-capacity 32 --performance-input-lengths 128 --output-dir "$results" || status=$?
     if [ -f "$results/summary.json" ]; then
         CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/summary.json"
     fi
