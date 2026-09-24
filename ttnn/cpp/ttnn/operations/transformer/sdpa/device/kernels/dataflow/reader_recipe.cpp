@@ -81,6 +81,7 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
 #ifdef SDPA_RECIPE_MASK
 // Additive attn_mask [1|B, 1|H, Sq, Sk]: stream one Q chunk x K chunk of tiles, one Q tile row
 // (SDPA_K_CHUNK_TILES tiles) at a time, so compute can apply each QK row group as it lands.
+// The mask CB holds one or two compute row groups (SDPA_RECIPE_MASK_GROUP_ROWS rows each).
 // Tiles outside the mask (Q rows past Sq, K columns past Sk) are zero: the recipe's pack-thread
 // tail hook already stamps -inf on padded K columns, and padded Q rows are never written.
 template <uint32_t q_tiles, typename Accessor>
@@ -91,8 +92,11 @@ FORCE_INLINE void read_mask_chunk(
     const uint32_t batch = SDPA_RECIPE_MASK_BCAST_BATCH ? 0 : head / SDPA_RECIPE_MASK_HEADS;
     const uint32_t mask_head = SDPA_RECIPE_MASK_BCAST_HEADS ? 0 : head % SDPA_RECIPE_MASK_HEADS;
     const uint32_t base = (batch * mask_heads + mask_head) * SDPA_RECIPE_MASK_Q_TILES * SDPA_RECIPE_MASK_K_TILES;
-    for (uint32_t row = 0; row < q_tiles; ++row) {
-        const uint32_t q_tile = q_tile0 + row;
+    // Whole compute row groups: an odd chunk's last group gets a zero padding row.
+    constexpr uint32_t rows = (q_tiles + SDPA_RECIPE_MASK_GROUP_ROWS - 1) / SDPA_RECIPE_MASK_GROUP_ROWS *
+                              SDPA_RECIPE_MASK_GROUP_ROWS;
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t q_tile = row < q_tiles ? q_tile0 + row : SDPA_RECIPE_MASK_Q_TILES;
         cb.reserve_back(SDPA_K_CHUNK_TILES);
         const uint32_t ptr = cb.get_write_ptr();
         bool zeroed = false;

@@ -1043,11 +1043,13 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 // accumulator (the same adder legacy SDPA uses); no recipe SFPU/FPU arithmetic changes, and
 // unmasked builds compile this out.
 constexpr uint32_t kRecipeMaskCb = 15;
-template <uint32_t cb_qkt_im, uint32_t k_tiles>
+// The reader always pushes whole group_rows groups (an odd chunk's single-row tail group carries a
+// zero padding row), so waits/pops stay group-aligned in a one- or two-group CB.
+template <uint32_t cb_qkt_im, uint32_t k_tiles, uint32_t group_rows>
 static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row_start, uint32_t rows) {
     constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
     const uint32_t tiles = rows * k_tiles;
-    CircularBuffer(kRecipeMaskCb).wait_front(tiles);
+    CircularBuffer(kRecipeMaskCb).wait_front(group_rows * k_tiles);
     configure_single_tile_pack(cb_qkt_im);
     sdpa_stream_reconfig_srca(kRecipeMaskCb);
     copy_init(kRecipeMaskCb);
@@ -1067,7 +1069,7 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
         tile_regs_release();
     }
     PACK((llk_pack_reconfig_l1_acc(0)));
-    CircularBuffer(kRecipeMaskCb).pop_front(tiles);
+    CircularBuffer(kRecipeMaskCb).pop_front(group_rows * k_tiles);
     // Callers expect srcA configured for the score CB (max reduce / next row group).
     sdpa_stream_reconfig_srca(cb_qkt_im);
 }
@@ -1327,7 +1329,7 @@ static void sdpa_inner_loop_step(
 #endif
 
 #ifdef SDPA_RECIPE_MASK
-        recipe_add_attn_mask<cb_qkt_im, KT_stride>(q_subblock * qkt_subblock_h, cur_qk_h);
+        recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
 #endif
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable

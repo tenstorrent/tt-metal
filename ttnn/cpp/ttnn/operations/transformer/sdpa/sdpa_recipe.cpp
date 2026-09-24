@@ -360,13 +360,27 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const auto& output = outputs.front();
     auto program = recipe_compute_program(policy, grid, k_chunks, q_tiles, k_tiles, d_tiles);
+    // QK row-group height the compute consumes the mask in: FAST uses legacy streaming subblocks
+    // (two rows for even Q chunks), FP32 recipes single rows, paired BF16 recipes row pairs.
+    const uint32_t mask_group_rows = policy.fp32_destination             ? 1
+                                     : policy.selection.recipe == Recipe::A ? (q_tiles % 2 == 0 ? 2 : 1)
+                                                                            : 2;
     if (attn_mask) {
-        // One Q chunk x K chunk of mask tiles: the reader streams it one Q tile row at a time and
-        // compute pops one QK row group at a time, so group reads never wrap mid-chunk.
+        // The reader streams mask tiles one Q tile row (k_tiles tiles) at a time in whole row groups
+        // (an odd paired chunk's last group is padded with a zero row), and compute pops one group at a
+        // time, so group reads never wrap. Double-buffer the group when L1 allows, else single.
         const auto mask_format = datatype_to_dataformat_converter(attn_mask->dtype());
         const uint32_t mask_page = attn_mask->buffer()->page_size();
+        const uint32_t group_bytes = mask_group_rows * k_tiles * mask_page;
+        uint64_t used = 0;
+        for (const auto& cb : program.cbs) {
+            used += cb.total_size;
+        }
+        const uint64_t available = q.device()->l1_size_per_core() -
+                                   q.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint32_t groups = used + 2 * group_bytes <= available ? 2 : 1;
         program.cbs.push_back(CBDescriptor{
-            .total_size = q_tiles * k_tiles * mask_page,
+            .total_size = groups * group_bytes,
             .core_ranges = grid,
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
         auto& defines = program.kernels.front().defines;
@@ -418,6 +432,7 @@ static std::vector<Tensor> run_recipe_segments(
         const auto& ms = attn_mask->logical_shape();
         reader.defines.emplace_back("SDPA_RECIPE_MASK", "1");
         reader.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_GROUP_ROWS", std::to_string(mask_group_rows));
         reader.defines.emplace_back("SDPA_RECIPE_MASK_Q_TILES", std::to_string((ms[2] + 31) / 32));
         reader.defines.emplace_back("SDPA_RECIPE_MASK_K_TILES", std::to_string((ms[3] + 31) / 32));
         reader.defines.emplace_back("SDPA_RECIPE_MASK_HEADS", std::to_string(qs[1]));
