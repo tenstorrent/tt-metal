@@ -266,10 +266,11 @@ void kernel_main() {
     uint32_t cb_prev_sum = cb_sum_2;
 
     // Loop through all heads assigned to core
-    // The mask buffers are generated once by the writer and kept fronted across every head and
-    // chunk that applies them (see "permanently fronted" in compute_common.hpp), so they are
-    // released once after the last use rather than at each use. Record what was actually fronted
-    // so the release matches the wait on every path, including the cores that apply no mask.
+    // The causal and sliding-window masks are generated once by the writer and kept fronted across
+    // every head and chunk that applies them (see "permanently fronted" in compute_common.hpp), so
+    // they are released once after the last use rather than at each use. Record which of the two
+    // this core fronted, so the release matches the wait. A streamed attention mask has a different
+    // shape, because the reader pushes a fresh chunk per K chunk, so it is not recorded here.
     uint32_t causal_mask_tiles_fronted = 0;
     uint32_t sliding_window_mask_tiles_fronted = 0;
     // The identity scaler is likewise fronted for every reduction (see "scale_cb has 1 produced" in
@@ -377,7 +378,7 @@ void kernel_main() {
                 if (add_mask_fusion) {
                     if (mask_cb_to_use == cb_sliding_window_mask_in) {
                         sliding_window_mask_tiles_fronted = qk_chunk_tiles_dynamic;
-                    } else {
+                    } else if (!use_attention_mask) {
                         causal_mask_tiles_fronted = qk_chunk_tiles_dynamic;
                     }
                 }
