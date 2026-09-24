@@ -5,7 +5,6 @@
 #include "moe_grouped_topk_device_operation.hpp"
 
 #include <bit>
-#include <cmath>
 
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/program_descriptors.hpp>
@@ -13,6 +12,23 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
+
+namespace {
+
+// floor(log2(value)). std::bit_width stays exact on powers of two; std::log2 can
+// round just below the integer, and a uint32 truncation then drops the result by one.
+uint32_t floor_log2(uint32_t value) {
+    TT_FATAL(value > 0, "log2 input must be positive, got {}", value);
+    return static_cast<uint32_t>(std::bit_width(value) - 1);
+}
+
+// ceil(log2(value)). width_tiles is not always a power of two (for example 384 experts).
+uint32_t ceil_log2(uint32_t value) {
+    TT_FATAL(value > 0, "log2 input must be positive, got {}", value);
+    return value == 1 ? 0u : static_cast<uint32_t>(std::bit_width(value - 1u));
+}
+
+}  // namespace
 
 tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
@@ -227,12 +243,12 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"cb_sorted_expert_indices_temp", cb_sorted_expert_indices_temp},
         {"cb_expert_index_template", cb_expert_index_template},
         {"group_size", experts / operation_attributes.n_groups},
-        {"log_group_size", static_cast<uint32_t>(std::log2(experts / operation_attributes.n_groups))},
+        {"log_group_size", floor_log2(experts / operation_attributes.n_groups)},
         {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
         {"topk_groups", operation_attributes.topk_groups},
         {"n_groups", operation_attributes.n_groups},
-        {"log_topk_groups", static_cast<uint32_t>(std::log2(operation_attributes.topk_groups))},
-        {"log_n_groups", static_cast<uint32_t>(std::log2(operation_attributes.n_groups))},
+        {"log_topk_groups", floor_log2(operation_attributes.topk_groups)},
+        {"log_n_groups", floor_log2(operation_attributes.n_groups)},
         {"cb_winning_group_scores", cb_winning_group_scores},
         {"cb_winning_group_indices", cb_winning_group_indices},
         {"num_group_tiles", num_group_tiles},
@@ -250,7 +266,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"score_func", static_cast<uint32_t>(operation_attributes.score_func)},
         // blocks::topk only reads log_tiles when tiles <= 2, so a ceil-log2 is safe. Used by the
         // single-group (n_groups == 1) path which runs a plain top-k over all width_tiles.
-        {"log_width_tiles", static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(width_tiles))))},
+        {"log_width_tiles", ceil_log2(static_cast<uint32_t>(width_tiles))},
     };
 
     // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
