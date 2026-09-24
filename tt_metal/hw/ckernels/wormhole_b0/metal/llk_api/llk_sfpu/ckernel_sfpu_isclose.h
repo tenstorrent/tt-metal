@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel_sfpu_binary_comp.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
 
@@ -25,16 +27,16 @@ namespace ckernel::sfpu {
 // handles this via explicit ttnn::typecast calls before dispatch.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool EQUAL_NAN>
 inline void calculate_sfpu_isclose(
-    const uint32_t dst_index_in0,
-    const uint32_t dst_index_in1,
-    const uint32_t dst_index_out,
-    uint32_t rtol_bits,
-    uint32_t atol_bits) {
-    constexpr uint32_t dst_tile_size_sfpi = 32;
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_out,
+    std::uint32_t rtol_bits,
+    std::uint32_t atol_bits) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // IEEE-754 abs(+inf). abs_bits == inf_bits -> +-Inf; abs_bits > inf_bits -> NaN
     // (NaN has exp == 0xFF and a non-zero mantissa, irrespective of sign or
     // quiet/signaling bit). One comparison classifies both special cases.
-    constexpr int32_t inf_bits = 0x7F800000;
+    constexpr std::int32_t inf_bits = 0x7F800000;
 
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
@@ -99,5 +101,21 @@ inline void calculate_sfpu_isclose(
 // Programs the sign-clear mask into a constant register so the hot loop does not
 // rebuild it with a per-element SFPLOADI inside the replay block.
 inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
+
+// Op class for elementwise isclose of two float tiles in Dest:
+// out = |in0 - in1| <= atol + rtol * |in1| ? 1.0 : 0.0, with rtol and atol passed as float bits.
+template <bool APPROXIMATION_MODE, bool EQUAL_NAN = false, int ITERATIONS = 8>
+struct IsClose : SfpuBinaryOp<IsClose<APPROXIMATION_MODE, EQUAL_NAN, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_out,
+        std::uint32_t rtol_bits,
+        std::uint32_t atol_bits) {
+        calculate_sfpu_isclose<APPROXIMATION_MODE, ITERATIONS, EQUAL_NAN>(
+            dst_index_in0, dst_index_in1, dst_index_out, rtol_bits, atol_bits);
+    }
+    static inline __attribute__((always_inline)) void init_op() { isclose_init(); }
+};
 
 }  // namespace ckernel::sfpu

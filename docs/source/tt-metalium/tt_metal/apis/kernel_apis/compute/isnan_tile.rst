@@ -1,4 +1,4 @@
 isnan_tile
 ==========
 
-.. doxygenfunction:: isnan_tile(uint32_t idst)
+.. doxygenfunction:: isnan_tile(std::uint32_t idst)

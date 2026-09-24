@@ -9,6 +9,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -40,4 +41,18 @@ inline void calculate_logical_not() {
         sfpi::dst_reg++;
     }
 }
+// Op class for logical not of a tile in Dest: 1 where x == 0, else 0, loaded and stored with INSTRUCTION_MODE.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::DEFAULT,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct LogicalNot : SfpuUnaryOp<LogicalNot<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_logical_not<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { logical_not_unary_init(); }
+};
+
 }  // namespace ckernel::sfpu

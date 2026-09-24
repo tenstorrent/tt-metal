@@ -8,8 +8,10 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_comp.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -146,6 +148,42 @@ inline void calculate_unary_le(std::uint32_t value) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for comparing a float tile in Dest against a scalar: x OP value ? 1.0 : 0.0, with value
+// passed as the bits of a float.
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
+struct UnaryComp : SfpuUnaryOp<UnaryComp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(std::uint32_t value) {
+        if constexpr (COMP_MODE == CompareOp::eq) {
+            calculate_unary_eq<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_MODE == CompareOp::ne) {
+            calculate_unary_ne<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_MODE == CompareOp::lt) {
+            calculate_unary_lt<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_MODE == CompareOp::le) {
+            calculate_unary_le<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else if constexpr (COMP_MODE == CompareOp::gt) {
+            calculate_unary_gt<APPROXIMATION_MODE, ITERATIONS>(value);
+        } else {
+            calculate_unary_ge<APPROXIMATION_MODE, ITERATIONS>(value);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        if constexpr (COMP_MODE == CompareOp::eq) {
+            unary_eq_init();
+        } else if constexpr (COMP_MODE == CompareOp::ne) {
+            unary_ne_init();
+        } else if constexpr (COMP_MODE == CompareOp::lt) {
+            unary_lt_init();
+        } else if constexpr (COMP_MODE == CompareOp::le) {
+            unary_le_init();
+        } else if constexpr (COMP_MODE == CompareOp::gt) {
+            unary_gt_init();
+        } else {
+            unary_ge_init();
+        }
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

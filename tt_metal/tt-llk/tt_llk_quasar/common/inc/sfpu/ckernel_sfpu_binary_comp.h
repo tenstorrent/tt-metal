@@ -17,7 +17,10 @@ namespace sfpu
 {
 
 /**
- * @brief Relational comparison selected by the SFPU binary compare kernels, testing `in0 OP in1`.
+ * @brief Relational comparison selected by the SFPU compare kernels.
+ *
+ * The kernel decides what the left and right operands are: the zero compares test `x OP 0` and the
+ * binary compares test `in0 OP in1`.
  */
 enum class CompareOp : std::uint8_t
 {
@@ -110,28 +113,39 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
 }
 
 /**
- * @brief Map a legacy SfpuType relational selector to its CompareOp.
+ * @brief Map a legacy SfpuType compare selector to its CompareOp.
  *
- * @tparam RELATIONAL_OP: Legacy selector, values = <lt/gt/le/ge>
+ * Accepts the binary compares (e.g. SfpuType::lt) and the zero compares (e.g. SfpuType::equal_zero).
+ *
+ * @tparam RELATIONAL_OP: Legacy selector, values = <lt/gt/le/ge/equal_zero/not_equal_zero/less_than_zero/
+ *         greater_than_zero/less_than_equal_zero/greater_than_equal_zero>
  */
 template <SfpuType RELATIONAL_OP>
 constexpr CompareOp _sfpu_type_to_compare_op_()
 {
-    if constexpr (RELATIONAL_OP == SfpuType::lt)
+    if constexpr (RELATIONAL_OP == SfpuType::equal_zero)
+    {
+        return CompareOp::eq;
+    }
+    else if constexpr (RELATIONAL_OP == SfpuType::not_equal_zero)
+    {
+        return CompareOp::ne;
+    }
+    else if constexpr (RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::less_than_zero)
     {
         return CompareOp::lt;
     }
-    else if constexpr (RELATIONAL_OP == SfpuType::gt)
+    else if constexpr (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::greater_than_zero)
     {
         return CompareOp::gt;
     }
-    else if constexpr (RELATIONAL_OP == SfpuType::le)
+    else if constexpr (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::less_than_equal_zero)
     {
         return CompareOp::le;
     }
     else
     {
-        static_assert(RELATIONAL_OP == SfpuType::ge, "Supported operation types: lt, gt, le, ge");
+        static_assert(RELATIONAL_OP == SfpuType::ge || RELATIONAL_OP == SfpuType::greater_than_equal_zero, "SfpuType is not a compare operation");
         return CompareOp::ge;
     }
 }

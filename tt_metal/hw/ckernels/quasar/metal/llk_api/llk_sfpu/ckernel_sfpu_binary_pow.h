@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_polyval.h"
@@ -418,6 +419,23 @@ inline void sfpu_binary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
 }
+
+// Op class for elementwise pow(in0, in1) of two float tiles in Dest. Same name and leading template
+// parameters as on Wormhole/Blackhole. The kernel addresses operands with a 32x32 tile stride.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryPow : SfpuBinaryOp<BinaryPow<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "calculate_sfpu_binary_pow assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

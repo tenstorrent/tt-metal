@@ -8,6 +8,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_is_fp16_zero.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
@@ -67,7 +69,7 @@ inline void not_equal_zero_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
     // Kept as hand-tuned TTI: the equivalent pure-SFPI form (bitwise magnitude + v_if
     // predication) measured ~1.5-2.1x slower in MATH_ISOLATE on Wormhole, because this
@@ -79,8 +81,8 @@ inline void calculate_comp() {
     constexpr std::uint32_t BFLOAT16_INF = 0x7f80;
 
     if constexpr (
-        COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
-        COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::less_than_equal_zero) {
+        COMP_MODE == CompareOp::lt || COMP_MODE == CompareOp::ge || COMP_MODE == CompareOp::gt ||
+        COMP_MODE == CompareOp::le) {
         TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, BFLOAT16_INF);
     }
 
@@ -90,7 +92,7 @@ inline void calculate_comp() {
         TTI_SFPSETSGN(0, V, ABS_V, 1);
 
         // eqz: default 0, set 1 where |v| == 0 (handles ±0; NaN has |v|!=0 → stays 0)
-        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::eq) {
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
@@ -98,7 +100,7 @@ inline void calculate_comp() {
         }
 
         // nez: default 1, set 0 where |v| == 0 (handles ±0; NaN has |v|!=0 → stays 1)
-        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::ne) {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
@@ -106,7 +108,7 @@ inline void calculate_comp() {
         }
 
         // ltz: default 0; chain: (v < 0) AND (|v| != 0) AND (|v| <= inf) → 1; NaN: |NaN| > inf → rejected
-        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+        if constexpr (COMP_MODE == CompareOp::lt) {
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -116,7 +118,7 @@ inline void calculate_comp() {
         }
 
         // gtz: default 0; chain: (v >= 0) AND (|v| != 0) AND (|v| <= inf) → 1; NaN: |NaN| > inf → rejected
-        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+        if constexpr (COMP_MODE == CompareOp::gt) {
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -126,7 +128,7 @@ inline void calculate_comp() {
         }
 
         // gez: default 1; chain1: (v<0) AND (|v|!=0) → 0 (negatives excl. -0); chain2: |v|>inf → 0 (NaN)
-        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::ge) {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -138,7 +140,7 @@ inline void calculate_comp() {
         }
 
         // lez: default 1; chain1: (v>=0) AND (|v|!=0) → 0 (positives excl. +0); chain2: |v|>inf → 0 (NaN)
-        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::le) {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
             TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -154,15 +156,14 @@ inline void calculate_comp() {
 // Each mode writes the constant that the untaken side would have produced up front and
 // keeps only the taken arm under a v_if. That drops the SFPCOMPC the v_else compiles to,
 // and lets the default be materialised once outside the predicate.
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     // res is pre-set below, so an unhandled COMP_MODE would silently zero the whole tile
     // instead of falling through to the identity copy the v/v_else form used to give.
-    // SfpuType has dozens of enumerators and a mistyped one would otherwise compile clean.
+    // Keep every CompareOp covered here if the enum grows.
     static_assert(
-        (COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero) or
-            (COMP_MODE == SfpuType::less_than_zero) or (COMP_MODE == SfpuType::greater_than_zero) or
-            (COMP_MODE == SfpuType::less_than_equal_zero) or (COMP_MODE == SfpuType::greater_than_equal_zero),
+        (COMP_MODE == CompareOp::eq) or (COMP_MODE == CompareOp::ne) or (COMP_MODE == CompareOp::lt) or
+            (COMP_MODE == CompareOp::gt) or (COMP_MODE == CompareOp::le) or (COMP_MODE == CompareOp::ge),
         "calculate_comp_int supports only the six comparison-to-zero modes");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -171,38 +172,38 @@ inline void calculate_comp_int() {
         vInt res = zero;
 
         // a[i] == 0
-        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::eq) {
             v_if(v == zero) { res = 1; }
             v_endif;
         }
 
         // a[i] != 0
-        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::ne) {
             res = 1;
             v_if(v == zero) { res = zero; }
             v_endif;
         }
 
         // a[i] < 0
-        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+        if constexpr (COMP_MODE == CompareOp::lt) {
             v_if(v < zero) { res = 1; }
             v_endif;
         }
 
         // a[i] > 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+        if constexpr (COMP_MODE == CompareOp::gt) {
             v_if(v > zero) { res = 1; }
             v_endif;
         }
 
         // a[i] <= 0
-        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::le) {
             v_if(v <= zero) { res = 1; }
             v_endif;
         }
 
         // a[i] >= 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::ge) {
             v_if(v >= zero) { res = 1; }
             v_endif;
         }
@@ -212,15 +213,15 @@ inline void calculate_comp_int() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
-    static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
+    static_assert((COMP_MODE == CompareOp::eq) or (COMP_MODE == CompareOp::ne));
     // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
-        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+        if constexpr (COMP_MODE == CompareOp::eq) {
             vUInt r = 0;
             v_if(v == 0) { r = 1; }
             v_endif;
@@ -264,7 +265,7 @@ inline void calculate_nez_uint32() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
     // Convert both operands to two's complement format
     //
@@ -286,10 +287,10 @@ inline void calculate_comp_unary_int(int scalar) {
 
         // Now both operands are in two's complement format
         // Use simple comparison like Blackhole
-        if constexpr (COMP_MODE == SfpuType::unary_ne) {
+        if constexpr (COMP_MODE == CompareOp::ne) {
             v_if(v != converted_scalar) { val = 1; }
             v_endif;
-        } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
+        } else if constexpr (COMP_MODE == CompareOp::eq) {
             v_if(v == converted_scalar) { val = 1; }
             v_endif;
         }
@@ -298,6 +299,87 @@ inline void calculate_comp_unary_int(int scalar) {
         dst_reg++;
     }
 }
+
+// SfpuType-selected entry points, kept for existing callers. They forward to the CompareOp versions above.
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp() {
+    calculate_comp<APPROXIMATION_MODE, _sfpu_type_to_compare_op_<COMP_MODE>(), ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_int() {
+    calculate_comp_int<APPROXIMATION_MODE, _sfpu_type_to_compare_op_<COMP_MODE>(), ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_uint16() {
+    calculate_comp_uint16<APPROXIMATION_MODE, _sfpu_type_to_compare_op_<COMP_MODE>(), ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_int(int scalar) {
+    calculate_comp_unary_int<APPROXIMATION_MODE, _sfpu_type_to_compare_op_<COMP_MODE>(), ITERATIONS>(scalar);
+}
+
+// Op class for comparing a float tile in Dest against zero: x OP 0 ? 1.0 : 0.0.
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
+struct ZeroComp : SfpuUnaryOp<ZeroComp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_comp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        if constexpr (COMP_MODE == CompareOp::eq) {
+            equal_zero_init();
+        } else if constexpr (COMP_MODE == CompareOp::ne) {
+            not_equal_zero_init();
+        } else if constexpr (COMP_MODE == CompareOp::lt) {
+            less_than_zero_init();
+        } else if constexpr (COMP_MODE == CompareOp::le) {
+            less_than_equal_zero_init();
+        } else if constexpr (COMP_MODE == CompareOp::gt) {
+            greater_than_zero_init();
+        } else {
+            greater_than_equal_zero_init();
+        }
+    }
+};
+
+// Op class for comparing an integer tile in Dest against zero: x OP 0 ? 1 : 0.
+// Int32 supports every CompareOp; UInt16 and UInt32 support eq and ne.
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
+struct ZeroCompInt : SfpuUnaryOp<ZeroCompInt<APPROXIMATION_MODE, COMP_MODE, DATA_FORMAT, ITERATIONS>> {
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
+        "Unsupported data format. Supported: Int32, UInt16, UInt32");
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || COMP_MODE == CompareOp::eq || COMP_MODE == CompareOp::ne,
+        "UInt16 and UInt32 support only eq and ne");
+    static inline __attribute__((always_inline)) void calculate() {
+        if constexpr (DATA_FORMAT == DataFormat::Int32) {
+            calculate_comp_int<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>();
+        } else if constexpr (DATA_FORMAT == DataFormat::UInt16) {
+            calculate_comp_uint16<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>();
+        } else if constexpr (COMP_MODE == CompareOp::eq) {
+            calculate_eqz_uint32<APPROXIMATION_MODE, ITERATIONS>();
+        } else {
+            calculate_nez_uint32<APPROXIMATION_MODE, ITERATIONS>();
+        }
+    }
+};
+
+// Op class for comparing an int32 tile in Dest against a scalar: x OP scalar ? 1 : 0.
+// eq/ne use calculate_comp_unary_int; lt/le/gt/ge use the tt-llk _calculate_comp_unary_int_.
+template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
+struct UnaryCompInt : SfpuUnaryOp<UnaryCompInt<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(int scalar) {
+        if constexpr (COMP_MODE == CompareOp::eq || COMP_MODE == CompareOp::ne) {
+            calculate_comp_unary_int<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>(scalar);
+        } else {
+            _calculate_comp_unary_int_<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>(scalar);
+        }
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
