@@ -424,5 +424,8 @@ def write_table(path, suffix: str) -> int:
             "passed through verbatim so a header comment survives, and cannot be "
             "generated here."
         )
-    path.write_text("".join(out), encoding="utf-8")
+    # Exactly one trailing newline: an op block carries its own trailing blank lines,
+    # and the last block's leave the file ending in several. `end-of-file-fixer` then
+    # rewrites the table on every commit.
+    path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
     return len(written)
