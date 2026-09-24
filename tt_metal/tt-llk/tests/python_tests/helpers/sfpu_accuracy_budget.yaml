@@ -5025,7 +5025,7 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
 # differently; 32768 at dest_acc=Yes has no such explanation, the product agreeing to
 # only ~8 mantissa bits. Attributing either is its own change, so it is recorded, not
 # blessed.
-Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-09-23, except where a row says otherwise
+Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32401 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "No", metric: tolerance}  # max 544 ULP, budget 599 > ceiling 51
@@ -5044,27 +5044,27 @@ Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Flo
   - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 36045}  # max 32768 ULP
   - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18177 ULP, block-quantized
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 18177 ULP, block-quantized
-  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 1024 ULP, budget 1127 > ceiling 51
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float16, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget 564 > ceiling 51
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 14337 ULP, budget 15771 > ceiling 6
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 127 ULP, budget 140 > ceiling 6
   - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # max 12929 ULP, budget 14222 > ceiling 6
-  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 939524097 ULP, budget 1033476507 > ceiling 419430
+  - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # max 8380416 ULP, budget 9218458 > ceiling 419430
   - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # max 847245825 ULP, budget 931970408 > ceiling 419430
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32509 ULP, block-quantized
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32509 ULP, block-quantized
   - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget 1109 > ceiling 51
   - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget 564 > ceiling 51
-  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36045}  # max 32768 ULP
   - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32509 ULP, block-quantized
   - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32509 ULP, block-quantized
-  - {in: Float32, out: Float16, dest: "No", max_ulp: 5}  # max 4 ULP
+  - {in: Float32, out: Float16, dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget 564 > ceiling 51
-  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float32, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {max_ulp: 4}  # wh: Float16 max 4 ULP, 40 variants, 2026-09-16
   - {out: Float16_b, max_ulp: 1}  # wh: max 1 ULP, 40 variants, 2026-09-16
