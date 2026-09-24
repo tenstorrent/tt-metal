@@ -297,7 +297,11 @@ def _cache_plan(table, migrated_layers) -> list:
             if mapped:
                 rows, why = {int(l): int(r) for l, r in dict(mapped).items()}, "adapter cache_layer_rows()"
         if rows is None and n_rows >= num_layers:
-            rows, why = {l: l for l in range(num_layers)}, "all-layers cache (row == global layer)"
+            # Map every row the config owns, not just the model's depth: a DFlash drafter cache spans
+            # the global layer axis and populates only its tail, so stopping at num_layers maps exactly
+            # the rows that are empty and none that hold data. Rows the builder never published resolve
+            # to noc_addr 0 and drop out at read time.
+            rows, why = {l: l for l in range(n_rows)}, "all-layers cache (row == global layer)"
         if rows is None and full_layers is not None and len(full_layers) == n_rows:
             rows, why = {lid: r for r, lid in enumerate(full_layers)}, "DSA index cache (row == full-indexer rank)"
         if rows is None:
@@ -456,6 +460,7 @@ def _verify_dst_vs_src_bytes(
         return False
 
     failures, checked, skipped, tail_tokens = [], 0, 0, 0
+    unpopulated, unpopulated_cfgs = 0, set()
     for src, dst, real_len in triples:
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
@@ -472,6 +477,15 @@ def _verify_dst_vs_src_bytes(
                 for pos in range(0, n_full, stride):
                     src_loc = table.lookup(row, pos, src, cfg_id)
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
+                    # A row the builder never published resolves to noc_addr 0 on BOTH sides, so
+                    # reading it compares DRAM address 0 against itself and always matches. The
+                    # drafter's configs span the global layer axis but populate only its tail, so
+                    # every verifier-layer row of a dflash config lands here. Counting those as
+                    # verified inflates the chunk total and defeats the `not checked` guard below.
+                    if src_loc.noc_addr == 0 or dst_loc.noc_addr == 0:
+                        unpopulated += 1
+                        unpopulated_cfgs.add(cfg_id)
+                        continue
                     try:
                         src_uid = producer._resolve_unique_id(
                             table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map
@@ -502,6 +516,13 @@ def _verify_dst_vs_src_bytes(
         logger.warning(
             f"[migration_driver] verify bytes: {tail_tokens} trailing token(s) across all pairs fell in a "
             "partial chunk and were NOT compared (real_len is not chunk-aligned)."
+        )
+    if unpopulated:
+        logger.warning(
+            f"[migration_driver] verify bytes: {unpopulated} chunk(s) across config(s) "
+            f"{sorted(unpopulated_cfgs)} sit on rows the table never published (noc_addr 0) and were "
+            "NOT compared. A ragged cache spans the global layer axis but populates only part of it, "
+            "so rows outside its own range hold no data."
         )
     if skipped:
         logger.warning(
@@ -797,6 +818,10 @@ def main() -> None:
 
     kv_table = producer._read_kv_chunk_table(timeout_s)
     ack_channel = producer._connect_layer_ack_channel(timeout_s)
+    # Migrate and drain on the axis the runner numbers its acks on, not the model depth configured
+    # here: under DFlash the drafter's context K/V occupy layers past the verifier's last, and only
+    # the published table carries that wider count.
+    driver.num_layers = producer._ack_layers_per_chunk(kv_table)
 
     driver.attach()
 
@@ -822,7 +847,7 @@ def main() -> None:
         f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
         f"requests={stats.completed}"
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    producer._drain_layer_acks(ack_channel, driver.num_layers * stats.total_pushes)
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)
