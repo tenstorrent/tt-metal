@@ -97,6 +97,11 @@ public:
         return static_cast<uint32_t>(start_addr_.get_address());
     }
 
+    template <typename Operand>
+    [[nodiscard]] Operand operand() const {
+        return Operand{(get_base_address() >> 4) - 1};
+    }
+
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // NOTE: This does not support standard-library algorithms that require a conforming iterator:
     //       `CoreLocalMem<T>` does not satisfy the named iterator requirements.

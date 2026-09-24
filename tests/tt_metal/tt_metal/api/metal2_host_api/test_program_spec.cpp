@@ -5181,27 +5181,7 @@ void kernel_main() {
 
 // LLKOperandFrom pulls experimental/2_0/llk_operand.h (Blackhole-only). Fold checks that name the
 // alias must JIT under a Blackhole mock; WH Gen1 cannot include that header.
-class ProgramSpecTestBlackhole : public ::testing::Test {
-protected:
-    void SetUp() override {
-        slow_dispatch_override_.emplace();
-        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
-        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
-    }
-    void TearDown() override {
-        if (mesh_device_) {
-            mesh_device_->close();
-            mesh_device_.reset();
-        }
-        experimental::disable_mock_mode();
-        slow_dispatch_override_.reset();
-    }
-
-    std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
-};
-
-// Fold checks for LLKOperandFrom (SPEC Part II).
+// Fold checks for LLKOperandFrom (SPEC Part II). Reuses ProgramSpecTestBlackhole above.
 using LLKOperandInterop = ProgramSpecTestBlackhole;
 
 TEST_F(LLKOperandInterop, ScratchpadWithoutMetadataFailsToFormOperand) {
@@ -5237,7 +5217,7 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)pad;
+    (void)pad.operand<PadOp>();
 }
 )"};
     spec.scratchpads = {ScratchpadSpec{
@@ -5264,7 +5244,7 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 1);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)pad;
+    (void)pad.operand<PadOp>();
 }
 )"};
     spec.scratchpads = {ScratchpadSpec{
@@ -5292,7 +5272,7 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)pad;
+    (void)pad.operand<PadOp>();
 }
 )"};
     spec.scratchpads = {ScratchpadSpec{
@@ -5320,7 +5300,8 @@ void kernel_main() {
     static_assert(InOp::descriptor.shape.face_c_dim == 16);
     static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)in;
+    (void)in.front<InOp>();
+    (void)in.back<InOp>();
 }
 )"};
 
@@ -5341,7 +5322,8 @@ void kernel_main() {
     static_assert(InOp::descriptor.shape.face_c_dim == 16);
     static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)in;
+    (void)in.front<InOp>();
+    (void)in.back<InOp>();
 }
 )"};
 
@@ -5376,7 +5358,7 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)a;
+    (void)a.operand<AOp>();
 }
 )"};
 
@@ -5399,7 +5381,7 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 1);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
-    (void)a;
+    (void)a.operand<AOp>();
 }
 )"};
 
@@ -5422,7 +5404,7 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 1);
-    (void)a;
+    (void)a.operand<AOp>();
 }
 )"};
 
