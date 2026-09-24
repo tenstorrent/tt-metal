@@ -68,7 +68,7 @@ def run_moreh_adam(
     cpu_grad = model.weight.grad.clone()
     dev_grad = create_tt_tensor(cpu_grad, device, dtype=dtype)
 
-    # Device does one update at `step` from zero state; do the same on CPU.
+    # Kernel raises beta to `step` in one shot; seed optimizer state at `step - 1`, then take one step.
     if step > 1:
         state = optimizer.state[model.weight]
         state["step"] = torch.tensor(float(step - 1))
