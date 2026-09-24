@@ -1359,7 +1359,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
+        named_compute || Sq_chunk_t % qk_out_subblock_h == 0,
         "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
         Sq_chunk_t,
         qk_out_subblock_h);
@@ -1416,10 +1416,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
     // reused before the matching grouped write has safely landed.
-    const uint32_t writer_out_row_group_h =
+    uint32_t writer_out_row_group_h =
         use_streaming_compute
             ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
             : out_out_subblock_h;
+    if (named_compute && Sq_chunk_t % writer_out_row_group_h != 0) {
+        // The writer drains contiguous row groups from cb_out's read pointer; with an odd Q tile count a
+        // recipe Q block ends at a single-row offset, so the next block's 2-row groups would straddle the
+        // CB wrap. Drain one row (vDHt tiles) at a time.
+        writer_out_row_group_h = 1;
+    }
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
