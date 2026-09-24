@@ -52,28 +52,15 @@ def test_legacy_program_configs_are_the_tuned_objects():
     assert attention._cross_program_config(1, 2) is attention.sdpa_program_config
 
 
-def test_recipe_ring_chunks_keep_tuned_tiles_and_fall_back():
+def test_recipe_chunks_are_op_selected():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
-    assert _chunks(attention._ring_program_config(9728)) == (256, 256)  # Q96 < 128 -> Q256; K256 kept
-    assert _chunks(attention._ring_program_config(38912)) == (192, 512)  # 6 tiles, even -> kept
-    assert _chunks(attention._ring_program_config(1234)) == (128, 512)
-    pc = attention._ring_program_config(38912)
-    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
-
-
-def test_recipe_ring_keeps_odd_tile_q_chunk():
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
-    attention.ring_sdpa_program_config = _pc(224, 384, WORKER_GRID)  # 7 tiles: odd
-    assert _chunks(attention._ring_program_config(1234)) == (224, 384)
-
-
-def test_recipe_dense_and_cross_chunks():
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
-    assert _chunks(attention._dense_program_config()) == (256, 256)
-    assert _chunks(attention._cross_program_config(1216, 32)) == (128, 512)  # K128 unsupported
-    assert _chunks(attention._cross_program_config(4864, 32)) == (192, 512)
-    attention.sdpa_program_config = _pc(224, 384)  # dense allows odd Q tiles
-    assert _chunks(attention._cross_program_config(1, 2)) == (224, 384)
+    grid = lambda pc: (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y)
+    for n in (9728, 38912, 1234):
+        pc = attention._ring_program_config(n)
+        assert _chunks(pc) == (0, 0) and grid(pc) == (11, 10)
+    assert _chunks(attention._dense_program_config()) == (0, 0)
+    for shape in ((1216, 32), (4864, 32), (1, 2)):
+        assert _chunks(attention._cross_program_config(*shape)) == (0, 0)
 
 
 def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():
@@ -114,19 +101,12 @@ def test_v2a_ring_cross_and_gathered_audio_configs():
     assert legacy._gathered_program_config(128) is legacy.sdpa_program_config
 
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
-    # Tiny per-device audio Q (32/64 rows): Q128 with a Q tail, not the Q256 fallback.
-    assert _chunks(attention._cross_ring_program_config(32)) == (128, 512)
-    assert _chunks(attention._cross_ring_program_config(64)) == (128, 512)
-    assert _chunks(attention._cross_ring_program_config(160)) == (192, 512)  # even tiles
-    assert _chunks(attention._cross_ring_program_config(4096)) == (256, 512)
-    pc = attention._cross_ring_program_config(32)
-    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
-    attention.cross_ring_sdpa_program_config = _pc(64, 128, WORKER_GRID)
-    assert _chunks(attention._cross_ring_program_config(64)) == (128, 512)  # K128 unsupported -> K512
-
-    assert _chunks(attention._gathered_program_config(128)) == (128, 256)
-    assert _chunks(attention._gathered_program_config(1024)) == (256, 256)
-    assert LTXAttention._recipe_small_q_chunk(320, 200) == 256
+    # Tiny per-device audio Q shards: SDPA sizes the Q chunk itself.
+    for q_len in (32, 64, 160, 4096):
+        pc = attention._cross_ring_program_config(q_len)
+        assert _chunks(pc) == (0, 0)
+        assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
+        assert _chunks(attention._gathered_program_config(q_len)) == (0, 0)
 
 
 def test_ltx_head_dims_video_and_audio_accepted():

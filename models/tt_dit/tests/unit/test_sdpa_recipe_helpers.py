@@ -34,24 +34,19 @@ def test_validate_rejects(precision, kv_dtype, head_dim, blackhole):
         recipe.validate_recipe_args(precision, kv_dtype, head_dim=head_dim, model="m", is_blackhole=blackhole)
 
 
-def test_chunk_selection():
-    assert recipe.recipe_q_chunk(224) == 224  # dense/joint accept odd tile counts
-    assert recipe.recipe_q_chunk(224, ring=True) == 224  # ring accepts odd tiles too
-    assert recipe.recipe_q_chunk(128, ring=True) == 128
-    assert recipe.recipe_q_chunk(320, ring=True) == 320
-    assert recipe.recipe_q_chunk(64) == 256 and recipe.recipe_q_chunk(352) == 256 and recipe.recipe_q_chunk(100) == 256
-    assert [recipe.recipe_k_chunk(k) for k in (256, 384, 512, 128, 1024)] == [256, 384, 512, 512, 512]
-    assert recipe.recipe_k_chunk(256, exp_ring=True) == 512
-
-
-def test_program_config_keeps_grid():
+def test_program_config_is_op_selected_and_keeps_grid():
     tuned = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 4), q_chunk_size=352, k_chunk_size=128, exp_approx_mode=False
+        compute_with_storage_grid_size=(8, 4),
+        q_chunk_size=352,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=8,
     )
-    config = recipe.recipe_program_config(tuned, ring=True)
-    assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (8, 4)
-    assert (config.q_chunk_size, config.k_chunk_size) == (256, 512)
-    assert config.exp_approx_mode is None
+    for kwargs in ({}, {"ring": True}, {"exp_ring": True}):
+        config = recipe.recipe_program_config(tuned, **kwargs)
+        assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (8, 4)
+        assert (config.q_chunk_size, config.k_chunk_size) == (0, 0)  # SDPA chooses the blocking
+        assert config.exp_approx_mode is None and config.max_cores_per_head_batch == 8
 
 
 def test_kwargs():

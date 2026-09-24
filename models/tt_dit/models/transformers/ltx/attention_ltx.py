@@ -603,7 +603,7 @@ class LTXAttention(Module):
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _ring_program_config(self, N: int) -> ttnn.SDPAProgramConfig:
-        """Self-attn ring SDPA config: the tuned per-N / per-mesh config, recipe-adjusted when opted in."""
+        """Self-attn ring SDPA config: the tuned per-N / per-mesh config, op-selected chunks under a recipe."""
         program_config = self._ring_pc_by_n.get(N, self.ring_sdpa_program_config)
         if self.sdpa_precision is None:
             return program_config
@@ -616,43 +616,27 @@ class LTXAttention(Module):
         return recipe_program_config(self.sdpa_program_config)
 
     def _cross_program_config(self, q_seq: int, kv_seq: int) -> ttnn.SDPAProgramConfig:
-        """Local cross-attn SDPA config: the per-shape tuned config, recipe-adjusted when opted in."""
+        """Local cross-attn SDPA config: the per-shape tuned config, op-selected chunks under a recipe."""
         program_config = self._sdpa_pc_by_shape.get((q_seq, kv_seq), self.sdpa_program_config)
         if self.sdpa_precision is None:
             return program_config
         return recipe_program_config(program_config)
 
-    @staticmethod
-    def _recipe_small_q_chunk(q_chunk: int, q_len: int) -> int:
-        """Cap a recipe Q chunk for a short per-device Q: min(q_chunk, max(128, roundup(q_len, 64))).
-
-        Keeps an even tile count (valid for ring SDPA too) and avoids a Q256 chunk that is mostly tail
-        padding when the Q shard is tiny (e.g. V2A audio Q of 32/64 rows per device)."""
-        return min(q_chunk, max(128, -(-q_len // 64) * 64))
-
     def _gathered_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
         """Padded audio self-attn with gathered K/V (SP>1): legacy config, or the recipe config
-        with the Q chunk capped for the short local Q shard."""
+        (the op sizes Q chunks for the short local Q shard)."""
+        del q_len
         if self.sdpa_precision is None:
             return self.sdpa_program_config
-        pc = recipe_program_config(self.sdpa_program_config)
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
-            q_chunk_size=self._recipe_small_q_chunk(pc.q_chunk_size, q_len),
-            k_chunk_size=pc.k_chunk_size,
-        )
+        return recipe_program_config(self.sdpa_program_config)
 
     def _cross_ring_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
         """V2A ring cross (is_cross) SDPA config: the tuned per-mesh config, or the ring recipe config
-        (even Q tiles) with Q capped for the tiny per-device audio Q shard."""
+        (the op sizes Q chunks for the tiny per-device audio Q shard)."""
+        del q_len
         if self.sdpa_precision is None:
             return self.cross_ring_sdpa_program_config
-        pc = recipe_program_config(self.cross_ring_sdpa_program_config, ring=True)
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
-            q_chunk_size=self._recipe_small_q_chunk(pc.q_chunk_size, q_len),
-            k_chunk_size=pc.k_chunk_size,
-        )
+        return recipe_program_config(self.cross_ring_sdpa_program_config, ring=True)
 
     def _recipe_mask_kv_len(self, attn_mask, attn_kv_len: int | None) -> int | None:
         """Under a recipe, the logical key length that replaces a key-column padding mask.

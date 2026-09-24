@@ -52,28 +52,22 @@ def test_legacy_ring_program_config_unchanged(blackhole):
         (2, 2, 1234, (128, 512)),  # default entry
     ],
 )
-def test_recipe_ring_program_config_keeps_tuned_chunks(blackhole, sp, tp, seq_len, expected):
+def test_recipe_ring_program_config_is_op_selected(blackhole, sp, tp, seq_len, expected):
+    del expected  # the legacy tuned chunks; recipes let SDPA choose instead
     config = _bare_attention(FAST, sp=sp, tp=tp).get_ring_sdpa_program_config(seq_len)
-    assert _chunks(config) == expected
+    assert _chunks(config) == (0, 0)
     assert config.exp_approx_mode is None
     assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
-
-
-def test_recipe_ring_program_config_falls_back(blackhole):
-    attention = _bare_attention(FAST)
-    attention.ring_sdpa_chunk_size_map = {(True, 4, 8): {-1: (224, 1024)}}
-    # 7 Q tiles (odd) is kept on ring; K1024 is unsupported.
-    assert _chunks(attention.get_ring_sdpa_program_config(4096)) == (224, 512)
 
 
 def test_recipe_dense_program_config():
     tuned = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(12, 9), q_chunk_size=224, k_chunk_size=512, exp_approx_mode=False
     )
-    dense = Attention._recipe_program_config(tuned, ring=False)
-    assert _chunks(dense) == (224, 512)  # joint SDPA accepts odd tile counts
-    assert dense.exp_approx_mode is None
-    assert _chunks(Attention._recipe_program_config(tuned, ring=True)) == (224, 512)  # ring: odd tiles too
+    for ring in (False, True):
+        config = Attention._recipe_program_config(tuned, ring=ring)
+        assert _chunks(config) == (0, 0) and config.exp_approx_mode is None
+        assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
 
 
 def test_legacy_kwargs_read_compute_config_at_call_time():

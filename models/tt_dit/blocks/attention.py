@@ -379,7 +379,7 @@ class Attention(Module):
         return spatial, prompt
 
     def _sdpa_program_config(self, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """The legacy program config, or the recipe one (same grid, recipe chunks; ring needs even Q tiles)."""
+        """The legacy program config, or the recipe one (same grid, op-selected chunks)."""
         if self.sdpa_precision is None:
             return self.sdpa_program_config
         return recipe_program_config(self.sdpa_program_config, ring=ring)

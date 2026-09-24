@@ -26,7 +26,7 @@ kernels.
 | --- | --- | --- |
 | 1 | Contract + input recommendations docs | done (5cffae00) |
 | 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint done and validated (sweep of 25 geometries x 7 variants x 3 regimes green on bh-38; frozen digests unchanged; ring 897 / exp 131 unchanged); ring/exp geometry in progress (`cglagovich/sdpa-recipe-ring-geometry`) |
-| 3 | Op-selected blocking and grid; `program_config` becomes an optional override | code done on `cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204 (host tests pass); device runs and perf table queued |
+| 3 | Op-selected blocking and grid; `program_config` becomes an optional override | done (`cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204, merged); device checks green; auto/tuned trace time geomean 0.89 over 67 DiT cases (worst 1.10, H3 exp ring A) |
 | 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | done (`cglagovich/sdpa-recipe-ring-factories` @ 4b65adf7, merged); legacy kernels byte-identical in 204/206 configs, ring/exp/continuation/mesh green, perf unchanged |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
 | 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done (`cglagovich/sdpa-recipe-masks` @ f365ffc8, merged; 131 mask tests, unmasked digests unchanged); lengths/exp geometry after task 4 |
@@ -82,6 +82,13 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 - Masked runs cost 1.3-2.4x unmasked (per-call pre-scale, dense mask reads, no reduce overlap).
   Open: key-padding fast path; pre-scale once.
 - Joint SDPA has no `attn_mask` argument.
+
+## Task 3 notes (op-selected blocking)
+
+- `q_chunk_size`/`k_chunk_size` default to 0 (op-selected); explicit values are honored.
+- Cost model: per-variant roofline fitted to one 8192x8192 shape; Q256/K512 preferred within 5%.
+- Open: the chooser does not budget the mask CB (masked auto blocking relies on run_recipe's
+  L1 check); the FAST legacy-ring L1 mirror is conservative (rejects Wan's tuned Q288/K512).
 
 ## Decisions log
 

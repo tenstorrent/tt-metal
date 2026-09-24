@@ -355,10 +355,10 @@ class Ideogram4TransformerBlock(Module):
         return pc
 
     def _recipe_sdpa_program_config(self, program_config: ttnn.SDPAProgramConfig, *, ring: bool):
-        """Legacy config unchanged when no recipe is set; else the same grid with recipe chunks.
+        """Legacy config unchanged when no recipe is set; else the same grid with op-selected chunks.
 
-        The tuned D256 Q128/K256 (L1-limited) is recipe-supported on dense and ring (Q128 = 4 tiles,
-        even), so the helper keeps it; exp_approx_mode is left to the recipe.
+        The tuned D256 Q128/K256 (L1-limited) stays legacy-only: under a recipe SDPA sizes the chunks
+        to fit L1 itself; exp_approx_mode is left to the recipe.
         """
         if self.sdpa_precision is None:
             return program_config

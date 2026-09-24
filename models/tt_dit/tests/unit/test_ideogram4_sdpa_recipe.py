@@ -50,23 +50,19 @@ def test_legacy_program_configs_are_the_tuned_objects():
 
 
 @pytest.mark.parametrize("precision", [ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.ACCURATE])
-def test_recipe_keeps_tuned_d256_q128_k256_dense_and_ring(precision):
+def test_recipe_d256_chunks_are_op_selected(precision):
+    # The tuned D256 Q128/K256 is legacy-only; under a recipe SDPA sizes the chunks to fit L1.
     block = _bare_block(precision)
     dense = block._recipe_sdpa_program_config(block.sdpa_program_config, ring=False)
     ring = block._recipe_sdpa_program_config(block._get_ring_sdpa_program_config(512), ring=True)
-    assert _chunks(dense) == (128, 256)
-    assert _chunks(ring) == (128, 256)  # Q128 = 4 tiles (even): valid ring checkpoint
+    assert _chunks(dense) == (0, 0)
+    assert _chunks(ring) == (0, 0)
     grid = lambda pc: (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y)
     assert grid(dense) == (12, 10)
     assert grid(ring) == WORKER_GRID  # CCL row stays reserved
     assert not dense.exp_approx_mode and not ring.exp_approx_mode  # left unset for the recipe
-
-
-def test_recipe_ring_and_dense_keep_odd_tile_q_chunk():
-    block = _bare_block(ttnn.SDPAPrecision.ACCURATE)
-    assert _chunks(block._recipe_sdpa_program_config(_pc(160, 256), ring=True)) == (160, 256)  # 5 tiles: odd OK
-    assert _chunks(block._recipe_sdpa_program_config(_pc(160, 256), ring=False)) == (160, 256)
-    assert _chunks(block._recipe_sdpa_program_config(_pc(64, 128), ring=False)) == (256, 512)
+    for pc, ring_flag in ((_pc(160, 256), True), (_pc(64, 128), False)):
+        assert _chunks(block._recipe_sdpa_program_config(pc, ring=ring_flag)) == (0, 0)
 
 
 def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():

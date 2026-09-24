@@ -15,6 +15,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
+from ....utils.sdpa_recipe import recipe_program_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -172,24 +173,13 @@ class WanAttention(Module):
         )
         self.sdpa_recipe_kwargs = None
         if sdpa_precision is not None:
+            # Recipes choose their own chunks (and exp-ring grid width); only the grids carry over.
             if self.use_exp_ring_sdpa:
-                # Exp ring keeps recipe state resident, so odd Q chunks only matter to paired recipes.
-                self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=full_grid,
-                    q_chunk_size=self._recipe_q_chunk(ring_sdpa_chunk_size[0], sdpa_precision, ring=False),
-                    k_chunk_size=512,
+                self.exp_ring_sdpa_program_config = recipe_program_config(
+                    self.exp_ring_sdpa_program_config, exp_ring=True
                 )
-            self.sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid,
-                q_chunk_size=self._recipe_q_chunk(256, sdpa_precision, ring=False),
-                k_chunk_size=512,
-            )
-            # Keep the mesh-tuned Q chunk where the recipe supports it; K blocking is fixed at 512.
-            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=self._recipe_q_chunk(ring_sdpa_chunk_size[0], sdpa_precision, ring=True),
-                k_chunk_size=512,
-            )
+            self.sdpa_program_config = recipe_program_config(self.sdpa_program_config)
+            self.ring_sdpa_program_config = recipe_program_config(self.ring_sdpa_program_config, ring=True)
             self.sdpa_recipe_kwargs = {
                 "precision": sdpa_precision,
                 "inputs_prepared": sdpa_precision == ttnn.SDPAPrecision.LOW_PRECISION,
@@ -341,15 +331,6 @@ class WanAttention(Module):
                 dtype=dtype,
             )
         return output
-
-    @staticmethod
-    def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool) -> int:
-        """Reuse a tuned Q chunk when the recipe supports it, else Q256.
-
-        Dense, ring and exp-ring recipes all accept any 32-row step from 128 to 320 (odd tile counts included).
-        """
-        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320
-        return q_chunk if supported else 256
 
     def _self_sdpa_kwargs(self) -> dict:
         # Read the compute config at call time: apply_quant_config replaces it after construction.

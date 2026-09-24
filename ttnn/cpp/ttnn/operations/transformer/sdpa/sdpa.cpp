@@ -8,6 +8,7 @@
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_numerics.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -77,10 +78,14 @@ ttnn::Tensor scaled_dot_product_attention(
                     : *attn_mask,
                 1.0f / recipe_scale);
         }
-        return numeric::run_recipe(
-            input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config, recipe_mask);
+        // Op-selected blocking when program_config leaves chunks unset. The chooser does not yet
+        // budget the mask CB; run_recipe's L1 check rejects a masked blocking that does not fit.
+        const auto blocking = numeric::resolve_dense_recipe_blocking(
+            policy, input_tensor_q, input_tensor_k, nullptr, nullptr, program_config);
+        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask);
     }
     TT_FATAL(!inputs_prepared, "inputs_prepared is meaningful only with an explicit LOW_PRECISION recipe");
+    operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -238,6 +243,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
+        const auto blocking = numeric::resolve_dense_recipe_blocking(
+            policy, input_tensor_q, input_tensor_k, &joint_tensor_q, &joint_tensor_k, program_config);
         return numeric::run_joint_recipe(
             input_tensor_q,
             input_tensor_k,
@@ -246,9 +253,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
             joint_tensor_k,
             joint_tensor_v,
             policy,
-            program_config);
+            blocking);
     }
     TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
+    operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -313,6 +321,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         TT_FATAL(
             std::holds_alternative<std::size_t>(logical_n) && std::holds_alternative<std::size_t>(logical_l),
             "Named ring recipes currently require scalar logical lengths");
+        program_config = operations::transformer::sdpa::detail::resolve_ring_recipe_blocking(
+            policy,
+            input_tensor_q,
+            input_tensor_k,
+            joint_tensor_q,
+            joint_tensor_k,
+            static_cast<uint32_t>(
+                cluster_axis == 0 ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols()),
+            program_config);
         TT_FATAL(
             (input_tensor_q.logical_shape()[3] == 64 || input_tensor_q.logical_shape()[3] == 128 ||
              input_tensor_q.logical_shape()[3] == 256) &&
@@ -334,6 +351,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         };
     } else {
         TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
+        operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
@@ -508,6 +526,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         TT_FATAL(
             std::holds_alternative<std::size_t>(logical_n),
             "Named exp ring recipes currently require a scalar logical_n");
+        program_config = operations::transformer::sdpa::detail::resolve_exp_ring_recipe_blocking(
+            policy,
+            input_tensor_q,
+            input_tensor_k,
+            joint_tensor_q,
+            static_cast<uint32_t>(
+                cluster_axis == 0 ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols()),
+            program_config);
         TT_FATAL(
             program_config.k_chunk_size == 512 && input_tensor_q.logical_shape()[3] == 128 &&
                 input_tensor_k.logical_shape()[3] == 128 && input_tensor_v.logical_shape()[3] == 128,
@@ -523,6 +549,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         };
     } else {
         TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
+        operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
