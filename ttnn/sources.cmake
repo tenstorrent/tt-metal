@@ -91,6 +91,8 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
+    # Keep at the end: TTNNCPP_SRCS order drives the unity-build batching.
+    cpp/ttnn/kernel_lib/host/mcast_host.cpp
 )
 
 ####################################################################################################
@@ -136,6 +138,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
