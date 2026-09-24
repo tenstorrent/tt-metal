@@ -13,6 +13,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
+    test_host_region.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_events.cpp
@@ -44,6 +45,8 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
+        # test_host_region.cpp includes "tt_metal/distributed/..." as the benchmarks do.
+        ${PROJECT_SOURCE_DIR}
 )
 
 set_target_properties(
