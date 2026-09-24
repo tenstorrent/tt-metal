@@ -1666,9 +1666,8 @@ bool MeshDeviceImpl::initialize_impl(
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto sub_devices = {SubDevice(SubDeviceImpl(
-        &metal_env(),
-        std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
+    auto sub_devices = {
+        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();

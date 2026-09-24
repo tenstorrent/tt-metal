@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
@@ -516,6 +517,29 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
     // Assert that the MetalContext instance was cleaned up after MeshDevice close
     ASSERT_FALSE(MetalContext::instance_exists(context_id));
+}
+
+// SubDevice construction must not reach any MetalContext; it is validated against the device it is applied to.
+TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value())};
+
+    const SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {1, 1}))});
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> unsupported_cores{};
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({2, 2}, {2, 2}));
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::DISPATCH)] =
+        CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice unsupported_sub_device(unsupported_cores);
+
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto manager_id = mesh_device->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    // Blackhole never registers the DISPATCH core type.
+    EXPECT_THROW(mesh_device->create_sub_device_manager({unsupported_sub_device}, 0), std::runtime_error);
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 }
 
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.

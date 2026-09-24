@@ -13,49 +13,27 @@
 #include <utility>
 
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_accessor.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 
 namespace tt::tt_metal {
 
 // SubDeviceImpl implementation
 
-tt::tt_metal::MetalEnvImpl* get_env_or_default(tt::tt_metal::MetalEnvImpl* env) {
-    if (env == nullptr) {
-        return &MetalEnvAccessor(MetalContext::instance(DEFAULT_CONTEXT_ID).get_env()).impl();
-    }
-    return env;
-}
-
-SubDeviceImpl::SubDeviceImpl(
-    tt::tt_metal::MetalEnvImpl* env, const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores) :
-    cores_(cores), env_(get_env_or_default(env)) {
+SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores) : cores_(cores) {
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, ttsl::Span<const CoreRangeSet> cores) :
-    env_(get_env_or_default(env)) {
+SubDeviceImpl::SubDeviceImpl(ttsl::Span<const CoreRangeSet> cores) {
     TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
     std::copy(cores.begin(), cores.end(), this->cores_.begin());
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(
-    tt::tt_metal::MetalEnvImpl* env, std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores) :
-    cores_(std::move(cores)), env_(get_env_or_default(env)) {
+SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores) : cores_(std::move(cores)) {
     this->validate();
 }
 
 void SubDeviceImpl::validate() const {
-    TT_ASSERT(env_ != nullptr, "Missing MetalEnv for this SubDevice");
-    auto num_core_types = env_->get_hal().get_programmable_core_type_count();
-    for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
-        TT_FATAL(
-            this->cores_[i].empty(),
-            "CoreType {} is not allowed in SubDevice",
-            static_cast<HalProgrammableCoreType>(i));
-    }
     TT_FATAL(
         this->cores_[static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH)].empty(),
         "CoreType IDLE_ETH is not allowed in SubDevice");
@@ -77,8 +55,7 @@ const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) cons
 
 // SubDevice implementation
 
-SubDevice::SubDevice(ttsl::Span<const CoreRangeSet> cores) :
-    pimpl_(std::make_unique<SubDeviceImpl>(nullptr, cores)) {}
+SubDevice::SubDevice(ttsl::Span<const CoreRangeSet> cores) : pimpl_(std::make_unique<SubDeviceImpl>(cores)) {}
 
 SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}
 
