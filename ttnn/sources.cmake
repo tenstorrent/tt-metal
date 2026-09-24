@@ -163,6 +163,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/compute/transpose_wh_metal2.cpp
     cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
