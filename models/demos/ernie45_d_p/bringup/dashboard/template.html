@@ -143,6 +143,17 @@ footer{color:var(--muted);font-size:12px}
     </section>
   </div>
 
+  <div class="two">
+    <section aria-labelledby="s-find">
+      <div class="sec-head"><h2 id="s-find">Findings and tagged gaps</h2><p>Missing TTNN ops, harness pitfalls, contract notes</p></div>
+      <div id="findings" style="display:grid;gap:12px"></div>
+    </section>
+    <section aria-labelledby="s-time">
+      <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Wall-clock per prefill chunk, bring-up build (dense-EP MoE, no trace)</p></div>
+      <div class="tbl-wrap"><table id="timing"></table></div>
+    </section>
+  </div>
+
   <section aria-labelledby="s-shard">
     <div class="sec-head"><h2 id="s-shard">Sharding across chips</h2><p id="shard-sub"></p></div>
     <div class="legend" id="mem-legend"></div>
@@ -367,7 +378,21 @@ function pccChart(){
     D.config.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toFixed(7) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
 }
 
-function render(){ header(); ladder(); dag(); ops(); sharding(); pccChart();
+function findings(){
+  const col = {"TTNN-GAP":"--s4", HARNESS:"--crit", CONTRACT:"--s1"};
+  $("#findings").innerHTML = (D.findings || []).map(f => `<div style="display:grid;gap:4px">
+    <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><span class="tag" style="border-color:var(${col[f.tag] || "--line"})">${esc(f.tag)}</span><b style="font-size:13.5px">${esc(f.title)}</b></div>
+    <div class="sub" style="font-size:13px">${esc(f.text)}</div></div>`).join("") || `<div class="empty">None yet</div>`;
+}
+function timing(){
+  const T = D.timing || [];
+  if (!T.length){ $("#timing").outerHTML = `<div class="empty">No device runs yet</div>`; return; }
+  $("#timing").innerHTML = `<thead><tr><th>Run</th><th>Chunks</th><th>First</th><th>Steady (median)</th><th>Total</th></tr></thead><tbody>` +
+    T.map(t => { const v = t.chunks.map(c => c[1]); const rest = v.slice(1).sort((a, b) => a - b);
+      const med = rest.length ? rest[Math.floor(rest.length / 2)] : v[0];
+      return `<tr><td>${esc(t.label)}</td><td class="num">${v.length}</td><td class="num">${v[0].toFixed(2)} s</td><td class="num">${med.toFixed(2)} s</td><td class="num">${v.reduce((a, b) => a + b, 0).toFixed(1)} s</td></tr>`; }).join("") + "</tbody>";
+}
+function render(){ header(); ladder(); dag(); ops(); findings(); timing(); sharding(); pccChart();
   $("#foot").textContent = `Generated from models/demos/ernie45_d_p/bringup (tasks.yaml, state.json, results/, components.yaml) by export_dashboard.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
