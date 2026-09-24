@@ -54,6 +54,27 @@ class TtKVCache:
             }
         return self._chunk_pt[key]
 
+    def load_prefix(self, i: int, k: torch.Tensor, v: torch.Tensor) -> None:
+        """Overwrite layer i with host K/V [n_kv_total, L, D] at positions [0, L) (rest zero); chip c gets head c."""
+        n_kv, L, D = k.shape
+        nb = self.max_seq // KV_BLOCK
+
+        def dev(t):
+            full = torch.zeros(n_kv, self.max_seq, D, dtype=torch.bfloat16)
+            full[:, :L] = t.to(torch.bfloat16)
+            paged = full.reshape(n_kv, nb, KV_BLOCK, D).transpose(0, 1).contiguous()  # [nb, n_kv, B, D]
+            return ttnn.from_torch(
+                paged,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=1),
+            )
+
+        ttnn.deallocate(self.k[i])
+        ttnn.deallocate(self.v[i])
+        self.k[i], self.v[i] = dev(k), dev(v)
+
     def to_torch(self, i: int, length: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Gather layer i as [n_kv_total, length, D] host tensors (KV head c from chip c)."""
 
