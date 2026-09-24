@@ -24,8 +24,7 @@ wiped every step and `dg` is numerically ~1e-3 while the other gradients are
 O(1)) it lands at PCC 0.99974 / rel-RMS 0.024 against the float64 oracle,
 inside the PCC band but outside the 0.02 RMS band.
 
-The term was isolated with the scratch-readback harness
-(`tests/.../test_gated_delta_net_backward_debug.py`): recomputing `dg` on the
+The term was isolated with a scratch-readback harness: recomputing `dg` on the
 host in float64 from the DEVICE's own scratch reproduces the miss (0.026), and
 substituting only the exact `decay` column removes it (0.002).  `decay` is a
 cumulative sum reaching |242| at that setting, and every consumer of it is
