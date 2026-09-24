@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    const tt::tt_metal::IDevice* device = &output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
     const bool reduce_all = not dim.has_value();
 
     // Resource names. Declared function-locally: both argmax factories share a unity-build
@@ -137,14 +137,14 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
-    const auto grid_size = device->compute_with_storage_grid_size();
+    const auto grid_size = device.compute_with_storage_grid_size();
     const uint32_t num_units = 1;  // single-core
     auto [num_cores, all_cores, unused_1, unused_2, unused_3, unused_4] =
         tt::tt_metal::split_work_to_cores(grid_size, num_units);
 
     TT_FATAL(num_cores > 0, "Argmax single-core split requires at least one core ");
     validate_reduce_op_program_grid(
-        "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
+        "Argmax single-core", all_cores, device.compute_with_storage_grid_size(), nullptr, true, {});
 
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
@@ -206,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .compile_time_args = std::move(ctime_args),
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
 
     ProgramSpec spec{

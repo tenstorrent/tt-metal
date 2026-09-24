@@ -112,7 +112,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto tile_hw = tile_shape[0] * tile_shape[1];

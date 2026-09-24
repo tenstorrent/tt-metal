@@ -36,7 +36,7 @@ struct StickInterval {
 };
 
 Tensor create_config_tensor(
-    IDevice* device,
+    const distributed::MeshDevice& device,
     ShardSpec shard_spec,
     const std::uint32_t batch_size,
     const std::uint32_t in_h,
@@ -180,7 +180,7 @@ Tensor create_config_tensor(
                 per_core_start_idx = config_vector.size();
             }
             for (; j < dst_core_end_idx_map[ind]; ++j) {
-                core_coords = device->worker_core_from_logical_core(
+                core_coords = device.worker_core_from_logical_core(
                     is_height_sharded
                         ? CoreCoord(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y)
                         : CoreCoord(i, logical_core_to_stick_map[j].core_y));
@@ -325,7 +325,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     // --- Op-owned config tensor: construction UNCHANGED from legacy ---
     Tensor config_tensor = create_config_tensor(
-        device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
+        *device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
 
     const auto shard_shape =
         std::array<std::uint32_t, 2>({1, static_cast<std::uint32_t>(config_tensor.logical_shape()[-1])});

@@ -85,13 +85,13 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    IDevice* device{&input_tensor.mutable_device()};
+    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.mutable_device();
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
 
     const uint32_t input_rank{input_tensor.padded_shape().rank()};
 
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = device.compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
     TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
 
@@ -198,7 +198,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
 
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
-    const auto is_wormhole = device->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto is_wormhole = device.arch() == tt::ARCH::WORMHOLE_B0;
     const auto default_math_fidelity =
         (is_wormhole && output_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
@@ -226,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
             .accessor_name = "input",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
 
     KernelSpec writer{
@@ -242,7 +242,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
             .accessor_name = "output",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     };
 
     const ComputeGen1Config compute_config{

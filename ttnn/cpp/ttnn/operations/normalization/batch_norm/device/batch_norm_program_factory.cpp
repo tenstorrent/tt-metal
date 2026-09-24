@@ -189,7 +189,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     const auto& weight_tensor = tensor_args.weight;
     const auto& bias_tensor = tensor_args.bias;
 
-    IDevice* device = &input_tensor.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = input_tensor.mutable_device();
 
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();
@@ -223,7 +223,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         (interm_data_format == DataFormat::Float32 && c_data_format != DataFormat::Float32);
 
     // we parallelize the computation across the output tiles
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = NodeRangeSet(NodeRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
@@ -285,7 +285,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         .compile_time_args = {{"fill_eps_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"eps", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
 
     // WRITER KERNEL
@@ -357,7 +357,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
                   DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     };
 
     // COMPUTE KERNEL
@@ -460,7 +460,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     }
 
     auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+        ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. Every DFB the
         // compute kernel consumes is listed; the writer-facing output is producer-only, so it gets no

@@ -51,7 +51,7 @@ namespace reuse_mcast_optimized_helpers {
 // create_program_artifacts port (the Metal 2.0 builder in the anonymous namespace below replaces it).
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -243,23 +243,23 @@ namespace reuse_mcast_optimized_helpers {
 
         if (transpose_mcast) {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
                 in0_mcast_noc_y.push_back(
-                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                    device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
                 in0_mcast_noc_x.push_back(
-                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                    device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
 
@@ -372,7 +372,7 @@ namespace reuse_mcast_optimized_helpers {
     uint32_t per_core_N_storage = 0;
     uint32_t batches_per_bank = 0;
     if (in1_is_sharded and in1_is_dram) {
-        num_dram_banks = device->num_dram_channels();
+        num_dram_banks = device.num_dram_channels();
         if (in1_is_width_sharded) {
             per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
         } else {
@@ -624,9 +624,9 @@ namespace reuse_mcast_optimized_helpers {
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), cores.size(), mm_kernel_defines);
+        device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+        device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -690,10 +690,10 @@ namespace reuse_mcast_optimized_helpers {
     };
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors
@@ -1129,7 +1129,7 @@ namespace reuse_mcast_optimized_helpers {
         //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
         //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
         //    ascending via min/max. (#48552)
-        if (device->arch() == tt::ARCH::QUASAR) {
+        if (device.arch() == tt::ARCH::QUASAR) {
             uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             in0_mcast_receiver_grid_diff_coord_start = lo;
@@ -1165,12 +1165,12 @@ namespace reuse_mcast_optimized_helpers {
             (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto left_core_physical = device.worker_core_from_logical_core(left_core);
+        auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+        auto right_core_physical = device.worker_core_from_logical_core(right_core);
+        auto top_core_physical = device.worker_core_from_logical_core(top_core);
+        auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+        auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -1203,7 +1203,7 @@ namespace reuse_mcast_optimized_helpers {
             uint32_t in0_mcast_receiver_grid_same_coord;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).x;
                 mm_in0_sender_args.push_back(core.y);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
@@ -1212,7 +1212,7 @@ namespace reuse_mcast_optimized_helpers {
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).y;
                 mm_in0_sender_args.push_back(core.x);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
@@ -1551,7 +1551,7 @@ namespace reuse_mcast_optimized_helpers {
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -1750,23 +1750,23 @@ create_program_mcast_in0_in1(
 
         if (transpose_mcast) {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
                 in0_mcast_noc_y.push_back(
-                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                    device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
                 in0_mcast_noc_x.push_back(
-                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                    device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
 
@@ -1879,7 +1879,7 @@ create_program_mcast_in0_in1(
     uint32_t per_core_N_storage = 0;
     uint32_t batches_per_bank = 0;
     if (in1_is_sharded and in1_is_dram) {
-        num_dram_banks = device->num_dram_channels();
+        num_dram_banks = device.num_dram_channels();
         if (in1_is_width_sharded) {
             per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
         } else {
@@ -2131,9 +2131,9 @@ create_program_mcast_in0_in1(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), cores.size(), mm_kernel_defines);
+        device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+        device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -2187,10 +2187,10 @@ create_program_mcast_in0_in1(
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -2233,9 +2233,9 @@ create_program_mcast_in0_in1(
         if (fuse_op) {
             if (fused_op_signaler->is_all_gather()) {
                 // Create semaphores
-                fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+                fused_op_signaler->init_fused_op(program, &device, in0_sender_interleaved);
             } else if (fused_op_signaler->is_reduce_scatter()) {
-                fused_op_signaler->init_fused_op(program, device, all_cores, cores);
+                fused_op_signaler->init_fused_op(program, &device, all_cores, cores);
             } else {
                 TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
             }
@@ -2591,7 +2591,7 @@ create_program_mcast_in0_in1(
         //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
         //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
         //    ascending via min/max. (#48552)
-        if (device->arch() == tt::ARCH::QUASAR) {
+        if (device.arch() == tt::ARCH::QUASAR) {
             uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             in0_mcast_receiver_grid_diff_coord_start = lo;
@@ -2638,12 +2638,12 @@ create_program_mcast_in0_in1(
             (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto left_core_physical = device.worker_core_from_logical_core(left_core);
+        auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+        auto right_core_physical = device.worker_core_from_logical_core(right_core);
+        auto top_core_physical = device.worker_core_from_logical_core(top_core);
+        auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+        auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -2676,7 +2676,7 @@ create_program_mcast_in0_in1(
             uint32_t in0_mcast_receiver_grid_same_coord;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).x;
                 mm_in0_sender_args.push_back(core.y);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
@@ -2685,7 +2685,7 @@ create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).y;
                 mm_in0_sender_args.push_back(core.x);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
@@ -3279,7 +3279,7 @@ m2::KernelSpec make_compute_kernel(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -3446,23 +3446,23 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
         if (transpose_mcast) {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
+                device.worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
                 in0_mcast_noc_y.push_back(
-                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                    device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
             in0_mcast_receiver_grid_diff_coord_start =
-                device->worker_core_from_logical_core({start_core_x, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x, start_core_y}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
+                device.worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
                 in0_mcast_noc_x.push_back(
-                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                    device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
 
@@ -3625,9 +3625,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), cores.size(), mm_kernel_defines);
+        device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+        device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -3787,7 +3787,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device->arch(),
+        device.arch(),
         ttnn::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .math_approx_mode = math_approx_mode,
@@ -3797,8 +3797,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via
     // the reader/writer Gen1 config, so the _other kernels are functionally identical here — see report.)
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     m2::Group<m2::KernelSpec> kernels;
 
@@ -3931,7 +3931,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
             // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -3963,7 +3963,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
             // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -4004,7 +4004,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
             // on in0_noc for both the main and _other receivers, so both must use in0_noc.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -4129,7 +4129,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
             // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -4210,7 +4210,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
             // the sender's multicast rectangle and semaphore signaling.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -4350,7 +4350,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
         //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
         //    ascending via min/max. (#48552)
-        if (device->arch() == tt::ARCH::QUASAR) {
+        if (device.arch() == tt::ARCH::QUASAR) {
             uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
             in0_mcast_receiver_grid_diff_coord_start = lo;
@@ -4417,12 +4417,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto left_core_physical = device.worker_core_from_logical_core(left_core);
+        auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+        auto right_core_physical = device.worker_core_from_logical_core(right_core);
+        auto top_core_physical = device.worker_core_from_logical_core(top_core);
+        auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+        auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -4456,7 +4456,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             uint32_t in0_mcast_receiver_grid_same_coord;
             m2::Table<std::string, uint32_t> leading;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).x;
                 leading = {
                     {"sender_id", core.y},
                     {"in0_mcast_dest_noc_start_x", in0_mcast_receiver_grid_same_coord},
@@ -4475,7 +4475,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     v.push_back(y);
                 }
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).y;
                 leading = {
                     {"sender_id", core.x},
                     {"in0_mcast_dest_noc_start_x", in0_mcast_receiver_grid_diff_coord_start},
@@ -4843,7 +4843,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::distributed::MeshDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -4940,7 +4940,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
         program,
-        device,
+        *device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -5064,10 +5064,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = &in0_tensor.mutable_device();
+    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
@@ -5081,7 +5081,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
                                           ? program_config.allowed_worker_cores.value().bounding_box().start_coord
                                           : CoreCoord{0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device->worker_cores(
+        auto sub_device_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sub_device_cores.bounding_box();
         sub_device_start_core = bbox.start_coord;

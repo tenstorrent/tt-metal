@@ -62,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;

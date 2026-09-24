@@ -65,7 +65,7 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
     uint32_t num_padded_sticks) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();

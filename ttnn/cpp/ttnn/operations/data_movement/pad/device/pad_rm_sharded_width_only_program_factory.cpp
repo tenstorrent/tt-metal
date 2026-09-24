@@ -52,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();

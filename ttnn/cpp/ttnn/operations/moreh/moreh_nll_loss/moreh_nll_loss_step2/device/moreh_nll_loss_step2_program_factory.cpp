@@ -211,7 +211,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_2d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -464,7 +464,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -736,7 +736,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_4d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 

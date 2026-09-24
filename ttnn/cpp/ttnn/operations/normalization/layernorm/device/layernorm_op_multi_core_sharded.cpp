@@ -117,7 +117,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -399,7 +399,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // The write-back segment block's length is measured per node while the run args are built, and
     // the kernel specs declare it, so the run args come first.
     auto [run_args, writer_num_varargs] =
-        build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
+        build_run_args(cores, rt_ctx, config, *device, a, b, gamma, beta, stats, recip_tensor, output);
     add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
 
     return ttnn::device_operation::ProgramArtifacts{

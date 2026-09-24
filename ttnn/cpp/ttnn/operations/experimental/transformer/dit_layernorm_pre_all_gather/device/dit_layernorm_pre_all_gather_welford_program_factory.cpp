@@ -29,7 +29,7 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_tile_rows = NC * Ht;

@@ -59,7 +59,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     uint32_t LH = ls[0];
     uint32_t LW = ls[1];
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
 
     // MeshTensors for the tensor-parameter bindings (Metal 2.0 speaks MeshTensor).
     const auto& input_mesh_tensor = input.mesh_tensor();

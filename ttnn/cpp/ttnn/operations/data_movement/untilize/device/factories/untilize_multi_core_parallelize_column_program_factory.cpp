@@ -49,7 +49,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;

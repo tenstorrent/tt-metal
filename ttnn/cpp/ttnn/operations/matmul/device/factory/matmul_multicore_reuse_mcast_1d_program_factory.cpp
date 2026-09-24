@@ -62,7 +62,7 @@ namespace reuse_mcast_1d_optimized_helpers {
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
-    const tt_metal::IDevice* device,
+    const tt_metal::distributed::MeshDevice& device,
     const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
@@ -72,8 +72,8 @@ uint32_t get_preferred_noc(
     uint32_t src_x = src.x, src_y = src.y;
     uint32_t dst_x = dst.x, dst_y = dst.y;
 
-    uint32_t MAX_X = device->grid_size().x;
-    uint32_t MAX_Y = device->grid_size().y;
+    uint32_t MAX_X = device.grid_size().x;
+    uint32_t MAX_Y = device.grid_size().y;
 
     // Get the wrapped distances
     uint32_t dist_right = src_x <= dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
@@ -97,7 +97,7 @@ uint32_t get_preferred_noc(
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -330,11 +330,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
             in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
             in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -354,8 +354,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -560,9 +560,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_locally_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -611,14 +611,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     if (fuse_op && fused_op_signaler->is_all_gather()) {
         // Create semaphores
         fused_op_signaler->init_fused_op(
             program,
-            device,
+            &device,
             in0_mcast_sender_cores,
             in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE
                            : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
@@ -1212,7 +1212,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -1435,8 +1435,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
@@ -1620,9 +1620,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1662,8 +1662,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -2145,7 +2145,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::Program& program,
     const ttnn::Tensor& a,
     const std::vector<ttnn::Tensor>& b_tensors,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -2196,9 +2196,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
     non_idle_cores_vec.reserve(non_idle_cores.ranges().size());
-    auto subdevice_cores = device->worker_cores(
+    auto subdevice_cores = device.worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
@@ -2580,13 +2580,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
@@ -2595,7 +2595,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     // Init the signaler
     if (fused_op_signaler.has_value()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-        signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
+        signaler.init_llama_rs_cores_mm(all_cores, program, &device, 0);
     }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
@@ -2673,7 +2673,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
             if (fused_op_signaler.has_value()) {
                 ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
             }
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
@@ -2692,11 +2692,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     // On Blackhole: dynamically derived from optimal DRAM bank API; banks split at x <= 6.
     std::map<uint32_t, uint32_t> worker_y_to_dram_bank_first_col;
     std::map<uint32_t, uint32_t> worker_y_to_dram_bank_second_col;
-    uint32_t first_col_max_x = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
+    uint32_t first_col_max_x = device.arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
     uint32_t num_receiver_cores_per_dram = 2;  // default to 2 for wormhole b0 and blackhole
     if (in1_is_dram_sharded) {
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        if (device.arch() == tt::ARCH::WORMHOLE_B0) {
             worker_y_to_dram_bank_first_col[0] = 1;
             worker_y_to_dram_bank_first_col[4] = 2;
             worker_y_to_dram_bank_first_col[5] = 3;
@@ -2712,7 +2712,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             worker_y_to_dram_bank_second_col[9] = 5;
         } else {
             // Dynamically derive mapping from optimal DRAM bank API
-            auto optimal_dram_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
+            auto optimal_dram_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
             uint32_t num_banks = optimal_dram_workers.size();
             uint32_t banks_in_first_col = num_banks / 2;
 
@@ -2754,7 +2754,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             };
 
             // Build complete maps for all possible y-coordinates (0 to max worker y)
-            auto compute_grid = device->compute_with_storage_grid_size();
+            auto compute_grid = device.compute_with_storage_grid_size();
             for (uint32_t y = 0; y < compute_grid.y; ++y) {
                 if (!first_col_anchors.empty()) {
                     worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
@@ -2772,7 +2772,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
+        const auto& core_noc = device.worker_core_from_logical_core(core);
 
         /* in0 */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
@@ -2783,7 +2783,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
             next_core = worker_cores_vec[next_i % num_cores];
         }
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        const auto& next_core_noc = device.worker_core_from_logical_core(next_core);
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
@@ -2845,7 +2845,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
              * increases by 1 for each core in the same row*/
             /* TODO: This logic should be removed once all usage of ring matmul asserts that the input core ranges are
              * arranged in row major order*/
-            if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+            if (device.arch() == tt::ARCH::WORMHOLE_B0) {
                 if (core.x % 2 == 0) {
                     dram_read_offset = 1;
                 }
@@ -2868,7 +2868,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         }
         if (fused_op_signaler.has_value()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
@@ -2891,11 +2891,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
         auto core_type = CORE_TYPE::HOP_CORE;  // hop core
         const auto& core = hop_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
+        const auto& core_noc = device.worker_core_from_logical_core(core);
 
         /* in0 */
         CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        const auto& next_core_noc = device.worker_core_from_logical_core(next_core);
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
@@ -2913,7 +2913,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
         if (fused_op_signaler.has_value()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
@@ -3160,7 +3160,7 @@ void override_program_parameters(
 
 static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
@@ -3380,11 +3380,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
             in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
             in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -3400,8 +3400,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3526,9 +3526,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -3551,8 +3551,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
@@ -4074,7 +4074,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     {
         // The op resolves a TTNN ComputeKernelConfig, so translate that rather than building a Metal
         // config by hand.
-        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
         // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
         // builder, so the descriptor default applied and this op has always ignored the knob. The
         // TTNN helper reads the resolved config and would hand the caller's value back, which would
@@ -4436,7 +4436,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
 static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
@@ -4643,8 +4643,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
@@ -4754,9 +4754,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -4778,8 +4778,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
@@ -5206,7 +5206,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
 
     // ---- compute ----------------------------------------------------------
     {
-        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
         // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
         // builder, so the descriptor default applied and this op has always ignored the knob. Pin the
         // legacy-default result rather than letting the TTNN helper hand the caller's value back.
@@ -5604,7 +5604,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::distributed::MeshDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -5708,7 +5708,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             program,
             a,
             b_tensors,
-            device,
+            *device,
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
@@ -5780,7 +5780,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
             program,
             a,
-            device,
+            *device,
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
@@ -5827,7 +5827,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
         program,
         a,
-        device,
+        *device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -5942,10 +5942,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = &in0_tensor.mutable_device();
+    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     const auto in0_B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto in1_B = fuse_batch ? 1 : get_batch_size(b_shape_padded);
@@ -5975,7 +5975,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     // back to allowed_worker_cores start so non-(0,0) placements work correctly.
     CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sd_worker_cores = device->worker_cores(
+        auto sd_worker_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sd_worker_cores.bounding_box();
         TT_FATAL(

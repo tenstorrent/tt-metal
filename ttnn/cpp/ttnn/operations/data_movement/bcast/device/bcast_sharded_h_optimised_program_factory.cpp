@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     const std::uint32_t NC = N * C;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;

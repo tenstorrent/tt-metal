@@ -217,7 +217,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Dataflow Buffer Data Format Setup
@@ -276,7 +276,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t num_tile_rows = NC * Ht;
 
     // The caller may restrict the program to a subset of the grid; otherwise take the whole of it.
-    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(*device);
 
     // Use split_work_to_cores to properly distribute tile rows across available cores
     auto
@@ -1013,8 +1013,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     };
 }
 
-CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(IDevice* device) {
-    auto grid_size = device->compute_with_storage_grid_size();
+CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(const MeshDevice& device) {
+    auto grid_size = device.compute_with_storage_grid_size();
     return CoreRangeSet({CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
 }
 

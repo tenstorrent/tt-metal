@@ -36,7 +36,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     const auto& output_shape = output.padded_shape();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);

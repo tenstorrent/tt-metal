@@ -116,7 +116,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
     const uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     // tensor shape
     const auto& shape = a.padded_shape();

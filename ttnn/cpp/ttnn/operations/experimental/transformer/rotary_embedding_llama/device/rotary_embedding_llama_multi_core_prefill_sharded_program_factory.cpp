@@ -71,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);

@@ -93,7 +93,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 
-    tt_metal::IDevice* device = &in0_buffer.mutable_device();
+    tt_metal::distributed::MeshDevice& device = in0_buffer.mutable_device();
 
     auto fp32_dest_acc_en = operation_attributes.compute_kernel_config->fp32_dest_acc_en;
     auto packer_l1_acc = operation_attributes.compute_kernel_config->packer_l1_acc;
@@ -371,9 +371,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
     // ---- Reader kernel (reads in0) ----
@@ -411,8 +411,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Reader/Writer kernel (reads in1, writes output) ----
@@ -459,12 +458,11 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
             },
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ComputeHardwareConfig compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+        ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config.value());
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {

@@ -66,7 +66,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::IDevice* device = &a.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
@@ -84,7 +84,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             "ttnn::operations::experimental::quasar::matmul::normalize_program_config() on the program config first. "
             "This will become "
             "a hard error in a future release.");
-        auto device_grid = device->compute_with_storage_grid_size();
+        auto device_grid = device.compute_with_storage_grid_size();
         pc.allowed_worker_cores =
             CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(device_grid.x - 1, device_grid.y - 1)));
     }
@@ -182,8 +182,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                      "num_output_tiles",
                      "MtNt"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -205,22 +204,21 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group tile-count CTA ----
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     std::map<std::string, std::string> mm_kernel_defines;
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
     // Table has no iterator-pair constructor; use the single-argument range constructor over the std::map.
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
     ComputeHardwareConfig compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+        ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config.value());
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity

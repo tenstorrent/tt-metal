@@ -56,7 +56,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
 
     auto all_cores_vec = tt::tt_metal::corerange_to_cores(all_cores, num_cores, true);
     CoreCoord collector_core = all_cores_vec[0];
-    const tt::tt_metal::IDevice* device = input.device();
+    const tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto collector_noc = device->worker_core_from_logical_core(collector_core);
 
     // --- Circular Buffers ---

@@ -317,7 +317,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 

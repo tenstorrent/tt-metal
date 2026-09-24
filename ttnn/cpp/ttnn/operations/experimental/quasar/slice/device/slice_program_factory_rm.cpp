@@ -222,7 +222,7 @@ namespace ttnn::prim::qsr {
 ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_artifacts(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 

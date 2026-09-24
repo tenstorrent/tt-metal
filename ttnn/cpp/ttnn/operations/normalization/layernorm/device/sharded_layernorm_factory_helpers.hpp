@@ -431,7 +431,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

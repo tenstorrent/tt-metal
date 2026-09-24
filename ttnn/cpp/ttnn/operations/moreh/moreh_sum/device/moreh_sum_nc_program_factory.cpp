@@ -26,7 +26,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
 
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
 
     const auto dfb_data_format = datatype_to_dataformat_converter(output.dtype());
 

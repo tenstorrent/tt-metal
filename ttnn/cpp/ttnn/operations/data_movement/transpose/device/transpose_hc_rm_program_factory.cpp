@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
     log_debug(tt::LogOp, "transpose_hc_rm");
     log_debug(tt::LogOp, "dfb_data_format: {}", dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =

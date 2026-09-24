@@ -113,7 +113,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
     const uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto& shape = a.padded_shape();
     uint32_t H = shape[1] * shape[2] * num_batches;

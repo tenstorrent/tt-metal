@@ -350,7 +350,7 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     auto num_q_heads = operation_attributes.num_q_heads;
     auto num_kv_heads = operation_attributes.num_kv_heads;
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

@@ -26,7 +26,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input_tensor = tensor_args.input;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output.padded_shape();
