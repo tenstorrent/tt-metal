@@ -128,7 +128,7 @@ the batched-shape ops get no device data.
 ## Performance (P150, sustained)
 
 Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run; the board settles its clock at
-≈1.1–1.3 GHz under load), one Galaxy P150 (12x10 = 120 worker cores), measured 2026-09-24:
+≈1.1–1.3 GHz under load), one Galaxy P150 (12x10 = 120 worker cores):
 
 | batch | Qwen3-Embedding-4B | pplx-embed-4B (same stack) | H200 reference | × H200 |
 |---|---|---|---|---|

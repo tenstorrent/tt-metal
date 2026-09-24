@@ -87,20 +87,20 @@ activations in **L1** when the per-user sequence is ≤ 512
 | bs=8  ISL=512   | 20 MB      | DRAM      | `minimal_matmul`, 12×10 | **120.9 ms · 33.9k tok/s** |
 | bs=16 ISL=512   | 40 MB      | DRAM      | `minimal_matmul`, 12×10 | **227.6 ms · 36.0k tok/s** |
 | **bs=32 ISL=512** | **80 MB** | DRAM    | `minimal_matmul`, 12×10 | **446.4 ms · 36.7k tok/s** |
-| bs=1  ISL=1024 / 2048 | 5 / 10 MB | DRAM | `minimal_matmul`, 12×10 | not re-measured since the 2026-09-22 baseline |
+| bs=1  ISL=1024 / 2048 | 5 / 10 MB | DRAM | `minimal_matmul`, 12×10 | not re-measured |
 
-ᵃ bs=4 moved to the DRAM path on 2026-09-24: the batched-L1 placement now clashes with the fused ops'
+ᵃ bs=4 runs on the DRAM path: the batched-L1 placement clashes with the fused ops'
 circular buffers, and DRAM is faster with them anyway (65 ms best of 10 vs the 75 ms the L1 path read before).
-Measured 2026-09-24 on a Galaxy P150 exposing **12×10 = 120 worker cores** (a p150a card exposes 13×10);
+Measured on a Galaxy P150 exposing **12×10 = 120 worker cores** (a p150a card exposes 13×10);
 "sustained" is after the board's power manager has settled the clock at ≈1.1–1.3 GHz under continuous
 load, which is the like-for-like comparison against a steady-state H200 (bs=1 5.44 ms, bs=8 33.08,
 bs=16 67.23, bs=32 139.15): **3.24× / 3.65× / 3.39× / 3.21×**. Qwen3-Embedding-4B through the same
-stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Baseline, same method:
-28.8 / 190.3 / 372.7 / 720.8 ms — the full path is in [PERF.md](PERF.md).
+stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Baseline (customer reference
+measurement on Blackhole P150): 45.773 / 190.065 / 375.817 / 726.944 ms — the full path is in [PERF.md](PERF.md).
 
 ### Optimization history
 
-Every landing from the 2026-09-22 baseline to the numbers above, with its mechanism and measured effect, is in
+Every landing from the baseline to the numbers above, with its mechanism and measured effect, is in
 [PERF.md](PERF.md). Most of the early wins were inherited configuration constants that did not fit the
 4B shapes; re-check them before reusing this config on another model in the family.
 
@@ -245,7 +245,7 @@ TT_VISIBLE_DEVICES=10 python models/demos/blackhole/pplx_embed_4b/demo/eval_accu
 | batch 16 | 0.8140 | 0.983 / 0.912 | 0.9943 |
 | batch 32 | 0.8159 | 0.982 / 0.908 | 0.9933 |
 
-Measured 2026-09-24 with the shipped defaults (row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved
+Measured with the shipped defaults (row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved
 weights at bs32, bfp4 weights, bfp8 activations). The per-text spread is the bfp8 pipeline's normal
 sensitivity (a benign kernel change moves per-token cosines by a similar amount after 36 layers, see
 the negatives file §16/§33); the task metric is unchanged or better at every batch size.

@@ -3,21 +3,20 @@
 All numbers are **sustained latency at ISL 512**: the median of iterations 15–29 of a 30-iteration run,
 after the board's power manager has settled the clock (≈1.1–1.3 GHz under load), on one P150 of a Galaxy
 (12×10 = 120 worker cores; a p150a card exposes 13×10). Timed path is the extended trace: forward + pooling
-+ I/O in one replay. Branch `arg/embed-4b-pplx-qwen3`; measured 2026-09-24.
++ I/O in one replay. Branch `arg/embed-4b-pplx-qwen3`.
 
 ## Headline
 
-| batch | baseline (2026-09-22) | pplx-embed-4B now | Qwen3-Embedding-4B now | speedup | H200 | × H200 (pplx) | tok/s (pplx) |
+| batch | baseline | pplx-embed-4B now | Qwen3-Embedding-4B now | speedup | H200 | × H200 (pplx) | tok/s (pplx) |
 |---|---|---|---|---|---|---|---|
-| 1 | 28.8 ms | **17.6 ms** | 18.4 ms | 1.64× | 5.44 ms | 3.24× | 29.1k |
-| 8 | 190.3 | **120.9** | 120.8 | 1.57× | 33.08 | 3.65× | 33.9k |
-| 16 | 372.7 | **227.6** | 228.2 | 1.64× | 67.23 | 3.39× | 36.0k |
-| 32 | 720.8 | **446.4** | 445.1 | 1.61× | 139.15 | 3.21× | 36.7k |
+| 1 | 45.773 ± 0.160 ms | **17.6 ms** | 18.4 ms | 2.60× | 5.44 ms | 3.24× | 29.1k |
+| 8 | 190.065 ± 4.527 | **120.9** | 120.8 | 1.57× | 33.08 | 3.65× | 33.9k |
+| 16 | 375.817 ± 5.810 | **227.6** | 228.2 | 1.65× | 67.23 | 3.39× | 36.0k |
+| 32 | 726.944 ± 2.552 | **446.4** | 445.1 | 1.63× | 139.15 | 3.21× | 36.7k |
 
-- **Baseline** is commit fb45b516f49: the stock tt_transformers prefill with the grid clamp that lets bs≥8 run
-  on this 120-worker part, re-measured today with the same method (its Python against the current host
-  library). The two models share one code path; Qwen3-Embedding-4B differs only by causal attention and
-  last-token pooling, which the stack switches on from `HF_MODEL`.
+- **Baseline** is the reference measurement of pplx-embed-4B on Blackhole P150 as provided by the customer
+  (mean ± spread, ms). The two models share one code path; Qwen3-Embedding-4B differs only by causal attention
+  and last-token pooling, which the stack switches on from `HF_MODEL`.
 - **Accuracy** was re-checked after every landing: STS-B Spearman 0.8161 (pplx, bucketed bs1 path),
   0.812–0.816 through the batched paths; Qwen3-Embedding-4B 0.807–0.819 (last token + EOS). Every landed
   change is bit-identical to the stock op or within noise of the stock op's accuracy.
@@ -50,7 +49,7 @@ Sustained after step 12: **17.6 / 120.9 / 227.6 / 446.4 ms**. Configuration live
 
 `demo/dp32_multiprocess.py --num-devices 32 --batch-size B --iterations 30 --warmup 5`: one resident model per
 chip, workers released together after warm-up, per-chip latency = median of 30 extended-trace iterations,
-throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 2026-09-24, 32/32 chips active in every run).
+throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 32/32 chips active in every run).
 
 | per-chip batch | global batch | per-chip median | slowest chip | vs one chip sustained | embeddings/s | tokens/s | scaling vs 32 × one chip |
 |---|---|---|---|---|---|---|---|
