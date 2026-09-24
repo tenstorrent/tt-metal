@@ -1036,6 +1036,14 @@ def test_uint32_reduce_column_average_bit31(band):
     if TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
+    # Blackhole's ckernel_sfpu_reduce.h carries the identical defect (#57509 item 2), fixed in
+    # tenstorrent/tt-metal#57661. That PR removes this skip.
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            reason="Blackhole has the same unsigned-average defect; fixed separately in "
+            "tenstorrent/tt-metal#57661 (#57509 item 2)"
+        )
+
     column_sums, golden, res = _run_uint32_column_average(_UINT32_AVERAGE_BANDS[band])
 
     mismatch = golden != res
