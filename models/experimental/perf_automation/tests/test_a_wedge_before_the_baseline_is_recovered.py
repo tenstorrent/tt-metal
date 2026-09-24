@@ -30,6 +30,28 @@ def test_the_firmware_startup_failure_counts_as_a_dead_board():
     assert device_recovery.is_dead_board(text)
 
 
+def test_a_stuck_eth_fabric_counts_as_a_dead_board():
+    """The multi-chip wedge this model actually produces, twice on 2026-09-24:
+
+        RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: 14521888976,
+        ETH core e8-6 (NOC0) to advance. Stuck at 0xaabb0025
+
+    run.py already calls this a "heartbeat-stuck wedge"; it was simply not on the list, so every
+    retry failed identically until a human reset the board."""
+    text = (
+        "RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: 14521888976, "
+        "ETH core e8-6 (NOC0) to advance. Stuck at 0xaabb0025"
+    )
+    assert device_recovery.is_dead_board(text)
+
+
+def test_the_word_heartbeat_alone_is_not_a_wedge():
+    """The harness prints its own heartbeats ("round 3 working... 66s"). Matching those would
+    reset the board on a healthy run, so the signature is the ETH one, not the bare word."""
+    assert not device_recovery.is_dead_board("round 3 working... 66s, 2 tool calls")
+    assert not device_recovery.is_dead_board("· still optimizing... heartbeat 5m elapsed")
+
+
 def test_the_signatures_that_already_worked_still_do():
     for text in ("Read 0xffffffff over PCIe ID 3", "board should be reset", "pcie link down", "device hang"):
         assert device_recovery.is_dead_board(text), text

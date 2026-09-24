@@ -575,9 +575,26 @@ def before_loop(
             dirty = gitio.changed_files(repo, head, pathspec=str(model_root))
             _generated = {"RUN_REPORT.md", ".module_optimize_state.json"}
             code_dirty = [d for d in dirty if os.path.basename(d) not in _generated]
-            if code_dirty:
-                gitio.checkout(repo, head, pathspec=code_dirty)
-                stages.done(f"restored {len(code_dirty)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
+            # Restore only what this commit HAS. `git checkout <sha> -- <paths>` fails the whole
+            # invocation if any one path is unknown to the commit, printing a line per path -- so a
+            # model that is untracked on the checked-out branch (it lives on its own branch, or is
+            # staged but not committed) produced ~100 "did not match any file(s) known to git"
+            # errors, restored nothing, and reported itself as a tidy "skipped".
+            restorable = gitio.present_at(repo, head, code_dirty) if code_dirty else []
+            absent = [d for d in code_dirty if d not in set(restorable)]
+            if restorable:
+                gitio.checkout(repo, head, pathspec=restorable)
+            if restorable and absent:
+                stages.done(
+                    f"restored {len(restorable)} leftover-dirty file(s) to {head[:9]}; "
+                    f"{len(absent)} not in that commit, left as they are"
+                )
+            elif restorable:
+                stages.done(f"restored {len(restorable)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
+            elif absent:
+                # Not an error and not a clean tree: there is simply no committed state to go back
+                # to. Say so in ONE line, and do not let the caller believe a reset happened.
+                stages.done(f"no reset: {len(absent)} model file(s) are not in {head[:9]} (untracked on this branch)")
             else:
                 stages.done(f"clean ({head[:9]})")
         except Exception as exc:  # never block the run on the restore

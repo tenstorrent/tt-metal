@@ -115,6 +115,27 @@ def remove_new_untracked(repo, baseline: set, pathspec=None) -> list:
     return removed
 
 
+def present_at(repo, sha: str, paths) -> list:
+    """Of `paths`, the ones that EXIST in `sha` -- i.e. the ones checkout can restore.
+
+    `git checkout <sha> -- <path>` fails the whole invocation when ANY pathspec is unknown to that
+    commit, and reports one error line per path. A model directory that is untracked on the checked
+    out branch (the model lives on its own branch, or is staged but never committed) therefore turns
+    a restore into a wall of "did not match any file(s) known to git" and restores nothing --
+    including the paths that were perfectly restorable.
+
+    Ask the commit what it actually has, once, and let the caller act on the answer.
+    """
+    wanted = [str(p) for p in (paths or [])]
+    if not wanted:
+        return []
+    r = _git(["ls-tree", "--name-only", "-r", sha, "--", *wanted], repo)
+    if r.returncode != 0:
+        return []
+    have = {ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()}
+    return [p for p in wanted if p in have]
+
+
 def checkout(repo, sha: str, pathspec=None) -> None:
     """Restore tracked files to their state at `sha` (`git checkout <sha> -- <pathspec>`).
 

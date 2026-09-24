@@ -58,6 +58,12 @@ DEAD_BOARD_SIGS = (
     # actually printed, while matching none of the signatures above. Arch-independent: the same UMD
     # template serves every device.
     "firmware startup error",
+    # A multi-chip ETH fabric that stopped advancing: "Timed out waiting for ETH heartbeat on
+    # device ASIC ID: N, ETH core eX-Y (NOC0) to advance. Stuck at 0x...". run.py already calls
+    # this a "heartbeat-stuck wedge" when it warns that resetting chip 0 alone can CAUSE one, so
+    # the condition is known to the tool -- it just was not on this list, and a board in it fails
+    # every retry identically until someone resets it by hand.
+    "eth heartbeat",
 )
 
 # THE KERNEL'S VERDICT that a reset cannot help. `tt-smi -r` talks to the card OVER PCIe and asks its
