@@ -104,7 +104,9 @@ class _TtHCABase(LightweightModule):
         chip c reads from ``kv_actual + c*local``, which walks out of any fixed slice. A row is 128 B, so
         the table is 14 MB for a 56K-token context -- cheap enough to keep whole."""
         positions = (torch.arange(count) * stride).unsqueeze(0)
-        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type="compress")
+        # "compress" (yarn, theta 160000) for the HCA/CSA layers; the two sliding-window layers use "main"
+        layer_type = getattr(self, "rope_layer_type", "compress")
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type=layer_type)
         pair = []
         for t in (cos, sin):
             t = t.repeat_interleave(2, dim=-1)  # [1, count, rope_head_dim]
@@ -399,13 +401,17 @@ class TtHCAState:
 class TtHCA(_TtHCABase):
     """HCA block: query/kv stems + compressor + attention core + grouped output projection.
 
-    Block I/O is ``[B, 1, S/sp, hidden/tp]``, so layers chain without a reshard."""
+    Block I/O is ``[B, 1, S/sp, hidden/tp]``, so layers chain without a reshard.
+
+    ``compressor=None`` is the SLIDING-WINDOW layer (V4-Flash layers 0 and 1): the same stems, window carry,
+    sinks, un-rope and o-projection with no compressed entries -- keys are ``[carry | chunk | pad]``, the carry
+    index steps by TILE instead of the compression rate, rope type ``rope_layer_type`` (``"main"`` for SWA)."""
 
     def __init__(
         self,
         device,
         *,
-        compressor: TtHCACompressor,
+        compressor: TtHCACompressor | None,
         q_a_proj_weight: torch.Tensor,
         q_a_norm_weight: torch.Tensor,
         q_b_proj_weight: torch.Tensor,
@@ -427,11 +433,13 @@ class TtHCA(_TtHCABase):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        rope_layer_type: str = "compress",
     ):
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
         self.memory_config = memory_config
+        self.rope_layer_type = str(rope_layer_type)
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
         self.rope_head_dim = int(rope_head_dim)
@@ -509,10 +517,12 @@ class TtHCA(_TtHCABase):
         sliding = ttnn.typecast(ttnn.log(ttnn.multiply(ttnn.le(jc, ic), ttnn.gt(jc, ic_lo))), self.dtype)
 
         zero_seq = ttnn.multiply(ic, 0.0)
-        blank = ttnn.typecast(
-            ttnn.add(zero_seq, self._from_torch(torch.zeros(1, 1, 1, cap), dtype=ttnn.float32)), self.dtype
-        )
-        parts = [sliding, blank]
+        parts = [sliding]
+        if cap:
+            blank = ttnn.typecast(
+                ttnn.add(zero_seq, self._from_torch(torch.zeros(1, 1, 1, cap), dtype=ttnn.float32)), self.dtype
+            )
+            parts.append(blank)
         pad_w = sk_pad - raw - cap
         if pad_w:
             parts.append(
@@ -548,11 +558,26 @@ class TtHCA(_TtHCABase):
         Every host tensor this layer will ever need is built here, which is what leaves forward with none.
         So the caller has to own the state: a prefill of one chunk allocates the same way a long one
         does."""
+        chunk = chunk_tokens or max_seq_len
+        if self.compressor is None:
+            # Sliding-window layer: no entries, keys are [carry | chunk | pad]; every chip's share of the slab
+            # only has to be tile-aligned.
+            align = ttnn.TILE_SIZE * self.sp_factor
+            assert chunk % align == 0, f"the slab is {chunk} wide, not a multiple of TILE * sp_factor ({align})"
+            self._build_carry_index(chunk)
+            self._build_masks(chunk, 0)
+            self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
+            self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+            return TtHCAState(
+                compressed_kv=None,
+                sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+                tail=None,
+                max_seq_len=max_seq_len,
+            )
         entries = -(-int(max_seq_len) // self.compressor.compress_rate)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
         # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
         # ``chunk_tokens`` sizes that headroom.
-        chunk = chunk_tokens or max_seq_len
         align = self.compressor.compress_rate * self.sp_factor
         assert chunk % align == 0, (
             f"the slab is {chunk} wide, which is not a multiple of compress_rate * sp_factor "
@@ -580,12 +605,21 @@ class TtHCA(_TtHCABase):
         )
 
     @classmethod
-    def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
-        # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
-        compressor = TtHCACompressor.from_reference(
-            device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
-        )
+    def from_reference(cls, device, reference, config, rotary_emb=None, **kwargs) -> "TtHCA":
+        """``reference`` is a ``DeepseekV4Attention``. A sliding-window layer (``reference.compressor is None``)
+        has no rotary embedding of its own -- pass the model-level ``DeepseekV4RotaryEmbedding`` as
+        ``rotary_emb``; it is rotated with ``layer_type="main"``."""
+        if reference.compressor is None:
+            assert rotary_emb is not None, "a sliding-window layer needs the model-level rotary_emb"
+            compressor = None
+            kwargs.setdefault("rope_layer_type", "main")
+        else:
+            # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
+            compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
+            compressor = TtHCACompressor.from_reference(
+                device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
+            )
+            rotary_emb = reference.compressor.rotary_emb
         return cls(
             device,
             compressor=compressor,
@@ -597,7 +631,7 @@ class TtHCA(_TtHCABase):
             sinks=reference.sinks,
             o_a_proj_weight=reference.o_a_proj.weight,
             o_b_proj_weight=reference.o_b_proj.weight,
-            rotary_emb=reference.compressor.rotary_emb,
+            rotary_emb=rotary_emb,
             num_heads=config.num_attention_heads,
             head_dim=config.head_dim,
             rope_head_dim=config.qk_rope_head_dim,
@@ -752,7 +786,9 @@ class TtHCA(_TtHCABase):
 
         # Pad Sk to a multiple of 32 by hand: SDPA would pad it with zeros, and the mask reads its own pad
         # columns as "attend", which would pollute the softmax. The mask -infs the columns added here.
-        parts = [carry, sliding_kv, compressed_kv]
+        parts = [carry, sliding_kv]
+        if compressed_kv is not None:
+            parts.append(compressed_kv)
         if self._kv_pad is not None:
             parts.append(self._kv_pad)
         kv = ttnn.concat(parts, dim=2)
@@ -761,18 +797,19 @@ class TtHCA(_TtHCABase):
         # mask is built once and this overwrites that range in place. The offset is part of the program,
         # but it never changes, so one program serves every chunk.
         mask = self._mask
-        rows = mask_block.shape[2]
+        rows = mask.shape[2]
         carry_cols = self._carry_cols[kv_actual == 0]
         ttnn.experimental.slice_write(
             carry_cols, mask, start=[0, 0, 0, 0], end=[batch, 1, rows, carry_cols.shape[3]], step=[1, 1, 1, 1]
         )
-        ttnn.experimental.slice_write(
-            mask_block,
-            mask,
-            start=[0, 0, 0, self._mask_col],
-            end=[batch, 1, rows, self._mask_col + mask_block.shape[3]],
-            step=[1, 1, 1, 1],
-        )
+        if mask_block is not None:
+            ttnn.experimental.slice_write(
+                mask_block,
+                mask,
+                start=[0, 0, 0, self._mask_col],
+                end=[batch, 1, rows, self._mask_col + mask_block.shape[3]],
+                step=[1, 1, 1, 1],
+            )
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -859,24 +896,31 @@ class TtHCA(_TtHCABase):
     def _carry_key(self, real_len):
         """The carry index is tabulated per whole compression window. A ragged chunk rounds down, which is
         safe because only the final chunk may be ragged and nothing reads its carry."""
-        rate = self.compressor.compress_rate
-        return max(rate, (int(real_len) // rate) * rate)
+        step = self.compressor.compress_rate if self.compressor is not None else ttnn.TILE_SIZE
+        return max(self.sliding_window, (int(real_len) // step) * step)
 
     def _build_carry_index(self, chunk_tokens):
         """start/end index tensors for the carry slice, one pair per real_len a chunk can have. Built here
         because forward must build no host tensors; each pair is 8 uint32s."""
-        rate, sw = self.compressor.compress_rate, self.sliding_window
-        assert sw % ttnn.TILE_SIZE == 0 and rate % sw == 0, (
-            f"the carry slice needs a tile-aligned start and one whole window per step: sliding_window "
-            f"{sw} must be a multiple of {ttnn.TILE_SIZE} and divide compress_rate {rate}"
-        )
+        sw = self.sliding_window
+        if self.compressor is not None:
+            rate = self.compressor.compress_rate
+            assert sw % ttnn.TILE_SIZE == 0 and rate % sw == 0, (
+                f"the carry slice needs a tile-aligned start and one whole window per step: sliding_window "
+                f"{sw} must be a multiple of {ttnn.TILE_SIZE} and divide compress_rate {rate}"
+            )
+        else:
+            # Sliding-window layer: the carry start real_len - sw only has to be tile-aligned, so tabulate
+            # per TILE from one full window up (a shorter non-final chunk is rejected by forward).
+            rate = ttnn.TILE_SIZE
+            assert sw % ttnn.TILE_SIZE == 0, f"sliding_window {sw} must be a multiple of {ttnn.TILE_SIZE}"
 
         def idx(vals):
             return self._from_torch(
                 torch.tensor(vals, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
-        for real_len in range(rate, int(chunk_tokens) + 1, rate):
+        for real_len in range(sw, int(chunk_tokens) + 1, rate):
             self._carry_index[real_len] = (idx([0, 0, real_len - sw, 0]), idx([1, 1, real_len, self.head_dim]))
 
     def _tail_tile_matrices(self, r_e, width, n_new):
@@ -939,10 +983,13 @@ class TtHCA(_TtHCABase):
         passes a state too, so there is no second path through here."""
         batch = hidden_states.shape[0]
         seq_pad_global = hidden_states.shape[2] * self.sp_factor
-        compress_rate = self.compressor.compress_rate
         real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
 
         assert batch == 1, f"HCA prefill expects batch 1, got {batch}"
+
+        if self.compressor is None:
+            return self._forward_sliding(hidden_states, real_len, state)
+        compress_rate = self.compressor.compress_rate
 
         assert real_len >= compress_rate, (
             f"HCA prefill needs at least one full compression window: got seq_len {real_len} < "
@@ -991,6 +1038,30 @@ class TtHCA(_TtHCABase):
         )
 
         state.entry_count = total_entries
+        state.kv_actual += real_len
+        state.sliding_carry = next_carry
+        return self._o_proj(attn)
+
+    def _forward_sliding(self, hidden_states, real_len: int, state: TtHCAState):
+        """The sliding-window layer's chunk: stems, window attention over ``[carry | chunk | pad]`` with the
+        sinks, un-rope, o-projection. No entries, no cache write."""
+        assert real_len >= 1, f"empty chunk (real_len {real_len})"
+        assert state.kv_actual + real_len <= state.max_seq_len, (
+            f"context longer than the state was allocated for: {state.kv_actual + real_len} tokens > "
+            f"max_seq_len {state.max_seq_len}"
+        )
+        # The carry index is tabulated from one full window up in TILE steps (see _build_carry_index), so a
+        # NON-final chunk must be at least one window long and tile-aligned; only the final chunk may be ragged.
+        assert state.kv_actual % ttnn.TILE_SIZE == 0, (
+            f"cannot append after a chunk with {state.kv_actual % ttnn.TILE_SIZE} leftover tokens; only the final "
+            f"chunk may be ragged, non-final chunks must be a multiple of {ttnn.TILE_SIZE}"
+        )
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        attn, next_carry = self._attention(
+            q, sliding_kv, None, None, cos, sin, carry=state.sliding_carry, kv_actual=state.kv_actual, real_len=real_len
+        )
         state.kv_actual += real_len
         state.sliding_carry = next_carry
         return self._o_proj(attn)
