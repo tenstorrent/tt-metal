@@ -11,9 +11,23 @@ card supports:
     chips, with fabric enabled
   * any other card runs the batch sweep at sequence length 512 on one device
 
+``mode`` selects what the timing loop covers:
+
+  * ``forward``  replays the trace only, so the device time carries no host cost
+  * ``2cq``      streams the next input on a second queue while the trace runs
+  * ``h2d_d2h``  times one whole request: input upload, trace, output download
+
+The mesh decides whether a mode runs data parallel. On a 2-chip card every mode
+shards the batch across both chips, so ``2cq`` there is the data-parallel
+two-queue case. One report format serves every mode.
+
 Run it from the tt-metal root:
 
     TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -s
+
+Select one mode with -k:
+
+    TT_VISIBLE_DEVICES=0 pytest .../perf.py::test_perf -k "2cq and b32" -s
 """
 
 import time
@@ -27,6 +41,14 @@ from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 NUM_ITERATIONS = 10
 
+# (mode, num_command_queues). The queue count opens the device, so it pairs with
+# the mode instead of multiplying against it.
+MODE_PARAMS = [
+    ("forward", 1),
+    ("2cq", 2),
+    ("h2d_d2h", 1),
+]
+
 
 def detected_n300() -> bool:
     """True when the visible hardware is a 2-chip Wormhole card.
@@ -38,12 +60,12 @@ def detected_n300() -> bool:
     return ttnn.get_arch_name() == "wormhole_b0" and ttnn.get_num_devices() == 2
 
 
-def report_perf(batch_size, seq_len, valid_len, masked, best_ms, avg_ms):
+def report_perf(batch_size, seq_len, valid_len, masked, best_ms, avg_ms, mode="forward"):
     """Log one result block."""
     total_tokens = batch_size * valid_len
     logger.info("")
     logger.info("=" * 60)
-    logger.info(f"  BGE-M3  B{batch_size} S{seq_len}  ({'masked' if masked else 'nomask'})")
+    logger.info(f"  BGE-M3  B{batch_size} S{seq_len}  ({'masked' if masked else 'nomask'})  mode={mode}")
     logger.info("=" * 60)
     logger.info(f"  Batch size:           {batch_size}")
     if masked:
@@ -54,6 +76,7 @@ def report_perf(batch_size, seq_len, valid_len, masked, best_ms, avg_ms):
     logger.info(f"  Valid tokens/seq:     {valid_len}")
     logger.info(f"  Total valid tokens:   {total_tokens}")
     logger.info(f"  Iterations:           {NUM_ITERATIONS}")
+    logger.info(f"  Mode:                 {mode}")
     logger.info("-" * 60)
     logger.info(f"  Avg latency:          {avg_ms:.3f} ms")
     logger.info(f"  Best latency:         {best_ms:.3f} ms")
@@ -105,6 +128,77 @@ def _n300_dp_inputs(pad_token_id, batch, valid_len, seq_len=8192):
     }
 
 
+def _stage_on_host(torch_inputs, mesh_device):
+    """Build host tensors that carry the mesh shard layout.
+
+    ``device=None`` keeps them on host. ``copy_host_to_device_tensor`` then
+    streams each shard onto its own chip without running the mapper again, which
+    is how a captured trace receives new input.
+    """
+    return _n300_dp_batchshard(torch_inputs, mesh_device, on_device=False)
+
+
+def _refill_device(host_tensors, device_tensors, *, cq_id=0):
+    """Overwrite the trace input slots with new host data."""
+    for key, host in host_tensors.items():
+        ttnn.copy_host_to_device_tensor(host, device_tensors[key], cq_id=cq_id)
+
+
+def _time_forward(model, mesh_device, device_tensors, host_tensors):
+    """Replay the trace only. Reports device time without host transfer."""
+    times = []
+    for _ in range(NUM_ITERATIONS):
+        start = time.perf_counter()
+        model.execute_trace(blocking=True)
+        times.append((time.perf_counter() - start) * 1000.0)
+    return times
+
+
+def _time_2cq(model, mesh_device, device_tensors, host_tensors):
+    """Upload the next input on queue 1 while queue 0 replays the trace.
+
+    The queues overlap, so one iteration cannot be timed alone. Time the whole
+    run and divide, and report the amortized figure as both best and average.
+    """
+    write_event = ttnn.record_event(mesh_device, 1)
+
+    start = time.perf_counter()
+    for _ in range(NUM_ITERATIONS - 1):
+        ttnn.wait_for_event(0, write_event)
+        op_event = ttnn.record_event(mesh_device, 0)
+        model.execute_trace(blocking=False, synchronize=False)
+
+        ttnn.wait_for_event(1, op_event)
+        _refill_device(host_tensors, device_tensors, cq_id=1)
+        write_event = ttnn.record_event(mesh_device, 1)
+
+    ttnn.wait_for_event(0, write_event)
+    model.execute_trace(blocking=False, synchronize=False)
+    ttnn.synchronize_device(mesh_device)
+    amortized_ms = (time.perf_counter() - start) * 1000.0 / NUM_ITERATIONS
+    return [amortized_ms] * NUM_ITERATIONS
+
+
+def _time_h2d_d2h(model, mesh_device, device_tensors, host_tensors):
+    """Time one whole request: upload, trace, download."""
+    times = []
+    for _ in range(NUM_ITERATIONS):
+        start = time.perf_counter()
+        _refill_device(host_tensors, device_tensors, cq_id=0)
+        output = model.execute_trace(blocking=True)
+        if output is not None:
+            ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        times.append((time.perf_counter() - start) * 1000.0)
+    return times
+
+
+TIMERS = {
+    "forward": _time_forward,
+    "2cq": _time_2cq,
+    "h2d_d2h": _time_h2d_d2h,
+}
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [(2, 1)] if detected_n300() else [1],
@@ -112,15 +206,20 @@ def _n300_dp_inputs(pad_token_id, batch, valid_len, seq_len=8192):
     ids=["n300_dp2"] if detected_n300() else ["single"],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, mode",
     [
-        {
-            "trace_region_size": 50_000_000,
-            "num_command_queues": 1,
-            **({"fabric_config": ttnn.FabricConfig.FABRIC_1D} if detected_n300() else {}),
-        }
+        (
+            {
+                "trace_region_size": 50_000_000,
+                "num_command_queues": cqs,
+                **({"fabric_config": ttnn.FabricConfig.FABRIC_1D} if detected_n300() else {}),
+            },
+            mode,
+        )
+        for mode, cqs in MODE_PARAMS
     ],
-    indirect=True,
+    indirect=["device_params"],
+    ids=[mode for mode, _ in MODE_PARAMS],
 )
 @pytest.mark.parametrize(
     "batch_size, seq_len",
@@ -130,8 +229,8 @@ def _n300_dp_inputs(pad_token_id, batch, valid_len, seq_len=8192):
     ),
 )
 @pytest.mark.parametrize("masked", [False, True], ids=["nomask", "masked"])
-def test_perf(mesh_device, batch_size, seq_len, masked):
-    """Report wall-clock trace-replay time for the shape the local card runs.
+def test_perf(mesh_device, batch_size, seq_len, masked, mode):
+    """Report wall-clock time for the shape the local card runs.
 
     masked uses compact valid lengths, which only the data-parallel path
     accepts. Every other shape rejects that mask, so the masked run applies to
@@ -153,22 +252,20 @@ def test_perf(mesh_device, batch_size, seq_len, masked):
     for valid_len in valid_lengths:
         inputs = _n300_dp_inputs(args.pad_token_id, batch_size, valid_len, seq_len)
         device_tensors = _n300_dp_batchshard(inputs, mesh_device, on_device=True)
+        # The refilling modes need a host copy that carries the same shard layout.
+        host_tensors = _stage_on_host(inputs, mesh_device) if mode != "forward" else {}
 
-        out = model.forward(**device_tensors)
+        out = model.forward(**device_tensors, no_padding=not masked)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(out)
 
-        model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+        model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0, no_padding=not masked)
         for _ in range(3):
             model.execute_trace(blocking=True)
 
-        times = []
-        for _ in range(NUM_ITERATIONS):
-            start = time.perf_counter()
-            model.execute_trace(blocking=True)
-            times.append((time.perf_counter() - start) * 1000.0)
+        times = TIMERS[mode](model, mesh_device, device_tensors, host_tensors)
         model.release_trace()
 
         times.sort()
         avg_ms = sum(times) / len(times)
-        report_perf(batch_size, seq_len, valid_len, masked, times[0], avg_ms)
+        report_perf(batch_size, seq_len, valid_len, masked, times[0], avg_ms, mode=mode)

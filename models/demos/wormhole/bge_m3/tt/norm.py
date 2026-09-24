@@ -106,6 +106,19 @@ class LayerNorm1D(LightweightModule):
                         residual_input_tensor, memory_config=self.config.sharded_memcfg
                     )
             memory_config = self.config.sharded_memcfg
+        elif _use_balanced_layernorm(x, residual_input_tensor, self.config):
+            from models.demos.wormhole.bge_m3.tt.custom_ops.balanced_layernorm import bge_balanced_layernorm
+
+            output = bge_balanced_layernorm(
+                x,
+                residual_input_tensor,
+                self.weight,
+                self.bias,
+                eps=self.config.eps,
+                memory_config=memory_config,
+                output_dtype=x.dtype,
+            )
+            return (output, None) if return_sharded else output
 
         sharded_output = ttnn.layer_norm(
             x,
@@ -143,6 +156,29 @@ class LayerNorm1D(LightweightModule):
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _use_balanced_layernorm(x, residual, config) -> bool:
+    """B8/B16/B32 S512 on a grid narrower than 13 columns (Galaxy, 12x10): the
+    model-local LayerNorm (custom_ops/balanced_layernorm). Same result as stock
+    (bitwise, standalone check on Galaxy chip 0), faster per row: B8 38.2 us against
+    55.5 us, B16 57.7 us against 76.0 us, B32 89.4 us against 116.0 us.
+    """
+    if residual is None or tuple(residual.shape) != tuple(x.shape) or len(x.shape) != 4:
+        return False
+    if x.shape[0] not in (8, 16, 32) or x.shape[1] != 1 or x.shape[2] != 512:
+        return False
+    if x.layout != ttnn.TILE_LAYOUT or residual.layout != ttnn.TILE_LAYOUT:
+        return False
+    if x.is_sharded() or residual.is_sharded():
+        return False
+    ckc = config.compute_kernel_config
+    if ckc is None or ckc.math_fidelity != ttnn.MathFidelity.HiFi2 or not ckc.fp32_dest_acc_en:
+        return False
+    device = config.mesh_device
+    if device is None or not ttnn.device.is_blackhole(device):
+        return False
+    return int(device.compute_with_storage_grid_size().x) < 13
 
 
 def _load_input_device_tensor(x, config):

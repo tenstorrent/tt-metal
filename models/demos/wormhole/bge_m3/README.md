@@ -1,139 +1,144 @@
 # BGE-M3
 
 Tenstorrent implementation of [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3),
-a multilingual embedding model supporting dense, sparse (lexical), and ColBERT
-(multi-vector) retrieval.
+a multilingual embedding model with dense, sparse (lexical) and ColBERT
+(multi-vector) outputs.
 
-## Long-context serving: batch 12, sequence length 8192 (N300)
+This branch is tuned for **one Blackhole chip at sequence length 512** (for
+example one chip of a Blackhole Galaxy) at batch 1, 8, 16 and 32, with weights
+and activations in `bfloat8_b`.
 
-This is the optimized long-context prefill configuration for a **single
-Wormhole N300 chip (64 cores, 8×8 grid)**: global batch **12**, input
-sequence length (ISL) **8192**, weights and activations in **bfloat8_b**.
+## Setup
 
-### Requirements to launch this configuration
-
-- **Hardware:** one Wormhole N300 (single chip; the demo/perf tests expect
-  exactly one device — do **not** set `TT_VISIBLE_DEVICES` to more than one id).
-- **Model weights:** `BAAI/bge-m3` (downloaded automatically from HuggingFace
-  on first run, or point to a local checkout via `hf_model_name`).
-- **Data type:** `ttnn.bfloat8_b`.
-- **Device launch parameters** (must match across demo + perf tests):
-  - `trace_region_size = 50_000_000` (holds the captured 24-layer encoder program)
-  - `num_command_queues = 1`
-- **Fixed shapes:** `max_batch_size = 12`, `max_seq_len = 8192`. Prompts are
-  padded/truncated to 8192; the batch dimension is exactly 12.
-
-### Run the demo
-
-`demo_traced.py` builds the model, runs one warmup forward to compile the
-kernels, captures the trace, and replays it to embed the prompts. Use
-`--data-parallel` to run the batch across both chips of an N300, which is the
-configuration the performance and evaluation numbers use.
+Run every command from the tt-metal root, inside `python_env`, on one chip:
 
 ```bash
-# Batch 12, sequence length 8192, both chips (the serving shape)
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py \
-  --batch 12 --seq-len 8192 --data-parallel
-
-# Batch 12, sequence length 8192, one chip
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py --batch 12 --seq-len 8192
-
-# Batch 1, sequence length 512, one trace replay per prompt
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py --batch 1
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export TT_VISIBLE_DEVICES=0          # one chip; any single chip id works
 ```
 
-Batch 1 allows sequence length 512, and batch 12 allows sequence length 8192.
-The output is the encoder hidden state `[12, 1, 8192, 1024]` plus one pooled
-CLS embedding per prompt.
+The weights (`BAAI/bge-m3`) download from HuggingFace on the first run.
 
-### Measure prefill performance (`perf.py`)
+## Performance (`tests/perf/perf.py`)
 
-`test_perf` captures the trace and times only the trace replay
-(`execute_trace(blocking=True)`), reporting avg / best ms, embeddings/s,
-tokens/s, and requests/s.
+`test_perf` builds the model, captures the 24-layer encoder in a trace, and
+times the trace replay (10 iterations, average and best). It reports latency,
+embeddings/s and tokens/s.
 
-pytest reads the hardware while it collects the tests. An N300 runs the
-B12/S8192 data-parallel shape on a (2, 1) mesh with fabric. Any other card
-runs the S512 batch sweep on one device. No test filter is needed:
+Each test ID has three parts:
+
+| part | values | meaning |
+|---|---|---|
+| batch | `b1_s512`, `b8_s512`, `b16_s512`, `b32_s512` | batch size at sequence length 512 |
+| mask | `nomask`, `masked` | `nomask`: all 512 tokens are valid. `masked`: the model applies the padding mask (the serving path) |
+| mode | `forward`, `2cq`, `h2d_d2h` | what the timer covers, see below |
+
+- `forward`: the trace replay only (device time, no host cost).
+- `2cq`: the next input uploads on a second command queue while the trace runs.
+- `h2d_d2h`: one full request: input upload, trace, and output download to the host.
 
 ```bash
-# The shape the local card supports, unmasked and masked
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -s
+# One batch, device time
+pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k "forward and b8_s512 and nomask" -s
 
-# Full 8192-token attention only (headline wall-clock latency)
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k nomask -s
+# Every batch, device time
+pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k "forward" -s
 
-# Masked serving: compact valid lengths swept over 128 / 512 / 1024 / 2048 /
-# 4096 tokens, each padded to 8192. A short request skips the all-padding key
-# blocks and finishes faster than the full pass. The data-parallel path is the
-# only one that accepts this mask, so other cards skip it.
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k masked -s
+# Everything (4 batches x 2 mask settings x 3 modes)
+pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -s
 ```
 
-### Run MTEB evaluation (`mteb_eval_minimal.py`)
+Reference `forward` results, `nomask`, one Blackhole Galaxy chip (12x10 compute
+grid, stock 130 W power limit):
 
-Evaluates the B12/S8192 DP=2 model against the HF/CPU reference on MTEB
-retrieval tasks. `--mode both` scores HF and TT and prints the delta; `hf` or
-`tt` run a single backend.
+| batch | latency (ms) | embeddings/s | tokens/s |
+|---|---|---|---|
+| 1  | 3.37  | 297  | 152k |
+| 8  | 11.99 | 667  | 342k |
+| 16 | 22.48 | 712  | 364k |
+| 32 | 45.21 | 708  | 362k |
+
+## Kernel profiling (`tests/perf/tracy_perf.py`)
+
+`test_bge_m3_tracy_perf` runs one forward (no trace, so Tracy sees each device
+op) between the signposts `start` and `stop`. It needs
+`TT_METAL_DEVICE_PROFILER=1`. Select the batch and mask with the exact test ID:
 
 ```bash
-# HF vs TT on STSBenchmark (full set)
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
-  --mode both --task STSBenchmark --output-dir ./mteb_eval_results
-
-# TT only, quick smoke over a few samples
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
-  --mode tt --task STSBenchmark --smoke-samples 50
+TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest \
+  "models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py::test_bge_m3_tracy_perf[device_params0-batch8-nomask]" -sv
 ```
 
-Install the eval dependencies once inside `python_env`:
+IDs: `batch1`, `batch8`, `batch16`, `batch32`, each with `-nomask` or `-masked`.
+If Tracy cannot connect (for example when the hostname resolves to an address
+that is not on the machine), give it a port with `-t 8086`.
+
+The report is
+`generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv`. For a
+per-op summary, install `tt-perf-report` once and run it on the CSV:
 
 ```bash
-uv pip install --python python_env/bin/python mteb
-```
-
-### Kernel-level profiling (`tracy_perf.py`)
-
-`test_n300_dp_tracy` runs a single B12/S8192 DP=2 forward (no trace capture —
-Tracy needs the individual device ops) inside Tracy signposts. Requires
-`TT_METAL_DEVICE_PROFILER=1`:
-
-```bash
-TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r \
-  --no-runtime-analysis -v -m pytest \
-  models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py \
-  -k "n300_dp_tracy" -sv
-```
-
-Reports are saved to
-`generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv`. Then
-summarize the CSV with `tt-perf-report` (install it once with
-`uv pip install --python python_env/bin/python tt-perf-report`; the console
-script lands in `python_env/bin/`):
-
-```bash
+uv pip install --python python_env/bin/python tt-perf-report
 python_env/bin/tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
-  --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_n300_dp_tracy_report.log
+  --start-signpost start --end-signpost stop
 ```
 
-The stacked report at the end gives the total device kernel time per chip (both
-DP replicas run the same program concurrently, so per-chip sets the wall). A
-reference run produced:
+`tt-perf-report` shows "Unclassified operation" for the model-local ops
+(`GenericOp`). This does not change the totals.
 
-| Total % | Op | Device time sum |
-|--------:|----|----------------:|
-| 76.7 % | GenericOpDeviceOperation (encoder SDPA + head-split + concat-heads) | 667.8 ms |
-| 18.5 % | MinimalMatmulDeviceOperation (QKV, Wi, Wo, attention output) | 160.6 ms |
-|  4.6 % | LayerNormDeviceOperation | 39.9 ms |
-|  0.2 % | EmbeddingsDeviceOperation | 2.0 ms |
-| **100 %** | **Total device kernel time** | **≈ 870 ms** |
+## Accuracy (MTEB, `demo/mteb_eval_minimal.py`)
 
-This is the untraced forward (pure device-kernel time), so it sits just under
-the traced wall time from `test_perf` (≈ 985 ms); the difference is host
-dispatch overhead that trace replay hides. Attention (the `GenericOp` path)
-dominates at ~77 %. `tt-perf-report` prints "Unclassified operation" warnings
-for the model-local `GenericOp`/`MinimalMatmul` ops — cosmetic, totals are
-unaffected.
+Install the eval packages once. Keep the pydantic pin of
+`tt_metal/python_env/requirements-dev.txt` (uv then selects mteb 2.12.10):
+
+```bash
+uv pip install --python python_env/bin/python mteb 'pydantic==2.9.2'
+```
+
+Score the model on one chip at S512, at each batch size (masked path, CLS
+pooling, cosine similarity):
+
+```bash
+python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py --mode tt \
+  --batch 1 8 16 32 --task STSBenchmark ArguAna --output-dir ./mteb_eval_results/s512
+```
+
+The script writes one folder per batch (`tt_b<B>/`) and a summary
+`tt_single_chip_scores.json`. Add `--smoke-samples 50` for a quick check.
+
+Reference scores, one Blackhole Galaxy chip:
+
+| task | B1 | B8 | B16 | B32 | HF at 512 tokens | HF at 8192 tokens |
+|---|---|---|---|---|---|---|
+| STSBenchmark (Spearman) | 84.70 | 84.61 | 84.67 | 84.58 | — | 84.87 |
+| ArguAna (nDCG@10) | 54.49 | 54.24 | 54.33 | 54.23 | 54.05 | 53.99 |
+
+mteb's HF reference for BAAI/bge-m3 uses 8192 tokens. ArguAna has documents
+longer than 512 tokens, so compare S512 scores with HF at 512 tokens.
+
+## Long context on Wormhole N300 (batch 12, sequence length 8192)
+
+The same model also runs batch 12 at sequence length 8192 across both chips of
+a Wormhole N300 (data parallel, `trace_region_size=50_000_000`). On an N300,
+`perf.py` selects this shape automatically.
+
+```bash
+# Demo: embed prompts with trace replay
+python models/demos/wormhole/bge_m3/demo/demo_traced.py --batch 12 --seq-len 8192 --data-parallel
+
+# Performance
+pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k nomask -s
+
+# Kernel profile
+TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest \
+  models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "n300_dp_tracy" -sv
+
+# MTEB, HF on CPU against TT
+python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py --mode both --task STSBenchmark \
+  --output-dir ./mteb_eval_results
+```
+
+# Python API
 
 ## Low-level model creation
 
@@ -261,51 +266,6 @@ ttnn.close_device(device)
 ```
 
 See `demo/demo_traced.py` for a complete runnable example.
-
-## Performance benchmarks
-
-Two benchmark scripts live in `models/demos/wormhole/bge_m3/tests/perf/`.
-
-### `perf.py` — Latency and throughput
-
-Measures trace-replay latency for B1 and B32 at S512. Each iteration copies fresh random inputs to device before replaying the trace, timing only the device execution.
-
-```bash
-# Batch 1
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch1" -s
-
-# Batch 32
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch32" -s
-
-# Both
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -s
-```
-
-### `tracy_perf.py` — Kernel-level profiling
-
-Runs a single forward pass inside Tracy signposts for device-level op reports. Requires `TT_METAL_DEVICE_PROFILER=1` — the test will error if it's not set.
-
-```bash
-# Batch 1
-TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch1" -sv
-
-# Batch 32
-TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch32" -sv
-```
-
-Reports are saved to `generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv` with per-kernel device timing, core utilization, and memory layout.
-
-To generate a human-readable summary from the CSV report, first install `tt-perf-report` if you haven't already:
-
-```bash
-uv pip install --python python_env/bin/python tt-perf-report
-```
-
-Then run:
-
-```bash
-python_env/bin/tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_tracy_report.log
-```
 
 ## Embedding API
 
