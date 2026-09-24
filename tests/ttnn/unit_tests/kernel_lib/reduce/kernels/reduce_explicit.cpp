@@ -8,6 +8,9 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef REDUCE_POST_EXP
+#include "api/compute/eltwise_unary/exp.h"
+#endif
 
 namespace {
 
@@ -19,6 +22,21 @@ constexpr uint32_t num_calls = get_compile_time_arg_val(0);
 constexpr uint32_t auxiliary_tiles = get_compile_time_arg_val(1);
 
 static_assert(num_calls >= 1);
+
+ALWI auto make_post_op() {
+#ifdef REDUCE_POST_EXP
+    // The unclamped approximate exp initializer overwrites the SFPU replay buffer on Wormhole.
+    // Multiple outputs must still perform their SUM collapse correctly after this callback.
+    return [](uint32_t dst) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, __builtin_bit_cast(uint32_t, -0.01f));
+        exp_tile_init<true, 0x3F800000, InputClamping::None>();
+        exp_tile<true, false, InputClamping::None>(dst);
+    };
+#else
+    return compute_kernel_lib::NoOp{};
+#endif
+}
 
 template <uint32_t call>
 ALWI auto make_accumulation() {
@@ -53,7 +71,7 @@ ALWI void run_reduce_calls(
             shape,
             layout,
             make_accumulation<call>(),
-            compute_kernel_lib::NoOp{},
+            make_post_op(),
             REDUCE_PARTIAL_MODE,
             compute_kernel_lib::ReduceInputChunk::of(0, REDUCE_CHUNK_OUTPUTS),
             REDUCE_AUXILIARY_OFFSET);
