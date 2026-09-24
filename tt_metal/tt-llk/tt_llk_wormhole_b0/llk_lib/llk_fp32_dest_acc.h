@@ -10,31 +10,41 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
-#include "llk_assert.h"
+#include "ckernel_structs.h"
 
 using namespace ckernel;
 
 namespace fp32_dest_acc
 {
-constexpr std::uint32_t UNPACK_READY = 0x46504101; // 'FPA' | 0x01
-constexpr std::uint32_t PACK_READY   = 0x46504102; // 'FPA' | 0x02
-constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
+// One 0/1 ping-pong semaphore per consumer. No semaphore is free, so these borrow the unpack-to-dest
+// pair: both are Max=1, start at 0, and are balanced at op boundaries. Do not switch mid unpack-to-dest.
+constexpr std::uint8_t UNPACK_SEM = semaphore::UNPACK_TO_DEST;
+constexpr std::uint8_t PACK_SEM   = semaphore::MATH_DONE;
+
+// This thread has nothing in flight on any engine that reads the dest-acc fields (FPU, SFPU, packer) or
+// the unpacker. Any thread can drive any engine (e.g. SFPU from PACK), so each thread drains all of them.
+constexpr std::uint32_t THREAD_IDLE = p_stall::UNPACK | p_stall::PACK | p_stall::MATH | p_stall::WAIT_SFPU;
 } // namespace fp32_dest_acc
 
 /**
  * @brief Coordinate a mid-kernel FP32 dest-acc reconfiguration across Unpack, Math, and Pack.
  *
- * Dest-acc CFG is MATH-owned. tensix_sync drains each thread's Tensix FIFO (including FPU / SFPU /
- * packer); the mailbox then holds RISC so no new work is issued until MATH has written dest-acc:
- *   1. UNPACK/PACK tensix_sync, signal MATH, and wait.
- *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL, and releases
- *      UNPACK/PACK.
- *   3. Every thread STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until those
- *      writes are visible.
+ * Dest-acc CFG is MATH-owned. The handshake is Tensix-only, so ordering is enforced at each thread's
+ * Wait Gate and no RISC blocks:
+ *   1. UNPACK/PACK wait until none of their own work is in flight on any engine, SEMPOST their
+ *      semaphore, then SEMWAIT with every instruction class blocked until MATH takes it back.
+ *   2. MATH waits for both semaphores, waits until its own work has drained, programs ALU_ACC_CTRL and
+ *      PCK_DEST_RD_CTRL, then SEMGETs both semaphores to release UNPACK/PACK. The Wait Gate issues in
+ *      order and RMWCIB executes in the cycle it leaves the gate, so the SEMGET cannot take effect
+ *      before the config writes have.
+ * Old-mode work finishes before the config changes, and no Tensix instruction issued after the call
+ * on any thread sees the old config.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
- * @note All three TRISC threads must call their specialization together. Not supported on Quasar.
+ * @note All three TRISC threads must call their specialization together, between ops. Only Tensix
+ *       instructions are ordered: RISC code after the call is not held back. Not supported
+ *       on Quasar.
  */
 template <ThreadId thread_id>
 inline void _llk_set_fp32_dest_acc_(bool enable = false)
@@ -43,37 +53,24 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
         "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
-    constexpr std::uint32_t dest_acc_stall = p_stall::STALL_UNPACK | p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SFPU;
+    if constexpr (thread_id == ThreadId::MathThreadId)
+    {
+        constexpr std::uint32_t both_sems = semaphore::t6_sem(fp32_dest_acc::UNPACK_SEM) | semaphore::t6_sem(fp32_dest_acc::PACK_SEM);
 
-    tensix_sync();
-
-    if constexpr (thread_id == ThreadId::UnpackThreadId)
-    {
-        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
-        const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
-        LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
-    }
-    else if constexpr (thread_id == ThreadId::PackThreadId)
-    {
-        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
-        const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
-        LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
-    }
-    else
-    {
-        const std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
-        const std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
-        LLK_ASSERT(unpack_ready == fp32_dest_acc::UNPACK_READY, "Unexpected dest-acc message from unpack thread.");
-        LLK_ASSERT(pack_ready == fp32_dest_acc::PACK_READY, "Unexpected dest-acc message from pack thread.");
+        TTI_SEMWAIT(p_stall::STALL_CFG | p_stall::STALL_SYNC, both_sems, p_stall::STALL_ON_ZERO);
+        TTI_STALLWAIT(p_stall::STALL_CFG, fp32_dest_acc::THREAD_IDLE);
 
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
 
-        mailbox_write(ThreadId::UnpackThreadId, fp32_dest_acc::MATH_DONE);
-        mailbox_write(ThreadId::PackThreadId, fp32_dest_acc::MATH_DONE);
+        TTI_SEMGET(both_sems);
+    }
+    else
+    {
+        constexpr std::uint8_t sem = (thread_id == ThreadId::UnpackThreadId) ? fp32_dest_acc::UNPACK_SEM : fp32_dest_acc::PACK_SEM;
+
+        t6_semaphore_post<fp32_dest_acc::THREAD_IDLE>(sem);
+        t6_semaphore_wait_on_max<p_stall::STALL_THREAD>(sem);
     }
 }

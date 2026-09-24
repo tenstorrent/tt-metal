@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "sanitizer/api.h"
 #include "api/compute/src_order.h"
@@ -57,7 +58,7 @@ namespace ckernel {
  */
 // clang-format on
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb) {
     LLK_SAN_FUNCTION();
 
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
@@ -66,8 +67,8 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     // resolved at compile time. Both UNPACK and MATH hw_configure are programmed with the same
     // (src_a_cb, src_b_cb) ordering so the unpacker tile descriptors and the math ALU format registers agree.
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    const uint32_t src_a_cb = reverse ? icb1 : icb0;
-    const uint32_t src_b_cb = reverse ? icb0 : icb1;
+    const std::uint32_t src_a_cb = reverse ? icb1 : icb0;
+    const std::uint32_t src_b_cb = reverse ? icb0 : icb1;
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 
@@ -103,7 +104,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t ocb) {
     LLK_SAN_FUNCTION();
 
     compute_kernel_hw_startup(icb0, icb0, ocb);
@@ -115,14 +116,16 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
- * and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
+ * for 32-bit destination reads.
+ * Synchronized with Tensix semaphores only: every thread's in-flight work
+ * drains before MATH changes the config, and no Tensix instruction issued
+ * after the call, on any thread, sees the old config. RISC code after the
+ * call is not held back. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
- * All three TRISC threads must call this together. TRISC mailboxes must not
- * be in use.
+ * All three TRISC threads must call this together, between ops. Borrows
+ * the UNPACK_TO_DEST and MATH_DONE semaphores, so it must not be called in
+ * the middle of an unpack-to-dest op.
  *
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
@@ -147,14 +150,16 @@ ALWI void enable_fp32_dest_acc() {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
- * MATH and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
+ * to disable 32-bit destination reads.
+ * Synchronized with Tensix semaphores only: every thread's in-flight work
+ * drains before MATH changes the config, and no Tensix instruction issued
+ * after the call, on any thread, sees the old config. RISC code after the
+ * call is not held back. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
- * All three TRISC threads must call this together. TRISC mailboxes must not
- * be in use.
+ * All three TRISC threads must call this together, between ops. Borrows
+ * the UNPACK_TO_DEST and MATH_DONE semaphores, so it must not be called in
+ * the middle of an unpack-to-dest op.
  *
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
