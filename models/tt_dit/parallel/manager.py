@@ -219,7 +219,9 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
+    def get_ag_ping_pong_buffer(
+        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None
+    ):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -228,13 +230,17 @@ class CCLManager:
             shape: Tensor shape tuple
             dim: Dimension for the operation
             mesh_axis: Mesh axis for parallelization
+            capacity: Rows to allocate along `dim` instead of the gathered size, so varying
+                gathered lengths up to it share one pair.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
         dim = self.get_dim(dim, shape)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
+        output_buffer_shape = list(shape)
+        output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -243,8 +249,6 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
-            output_buffer_shape = list(shape)
-            output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.

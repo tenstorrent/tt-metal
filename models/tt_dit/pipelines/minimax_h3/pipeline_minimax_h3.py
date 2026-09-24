@@ -1234,6 +1234,8 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
+            # Traced rungs each pin their own K/V gather pair; size one at the top rung for all.
+            kv_gather_capacity=self.bucket_ladder[-1] if self.trace_denoise else None,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
