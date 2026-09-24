@@ -482,7 +482,6 @@ bool MappingConstraints<TargetNode, GlobalNode>::merge(const MappingConstraints&
 
     merged.minimize_same_rank_groups_used_ =
         minimize_same_rank_groups_used_ || other.minimize_same_rank_groups_used_;
-    merged.fill_all_rank_groups_ = fill_all_rank_groups_ || other.fill_all_rank_groups_;
     // 0 means no cap, so the tighter of the two is the smaller of the non-zero values.
     if (max_same_rank_groups_used_ == 0) {
         merged.max_same_rank_groups_used_ = other.max_same_rank_groups_used_;
@@ -2058,7 +2057,6 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
     max_same_rank_groups_used = constraints.max_same_rank_groups_used();
-    fill_all_rank_groups = constraints.fill_all_rank_groups();
 
     resource_count = constraints.resource_count();
     global_to_resource_indices.assign(graph_data.n_global, {});

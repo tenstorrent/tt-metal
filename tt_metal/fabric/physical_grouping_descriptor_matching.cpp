@@ -2529,7 +2529,8 @@ bool build_sat_placement_constraints(
     if (!constraints.add_resource_constraint<uint32_t>(seat_to_asics)) {
         return false;
     }
-    // Host fill-all: prefer covering every chip on a used host.
+    // Group the single-host seats by host so the host-count cap below can constrain how many distinct
+    // hosts are occupied.
     std::map<std::string, std::set<const Candidate*>> seats_by_host;
     for (const auto& [seat, _] : seat_to_asics) {
         std::string host;
@@ -2555,8 +2556,35 @@ bool build_sat_placement_constraints(
         }
     }
     if (host_seat_groups.size() > 1) {
-        return constraints.set_same_rank_groups_constraint({}, host_seat_groups) &&
-               constraints.set_fill_all_rank_groups_constraint(true);
+        if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
+            return false;
+        }
+        // HARD host-count cap: force the placement into the minimum number of hosts. Chip disjointness
+        // (add_resource_constraint above) already caps a host at floor(host_chips / mesh_chips) meshes, so
+        // capping the number of occupied hosts at ceil(meshes / capacity) forces every used host to be
+        // packed full. Unlike per-host fill-all, this is a GLOBAL constraint the solver cannot dodge by
+        // spreading across more locally-"full" hosts. If the cap is infeasible at the current candidate
+        // seats, solve_sat_placement retries without it (fallback) before growing pools.
+        std::size_t asics_per_mesh = 0;
+        for (const auto& [seat, asics] : seat_to_asics) {
+            (void)seat;
+            asics_per_mesh = std::max(asics_per_mesh, asics.size());
+        }
+        std::map<std::string, std::size_t> host_asic_counts;
+        for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
+            (void)asic_id;
+            ++host_asic_counts[desc.host_name];
+        }
+        std::size_t max_host_asics = 0;
+        for (const auto& [host, count] : host_asic_counts) {
+            (void)host;
+            max_host_asics = std::max(max_host_asics, count);
+        }
+        const std::size_t capacity = (asics_per_mesh > 0) ? (max_host_asics / asics_per_mesh) : 0;
+        if (capacity > 0) {
+            const std::size_t k = (pools.size() + capacity - 1) / capacity;
+            constraints.set_max_same_rank_groups_used(k);
+        }
     }
     return true;
 }
@@ -2572,39 +2600,47 @@ std::vector<MappingResult<GlobalMeshId, const Candidate*>> solve_sat_placement(
     const std::vector<std::map<GlobalMeshId, const Candidate*>>& excluded_mappings = {},
     bool unique_shapes = false) {
     std::vector<MappingResult<GlobalMeshId, const Candidate*>> results;
-    for (const bool relaxed : {false, true}) {
-        if (relaxed && !relaxed_inter_mesh_policy) {
-            continue;
+    auto solve_with = [&](const MappingConstraints<GlobalMeshId, const Candidate*>& cons) -> bool {
+        for (const bool relaxed : {false, true}) {
+            if (relaxed && !relaxed_inter_mesh_policy) {
+                continue;
+            }
+            ++attempts;
+            const auto encode_start = std::chrono::steady_clock::now();
+            TopologyMappingEnumerationSession<GlobalMeshId, const Candidate*> session(
+                mesh_level_graph,
+                seat_graph,
+                cons,
+                relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT,
+                /*quiet_mode=*/true,
+                TopologyMappingSolverEngine::Sat,
+                unique_shapes);
+            for (const auto& mapping : excluded_mappings) {
+                session.exclude_mapping(mapping);
+            }
+            const auto encode_end = std::chrono::steady_clock::now();
+            MappingResult<GlobalMeshId, const Candidate*> result = session.next();
+            const auto solve_end = std::chrono::steady_clock::now();
+            if (stats != nullptr) {
+                stats->master_encode_elapsed +=
+                    std::chrono::duration_cast<std::chrono::microseconds>(encode_end - encode_start);
+                stats->master_solve_elapsed +=
+                    std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
+                stats->master_sat_attempts = attempts;
+            }
+            if (!result.success) {
+                continue;
+            }
+            results.push_back(std::move(result));
+            return true;
         }
-        ++attempts;
-        const auto encode_start = std::chrono::steady_clock::now();
-        TopologyMappingEnumerationSession<GlobalMeshId, const Candidate*> session(
-            mesh_level_graph,
-            seat_graph,
-            constraints,
-            relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Sat,
-            unique_shapes);
-        for (const auto& mapping : excluded_mappings) {
-            session.exclude_mapping(mapping);
-        }
-        const auto encode_end = std::chrono::steady_clock::now();
-        MappingResult<GlobalMeshId, const Candidate*> result = session.next();
-        const auto solve_end = std::chrono::steady_clock::now();
-        if (stats != nullptr) {
-            stats->master_encode_elapsed +=
-                std::chrono::duration_cast<std::chrono::microseconds>(encode_end - encode_start);
-            stats->master_solve_elapsed +=
-                std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
-            stats->master_sat_attempts = attempts;
-        }
-        if (!result.success) {
-            continue;
-        }
-        results.push_back(std::move(result));
-        break;
-    }
+        return false;
+    };
+    // Solve with the constraints as given (the HARD host-count cap when the caller set one). If the cap is
+    // infeasible at the current candidate seats this returns empty on purpose, so the caller's grow loop adds
+    // seats and retries -- growing candidates is what makes a tight (minimum-host) packing representable. The
+    // cap is only dropped as a last resort, after growth is exhausted (see SatPlacementEnumerationSession::next).
+    (void)solve_with(constraints);
     return results;
 }
 
@@ -3025,6 +3061,26 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     // those newly-grown columns. Make one final attempt so the last growth is actually tried before giving up.
     if (results.empty()) {
         try_solve();
+    }
+
+    // Grow is exhausted and the HARD host-count cap is still infeasible: drop the cap and solve once more so a
+    // system that genuinely cannot pack into the minimum host count still gets a placement instead of failing.
+    // This fallback runs only after growth, so a tight packing is always preferred when it is reachable.
+    if (results.empty()) {
+        AdjacencyGraph<const Candidate*> seat_graph = build_sat_placement_seat_graph(*pools_, mesh_level_graph_);
+        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, constraints_) &&
+            apply_extra_constraints(constraints_)) {
+            constraints_.set_max_same_rank_groups_used(0);
+            results = solve_sat_placement(
+                mesh_level_graph_,
+                seat_graph,
+                constraints_,
+                relaxed_inter_mesh_policy_,
+                attempts_,
+                stats_,
+                excluded_seat_maps(),
+                unique_shapes_);
+        }
     }
 
     // 4. Decode SAT placements. Leave solved_ false so a later next() re-solves with

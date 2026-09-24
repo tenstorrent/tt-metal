@@ -34,7 +34,6 @@ struct SatSearchBackend::Impl {
     int symmetry_lit = 0;
     int preferred_lit = 0;
     int minimize_lit = 0;
-    int fill_lit = 0;
     std::vector<std::vector<int>> stages;
     size_t stage = 0;
     bool unique_shapes = false;
@@ -764,92 +763,6 @@ inline bool topology_sat_encode_at_most_k_groups(
     std::string reason;
     return topology_sat_add_at_least_k_literals(
         solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason, extra_lit);
-}
-
-// SOFT fill of used same-rank groups, guarded by extra_lit (assume -extra_lit to enable).
-// With resources (placement seats): a used host must have every chip that appears on any of its
-// seats covered by a chosen seat -- not "every candidate seat is chosen".
-// Without resources (inter-mesh meshes): a used group must have every reachable member used.
-void topology_sat_encode_soft_fill_all_rank_groups(
-    TopologySatSolver& solver,
-    const TopologySatConstraintView& constraint_data,
-    const TopologySatHardEncoding& enc,
-    int extra_lit) {
-    const size_t num_groups = constraint_data.same_rank_groups.size();
-    const auto& global_to_host = constraint_data.global_to_same_rank_group;
-    if (num_groups == 0 || global_to_host.empty() || extra_lit == 0) {
-        return;
-    }
-    const bool chip_fill = constraint_data.resource_count > 0 && !constraint_data.global_to_resource_indices.empty();
-
-    std::vector<std::vector<int>> group_any_lits(num_groups);
-    std::vector<std::map<uint32_t, std::vector<int>>> group_chip_lits(num_groups);
-    std::vector<std::map<size_t, std::vector<int>>> group_member_lits(num_groups);
-    for (size_t t = 0; t < enc.assign_lit.size() && t < enc.allowed_global_idx.size(); ++t) {
-        const auto& globs = enc.allowed_global_idx[t];
-        const auto& lits = enc.assign_lit[t];
-        for (size_t k = 0; k < globs.size() && k < lits.size(); ++k) {
-            const size_t g = globs[k];
-            if (g >= global_to_host.size()) {
-                continue;
-            }
-            const int label = global_to_host[g];
-            if (label < 0 || static_cast<size_t>(label) >= num_groups) {
-                continue;
-            }
-            group_any_lits[static_cast<size_t>(label)].push_back(lits[k]);
-            if (chip_fill && g < constraint_data.global_to_resource_indices.size()) {
-                for (uint32_t resource : constraint_data.global_to_resource_indices[g]) {
-                    group_chip_lits[static_cast<size_t>(label)][resource].push_back(lits[k]);
-                }
-            } else if (!chip_fill) {
-                group_member_lits[static_cast<size_t>(label)][g].push_back(lits[k]);
-            }
-        }
-    }
-
-    for (size_t p = 0; p < num_groups; ++p) {
-        const auto& any = group_any_lits[p];
-        if (any.empty()) {
-            continue;
-        }
-        const int occ = solver.declare_one_more_variable();
-        solver.add(-occ);
-        for (int lit : any) {
-            solver.add(lit);
-        }
-        solver.add(0);
-        for (int lit : any) {
-            solver.add(-lit);
-            solver.add(occ);
-            solver.add(0);
-        }
-        if (chip_fill) {
-            for (const auto& [_, covers] : group_chip_lits[p]) {
-                if (covers.empty()) {
-                    continue;
-                }
-                solver.add(extra_lit);
-                solver.add(-occ);
-                for (int lit : covers) {
-                    solver.add(lit);
-                }
-                solver.add(0);
-            }
-        } else {
-            for (const auto& [_, member_lits] : group_member_lits[p]) {
-                if (member_lits.empty()) {
-                    continue;
-                }
-                solver.add(extra_lit);
-                solver.add(-occ);
-                for (int lit : member_lits) {
-                    solver.add(lit);
-                }
-                solver.add(0);
-            }
-        }
-    }
 }
 
 // ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
@@ -1704,14 +1617,6 @@ bool SatSearchBackend::start(
         return false;
     }
 
-    // SOFT fill: first solve prefers filled used hosts; later stages drop the assumption so a leftover
-    // can occupy part of a host. Placement uses chip coverage (not "choose every candidate seat").
-    if (constraint_data.fill_all_rank_groups) {
-        const int fill_lit = s.solver.declare_one_more_variable();
-        topology_sat_encode_soft_fill_all_rank_groups(s.solver, constraint_data, s.enc, /*extra_lit=*/-fill_lit);
-        s.fill_lit = fill_lit;
-    }
-
     // HARD host-group cap: at-most-k occupancy in CNF. Infeasible caps fail the session; the mapper restarts
     // without the cap. Do not encode a guarded/optional cap here.
     //
@@ -1839,20 +1744,11 @@ bool SatSearchBackend::start(
     }
 
     s.symmetry_lit = topology_sat_symmetry_assumption_lit(graph_data, s.enc);
-    const int fill = s.fill_lit;
     const int min_lit = s.minimize_lit;
     const int pref = s.preferred_lit;
     s.stages.clear();
-    if (fill != 0 && min_lit != 0 && pref != 0) {
-        s.stages = {{fill, min_lit, pref}, {fill, min_lit}, {fill}, {min_lit}, {pref}, {}};
-    } else if (fill != 0 && min_lit != 0) {
-        s.stages = {{fill, min_lit}, {fill}, {min_lit}, {}};
-    } else if (fill != 0 && pref != 0) {
-        s.stages = {{fill, pref}, {fill}, {pref}, {}};
-    } else if (min_lit != 0 && pref != 0) {
+    if (min_lit != 0 && pref != 0) {
         s.stages = {{min_lit, pref}, {min_lit}, {pref}, {}};
-    } else if (fill != 0) {
-        s.stages = {{fill}, {}};
     } else if (min_lit != 0) {
         s.stages = {{min_lit}, {}};
     } else if (pref != 0) {
@@ -1946,10 +1842,12 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                     s.solver.assume(lit);
                 }
                 ++s.solve_calls;
+                // Host-count minimization stays budget-limited so an infeasible packing objective is
+                // dropped instead of stalling the session; the HARD host cap keeps every solution capped.
                 bool limited = s.cap_active;
-                if (!limited && (s.minimize_lit != 0 || s.fill_lit != 0)) {
+                if (!limited && s.minimize_lit != 0) {
                     for (int lit : optional_lits) {
-                        if (lit == s.minimize_lit || lit == s.fill_lit) {
+                        if (lit == s.minimize_lit) {
                             limited = true;
                             break;
                         }

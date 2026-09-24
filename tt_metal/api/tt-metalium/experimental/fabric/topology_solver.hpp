@@ -470,24 +470,6 @@ public:
     std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
 
     /**
-     * @brief Prefer filling groups already set by set_same_rank_groups_constraint.
-     *
-     * Does not replace those groups. Target-group pairing stays as set. First solve
-     * tries to fill every used global group (host chips when resources are set;
-     * otherwise every group member). If that packing is infeasible the same session
-     * continues without the fill, so a leftover can occupy part of a host. Returns
-     * false if enabled with no global groups registered.
-     */
-    bool set_fill_all_rank_groups_constraint(bool enable = true) {
-        if (enable && same_rank_global_groups_.empty()) {
-            return false;
-        }
-        fill_all_rank_groups_ = enable;
-        return true;
-    }
-    bool fill_all_rank_groups() const { return fill_all_rank_groups_; }
-
-    /**
      * @brief Footprint-disjointness: each Resource may be used by at most one chosen global.
      *
      * Densifies each distinct Resource to ResourceIndex 0..R-1 and stores only the dense bags.
@@ -567,9 +549,6 @@ private:
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used_ = 0;
-
-    // Opt-in HARD fill: a used same-rank global group must have every member used.
-    bool fill_all_rank_groups_ = false;
 
     // Footprint resources: each chosen global claims these ResourceIndex values; AMO per index.
     std::map<GlobalNode, std::vector<uint32_t>> global_to_resource_indices_;
@@ -914,9 +893,6 @@ struct ConstraintIndexData {
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used = 0;
 
-    // Opt-in HARD fill: a used same-rank global group must have every member used.
-    bool fill_all_rank_groups = false;
-
     // Footprint resources, indexed by global_idx. Empty when no add_resource_constraint was set.
     std::vector<std::vector<uint32_t>> global_to_resource_indices;
     uint32_t resource_count = 0;
@@ -1053,7 +1029,6 @@ struct TopologySatConstraintView {
     const std::vector<size_t>& target_to_group;
     bool minimize_same_rank_groups_used = false;
     std::size_t max_same_rank_groups_used = 0;
-    bool fill_all_rank_groups = false;
     const std::vector<std::vector<uint32_t>>& global_to_resource_indices;
     uint32_t resource_count = 0;
 
@@ -1068,7 +1043,6 @@ struct TopologySatConstraintView {
         target_to_group(c.target_to_group),
         minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
         max_same_rank_groups_used(c.max_same_rank_groups_used),
-        fill_all_rank_groups(c.fill_all_rank_groups),
         global_to_resource_indices(c.global_to_resource_indices),
         resource_count(c.resource_count) {}
 
