@@ -136,3 +136,74 @@ inline void llk_unpack_AB_matmul(
         kt_dim);
     WAYPOINT("UPMD");
 }
+
+// K-looping variant of llk_unpack_AB_matmul: kt_dim K-tile steps in one call, operand A advancing one tile and
+// operand B in1_kt_stride tiles per step. Pairs with llk_math_matmul_kloop.
+inline void llk_unpack_AB_matmul_kloop(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t in1_kt_stride) {
+    // In0/InA -> srcB (supports partial face)
+    // In1/InB -> srcA
+
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const bool partial_face_a = get_operand_partial_face(operandB_id);  // In1/InB -> srcA
+    const bool partial_face_b = get_operand_partial_face(operandA_id);  // In0/InA -> srcB
+
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id)));
+
+    for (std::uint32_t k = 0; k < kt_dim; k++) {
+        SAN_HOOK(execute<OperationUnpackMatmul>(
+            StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
+            StateVal<OperationUnpackMatmul::RtDim>(rt_dim),
+            StateVal<OperationUnpackMatmul::KtDim>(kt_dim),
+            StateVal<OperationUnpackMatmul::PartialFaceA>(partial_face_a),
+            StateVal<OperationUnpackMatmul::PartialFaceB>(partial_face_b),
+            StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandB_id]),
+            StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandA_id]),
+            StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandB_id]),
+            StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandA_id]),
+            StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandB_id)),
+            StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandA_id)),
+            StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandB_id)),
+            StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandA_id)),
+            StateDiscard<std::uint32_t>(tile_index_a + k),
+            StateDiscard<std::uint32_t>(tile_index_b + k * in1_kt_stride)));
+    }
+
+    WAYPOINT("UPMW");
+    _llk_unpack_AB_matmul_kloop_(
+        base_address_a,
+        base_address_b,
+        tile_index_a,
+        tile_index_b,
+        tile_size_a,
+        tile_size_b,
+        partial_face_a,
+        partial_face_b,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        in1_kt_stride);
+    WAYPOINT("UPMD");
+}

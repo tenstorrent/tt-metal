@@ -283,4 +283,99 @@ ALWI void matmul_block(
 #endif
 }
 
+// clang-format off
+/**
+ * Initialization for matmul_block_kloop. Same arguments and effect as matmul_block_init; on Wormhole a 2x2
+ * block additionally disables both source-register DVALID auto-clears for the K loop's explicit bank hand-backs.
+ * A later matmul_block_init or mm_uninit restores the standard state.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ */
+// clang-format on
+ALWI void matmul_block_kloop_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t call_line = __builtin_LINE()) {
+#if defined(ARCH_WORMHOLE) && MM_THROTTLE == 0
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_kloop_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+#else
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
+#endif
+}
+
+// clang-format off
+/**
+ * Performs kt_dim consecutive K-tile steps of matmul_block in one call: the block-matrix multiply C += A[.., k] * B[k, ..]
+ * for k in [0, kt_dim), accumulating into the same DST tiles. Equivalent to calling matmul_block kt_dim times with
+ * in0_tile_index advancing by 1 and in1_tile_index by in1_kt_stride per step, and numerically identical to it. On
+ * Wormhole a 2x2 block alternates the order of its four tile multiplies between consecutive K tiles so that each
+ * step's late source-register refills are spread over both unpackers. Requires matmul_block_kloop_init.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of the first K tile of block A in the first input CB          | uint32_t | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of the first K tile of block B in the second input CB         | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ * | in1_kt_stride  | Tiles between consecutive K tiles of block B (its row width in tiles).  | uint32_t | Must be at least ct_dim                        | True     |
+ */
+// clang-format on
+ALWI void matmul_block_kloop(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim,
+    uint32_t in1_kt_stride,
+    uint32_t call_line = __builtin_LINE()) {
+#if defined(ARCH_WORMHOLE) && MM_THROTTLE == 0
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_kloop(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, in1_kt_stride)));
+    MATH((llk_math_matmul_kloop<MATH_FIDELITY>(idst, ct_dim, rt_dim, kt_dim)));
+#else
+    for (uint32_t k = 0; k < kt_dim; k++) {
+        matmul_block(
+            in0_cb_id,
+            in1_cb_id,
+            in0_tile_index + k,
+            in1_tile_index + k * in1_kt_stride,
+            idst,
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            call_line);
+    }
+#endif
+}
+
 }  // namespace ckernel
