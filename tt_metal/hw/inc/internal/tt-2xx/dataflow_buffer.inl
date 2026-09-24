@@ -176,7 +176,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
-    has_traffic_ = true;
+    drain_owner_->has_traffic_ = true;
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -232,8 +232,8 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
-    has_traffic_ = true;
-    has_outbound_writes_ = true;
+    drain_owner_->has_traffic_ = true;
+    drain_owner_->has_outbound_writes_ = true;
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -323,11 +323,12 @@ inline void DataflowBuffer::finish_impl() {
 }
 
 inline DataflowBuffer::~DataflowBuffer() {
-    if (!has_traffic_) {
+    if (drain_owner_ != this || !has_traffic_) {
         return;
     }
     finish_impl();
 #ifndef COMPILE_FOR_TRISC
+    static_assert(NUM_NOCS == 1, "Destructor barriers the default NoC; it must cover every NoC DFB writes can use");
     if (has_outbound_writes_) {
         write_barrier_impl(Noc());
     }
@@ -631,7 +632,7 @@ inline void DataflowBuffer::commit_implicit_read() {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr =
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
     }
-    has_traffic_ = true;
+    drain_owner_->has_traffic_ = true;
     ptiles_read_++;
     if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
@@ -671,8 +672,8 @@ inline void DataflowBuffer::commit_implicit_write() {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr =
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
     }
-    has_traffic_ = true;
-    has_outbound_writes_ = true;
+    drain_owner_->has_traffic_ = true;
+    drain_owner_->has_outbound_writes_ = true;
     ctiles_written_++;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;

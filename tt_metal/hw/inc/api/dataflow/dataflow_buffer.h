@@ -109,8 +109,8 @@ public:
 
 #ifdef ARCH_QUASAR
     // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
-    // Only runs for objects that moved data (push/pop/implicit read/write), so copies and objects that
-    // were only used for config queries do not block.
+    // Only the original object drains, and only if it or any of its copies moved data (push/pop/implicit
+    // read/write). Copies passed into helpers never drain; the original must outlive them.
     ~DataflowBuffer();
 #endif
 
@@ -450,7 +450,10 @@ private:
     uint8_t ctxn_id_index_ = 0;
     uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
 
-    // Gate the destructor: drain only if this object moved data; write-barrier only if it drained entries out.
+    // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
+    // recorded on the original, and only the original drains.
+    DataflowBuffer* drain_owner_ = this;
+    // Gate the destructor: drain only if data moved; write-barrier only if entries were drained out.
     bool has_traffic_ = false;
     bool has_outbound_writes_ = false;
 #endif
