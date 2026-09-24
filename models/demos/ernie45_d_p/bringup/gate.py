@@ -16,6 +16,8 @@ every matched metric satisfies its threshold AND every declared artifact exists.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import fnmatch
 import json
 import operator
@@ -48,6 +50,28 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     STATE.write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
+
+
+@contextlib.contextmanager
+def locked():
+    """Serialize state.json read-modify-write and git commits across concurrent gate runs."""
+    with open(BRINGUP / ".lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def update_task_state(tid: str, **fields) -> None:
+    with locked():
+        state = load_state()
+        entry = state.setdefault(tid, {})
+        hist = fields.pop("history_add", None)
+        entry.update(fields)
+        if hist:
+            entry.setdefault("history", []).append(hist)
+        save_state(state)
 
 
 def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
@@ -95,6 +119,7 @@ def run_gate(tid: str, commit: bool, force: bool) -> int:
         return 2
 
     M.reset(tid)
+    update_task_state(tid, status="RUNNING", started=time.strftime("%Y-%m-%dT%H:%M:%S"))
     LOGS.mkdir(exist_ok=True)
     log = LOGS / f"{tid}.log"
     t0 = time.time()
@@ -118,21 +143,21 @@ def run_gate(tid: str, commit: bool, force: bool) -> int:
     )
     print(f"{verdict} {tid}: {task['title']}\n{summary}")
 
-    entry = state.get(tid, {})
-    entry.update(
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    update_task_state(
+        tid,
         status=verdict,
-        last_run=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        last_run=now,
         duration_s=round(dur, 1),
         rc=rc,
         metrics={k: v["value"] for k, v in got.items()},
         log=str(log.relative_to(REPO)),
+        history_add={"t": now, "status": verdict},
     )
-    entry.setdefault("history", []).append({"t": entry["last_run"], "status": verdict})
-    state[tid] = entry
-    save_state(state)
     if commit and verdict == "PASS":
         # The commit for a task is found later via its tag: git log --grep "\[ernie45_d_p\]\[<id>\]"
-        sha = git_commit(task, verdict, summary)
+        with locked():
+            sha = git_commit(task, verdict, summary)
         if sha:
             print(f"committed {sha}")
     return 0 if verdict == "PASS" else 1
