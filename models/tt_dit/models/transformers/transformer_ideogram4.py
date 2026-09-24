@@ -7,6 +7,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, Linear
@@ -17,7 +18,13 @@ from ...parallel.manager import CCLManager
 from ...reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.padding import pad_weight_tensor
-from ...utils.sdpa_recipe import validate_recipe_args
+from ...utils.sdpa_recipe import (
+    prepare_recipe_inputs,
+    recipe_program_config,
+    reject_mask,
+    sdpa_kwargs,
+    validate_recipe_args,
+)
 from ...utils.substate import pop_substate
 from ...utils.tensor import bf16_tensor
 
@@ -107,10 +114,22 @@ class Ideogram4TransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig | None = None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
         assert hidden_size % num_heads == 0
+        # Opt-in named SDPA recipe (None keeps the tuned legacy attention). Unmasked only: the
+        # segment-masked dense path rejects a recipe at call time.
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = validate_recipe_args(
+            sdpa_precision,
+            sdpa_kv_dtype,
+            head_dim=hidden_size // num_heads,
+            model="Ideogram4",
+            is_blackhole=is_blackhole(),
+        )
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_heads = num_heads
@@ -335,6 +354,20 @@ class Ideogram4TransformerBlock(Module):
             )
             self._ring_sdpa_pc_cache[qc] = pc
         return pc
+
+    def _recipe_sdpa_program_config(self, program_config: ttnn.SDPAProgramConfig, *, ring: bool):
+        """Legacy config unchanged when no recipe is set; else the same grid with recipe chunks.
+
+        The tuned D256 Q128/K256 (L1-limited) is recipe-supported on dense and ring (Q128 = 4 tiles,
+        even), so the helper keeps it; exp_approx_mode is left to the recipe.
+        """
+        if self.sdpa_precision is None:
+            return program_config
+        return recipe_program_config(program_config, ring=ring)
+
+    def _sdpa_kwargs(self) -> dict:
+        # Legacy compute config read at call time; a recipe replaces it with precision/inputs_prepared.
+        return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
         """Rearrange the fused reference QKV weight so column-fracturing shards heads.
@@ -570,7 +603,51 @@ class Ideogram4TransformerBlock(Module):
             v_f, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
         )
 
-        if self.sp_factor > 1 and attn_mask is None:
+        if self.sdpa_precision is not None:
+            # Recipes are unmasked only (the segment-masked SDPA stays legacy). LOW_PRECISION
+            # prepares Q/K/V after QK-norm/RoPE and before the ring all-gather / SDPA call.
+            reject_mask(self.sdpa_precision, attn_mask, model="Ideogram4")
+            q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
+
+        if self.sdpa_precision is not None and self.sp_factor > 1:
+            out, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                self.dummy_joint,
+                self.dummy_joint,
+                self.dummy_joint,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                    k.shape, 2, self.sp_axis, dtype=k.dtype
+                ),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                    v.shape, 2, self.sp_axis, dtype=v.dtype
+                ),
+                joint_strategy="rear",
+                logical_n=spatial_sequence_length,
+                program_config=self._recipe_sdpa_program_config(
+                    self._get_ring_sdpa_program_config(q.shape[2]), ring=True
+                ),
+                **self._sdpa_kwargs(),
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
+                num_links=self.ccl_manager.num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_manager.topology,
+                subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
+            )  # [B, n_local_heads, L/sp, head_dim]
+        elif self.sdpa_precision is not None:
+            out = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                program_config=self._recipe_sdpa_program_config(self.sdpa_program_config, ring=False),
+                **self._sdpa_kwargs(),
+            )  # [B, n_local_heads, L, head_dim]
+        elif self.sp_factor > 1 and attn_mask is None:
             # Sequence parallel, unmasked (full attention): ring SDPA all-gathers K/V
             # across the SP axis. Empty "joint" => plain self-attention over the full seq.
             empty = self.dummy_joint
@@ -709,9 +786,9 @@ class Ideogram4Transformer(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` exist for API parity with the recipe-wired denoisers;
-        Ideogram4 attention is D256, so any named SDPA recipe is rejected (ValueError). ``None`` keeps
-        the existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named SDPA recipe (Blackhole D256, unmasked
+        dense/ring self-attention; a segment mask then raises ValueError). ``None`` keeps the existing
+        attention configuration."""
         self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=emb_dim // num_heads)
         super().__init__()
         self.emb_dim = emb_dim
@@ -747,6 +824,8 @@ class Ideogram4Transformer(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for _ in range(num_layers)
         )
@@ -767,10 +846,8 @@ class Ideogram4Transformer(Module):
     def validate_sdpa_recipe(
         sdpa_precision: ttnn.SDPAPrecision | None, sdpa_kv_dtype: ttnn.DataType | None, *, head_dim: int
     ) -> None:
-        """Reject any named SDPA recipe: Ideogram4 attention (D256) is not wired for recipes."""
+        """Validate the recipe opt-in before any device work (the blocks re-check with the device arch)."""
         validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="Ideogram4")
-        if sdpa_precision is not None:
-            raise ValueError("Ideogram4: named SDPA recipes are not wired for this model")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # rotary_emb is a parameter-free buffer module in the reference; drop it (cos/sin

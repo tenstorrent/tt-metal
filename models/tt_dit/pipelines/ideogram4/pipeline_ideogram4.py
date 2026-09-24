@@ -271,8 +271,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` are accepted for API parity only: Ideogram4 attention is
-        D256, so requesting a named SDPA recipe raises ValueError. Omit them to keep the existing attention."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt the denoisers into a named SDPA recipe (see
+        models/tt_dit/utils/sdpa_recipe.py); omit them to keep the existing attention configuration."""
         # Fail before any device/weight work; the transformer constructor re-checks.
         model_cfg = modeling_ideogram4.Ideogram4Config()
         Ideogram4Transformer.validate_sdpa_recipe(
