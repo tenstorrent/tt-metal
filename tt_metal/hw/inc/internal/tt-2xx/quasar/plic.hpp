@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "overlay/meta/registers/overlay_reg_defines_debug.h"
+#include "overlay/meta/registers/tt_cluster_plic_reg.h"
 
 namespace overlay::quasar {
 

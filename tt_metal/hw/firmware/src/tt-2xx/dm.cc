@@ -327,10 +327,11 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-// Claims this round's FDS completion group, clearing any stale done from the previous round. Returns
-// the group (sub-device index + 1), or 0 when the round completes over the NOC instead.
+// Readies this launch's FDS done: waits for the go if asked, then queues idle on the done wire so the
+// previous launch's done is not taken for this one. Returns the done group (sub-device index + 1), or 0
+// when the launch completes over the NOC instead.
 #ifdef FDS_SIGNALLING
-inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
+inline uint32_t prepare_worker_completion_signal(launch_msg_t* launch_message, bool wait_for_go) {
     if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
         return 0;
     }
@@ -346,22 +347,24 @@ inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool
     return go_message_index + 1;
 }
 
-inline void signal_worker_completion_group_done(uint32_t worker_completion_group) {
+// Sends this launch's done to dispatch by queueing its group on the FDS done wire, where it stays until
+// the next launch clears it.
+inline void signal_worker_completion(uint32_t worker_completion_group) {
     overlay::fds_signalling::worker_signal_done(worker_completion_group);
 }
 #else
-inline uint32_t begin_worker_completion_round(launch_msg_t*, bool) { return 0; }
+inline uint32_t prepare_worker_completion_signal(launch_msg_t*, bool) { return 0; }
 
-inline void signal_worker_completion_group_done(uint32_t) { ASSERT(0); }
+inline void signal_worker_completion(uint32_t) { ASSERT(0); }
 #endif
 
 // Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
-// round, or 0 when the round is on the NOC.
+// launch, or 0 when the launch is on the NOC.
 inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
     if (worker_completion_group != 0) {
         DPRINT("DM0-FW: completion FDS\n");
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-        signal_worker_completion_group_done(worker_completion_group);
+        signal_worker_completion(worker_completion_group);
     } else {
         DPRINT("DM0-FW: completion NOC\n");
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
@@ -466,7 +469,7 @@ extern "C" uint32_t _start1() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             uint32_t worker_completion_group =
                 go_message_signal == RUN_MSG_GO
-                    ? begin_worker_completion_round(launch_msg_address, /*wait_for_go=*/false)
+                    ? prepare_worker_completion_signal(launch_msg_address, /*wait_for_go=*/false)
                     : 0;
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
@@ -525,7 +528,8 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("D");
 
                 if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
-                    worker_completion_group = begin_worker_completion_round(launch_msg_address, /*wait_for_go=*/true);
+                    worker_completion_group =
+                        prepare_worker_completion_signal(launch_msg_address, /*wait_for_go=*/true);
                 }
                 wait_subordinates();
 

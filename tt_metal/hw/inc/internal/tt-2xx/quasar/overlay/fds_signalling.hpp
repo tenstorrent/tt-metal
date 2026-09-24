@@ -26,7 +26,7 @@ inline constexpr uint32_t dispatch_lane_mask = (uint32_t{1} << num_dispatch_lane
 
 // Dispatch listens for done on every worker lane; completion is counted in software,
 // so the hardware count threshold stays at 0 and no interrupt is armed. One lane per worker that
-// can report done, which bounds how many workers a single completion round can cover.
+// can report done, which bounds how many workers a single sub-device's completion tracking can cover.
 inline constexpr uint32_t num_worker_lanes = 32;
 inline constexpr uint32_t all_worker_lanes_mask = ~uint32_t{0} >> (32 - num_worker_lanes);
 inline constexpr uint32_t dispatch_done_threshold = 0;
