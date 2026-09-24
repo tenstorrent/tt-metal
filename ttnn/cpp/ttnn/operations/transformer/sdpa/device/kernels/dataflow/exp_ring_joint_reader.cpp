@@ -188,7 +188,13 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
+#ifdef SDPA_RECIPE_EXP_RING
+    // Recipes allow odd Q tile counts with a 2-row QK subblock (the last group is a single row), so
+    // push ceil(Sq / sbh) subblocks and clamp the tail; flooring would never push the last Q row.
+    constexpr uint32_t q_num_subblocks = (Sq_chunk_t + qk_subblock_h - 1) / qk_subblock_h;
+#else
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+#endif
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
@@ -522,7 +528,12 @@ void kernel_main() {
                         const auto& q_gen = is_joint_q ? joint_q_generator : q_generator;
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+#ifdef SDPA_RECIPE_EXP_RING
+                            const uint32_t sb_row_end =
+                                std::min(sb_row_start + qk_subblock_h, q_slice.d2_start + Sq_chunk_t);
+#else
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+#endif
                             Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                             read_block(
                                 q_gen, q_sub_slice, q_end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/
