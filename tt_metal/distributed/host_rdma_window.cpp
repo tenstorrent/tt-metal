@@ -133,7 +133,9 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
     // which is defined only under the unified model.
     int* model = nullptr;
     int flag = 0;
-    MPI_Win_get_attr(im.win, MPI_WIN_MODEL, &model, &flag);
+    // void* by way of the address of the pointer: MPI's attribute out-param is void*, and
+    // int** converts to it only through an explicit cast.
+    MPI_Win_get_attr(im.win, MPI_WIN_MODEL, static_cast<void*>(&model), &flag);
     if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
         local_err =
             "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "

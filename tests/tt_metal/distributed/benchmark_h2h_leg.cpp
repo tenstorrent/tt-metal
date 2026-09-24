@@ -178,7 +178,7 @@ public:
         verify_ = state.range(5) != 0;
         page_ = tt_uva_frame_page_size(payload_bytes_);
 
-        const mh::ContextPtr world = mh::DistributedContext::get_current_world();
+        const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
         rank_ = static_cast<uint32_t>(*world->rank());
         ranks_ = static_cast<uint32_t>(*world->size());
         peer_ = 1 - rank_;
@@ -192,7 +192,10 @@ public:
         if (::posix_memalign(&raw, 4096, (bytes_ + 4095) & ~uint64_t{4095}) != 0) {
             raw = nullptr;
         }
-        base_ = static_cast<uint8_t*>(raw);
+        // Owned here so the allocation cannot outlive the fixture on an early return; base_
+        // stays a raw pointer because every offset below is arithmetic on it.
+        owned_.reset(static_cast<uint8_t*>(raw));
+        base_ = owned_.get();
         std::string err;
         if (base_ == nullptr) {
             err = "could not allocate " + std::to_string(bytes_ >> 20) + " MiB";
@@ -226,7 +229,8 @@ public:
             }
             win_.reset();
         }
-        std::free(base_);
+        // After win_: the window names these pages, so they must outlive it.
+        owned_.reset();
         base_ = nullptr;
     }
 
@@ -320,6 +324,7 @@ protected:
     }
 
     std::unique_ptr<RdmaWindow> win_;
+    std::unique_ptr<uint8_t, void (*)(void*)> owned_{nullptr, &std::free};
     uint8_t* base_ = nullptr;
     uint64_t bytes_ = 0;
     uint64_t src_off_ = 0;
@@ -524,7 +529,7 @@ int main(int argc, char** argv) {
     // Before Initialize: the context takes MPI's own argv entries first, and every collective
     // below needs it up.
     mh::DistributedContext::create(argc, argv);
-    const mh::ContextPtr world = mh::DistributedContext::get_current_world();
+    const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
     const uint32_t rank = static_cast<uint32_t>(*world->rank());
     if (*world->size() != 2) {
         if (rank == 0) {
