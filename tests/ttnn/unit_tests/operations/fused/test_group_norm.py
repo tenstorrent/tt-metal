@@ -176,9 +176,19 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
-@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
-@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+@pytest.mark.parametrize(
+    "use_welford",
+    [
+        pytest.param(True, marks=pytest.mark.merge_gate),
+        # The legacy stats path flakes on the cross-core reduce (see #57652): ~2.5% of
+        # wh_n150 merge-gate runs come back with a bit-identical wrong result that only the
+        # allclose check catches (max atol delta 1.27 vs 0.065, PCC still 0.999969). Ungated
+        # until that is fixed; it still runs in the nightly/post-commit ttnn suites.
+        pytest.param(False),
+    ],
+    ids=welford_ids,
+)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
