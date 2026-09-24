@@ -17,6 +17,7 @@ import pytest
 import torch
 from loguru import logger
 
+from models.demos.llvc.eval.evaluate import reference_stream
 from models.demos.llvc.tests.pcc.test_llvc import compute_pcc
 from models.demos.llvc.tt.model import LLVCModel
 from models.demos.llvc.tt.state_io import load_llvc_config_and_model
@@ -91,18 +92,38 @@ def _load(device, tmp_path):
     return config, reference, model
 
 
-def test_checkpoint_pcc_vs_reference(device, tmp_path):
+@pytest.mark.parametrize("chunk_factor", [1, 2])
+def test_checkpoint_pcc_vs_reference(device, tmp_path, chunk_factor):
+    """TTNN stream vs the PyTorch reference run with identical chunking (the PR's eval method)."""
     config, reference, model = _load(device, tmp_path)
     wav = _wav(tmp_path, config.sample_rate)
-    chunk = config.dec_chunk_size * config.L
-    wav = wav[: (wav.numel() // chunk) * chunk]
-    with torch.no_grad():
-        ref_out = reference(wav[None, None])
-    tt_out = model(wav)
+    ref_out = reference_stream(reference, wav, L=config.L, dec_chunk_size=config.dec_chunk_size, chunk_factor=chunk_factor)
+    tt_out, m = model.stream(wav, chunk_factor=chunk_factor)
     assert tt_out.shape == ref_out.shape, f"{tuple(tt_out.shape)} vs {tuple(ref_out.shape)}"
     pcc = compute_pcc(tt_out, ref_out)
-    logger.info("full checkpoint: TTNN vs PyTorch reference PCC {:.6f} over {} samples", pcc, wav.numel())
+    with torch.no_grad():
+        offline_pcc = compute_pcc(tt_out, reference(wav[None, None]))
+    logger.info(
+        "full checkpoint chunk_factor={}: PCC vs reference_stream {:.6f}, vs offline reference {:.6f}, "
+        "{} samples, e2e_RTF={:.3f}",
+        chunk_factor, pcc, offline_pcc, wav.numel(), m.rtf,
+    )
     assert pcc > TARGET_PCC, f"PCC {pcc:.4f} < {TARGET_PCC} (PR claims 0.9997)"
+
+
+def test_checkpoint_batched_two_streams_chunk_factor2(device, tmp_path):
+    """B=2 concurrent streams at chunk_factor=2 (two decoder windows per chunk) vs each row alone."""
+    config, _reference, model = _load(device, tmp_path)
+    wav = _wav(tmp_path, config.sample_rate)
+    a = wav
+    b = torch.roll(wav, wav.numel() // 2)
+    out_a, _ = model.stream(a, chunk_factor=2)
+    out_b, _ = model.stream(b, chunk_factor=2)
+    batched, _ = model.stream(torch.stack([a, b]), chunk_factor=2)
+    pcc_a = compute_pcc(batched[0], out_a[0])
+    pcc_b = compute_pcc(batched[1], out_b[0])
+    logger.info("full checkpoint B=2 chunk_factor=2: row0 PCC {:.6f}, row1 PCC {:.6f} vs single-stream", pcc_a, pcc_b)
+    assert pcc_a > TARGET_PCC and pcc_b > TARGET_PCC, f"batched rows diverge from single streams: {pcc_a:.4f}, {pcc_b:.4f}"
 
 
 @pytest.mark.parametrize("chunk_factor", [1, 2])
