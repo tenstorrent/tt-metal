@@ -318,12 +318,13 @@ void init_fds_signalling() {
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
     }
     reset_fds_go_wire();
-    if (previous_auto_dispatch_cycle_count == 0 && previous_auto_dispatch_enabled != 0) {
-        overlay::fds_signalling::wait_cycles(overlay::fds_signalling::unbounded_drain_fallback_cycles);
-    } else {
-        overlay::fds_signalling::wait_cycles(overlay::auto_dispatch_drain_cycles(
-            overlay::dispatch_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
-    }
+    // A previous run that left the pacing count at 0 with auto dispatch enabled releases queued entries only every
+    // 2^32 cycles, so draining its queue at init would take up to one more than the number of queued entries,
+    // multiplied by 2^32 cycles. We always write a nonzero pacing count before enabling auto dispatch. This assert
+    // guards against the case where the pacing count was left at 0 with auto dispatch enabled.
+    ASSERT(previous_auto_dispatch_cycle_count != 0 || previous_auto_dispatch_enabled == 0);
+    overlay::fds_signalling::wait_cycles(overlay::auto_dispatch_drain_cycles(
+        overlay::dispatch_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
     WAYPOINT("FACW");
     overlay::fds_signalling::dispatch_config_auto_dispatch_pacing(
         overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
