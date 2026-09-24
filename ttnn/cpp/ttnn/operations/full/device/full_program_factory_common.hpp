@@ -19,17 +19,27 @@ union fill_value_t {
     float f32;
 };
 
+// Convert by dtype, not by which variant the caller passed: fill_value is "float or int" for any dtype.
 inline fill_value_t encode_fill_value(const std::variant<float, int>& fill_value, tt::tt_metal::DataType dtype) {
+    auto as_float = [&] {
+        return std::holds_alternative<float>(fill_value) ? std::get<float>(fill_value)
+                                                         : static_cast<float>(std::get<int>(fill_value));
+    };
+
     fill_value_t u;
-    if (std::holds_alternative<int>(fill_value)) {
-        u.u32 = std::get<int>(fill_value);
-    } else {
-        auto float_val = std::get<float>(fill_value);
-        if (dtype == tt::tt_metal::DataType::BFLOAT16) {
-            u.u32 = static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(float_val))) << 16;
-        } else {
-            u.f32 = float_val;
+    switch (dtype) {
+        case tt::tt_metal::DataType::INT32: {
+            int value = std::holds_alternative<int>(fill_value) ? std::get<int>(fill_value)
+                                                                : static_cast<int>(std::get<float>(fill_value));
+            u.u32 = static_cast<uint32_t>(value);
+            break;
         }
+        case tt::tt_metal::DataType::BFLOAT16:
+            u.u32 = static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(as_float()))) << 16;
+            break;
+        default:  // FLOAT32
+            u.f32 = as_float();
+            break;
     }
     return u;
 }
