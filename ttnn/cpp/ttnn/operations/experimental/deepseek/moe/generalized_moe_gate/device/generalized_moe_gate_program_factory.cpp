@@ -18,12 +18,6 @@ namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::p
 
 namespace {
 
-constexpr uint8_t kInputCb = 0;
-constexpr uint8_t kBiasCb = 1;
-constexpr uint8_t kOutputCb = 2;
-constexpr uint8_t kInputIndicesCb = 3;
-constexpr uint8_t kOutputIndicesCb = 4;
-
 void update_tensor_cb(tt::tt_metal::Program& program, uint8_t cb_index, const Tensor& tensor) {
     auto* buffer = tensor.buffer();
     TT_FATAL(

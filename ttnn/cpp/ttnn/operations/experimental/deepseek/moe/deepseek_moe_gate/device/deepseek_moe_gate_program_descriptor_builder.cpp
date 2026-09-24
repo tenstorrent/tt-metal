@@ -20,7 +20,10 @@ namespace {
 constexpr const char* kDeepseekMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/kernels/deepseek_moe_gate_kernel.cpp";
 
-uint32_t float_bits_u32(float value) { return std::bit_cast<uint32_t>(value); }
+uint32_t float_bits_u32(float value) {
+    static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32 bits to pack into a compile-time arg");
+    return std::bit_cast<uint32_t>(value);
+}
 
 void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
@@ -87,11 +90,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     TT_FATAL(in_tile == input_indices_tensor.tensor_spec().tile(), "Input and input-indices tiles must match");
     TT_FATAL(out_tile == output_indices_tensor.tensor_spec().tile(), "Output tiles must match");
 
-    constexpr uint8_t input_cb = 0;
-    constexpr uint8_t bias_cb = 1;
-    constexpr uint8_t output_cb = 2;
-    constexpr uint8_t input_indices_cb = 3;
-    constexpr uint8_t output_indices_cb = 4;
+    constexpr uint8_t input_cb = kInputCb;
+    constexpr uint8_t bias_cb = kBiasCb;
+    constexpr uint8_t output_cb = kOutputCb;
+    constexpr uint8_t input_indices_cb = kInputIndicesCb;
+    constexpr uint8_t output_indices_cb = kOutputIndicesCb;
 
     auto in_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
     auto bias_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);

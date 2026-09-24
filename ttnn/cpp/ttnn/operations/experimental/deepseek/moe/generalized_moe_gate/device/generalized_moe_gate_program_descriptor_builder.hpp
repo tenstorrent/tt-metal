@@ -12,6 +12,13 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate {
 
+// Tensor-backed circular buffers. create_descriptor and override_runtime_arguments both use these indices.
+inline constexpr uint8_t kInputCb = 0;
+inline constexpr uint8_t kBiasCb = 1;
+inline constexpr uint8_t kOutputCb = 2;
+inline constexpr uint8_t kInputIndicesCb = 3;
+inline constexpr uint8_t kOutputIndicesCb = 4;
+
 // Build the executable program descriptor from the current tensors / scalars. Called by create_descriptor
 // (cache miss) only; the program-cache key is the framework's default hash over the op attributes +
 // tensor_args, so building the descriptor is not on the cache-hit path.

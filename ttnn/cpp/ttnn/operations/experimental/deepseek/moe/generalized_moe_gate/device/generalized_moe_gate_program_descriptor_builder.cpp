@@ -21,7 +21,10 @@ constexpr const char* kGeneralizedMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/"
     "generalized_moe_gate_kernel.cpp";
 
-uint32_t float_bits_u32(float value) { return std::bit_cast<uint32_t>(value); }
+uint32_t float_bits_u32(float value) {
+    static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32 bits to pack into a compile-time arg");
+    return std::bit_cast<uint32_t>(value);
+}
 
 void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
@@ -60,11 +63,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
 
-    constexpr uint8_t input_cb = 0;
-    constexpr uint8_t bias_cb = 1;
-    constexpr uint8_t output_cb = 2;
-    constexpr uint8_t input_indices_cb = 3;
-    constexpr uint8_t output_indices_cb = 4;
+    constexpr uint8_t input_cb = kInputCb;
+    constexpr uint8_t bias_cb = kBiasCb;
+    constexpr uint8_t output_cb = kOutputCb;
+    constexpr uint8_t input_indices_cb = kInputIndicesCb;
+    constexpr uint8_t output_indices_cb = kOutputIndicesCb;
     // Intermediate L1 stash CBs for the multi-block combine: each holds num_blocks per-block run tiles
     // for one field (scores/bias bf16, idx uint16). Only used when num_blocks > 1.
     constexpr uint8_t run_scores_cb = 5;
