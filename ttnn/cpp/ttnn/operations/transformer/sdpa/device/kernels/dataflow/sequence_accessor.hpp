@@ -10,9 +10,9 @@ struct SequenceAccessor {
     static constexpr bool has_partial_rows = PrimaryRows % 32 != 0 || JointRows % 32 != 0;
     static constexpr uint32_t primary_rows = ((PrimaryRows + 31) / 32) * 32;
     static constexpr uint32_t joint_rows = ((JointRows + 31) / 32) * 32;
-    static constexpr uint32_t rows_per_page = 32 / DHt;
-    static constexpr uint32_t head_pages =
-        ((primary_rows + joint_rows + ChunkRows - 1) / ChunkRows) * ChunkRows / rows_per_page;
+    // Pages covering a tile-aligned row count (any head dim, not only divisors of 32 tiles).
+    static constexpr uint32_t pages(uint32_t rows) { return rows / 32 * DHt; }
+    static constexpr uint32_t head_pages = pages(((primary_rows + joint_rows + ChunkRows - 1) / ChunkRows) * ChunkRows);
     Primary primary;
     Joint joint;
 
@@ -31,10 +31,10 @@ struct SequenceAccessor {
         } else {
             const uint32_t head = page / head_pages;
             const uint32_t offset = page % head_pages;
-            if (offset < primary_rows / rows_per_page) {
-                function(primary, head * primary_rows / rows_per_page + offset);
-            } else if (offset < (primary_rows + joint_rows) / rows_per_page) {
-                function(joint, head * joint_rows / rows_per_page + offset - primary_rows / rows_per_page);
+            if (offset < pages(primary_rows)) {
+                function(primary, head * pages(primary_rows) + offset);
+            } else if (offset < pages(primary_rows + joint_rows)) {
+                function(joint, head * pages(joint_rows) + offset - pages(primary_rows));
             } else {
                 return false;
             }

@@ -121,10 +121,10 @@ def test_recipe_k_chunk_preserves_accuracy(
         assert observed["max_abs"] <= max(2 * baseline["max_abs"], 1 / 64), (observed["max_abs"], baseline["max_abs"])
 
 
-@pytest.mark.parametrize("k_chunk", [128, 320, 640, 1024])
+@pytest.mark.parametrize("k_chunk", [100, 500])
 def test_recipe_rejects_unsupported_k_chunk(device, k_chunk):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     host = make_inputs(1024, "normal", q_length=256)
-    with pytest.raises(RuntimeError, match="K chunks of 256, 384 or 512"):
+    with pytest.raises(RuntimeError, match="tile-aligned K chunks"):
         invoke([upload(device, host, "D")], "D", (1, 1), 256, k_chunk)

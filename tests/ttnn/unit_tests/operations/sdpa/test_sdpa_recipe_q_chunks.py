@@ -19,7 +19,7 @@ from models.common.utility_functions import is_blackhole
 from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare, reference
 
 Q_CHUNKS = (128, 192, 224, 288, 320)
-UNSUPPORTED_Q_CHUNKS = (96, 100, 352)
+UNSUPPORTED_Q_CHUNKS = (100, 1056)
 
 
 def options(variant, grid, q_chunk_size):
@@ -109,5 +109,5 @@ def test_recipe_rejects_unsupported_q_chunk(device, q_chunk_size):
         pytest.skip("Named recipes initially target Blackhole")
     host = make_inputs(512, "normal", q_length=512)
     inputs = upload(device, host, "D")
-    with pytest.raises(RuntimeError, match="Q chunks from 128 to 320 rows"):
+    with pytest.raises(RuntimeError, match="tile-aligned Q chunks from 32 to 1024 rows"):
         invoke([inputs], "D", (2, 1), q_chunk_size)

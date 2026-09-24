@@ -17,6 +17,10 @@ uint32_t recipe_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
 // K tiles per chunk for a validated recipe program config (defaults to K512).
 uint32_t recipe_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
 
+// Dense/joint recipes: any tile-aligned Q chunk up to 1024 rows and any tile-aligned K chunk.
+uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
+uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
+
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,

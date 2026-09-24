@@ -134,6 +134,7 @@ def test_recipe_d256_accuracy(
 def test_recipe_rejects_unsupported_head_dim(device):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
-    host = [x[..., :96].contiguous() for x in make_inputs(512, "normal", q_length=256)]
-    with pytest.raises(RuntimeError, match="head dims 64, 128 and 256"):
+    # Tile-aligned head dims are supported (see test_sdpa_recipe_geometry.py); padded ones are not.
+    host = [x[..., :80].contiguous() for x in make_inputs(512, "normal", q_length=256)]
+    with pytest.raises(RuntimeError, match="tile-aligned head dims|tile-aligned head dim"):
         run([upload(device, host)], "D", (1, 1), 256, 512)
