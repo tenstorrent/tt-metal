@@ -77,6 +77,9 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::BFLOAT16,
             "rms_norm_eps (fused q/k RMS) needs a bfloat16 input, got {}",
             input_tensor.dtype());
+        TT_FATAL(
+            operation_attributes.compute_kernel_config.fp32_dest_acc_en,
+            "rms_norm_eps (fused q/k RMS) needs fp32_dest_acc_en = True");
     }
 
     TT_FATAL(

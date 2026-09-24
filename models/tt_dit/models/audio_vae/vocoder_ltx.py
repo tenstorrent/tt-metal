@@ -464,10 +464,7 @@ class Vocoder(Module):
         readback + re-upload that ``forward_BCT`` implies."""
         self._t_pad = t_pad
         mark = time.perf_counter()
-        if traced:
-            y_dev = self._forward_device(x_dev, traced=True, tracer_trace_key=trace_key)
-        else:
-            y_dev = self._forward_device(x_dev)
+        y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
         if timings is not None:
             ttnn.synchronize_device(self.mesh_device)
             timings["vocoder"] = time.perf_counter() - mark

@@ -16,7 +16,17 @@ _programs: dict = {}
 
 
 def _build(
-    mesh_device, *, s_pad: int, d: int, num_frames: int, height: int, out_channels: int, pt: int, p: int, x, out
+    mesh_device,
+    *,
+    s_pad: int,
+    d: int,
+    num_frames: int,
+    height: int,
+    out_channels: int,
+    pt: int,
+    p: int,
+    reader_acc: tuple,
+    writer_acc: tuple,
 ):
     grid = mesh_device.compute_with_storage_grid_size()
     cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]
@@ -41,13 +51,16 @@ def _build(
     return dict(
         core_grid=core_grid,
         rt=rt,
-        reader_ct=ct + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
-        writer_ct=ct + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+        reader_ct=ct + list(reader_acc),
+        writer_ct=ct + list(writer_acc),
         cbs=[cb],
         # Deterministic across processes (ints only, no str hashing); every compile-time and work-split input is in it,
         # since generic_op trusts the hash on a program-cache hit.
         hash=(0xC13 << 52)
-        | (hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), len(cores))) & ((1 << 52) - 1)),
+        | (
+            hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), reader_acc, writer_acc, len(cores)))
+            & ((1 << 52) - 1)
+        ),
     )
 
 
@@ -76,7 +89,11 @@ def unpatchify_tiled(
         mesh_device,
         ttnn.DRAM_MEMORY_CONFIG,
     )
-    key = (id(mesh_device), s_pad, d, num_frames, height, out_channels, patch_size_t, patch_size)
+    reader_acc = tuple(ttnn.TensorAccessorArgs(tokens).get_compile_time_args())
+    writer_acc = tuple(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+    key = (
+        id(mesh_device), s_pad, d, num_frames, height, out_channels, patch_size_t, patch_size, reader_acc, writer_acc
+    )
     built = _programs.get(key)
     if built is None:
         built = _build(
@@ -88,8 +105,8 @@ def unpatchify_tiled(
             out_channels=out_channels,
             pt=patch_size_t,
             p=patch_size,
-            x=tokens,
-            out=out,
+            reader_acc=reader_acc,
+            writer_acc=writer_acc,
         )
         _programs[key] = built
     common = dict(core_ranges=built["core_grid"], runtime_args=built["rt"])

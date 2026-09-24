@@ -16,8 +16,8 @@
 //   [0] cb_out_rm
 //   [1] num_t_tiles, [2] T, [3] W, [4] W2
 //   [5] y_tiles (= ceil(2W/32)), [6] uv_tiles (= ceil(W2/32))
-//   [7] wide (0/1), [8] cb_rowbuf, [9] row_bytes_y (= W*T), [10] row_bytes_uv (= W2*T)
-//   [11..] TensorAccessorArgs for Y, U, V buffers
+//   [7] wide (0/1), [8] cb_rowbuf, [9] row_bytes_y (= W*T), [10] row_bytes_uv (= W2*T), [11] rowpage
+//   [12..] TensorAccessorArgs for Y, U, V buffers
 //
 // Runtime args:
 //   [0] y_addr, [1] u_addr, [2] v_addr, [3] unit_start, [4] unit_count
@@ -49,14 +49,13 @@ void kernel_main() {
     constexpr uint32_t cb_rowbuf = get_compile_time_arg_val(8);
     constexpr uint32_t row_bytes_y = get_compile_time_arg_val(9);
     constexpr uint32_t row_bytes_uv = get_compile_time_arg_val(10);
-    constexpr auto y_args = TensorAccessorArgs<11>();
+    constexpr uint32_t rowpage = get_compile_time_arg_val(11);
+    constexpr auto y_args = TensorAccessorArgs<12>();
     constexpr auto u_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<u_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t last_tile_elems = T - (num_t_tiles - 1) * TILE_W;
     constexpr uint32_t y_sticks = 2 * W;
-    // One row buffer page per staged row, 64 B aligned so the row writes start aligned.
-    constexpr uint32_t rowpage = ((row_bytes_y + 63) / 64) * 64;
 
     const auto sy = TensorAccessor(y_args, y_addr);
     const auto su = TensorAccessor(u_args, u_addr);

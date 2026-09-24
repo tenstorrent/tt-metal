@@ -1485,7 +1485,7 @@ class MiniMaxH3Pipeline:
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
             # One stereo channel per row of the mesh axis the T-shard does not use, when that axis has two devices.
             batch_shard_axis = None
-            if audio_parallel_config is not None:
+            if audio_parallel_config is not None and not ttnn.using_distributed_env():
                 other = 1 - self._audio_t_axis
                 if tuple(self.mesh_device.shape)[other] >= 2:
                     batch_shard_axis = other

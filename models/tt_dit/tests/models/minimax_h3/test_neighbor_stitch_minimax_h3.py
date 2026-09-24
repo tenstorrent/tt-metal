@@ -5,13 +5,21 @@
 """The neighbour stitch pinned to the gather stitch through a whole 4x8 decode: same latents, weights and geometry,
 only the exchange differs. Real weights: a per-device stub would hide the tile placement this checks."""
 
+import json
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 
-from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig, split_tiles
+from ....models.vae.minimax_h3.vae_minimax_h3 import (
+    MiniMaxH3Vae,
+    MiniMaxH3VaeConfig,
+    prepare_decoder_state,
+    split_tiles,
+)
 from ....parallel.config import ParallelFactor, VAEParallelConfig
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MODEL_NAME
@@ -27,6 +35,24 @@ LATENT_HW = (48, 84)
 HEIGHT, WIDTH = 768, 1344
 
 
+def _decoder_state(weights_dir: str) -> dict[str, torch.Tensor]:
+    """The decoder-side tensors of the checkpoint, sharded or single-file."""
+    from safetensors.torch import load_file
+
+    prefixes = ("decoder.", "post_quant_conv.")
+    index_path = os.path.join(weights_dir, "diffusion_pytorch_model.safetensors.index.json")
+    if not os.path.isfile(index_path):
+        loaded = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+        return {k: v for k, v in loaded.items() if k.startswith(prefixes)}
+    weight_map = json.loads(open(index_path).read())["weight_map"]
+    wanted = {k: f for k, f in weight_map.items() if k.startswith(prefixes)}
+    state: dict[str, torch.Tensor] = {}
+    for shard in sorted(set(wanted.values())):
+        loaded = load_file(os.path.join(weights_dir, shard))
+        state.update({k: loaded[k] for k in wanted if k in loaded})
+    return state
+
+
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
 def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
@@ -37,6 +63,12 @@ def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
     torch.manual_seed(5)
 
     parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(mesh_axis=0, factor=1))
+    pixel_denorm = (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+
+    def decoder_state():
+        return prepare_decoder_state(
+            _decoder_state(weights), pixel_denorm=pixel_denorm, out_channels=config.out_channels
+        )
 
     def load_cached(module, subfolder, state):
         blocking = conv3d_blocking_hash(module)
@@ -48,9 +80,7 @@ def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
             mesh_shape=tuple(mesh_device.shape),
             mesh_device=mesh_device,
             dtype="fp32",
-            get_torch_state_dict=lambda: (_ for _ in ()).throw(
-                RuntimeError(f"cache miss for {subfolder}; run a served decode first to populate it")
-            ),
+            get_torch_state_dict=lambda: state or decoder_state(),
         )
 
     vae = MiniMaxH3Vae(
@@ -60,7 +90,7 @@ def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
         ccl_manager=CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring),
         device_stitch=True,
         weight_loader=load_cached,
-        pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+        pixel_denorm=pixel_denorm,
     )
     load_cached(vae.decoder, vae._decoder_subfolder(), {})
 

@@ -176,8 +176,9 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // The RMS prologue's fp32 DFBs (x^2, the rsqrt scale) feed the FPU through the source registers. Metal 2.0 wants
     // that said for every fp32 DFB a compute kernel is bound to under a 32-bit Dest, whether or not the kernel touches
     // it.
+    const bool fuse_rms = operation_attributes.rms_norm_eps.has_value();
     ComputeUnpackModes rms_unpack_modes;
-    if (fp32_dest_acc_en) {
+    if (fuse_rms && fp32_dest_acc_en) {
         rms_unpack_modes.emplace(XX_DFB, UnpackMode::UnpackToSrc);
         rms_unpack_modes.emplace(EX2PE_DFB, UnpackMode::UnpackToSrc);
     }
@@ -201,37 +202,12 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     }
 
     KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
-    const bool fuse_rms = operation_attributes.rms_norm_eps.has_value();
     uint32_t rms_eps_bits = 0;
     if (fuse_rms) {
         reload_define.insert({"FUSE_RMS", "1"});
         const float eps = operation_attributes.rms_norm_eps.value();
         std::memcpy(&rms_eps_bits, &eps, sizeof(rms_eps_bits));
     }
-    // RMS prologue buffers: x^2 and the rsqrt scale in fp32 (the reduce accumulates in fp32 DST), the normalised x in
-    // the input's format (bf16), one bf16 scaler tile the reader fills once.
-    const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
-    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-    DataflowBufferSpec xx_dfb{
-        .unique_id = XX_DFB,
-        .entry_size = fp32_tile_size,
-        .num_entries = head_dim_t,
-        .data_format_metadata = tt::DataFormat::Float32};
-    DataflowBufferSpec ex2pe_dfb{
-        .unique_id = EX2PE_DFB,
-        .entry_size = fp32_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = tt::DataFormat::Float32};
-    DataflowBufferSpec xn_dfb{
-        .unique_id = XN_DFB,
-        .entry_size = input_single_tile_size,
-        .num_entries = head_dim_t,
-        .data_format_metadata = input_cb_data_format};
-    DataflowBufferSpec scaler_dfb{
-        .unique_id = SCALER_DFB,
-        .entry_size = bf16_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = tt::DataFormat::Float16_b};
 
     // ------------------------------------------------------------------
     // Kernels
@@ -248,9 +224,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              DFBBinding{
                  .dfb_spec_name = TRANS_MAT_DFB,
                  .accessor_name = "trans_mat",
-                 .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
+                 .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
              TensorBinding{.tensor_parameter_name = COS_PARAM, .accessor_name = "cos"},
@@ -263,8 +237,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
              {"cos_Ht", cos_seq_len_t},
              {"sin_Ht", sin_seq_len_t},
-             {"rotary_Ht", rotary_seq_len_t},
-             {"fuse_rms", static_cast<uint32_t>(fuse_rms)}},
+             {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
         .hw_config = create_reader_datamovement_config(device->arch())};
 
@@ -320,22 +293,54 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              DFBBinding{
                  .dfb_spec_name = SIN_INTERM_DFB,
                  .accessor_name = "sin_interm",
-                 .endpoint_type = DFBEndpointType::CONSUMER},
-             // RMS prologue: scaler from the reader; xx / ex2pe / xn are compute-only (self-loop).
-             DFBBinding{
-                 .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{
-                 .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::CONSUMER}},
+                 .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args =
             {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}, {"rms_eps_bits", rms_eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
         .hw_config = compute_hw_config};
+
+    Group<DataflowBufferSpec> dataflow_buffers{
+        input_dfb, cos_dfb, sin_dfb, trans_mat_dfb, rotated_interm_dfb, cos_interm_dfb, sin_interm_dfb, out_dfb};
+    if (fuse_rms) {
+        const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
+        const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = XX_DFB,
+            .entry_size = fp32_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = tt::DataFormat::Float32});
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = EX2PE_DFB,
+            .entry_size = fp32_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float32});
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = XN_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = input_cb_data_format});
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = SCALER_DFB,
+            .entry_size = bf16_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b});
+        reader_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
 
     // ------------------------------------------------------------------
     // Per-node runtime args (batch×seq parallelization; idle cores zero-filled exactly as legacy).
@@ -402,19 +407,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     ProgramSpec spec{
         .name = "rotary_embedding_llama_multi_core",
         .kernels = {reader_spec, writer_spec, compute_spec},
-        .dataflow_buffers =
-            {input_dfb,
-             cos_dfb,
-             sin_dfb,
-             trans_mat_dfb,
-             rotated_interm_dfb,
-             cos_interm_dfb,
-             sin_interm_dfb,
-             out_dfb,
-             xx_dfb,
-             ex2pe_dfb,
-             xn_dfb,
-             scaler_dfb},
+        .dataflow_buffers = std::move(dataflow_buffers),
         .scratchpads = {zero_scratchpad},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};

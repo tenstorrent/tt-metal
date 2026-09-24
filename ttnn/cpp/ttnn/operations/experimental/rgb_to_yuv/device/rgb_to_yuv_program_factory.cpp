@@ -4,12 +4,14 @@
 
 #include "rgb_to_yuv_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <fmt/format.h>
+#include <algorithm>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -152,8 +154,8 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     const bool wide_rows = op_attrs.wide_rows;
     const uint32_t row_bytes_y = W * T;
     const uint32_t row_bytes_uv = W2 * T;
+    const uint32_t rowpage = tt::align(row_bytes_y, std::max(hal::get_l1_alignment(), hal::get_dram_alignment()));
     if (wide_rows) {
-        const uint32_t rowpage = ((row_bytes_y + 63) / 64) * 64;
         auto cfg = CircularBufferConfig(2 * rowpage, {{cb_rowbuf, u8_fmt}}).set_page_size(cb_rowbuf, rowpage);
         CreateCircularBuffer(program, all_cores, cfg);
     }
@@ -202,6 +204,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         cb_rowbuf,
         row_bytes_y,
         row_bytes_uv,
+        rowpage,
     };
     TensorAccessorArgs(*y_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*u_buf).append_to(writer_ct_args);

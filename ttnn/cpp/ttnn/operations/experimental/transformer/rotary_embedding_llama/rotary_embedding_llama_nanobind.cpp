@@ -34,7 +34,7 @@ void bind_rotary_embedding_llama(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor = DEFAULT_OUTPUT_MEMORY_CONFIG
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
                 * :attr:`rms_norm_eps`: Optional[float] = None. When set, the input is RMS-normalised over the head dim
-                  (x * rsqrt(mean(x^2) + eps)) inside the kernel before the rotation; prefill interleaved only.
+                  (x * rsqrt(mean(x^2) + eps)) inside the kernel before the rotation; prefill interleaved only, needs fp32_dest_acc_en.
         )doc",
         &ttnn::experimental::rotary_embedding_llama,
         nb::arg("input_tensor"),
