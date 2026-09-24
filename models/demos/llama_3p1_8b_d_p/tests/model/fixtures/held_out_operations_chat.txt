@@ -1,0 +1,110 @@
+Review this fictional operations note. Explain which observations need investigation, which calculations are valid, and what should be checked before the next trial. Keep measured facts separate from possible explanations. Do not invent missing observations.
+
+The Cedar Valley observatory runs three instruments from a shared battery bank. The camera takes a large image every forty seconds. A weather station records temperature, pressure, humidity, and wind speed every ten seconds. A small tracking motor changes its position continuously. The controller combines these records into one archive, but each instrument has its own sequence counter and clock.
+
+On Tuesday, the team changed the controller software from version 2.7 to version 2.8. The new version batches archive writes. It does not change the camera exposure settings. The battery bank was also replaced that morning. Therefore a difference between Tuesday and Monday cannot immediately be assigned to the software. We need a trial that keeps the battery, cable, ambient temperature, and instrument settings fixed.
+
+The archive contains both a measurement time and a receipt time. The measurement time is the instrument's best estimate of when the sample was taken. The receipt time is the controller's clock when the complete record arrives. A late receipt does not prove that the instrument sampled late. A negative apparent delay may mean that the clocks differ. It does not mean that data travelled backward in time.
+
+Here is a shortened configuration. The fields are examples, not instructions to operate equipment.
+
+{
+  "site": "cedar-valley",
+  "trial": 17,
+  "archive": {"batch_size": 24, "flush_ms": 500, "checksum": "crc32"},
+  "camera": {"exposure_ms": 180, "width": 2048, "height": 1536},
+  "weather": {"period_ms": 10000, "missing_value": null},
+  "motor": {"max_speed_deg_s": 1.25, "deadband_deg": 0.015},
+  "battery": {"nominal_volts": 24.0, "warning_volts": 22.8},
+  "clock": {"source": "local-reference", "resync_seconds": 600}
+}
+
+The analyst wrote this Python function. Check its treatment of missing values, ordering, repeated sequence numbers, and the first sample. Also explain whether the returned average is weighted by time.
+
+def summarize(samples):
+    previous = None
+    drops = 0
+    duplicates = 0
+    total = 0.0
+    count = 0
+    delays = []
+    for sample in sorted(samples, key=lambda item: item["received_ms"]):
+        sequence = sample["sequence"]
+        if previous is not None:
+            gap = sequence - previous
+            if gap == 0:
+                duplicates += 1
+            elif gap > 1:
+                drops += gap - 1
+        previous = sequence
+        value = sample.get("voltage")
+        if value is not None:
+            total += value
+            count += 1
+        delays.append(sample["received_ms"] - sample["measured_ms"])
+    return {
+        "mean_voltage": total / count if count else None,
+        "missing_sequence_numbers": drops,
+        "duplicate_sequence_numbers": duplicates,
+        "maximum_apparent_delay_ms": max(delays) if delays else None,
+    }
+
+There are several details to consider. The counters are unsigned sixteen-bit numbers, so a counter can wrap from 65535 to zero. The camera can restart without the weather station restarting. After a restart, the counter returns to zero and the boot identifier changes. Records can be delivered out of order if a radio retry succeeds after a later packet. Two copies with the same boot identifier and sequence number may contain identical payloads, or they may indicate an upstream defect. These cases need different labels in the report.
+
+The voltage sensor reports integer millivolts before the controller converts the result to volts. Its stated resolution is ten millivolts. A displayed value with six decimal places does not provide six decimal places of measurement precision. The temperature sensor has a different resolution and a different calibration history. A correlation between voltage and temperature can be useful, but correlation alone does not establish a cause.
+
+The camera has a local buffer for eight images. If archive writes stop, this buffer can hide the interruption for several minutes. A test that checks only the final image count may miss a delay that is unacceptable during observation. Conversely, a short burst of delayed receipts can occur without losing any images. Report completeness and delay separately.
+
+The following trial plan is proposed:
+1. Keep the same battery bank and cable for both software versions.
+2. Start with the instruments at the same temperature range.
+3. Record a stable ten-minute baseline before each trial.
+4. Run the same camera cadence and motor motion for twenty minutes.
+5. Save raw instrument timestamps, controller receipt timestamps, boot identifiers, sequence counters, and payload checksums.
+6. Restart one instrument at a known time during a separate recovery trial.
+7. Inject a brief archive pause during another trial, and check both buffer occupancy and recovery delay.
+8. Keep failed trials in the evidence set with an explanation. Do not remove them merely because they look unusual.
+
+A technician suggested averaging the maximum delay from each instrument. Explain why that value can hide a serious problem in one instrument. Also distinguish a percentile computed across all records from a percentile computed separately for each instrument. The camera and weather station have different sample rates. Combining them without naming the weighting rule changes the question being answered.
+
+The team also needs a small validation set for the analysis program. Include an empty input, one valid record, a missing voltage, a duplicate record, an out-of-order delivery, a counter wrap, a restart with a new boot identifier, and a clock correction. For each case, state the invariant that should hold. A correct mean for one normal file is not enough to establish correct handling of these cases.
+
+Here is an illustrative excerpt. Units are explicit: offset_s is seconds from trial start; volts is volts; temp_c is degrees Celsius; apparent_delay_ms is milliseconds. A dash means the sensor did not provide a value. No interpolation has been applied.
+
+offset_s,instrument,boot,sequence,volts,temp_c,apparent_delay_ms,note
+0,weather,w3,65530,24.12,18.4,12,baseline
+10,weather,w3,65531,24.10,18.4,14,baseline
+20,weather,w3,65532,24.11,18.5,11,baseline
+30,weather,w3,65533,24.08,18.5,16,baseline
+40,camera,c8,910,23.94,19.1,185,exposure
+40,weather,w3,65534,24.06,18.6,13,baseline
+50,weather,w3,65535,24.05,18.6,15,last_counter_value
+60,weather,w3,0,24.06,18.6,12,counter_wrap
+70,weather,w3,1,24.03,18.7,18,baseline
+80,camera,c8,911,23.91,19.2,193,exposure
+80,weather,w3,2,24.02,18.7,14,baseline
+90,weather,w3,3,-,18.8,17,missing_voltage
+100,weather,w3,4,24.00,18.8,15,baseline
+110,weather,w3,5,23.99,18.8,214,retry
+120,weather,w3,6,23.98,18.9,16,baseline
+120,camera,c8,912,23.87,19.3,205,exposure
+130,weather,w3,7,23.99,18.9,14,baseline
+140,weather,w3,8,23.97,19.0,13,baseline
+150,weather,w3,9,23.96,19.0,15,baseline
+160,camera,c8,913,23.84,19.4,211,exposure
+160,weather,w3,10,23.95,19.1,12,baseline
+170,weather,w3,11,23.94,19.1,17,baseline
+180,weather,w3,12,23.95,19.1,19,baseline
+190,weather,w3,13,23.93,19.2,14,baseline
+200,camera,c8,914,23.80,19.5,208,exposure
+200,weather,w3,14,23.92,19.2,16,baseline
+210,weather,w3,15,23.91,19.3,511,archive_pause
+220,weather,w3,16,23.92,19.3,402,archive_pause
+230,weather,w3,17,23.90,19.3,295,recovery
+240,camera,c8,915,23.78,19.6,247,recovery
+240,weather,w3,18,23.89,19.4,189,recovery
+250,weather,w3,19,23.90,19.4,17,baseline
+
+The excerpt alone cannot establish long-term battery capacity, sensor calibration, or the probability of a rare archive failure. State these limitations directly. A larger sample helps estimate variation, but it does not remove a systematic clock error or a bias in the trial design.
+
+Finally, suggest a concise report structure. The first section should contain observations with units and sample counts. The second should contain reproducible calculations. The third should list competing explanations and the specific next measurement that would distinguish them. End with a checklist for saving enough information that another analyst can repeat the calculations.
