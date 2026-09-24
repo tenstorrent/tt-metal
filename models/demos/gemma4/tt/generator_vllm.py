@@ -22,6 +22,8 @@ from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.tt.generator import (
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
+    _build_vision_state_dict,
+    _vision_encoder_seq_len,
     align_num_cached_tokens_to_sdpa,
     mask_page_table_columns_past_allocation,
     max_batched_prefill_users,
