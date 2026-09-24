@@ -1,6 +1,6 @@
 {
   "as_of": "2026-09-24",
-  "commit": "f970e9199d5 (branch arg/pplx-embed-upstream)",
+  "commit": "e9e63801158 (branch arg/pplx-embed-upstream)",
   "workload": {
     "profile": "prefill_embedding",
     "prompt_len": 512,
@@ -21,13 +21,13 @@
   },
   "e2e_ms": {
     "cold_best_of_10": {
-      "bs1": 17.6,
+      "bs1": 17.5,
       "bs8": 115.3,
       "bs16": 221.0,
       "bs32": 425.5
     },
     "sustained_median_it15_29_of_30": {
-      "bs1": 18.3,
+      "bs1": 17.7,
       "bs8": 121.0,
       "bs16": 228.2,
       "bs32": 451.1
@@ -47,13 +47,13 @@
   },
   "x_h200": {
     "cold": {
-      "bs1": 3.24,
+      "bs1": 3.22,
       "bs8": 3.49,
       "bs16": 3.29,
       "bs32": 3.06
     },
     "sustained": {
-      "bs1": 3.37,
+      "bs1": 3.26,
       "bs8": 3.66,
       "bs16": 3.39,
       "bs32": 3.24
@@ -66,7 +66,7 @@
     "bs32": 417.5
   },
   "device_ms_one_traced_replay": {
-    "bs1": 16.877,
+    "bs1": 16.634,
     "bs8": 106.633,
     "bs16": 199.829,
     "bs32": 365.318
@@ -79,14 +79,14 @@
   },
   "device_op_breakdown_ms": {
     "bs1": {
-      "MatmulDeviceOperation": 10.05,
-      "BinaryNgDeviceOperation": 2.341,
-      "GenericOpDeviceOperation": 1.766,
-      "SDPAOperation": 1.711,
-      "LayerNormDeviceOperation": 0.598,
-      "ShardedToInterleavedDeviceOperation": 0.201,
-      "InterleavedToShardedDeviceOperation": 0.177,
-      "EmbeddingsDeviceOperation": 0.029,
+      "MatmulDeviceOperation": 10.051,
+      "BinaryNgDeviceOperation": 2.393,
+      "SDPAOperation": 1.664,
+      "GenericOpDeviceOperation": 1.6,
+      "LayerNormDeviceOperation": 0.599,
+      "ShardedToInterleavedDeviceOperation": 0.2,
+      "InterleavedToShardedDeviceOperation": 0.091,
+      "EmbeddingsDeviceOperation": 0.03,
       "UntilizeCodegenDeviceOperation": 0.003,
       "SliceDeviceOperation": 0.002
     },
