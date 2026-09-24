@@ -107,6 +107,13 @@ public:
     // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
+#ifdef ARCH_QUASAR
+    // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
+    // Only runs for objects that moved data (push/pop/implicit read/write), so copies and objects that
+    // were only used for config queries do not block.
+    ~DataflowBuffer();
+#endif
+
     uint16_t get_id() const { return logical_dfb_id_; }
 
     // Returns the size of each entry in the DFB
@@ -311,12 +318,18 @@ public:
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    void finish() { finish_impl(); }
+    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
+    void finish() {}
 
 #ifndef COMPILE_FOR_TRISC
-    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
-    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+    // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
+    // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
+    // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
+    void write_barrier([[maybe_unused]] const Noc& noc) const {
+#ifndef ARCH_QUASAR
+        write_barrier_impl(noc);
+#endif
+    }
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
@@ -360,7 +373,9 @@ private:
     void push_back_impl(uint16_t num_entries);
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
+#ifdef ARCH_QUASAR
     void finish_impl();
+#endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
 
@@ -434,6 +449,10 @@ private:
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
     uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+
+    // Gate the destructor: drain only if this object moved data; write-barrier only if it drained entries out.
+    bool has_traffic_ = false;
+    bool has_outbound_writes_ = false;
 #endif
 };
 
