@@ -124,6 +124,11 @@ pytest models/demos/cosyvoice/tests/perf/ -v -s
 COSYVOICE_INPUTS=/path/to/inputs pytest models/demos/cosyvoice/tests/e2e/ -v
 ```
 
+Without the goldens and the weight exports in `tests/golden` (Quick start, step 3), the
+device tests skip and pytest still reports the run as passed. `tests/conftest.py` names
+what is absent in the header and counts the skipped tests in a red summary at the end;
+a run that prints it has not tested the port.
+
 ### Demo
 
 ```bash
