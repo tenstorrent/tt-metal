@@ -48,7 +48,7 @@ void barrier_across_send_recv_ranks(
 // Mesh-ID sockets are mesh-scoped: connections may land on any host that owns that mesh.
 // If a DistributedContext/subcontext was provided, rank_translation_table only contains the
 // ranks in that context, so coordinates owned by a rank outside the context are rejected.
-void validate_mesh_id_device_ownership(
+void validate_device_ownership_mesh_scoped(
     const SocketConfig& config, const std::unordered_map<Rank, Rank>& rank_translation_table) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& topology_mapper = control_plane.get_topology_mapper();
@@ -100,7 +100,7 @@ void validate_mesh_id_device_ownership(
 // Rank-addressed and mesh-id sockets both express SocketConnection device coordinates in
 // canonical logical mesh space (see SocketConfig). Rank-addressed sockets additionally
 // require those coordinates to sit on the sender/receiver ranks' host slices.
-void validate_device_ownership(
+void validate_device_ownership_rank_scoped(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -189,7 +189,7 @@ void MeshSocket::process_host_ranks(const tt_fabric::ControlPlane& control_plane
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    validate_device_ownership(sender_rank, receiver_rank, config_);
+    validate_device_ownership_rank_scoped(sender_rank, receiver_rank, config_);
 }
 
 void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) {
@@ -214,7 +214,7 @@ void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) 
             }
         }
     }
-    validate_mesh_id_device_ownership(config_, rank_translation_table_);
+    validate_device_ownership_mesh_scoped(config_, rank_translation_table_);
 }
 
 SocketConfig MeshSocket::populate_mesh_ids(
