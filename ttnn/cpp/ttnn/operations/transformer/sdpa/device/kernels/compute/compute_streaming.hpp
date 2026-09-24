@@ -2359,7 +2359,6 @@ void sdpa_ring_v2(
     const uint32_t q_base_tiles = 0) {
     init_sdpa_streaming_semaphores();
 
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
