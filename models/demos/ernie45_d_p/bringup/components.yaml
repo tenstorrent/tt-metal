@@ -1,0 +1,120 @@
+# Model components -> reference op -> TTNN implementation, with the task that gates each one.
+# tag:  NATIVE    a TTNN op does it directly
+#       COMPOSED  built from several TTNN ops (no single matching op)
+#       CPU       stays on host (no TTNN path yet)
+# The dashboard derives each component's live state from its gating task in state.json:
+#   task PASS -> "on device, gated"; otherwise -> "CPU reference".
+
+components:
+  - id: embed
+    name: Token embedding
+    block: model
+    ref: F.embedding(tokens, W[103424, 2560])
+    ttnn: ttnn.embedding (replicated table)
+    tag: NATIVE
+    task: P2.4
+  - id: attn_norm
+    name: Input RMSNorm
+    block: attention
+    ref: rms_norm(eps=1e-5)
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: qkv
+    name: Q/K/V projections
+    block: attention
+    ref: "x @ Wq[2560,2560], Wk/Wv[512,2560]"
+    ttnn: ttnn.linear (column-parallel, 5 Q + 1 KV head per chip)
+    tag: NATIVE
+    task: P2.6
+  - id: rope
+    name: Interleaved RoPE (theta 5e5) with chunk offset
+    block: attention
+    ref: apply_rope (pairs 2j, 2j+1)
+    ttnn: ttnn.experimental.rotary_embedding_llama + cos/sin for [start, start+S)
+    tag: NATIVE
+    task: P2.5
+  - id: kv_write
+    name: KV cache write at chunk offset
+    block: attention
+    ref: cache[:, start:end] = k, v
+    ttnn: ttnn.fill_cache(update_idx=start)  (contract layout in P2.15)
+    tag: NATIVE
+    task: P2.6
+  - id: sdpa
+    name: Chunked causal GQA attention
+    block: attention
+    ref: softmax(q k^T / sqrt(128) + causal(start)) v
+    ttnn: ttnn.transformer.scaled_dot_product_attention (chunk 0) / chunked_scaled_dot_product_attention
+    tag: NATIVE
+    task: P2.6
+  - id: o_proj
+    name: O projection + all_reduce
+    block: attention
+    ref: a @ Wo[2560,2560]
+    ttnn: ttnn.linear (row-parallel) + ttnn.all_reduce
+    tag: NATIVE
+    task: P2.6
+  - id: ffn_norm
+    name: Post-attention RMSNorm
+    block: mlp
+    ref: rms_norm(eps=1e-5)
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: dense_mlp
+    name: Dense SwiGLU MLP (layer 0, 12288)
+    block: mlp
+    ref: down(silu(gate x) * up x)
+    ttnn: ttnn.linear x3 + ttnn.silu/mul, TP4 + all_reduce
+    tag: COMPOSED
+    task: P2.7
+  - id: router
+    name: MoE router (softmax, bias-corrected top-6, renorm)
+    block: moe
+    ref: topk(softmax(x Wr^T) + bias) ; gather ; w / sum(w)
+    ttnn: ttnn.linear(fp32) + softmax + add + ttnn.topk + ttnn.gather + sum/div
+    tag: COMPOSED
+    task: P2.8
+  - id: experts
+    name: Routed experts (64, top-6, FFN 1536), EP4
+    block: moe
+    ref: sum_k w_k SwiGLU_e(x)
+    ttnn: ttnn.sparse_matmul (16 local experts) + swiglu + weighted reduce
+    tag: COMPOSED
+    task: P2.9
+  - id: shared
+    name: Shared experts (2 x 1536 fused), TP4
+    block: moe
+    ref: SwiGLU(x) with I=3072
+    ttnn: ttnn.linear x3 + silu/mul
+    tag: COMPOSED
+    task: P2.7
+  - id: moe_reduce
+    name: MoE combine (routed + shared) + all_reduce
+    block: moe
+    ref: routed + shared
+    ttnn: ttnn.add + ttnn.all_reduce
+    tag: NATIVE
+    task: P2.9
+  - id: final_norm
+    name: Final RMSNorm
+    block: model
+    ref: rms_norm
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: lm_head
+    name: LM head (tied, vocab-sharded)
+    block: model
+    ref: out @ embed^T
+    ttnn: ttnn.linear (vocab-sharded), gather on host
+    tag: NATIVE
+    task: P2.11
+  - id: mtp
+    name: Multi-token-prediction block (mtp_block.0)
+    block: model
+    ref: not used for prefill
+    ttnn: out of scope
+    tag: CPU
+    task: null
