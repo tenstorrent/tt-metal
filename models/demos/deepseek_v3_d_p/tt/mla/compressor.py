@@ -526,6 +526,8 @@ class TtCSACompressor(TtCompressorBase):
         )
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
+        if self.compress_rate != 4:
+            raise ValueError(f"TtCSACompressor requires compress_rate=4, got {self.compress_rate}")
         self.rope_head_dim = int(rope_head_dim)
         self.rms_norm_eps = float(rms_norm_eps)
         if preloaded_weights is None:

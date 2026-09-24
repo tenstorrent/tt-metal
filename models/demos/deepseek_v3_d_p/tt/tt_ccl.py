@@ -556,11 +556,11 @@ def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
     argument and all own collectives on both axes.
     """
     if isinstance(topology, tuple):
-        assert len(topology) == 2, f"a per-axis topology tuple must be (dim0, dim1), got {topology}"
-        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1. Guard it so
-        # a future axis swap fails loudly here instead of cross-wiring Ring onto the wrong axis, which
-        # deadlocks at runtime rather than returning a wrong answer.
-        assert sp_axis == 0 and tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+        if len(topology) != 2:
+            raise ValueError(f"a per-axis topology tuple must be (dim0, dim1), got {topology}")
+        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1.
+        if sp_axis != 0 or tp_axis != 1:
+            raise ValueError("per-axis topology tuple assumes sp_axis=0, tp_axis=1")
         return topology
     return topology, topology
 

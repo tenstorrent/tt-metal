@@ -51,8 +51,10 @@ void validate_common(const CsaRuntimeParams& params, const Inputs& args) {
     const auto mesh_shape = args.kv.device()->shape();
     TT_FATAL(mesh_shape.dims() == 2, "csa_compressor requires a 2D mesh");
     TT_FATAL(
-        params.seq_len_actual <= shape[-2] * mesh_shape[params.cluster_axis],
-        "seq_len_actual exceeds the global padded slab");
+        params.seq_len_actual > 0 && params.seq_len_actual <= shape[-2] * mesh_shape[params.cluster_axis],
+        "seq_len_actual must be in [1, {}], got {}",
+        shape[-2] * mesh_shape[params.cluster_axis],
+        params.seq_len_actual);
 }
 
 void validate_states(const Tensor& kv_state, const Tensor& score_state, const Tensor& kv) {
