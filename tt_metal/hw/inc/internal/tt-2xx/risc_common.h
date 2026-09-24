@@ -326,6 +326,164 @@ inline void invalidate_cache_all(uint32_t hartid) {
     invalidate_l1_icache();
 }
 
+// -----------------------------------------------------------------------------
+// Hardware Performance Monitors (HPM)
+// -----------------------------------------------------------------------------
+// The DM cores are Rocket-based, so they expose the standard RISC-V counters
+// (mcycle, minstret) plus four programmable event counters, mhpmcounter3-6.
+// Each counter has an event selector, mhpmevent3-6, written before the counter
+// is zeroed and the measured region begins.
+//
+// These answer questions cycle counts alone cannot: whether a region is bound by
+// instruction count, by D$ misses, or by stalls. Note in particular that Quasar
+// tile-counter programming issues as a ROCC custom instruction, so it retires as
+// neither a load nor a store -- only these counters separate its cost from memory
+// traffic.
+//
+// Selector encoding (Rocket): bits [7:0] = event set, bits [N:8] = event mask
+// within that set. Masks within one set may be OR'd to count several events into
+// one counter; events from different sets cannot be combined.
+//
+// Usage:
+//     hpm_set_event(3, HPM_INSN_LOAD);
+//     hpm_set_event(4, HPM_CACHE_DCACHE_MISS);
+//     hpm_zero_counters();
+//     const uint64_t c0 = read_mcycle(), i0 = read_minstret();
+//     ... region under test ...
+//     const uint64_t cycles = read_mcycle() - c0;
+//     const uint64_t insns  = read_minstret() - i0;
+//     const uint64_t loads  = hpm_read_counter(3);
+//     const uint64_t misses = hpm_read_counter(4);
+//
+// Reads are CSR accesses and are not free (a csrr is a system instruction and can
+// interlock); keep them outside the region being measured, exactly as with rdcycle.
+//
+// Source: overlay/software/unit_tests/memport_access_perf/include/tt_riscv_common.hpp
+// (tensix/soc/overlay). The event encoding is Rocket's; confirm a selector reports
+// what you expect before trusting an absolute number from it.
+
+// Event set ids (selector bits [7:0]).
+constexpr uint64_t HPM_EVENT_SET_INSN = 0;   // retired instruction types
+constexpr uint64_t HPM_EVENT_SET_STALL = 1;  // stalls and mispredictions
+constexpr uint64_t HPM_EVENT_SET_CACHE = 2;  // cache and TLB events
+
+// Build a selector from an event set and a bit position within that set.
+constexpr uint64_t hpm_event(uint64_t set, uint64_t bit) { return set | (uint64_t{1} << (bit + 8)); }
+
+// Set 0: retired instruction types.
+constexpr uint64_t HPM_INSN_EXCEPTION = hpm_event(HPM_EVENT_SET_INSN, 0);
+constexpr uint64_t HPM_INSN_LOAD = hpm_event(HPM_EVENT_SET_INSN, 1);
+constexpr uint64_t HPM_INSN_STORE = hpm_event(HPM_EVENT_SET_INSN, 2);
+constexpr uint64_t HPM_INSN_AMO = hpm_event(HPM_EVENT_SET_INSN, 3);
+constexpr uint64_t HPM_INSN_SYSTEM = hpm_event(HPM_EVENT_SET_INSN, 4);
+constexpr uint64_t HPM_INSN_ARITH = hpm_event(HPM_EVENT_SET_INSN, 5);
+constexpr uint64_t HPM_INSN_BRANCH = hpm_event(HPM_EVENT_SET_INSN, 6);
+constexpr uint64_t HPM_INSN_JAL = hpm_event(HPM_EVENT_SET_INSN, 7);
+constexpr uint64_t HPM_INSN_JALR = hpm_event(HPM_EVENT_SET_INSN, 8);
+constexpr uint64_t HPM_INSN_MUL = hpm_event(HPM_EVENT_SET_INSN, 9);
+constexpr uint64_t HPM_INSN_DIV = hpm_event(HPM_EVENT_SET_INSN, 10);
+
+// Set 1: stalls and mispredictions.
+constexpr uint64_t HPM_STALL_LOAD_USE = hpm_event(HPM_EVENT_SET_STALL, 0);
+constexpr uint64_t HPM_STALL_LONG_LATENCY = hpm_event(HPM_EVENT_SET_STALL, 1);
+constexpr uint64_t HPM_STALL_CSR = hpm_event(HPM_EVENT_SET_STALL, 2);
+constexpr uint64_t HPM_STALL_ICACHE_BLOCKED = hpm_event(HPM_EVENT_SET_STALL, 3);
+constexpr uint64_t HPM_STALL_DCACHE_BLOCKED = hpm_event(HPM_EVENT_SET_STALL, 4);
+constexpr uint64_t HPM_MISPREDICT_BRANCH = hpm_event(HPM_EVENT_SET_STALL, 5);
+constexpr uint64_t HPM_MISPREDICT_TARGET = hpm_event(HPM_EVENT_SET_STALL, 6);
+constexpr uint64_t HPM_STALL_FLUSH = hpm_event(HPM_EVENT_SET_STALL, 7);
+constexpr uint64_t HPM_STALL_REPLAY = hpm_event(HPM_EVENT_SET_STALL, 8);
+constexpr uint64_t HPM_STALL_MULDIV = hpm_event(HPM_EVENT_SET_STALL, 9);
+
+// Set 2: cache and TLB.
+constexpr uint64_t HPM_CACHE_ICACHE_MISS = hpm_event(HPM_EVENT_SET_CACHE, 0);
+constexpr uint64_t HPM_CACHE_DCACHE_MISS = hpm_event(HPM_EVENT_SET_CACHE, 1);
+constexpr uint64_t HPM_CACHE_DCACHE_RELEASE = hpm_event(HPM_EVENT_SET_CACHE, 2);
+constexpr uint64_t HPM_CACHE_ITLB_MISS = hpm_event(HPM_EVENT_SET_CACHE, 3);
+constexpr uint64_t HPM_CACHE_DTLB_MISS = hpm_event(HPM_EVENT_SET_CACHE, 4);
+constexpr uint64_t HPM_CACHE_L2TLB_MISS = hpm_event(HPM_EVENT_SET_CACHE, 5);
+
+// Cycles elapsed on this hart.
+inline __attribute__((always_inline)) uint64_t read_mcycle() {
+    uint64_t v;
+    __asm__ __volatile__("csrr %0, mcycle" : "=r"(v));
+    return v;
+}
+
+// Instructions retired on this hart. Compare against a static disassembly count to
+// see how much of a region is re-executed loop body versus straight-line code.
+inline __attribute__((always_inline)) uint64_t read_minstret() {
+    uint64_t v;
+    __asm__ __volatile__("csrr %0, minstret" : "=r"(v));
+    return v;
+}
+
+// Program the event selector for counter `n` (3-6). `n` must be a compile-time
+// constant: RISC-V encodes the CSR number in the instruction, so it cannot be a
+// runtime value.
+template <uint32_t N>
+inline __attribute__((always_inline)) void hpm_set_event(uint64_t selector) {
+    static_assert(N >= 3 && N <= 6, "Quasar DM exposes mhpmevent3-6 only");
+    if constexpr (N == 3) {
+        __asm__ __volatile__("csrw 0x323, %0" ::"r"(selector));
+    } else if constexpr (N == 4) {
+        __asm__ __volatile__("csrw 0x324, %0" ::"r"(selector));
+    } else if constexpr (N == 5) {
+        __asm__ __volatile__("csrw 0x325, %0" ::"r"(selector));
+    } else {
+        __asm__ __volatile__("csrw 0x326, %0" ::"r"(selector));
+    }
+}
+
+// Read counter `n` (3-6).
+template <uint32_t N>
+inline __attribute__((always_inline)) uint64_t hpm_read_counter() {
+    static_assert(N >= 3 && N <= 6, "Quasar DM exposes mhpmcounter3-6 only");
+    uint64_t v;
+    if constexpr (N == 3) {
+        __asm__ __volatile__("csrr %0, 0xB03" : "=r"(v));
+    } else if constexpr (N == 4) {
+        __asm__ __volatile__("csrr %0, 0xB04" : "=r"(v));
+    } else if constexpr (N == 5) {
+        __asm__ __volatile__("csrr %0, 0xB05" : "=r"(v));
+    } else {
+        __asm__ __volatile__("csrr %0, 0xB06" : "=r"(v));
+    }
+    return v;
+}
+
+// Zero counter `n` (3-6), so the next read is a count for the region alone rather
+// than a delta the caller has to compute.
+template <uint32_t N>
+inline __attribute__((always_inline)) void hpm_zero_counter() {
+    static_assert(N >= 3 && N <= 6, "Quasar DM exposes mhpmcounter3-6 only");
+    if constexpr (N == 3) {
+        __asm__ __volatile__("csrw 0xB03, zero");
+    } else if constexpr (N == 4) {
+        __asm__ __volatile__("csrw 0xB04, zero");
+    } else if constexpr (N == 5) {
+        __asm__ __volatile__("csrw 0xB05, zero");
+    } else {
+        __asm__ __volatile__("csrw 0xB06, zero");
+    }
+}
+
+// Zero all four programmable counters.
+inline __attribute__((always_inline)) void hpm_zero_counters() {
+    hpm_zero_counter<3>();
+    hpm_zero_counter<4>();
+    hpm_zero_counter<5>();
+    hpm_zero_counter<6>();
+}
+
+// Program all four selectors in one call, in counter order 3,4,5,6.
+inline __attribute__((always_inline)) void hpm_set_events(uint64_t sel3, uint64_t sel4, uint64_t sel5, uint64_t sel6) {
+    hpm_set_event<3>(sel3);
+    hpm_set_event<4>(sel4);
+    hpm_set_event<5>(sel5);
+    hpm_set_event<6>(sel6);
+}
+
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
 // Fallback for Quasar non-DM cores (TRISC) - no cache management needed

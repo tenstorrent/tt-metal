@@ -268,7 +268,7 @@ static uint32_t hart_blob_byte_size(
         for (const auto& rc : dfb->groups[0].hw_risc_configs) {
             if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
         }
-        sz += dfb_hart_init_entry_byte_size(num_tcs);
+        sz += dfb_hart_init_entry_byte_size_for(num_tcs, hartid < ::dfb::TENSIX_RISC_OFFSET);
     }
     if (n == 0) {
         sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
@@ -286,8 +286,12 @@ uint32_t compute_dfb_config_serialized_size(
     uint32_t payload = dfb_config_header_size();
     payload += dm1_remapper_blob_core_size(dfbs_on_core);
     payload += dm0_isr_blob_region_size(dfbs_on_core);
+    // Must mirror the emitter exactly: the hart-blob region starts 8B-aligned and every blob is
+    // rounded to 8, so the device can copy the image with ld/sd. Sizing this without the rounding
+    // under-allocates and the signal region runs off the end of the buffer.
+    payload = (payload + 63u) & ~63u;  // hart-blob region base: cache-line aligned
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-        payload += hart_blob_byte_size(h, dfbs_on_core);
+        payload += (hart_blob_byte_size(h, dfbs_on_core) + 63u) & ~63u;
     }
     // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
     payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
@@ -295,9 +299,14 @@ uint32_t compute_dfb_config_serialized_size(
     return align_dfb_config_transfer_size(hal, payload);
 }
 
+// participation_mask is no longer a device-visible header field -- the device reads
+// hart_desc[h].num_entries instead. It is still needed by the emitter and its validation, so it
+// is threaded through as a host-side out-parameter rather than serialized.
 void populate_dfb_global_header_participation(
-    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    std::fill(std::begin(ghdr.participation_mask), std::end(ghdr.participation_mask), 0u);
+    dfb_global_header_t& ghdr,
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS>& participation_mask,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    participation_mask.fill(0u);
     ghdr.num_dfbs = static_cast<uint8_t>(dfbs_on_core.size());
     TT_FATAL(
         dfbs_on_core.size() <= ::dfb::NUM_DFBS,
@@ -315,7 +324,7 @@ void populate_dfb_global_header_participation(
         id_mask |= (1u << dfb->device_slot);
         for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
             if (dfb->risc_mask & (1u << hartid)) {
-                ghdr.participation_mask[hartid] |= (1u << dfb->device_slot);
+                participation_mask[hartid] |= (1u << dfb->device_slot);
             }
         }
     }
@@ -326,6 +335,12 @@ void populate_dfb_global_header_participation(
         "DFB device slots must be contiguous 0..{}-1 (id_mask=0x{:x})",
         ghdr.num_dfbs,
         id_mask);
+    // Fill num_entries here, where the mask exists. It used to be set much later, in the
+    // blob-sizing loop -- which runs AFTER verify_dfb_global_header_participation, so the
+    // verifier read a field that was still zero.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        ghdr.hart_desc[h].num_entries = dfb_hart_participation_count(participation_mask[h]);
+    }
 }
 
 void verify_dfb_hart_blobs(
@@ -335,14 +350,15 @@ void verify_dfb_hart_blobs(
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
 
     for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
-        const uint32_t blob_off = ghdr->hart_blob_offset[hartid];
-        const uint8_t num_entries = dfb_hart_participation_count(ghdr->participation_mask[hartid]);
+        const uint32_t blob_off = ghdr->hart_desc[hartid].blob_start;
+        const uint8_t num_entries = ghdr->hart_desc[hartid].num_entries;
         TT_FATAL(
             blob_off <= config_bytes.size(),
             "hart_blob_offset[{}]={} out of range (config size {})",
             hartid, blob_off, config_bytes.size());
-        const uint32_t blob_end = (hartid + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS) ? ghdr->hart_blob_offset[hartid + 1u]
-                                                                                   : ghdr->dfb_signal_region_off;
+        const uint32_t blob_end = (hartid + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS)
+                                      ? static_cast<uint32_t>(ghdr->hart_desc[hartid + 1u].blob_start)
+                                      : ghdr->dfb_signal_region_off;
         TT_FATAL(
             blob_off <= blob_end && blob_end <= config_bytes.size(),
             "hart {} blob [{}, {}) is not an ascending in-range extent (config size {}); DM init derives "
@@ -368,6 +384,12 @@ void verify_dfb_hart_blobs(
 
         const uint8_t* blob = config_bytes.data() + blob_off;
 
+        // Under DFB_IFACE_IMAGE a DM entry is an 8B control prefix + a LocalDFBInterface image,
+        // not a dfb_hart_init_entry_t, so the field checks below do not apply to it.
+        if (hartid < ::dfb::TENSIX_RISC_OFFSET) {
+            continue;
+        }
+
         // Walk init entries and verify they are self-consistent with DFB data.
         uint32_t cursor = 0u;
         for (uint8_t e = 0; e < num_entries; e++) {
@@ -383,10 +405,10 @@ void verify_dfb_hart_blobs(
                 entry->logical_dfb_id < ghdr->num_dfbs,
                 "hart {} init entry {} logical_dfb_id={} >= num_dfbs={}",
                 hartid, e, entry->logical_dfb_id, ghdr->num_dfbs);
-            TT_FATAL(
-                (ghdr->participation_mask[hartid] & (1u << entry->logical_dfb_id)) != 0,
-                "hart {} init entry {} logical_dfb_id={} not in participation_mask=0x{:x}",
-                hartid, e, entry->logical_dfb_id, ghdr->participation_mask[hartid]);
+            // The mask is no longer serialized, so "this entry's dfb id is one the hart joined"
+            // cannot be re-derived from the emitted bytes. The equivalent invariant -- that the
+            // hart emits exactly hart_desc[h].num_entries entries -- is checked by this loop's
+            // trip count, and the mask itself is validated host-side before emission.
             cursor += entry_sz;
         }
         TT_FATAL(
@@ -402,6 +424,10 @@ void verify_dfb_hart_blobs(
 
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    // The mask is no longer serialized -- hart_desc[h].num_entries is. So this checks what the
+    // header actually carries: that each hart's recorded entry count matches the count implied by
+    // the DFB list's risc_masks, and that no DFB slot exceeds num_dfbs. The full mask equality is
+    // checked in populate_..., which still has the mask in hand.
     const uint32_t valid_dfb_mask =
         ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
     for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
@@ -412,17 +438,18 @@ void verify_dfb_global_header_participation(
             }
         }
         TT_FATAL(
-            ghdr.participation_mask[hartid] == expected,
-            "participation_mask[{}]=0x{:x} != expected 0x{:x} from risc_mask",
+            (expected & ~valid_dfb_mask) == 0,
+            "hart {} participates in DFB slots 0x{:x} with bits >= num_dfbs {}",
             hartid,
-            ghdr.participation_mask[hartid],
-            expected);
-        TT_FATAL(
-            (ghdr.participation_mask[hartid] & ~valid_dfb_mask) == 0,
-            "participation_mask[{}]=0x{:x} has bits >= num_dfbs {}",
-            hartid,
-            ghdr.participation_mask[hartid],
+            expected,
             ghdr.num_dfbs);
+        TT_FATAL(
+            ghdr.hart_desc[hartid].num_entries == dfb_hart_participation_count(expected),
+            "hart_desc[{}].num_entries={} != {} implied by risc_mask (expected mask 0x{:x})",
+            hartid,
+            ghdr.hart_desc[hartid].num_entries,
+            dfb_hart_participation_count(expected),
+            expected);
     }
 }
 
@@ -523,7 +550,8 @@ size_t serialize_dfb_config_for_core(
     // 2. Build the header (all offsets computed after blob sizes are known).
     // ---------------------------------------------------------------------------
     dfb_global_header_t ghdr = {};
-    populate_dfb_global_header_participation(ghdr, dfbs_on_core);
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> participation_mask{};
+    populate_dfb_global_header_participation(ghdr, participation_mask, dfbs_on_core);
     verify_dfb_global_header_participation(ghdr, dfbs_on_core);
 
     // has_dm0_isr: any DFB with implicit-sync txns?
@@ -534,20 +562,69 @@ size_t serialize_dfb_config_for_core(
     const uint32_t total_dm1_blob_size = dm1_remapper_blob_core_size(dfbs_on_core);
     const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
 
-    ghdr.dm1_remapper_blob_offset = header_size;
-    ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
+    // These three region offsets are uint16_t in the repacked header. Worst case for the whole
+    // region is ~36 KB (12 harts x 32 entries x 88B, plus the DM1/DM0 blobs and signal region),
+    // so uint16 has ~45% headroom -- but a static_cast truncates silently, and the hart-blob term
+    // is 93% of that total. If NUM_DFBS or MAX_NUM_TILE_COUNTERS_TO_RR grows, it blows first.
+    const uint32_t dm1_off = header_size;
+    const uint32_t dm0_off = dm1_off + total_dm1_blob_size;
+    TT_FATAL(dm0_off <= 0xFFFFu, "DFB config: dm0_isr_blob_offset {} does not fit uint16", dm0_off);
+    ghdr.dm1_remapper_blob_offset = static_cast<uint16_t>(dm1_off);
+    ghdr.dm0_isr_blob_offset = static_cast<uint16_t>(dm0_off);
     const uint32_t hart_blobs_base = ghdr.dm0_isr_blob_offset + total_dm0_isr_blob_size;
 
     // Pre-compute per-hart blob sizes to fill hart_blob_offset[].
     std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_blob_sizes{};
-    uint32_t running = hart_blobs_base;
+    std::array<uint16_t, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_blob_starts{};
+    // Every hart blob starts 8B-aligned so the device can copy the image with ld/sd. Two things
+    // have to hold, not just one: the region base must be 8-aligned AND every blob size must be a
+    // multiple of 8 -- otherwise one odd-sized blob knocks every later hart off alignment. The
+    // non-participating stub (4B) was exactly such a case.
+    // 64, not 8. 8B alignment is what the ld/sd image copy needs; 64B is what keeps each hart's
+    // blob starting at cache-line offset 0. A 576B blob spans 9 lines when line-aligned and 10
+    // when it starts 40 bytes in, so the base's phase is worth one fill per hart.
+    uint32_t running = (hart_blobs_base + 63u) & ~63u;
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-        uint32_t sz = hart_blob_byte_size(h, dfbs_on_core);
-        ghdr.hart_blob_offset[h] = static_cast<uint16_t>(running);
+        uint32_t sz = (hart_blob_byte_size(h, dfbs_on_core) + 63u) & ~63u;
+        TT_FATAL(running <= 0xFFFFu, "DFB config: hart {} blob offset {} does not fit uint16", h, running);
+        hart_blob_starts[h] = static_cast<uint16_t>(running);
         hart_blob_sizes[h] = sz;
         running += sz;
     }
-    ghdr.dfb_signal_region_off = running;
+    ghdr.dfb_signal_region_off = static_cast<uint16_t>(running);
+
+    // Packed per-hart view of the four scalars the device prologue reads, so it can fetch them all
+    // with one uncached load. Filled from the SAME values written above, then cross-checked: this
+    // is a second copy of a layout the emitter already computes, and every bug in this file so far
+    // has come from two places computing one layout and only one of them being updated.
+    TT_FATAL(
+        ghdr.dfb_signal_region_off <= 0xFFFFu,
+        "DFB config: signal region offset {} does not fit hart_desc::signal_region_off (uint16)",
+        ghdr.dfb_signal_region_off);
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        // num_entries already set in populate_dfb_global_header_participation.
+        ghdr.hart_desc[h]._rsvd = 0;
+        ghdr.hart_desc[h].blob_start = hart_blob_starts[h];
+        ghdr.hart_desc[h].blob_len = static_cast<uint16_t>(hart_blob_sizes[h]);
+        ghdr.hart_desc[h].signal_region_off = static_cast<uint16_t>(ghdr.dfb_signal_region_off);
+        const uint32_t desc_end =
+            static_cast<uint32_t>(ghdr.hart_desc[h].blob_start) + static_cast<uint32_t>(ghdr.hart_desc[h].blob_len);
+        const uint32_t emitted_end = (h + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS)
+                                         ? static_cast<uint32_t>(hart_blob_starts[h + 1u])
+                                         : ghdr.dfb_signal_region_off;
+        TT_FATAL(
+            desc_end == emitted_end,
+            "DFB config: hart_desc[{}] end {} != emitted blob end {} — the packed per-hart "
+            "descriptor and hart_blob_offset[] have diverged",
+            h,
+            desc_end,
+            emitted_end);
+        TT_FATAL(
+            hart_blob_sizes[h] <= 0xFFFFu,
+            "DFB config: hart {} blob size {} does not fit hart_desc::blob_len (uint16)",
+            h,
+            hart_blob_sizes[h]);
+    }
 
     // ---------------------------------------------------------------------------
     // 3. Emit header.
@@ -605,11 +682,16 @@ size_t serialize_dfb_config_for_core(
     //      (4B-padded end)
     //    num_entries = popcount(participation_mask[h]); not stored in the blob.
     // ---------------------------------------------------------------------------
+    // Skip to the 8B-aligned blob region base computed above.
+    offset = (offset + 63u) & ~63u;  // must mirror the sizer above
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         const uint32_t blob_start = offset;
         TT_FATAL(
-            static_cast<uint16_t>(blob_start) == ghdr.hart_blob_offset[h],
-            "hart {} blob offset mismatch: offset {} vs header {}", h, blob_start, ghdr.hart_blob_offset[h]);
+            static_cast<uint16_t>(blob_start) == hart_blob_starts[h],
+            "hart {} blob offset mismatch: offset {} vs header {}",
+            h,
+            blob_start,
+            hart_blob_starts[h]);
 
         // Count participating DFBs for this hart.
         uint8_t num_entries = 0;
@@ -620,16 +702,20 @@ size_t serialize_dfb_config_for_core(
         }
 
         if (num_entries == 0) {
-            // Minimal 4-byte blob: {0, 0, 0, 0}
-            TT_FATAL(offset + 4u <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
-            std::memset(out.data() + offset, 0, 4u);
-            offset += 4u;
+            // Minimal blob. It must consume the SAME space the sizer reserved for it -- which is
+            // now a whole 64B line, not 8B -- or every later hart's emitted offset drifts below
+            // the offset recorded in hart_desc. The emitter's own cross-check below catches that,
+            // and did: "hart 1 blob offset mismatch: offset 1224 vs header 1280".
+            const uint32_t stub = (8u + 63u) & ~63u;
+            TT_FATAL(offset + stub <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
+            std::memset(out.data() + offset, 0, stub);
+            offset += stub;
             continue;
         }
 
         TT_FATAL(
-            blob_start % 4u == 0u,
-            "hart {} blob offset {} is not 4B-aligned",
+            blob_start % 8u == 0u,
+            "hart {} blob offset {} is not 8B-aligned (the device copies the image with ld/sd)",
             h,
             blob_start);
 
@@ -648,7 +734,8 @@ size_t serialize_dfb_config_for_core(
                 "DFB {}: no risc_config for hart {} on core ({},{})", dfb->id, h, core.x, core.y);
             const DFBRiscConfig& rc = *rc_ptr;
             const uint8_t num_tcs = rc.config.num_tcs_to_rr;
-            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            const bool hart_is_dm = h < ::dfb::TENSIX_RISC_OFFSET;
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size_for(num_tcs, hart_is_dm);
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
@@ -712,6 +799,48 @@ size_t serialize_dfb_config_for_core(
                                            ? rc.config.intra_shadow_tc_id
                                            : 0xFFu;
 
+            if (hart_is_dm) {
+                // Emit the control prefix + the finished LocalDFBInterface image. The device copies
+                // the image verbatim, so every value the interface needs is finalized here.
+                //
+                // The TC slots are carried as full interface slots, not as the shared
+                // dfb_blob_tc_pair_t tail. That duplicates base_addr three times (rd_ptr == wr_ptr
+                // == base_addr at init), 8 redundant bytes per slot -- but reusing the shared tail
+                // was measured at +230 retired instructions, because it brings back the guarded
+                // ptc_w0/ptc_w1 preloads and the per-slot select/variable-shift/mask that the image
+                // deletes. The bytes are the cheaper side of that trade.
+                uint32_t tc_bases[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint32_t tc_limits[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint8_t tc_ptcs[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                for (uint8_t t = 0; t < num_tcs; t++) {
+                    tc_bases[t] = rc.config.base_addr[t];
+                    tc_limits[t] = rc.config.limit[t];
+                    tc_ptcs[t] = rc.config.packed_tile_counter[t];
+                }
+                dfb_write_dm_image_entry(
+                    out.data() + offset,
+                    static_cast<uint16_t>(entry.logical_dfb_id * DFB_DM_IFACE_SIZE),
+                    entry.flags,
+                    dfb_precomp_signal_slot(entry.logical_dfb_id, producer_signal_bit[di][h]),
+                    entry.capacity,
+                    entry.remapper_pair_index,
+                    num_tcs,
+                    dfb->config.entry_size,  // cb_addr_shift == 0 on DM
+                    entry.stride_size_precomp,
+                    entry.txn_ids,
+                    entry.threshold,
+                    entry.num_entries_per_txn_id,
+                    entry.num_entries_per_txn_id_per_tc,
+                    entry.num_txn_ids,
+                    static_cast<uint8_t>((entry.flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
+                    entry.num_entries,
+                    tc_bases,
+                    tc_limits,
+                    tc_ptcs);
+                offset += entry_sz;
+                continue;
+            }
+
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
 
@@ -762,7 +891,9 @@ size_t serialize_dfb_config_for_core(
         }
 
         // Pad blob to 4B boundary.
-        const uint32_t blob_end_padded = (offset + 3u) & ~3u;
+        // Pad to 8, matching the size reserved in hart_blob_offset[] above. 4B padding here would
+        // leave the next hart's blob 4B-misaligned and the device's ld would fault.
+        const uint32_t blob_end_padded = (offset + 63u) & ~63u;
         if (blob_end_padded > offset) {
             std::memset(out.data() + offset, 0, blob_end_padded - offset);
             offset = blob_end_padded;
@@ -1415,7 +1546,7 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
     uint32_t sz = 0;
     for (const auto& rc : groups[0].hw_risc_configs) {
-        sz += dfb_hart_init_entry_byte_size(rc.config.num_tcs_to_rr);
+        sz += dfb_hart_init_entry_byte_size_for(rc.config.num_tcs_to_rr, rc.risc_id < ::dfb::TENSIX_RISC_OFFSET);
     }
     return sz;
 }

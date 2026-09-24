@@ -307,8 +307,8 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
     EXPECT_EQ(ghdr->num_dfbs, 1u);
-    EXPECT_EQ(sizeof(dfb_global_header_t), 96u);  // new 96B header
-    EXPECT_EQ(dfb_config_header_size(), 96u);
+    EXPECT_EQ(sizeof(dfb_global_header_t), 112u);  // repacked: hart_desc[12] + scalars
+    EXPECT_EQ(dfb_config_header_size(), 112u);
 
     // Header is at offset 0; DM1 blob starts immediately after.
     EXPECT_EQ(ghdr->dm1_remapper_blob_offset, dfb_config_header_size());
@@ -320,11 +320,11 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(sizeof(dfb_dm0_isr_txn_threshold_t), 4u);
 
     // hart_blob_offset[] must be set for the two participating harts (0=producer, 4=consumer).
-    EXPECT_GT(ghdr->hart_blob_offset[0], 0u);
-    EXPECT_GT(ghdr->hart_blob_offset[4], 0u);
+    EXPECT_GT(ghdr->hart_desc[0].blob_start, 0u);
+    EXPECT_GT(ghdr->hart_desc[4].blob_start, 0u);
     // Non-participating harts must also have a valid (minimal) blob offset.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        EXPECT_GT(ghdr->hart_blob_offset[h], 0u) << "hart " << static_cast<int>(h);
+        EXPECT_GT(ghdr->hart_desc[h].blob_start, 0u) << "hart " << static_cast<int>(h);
     }
 
     // Signal region: per-producer byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
@@ -339,30 +339,32 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
         buf.data() + ghdr->dfb_signal_region_off + kExpectedOff);
     EXPECT_EQ(dfb_expected[0], 1u);
 
-    // DFB 0 init entry for hart 0 (producer): participation_mask bit set, one init entry.
-    EXPECT_EQ(ghdr->participation_mask[0], 1u);
-    const auto* entry0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        buf.data() + ghdr->hart_blob_offset[0]);
-    EXPECT_EQ(entry0->logical_dfb_id, 0u);
-    EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
-    EXPECT_EQ(entry0->entry_size, 1024u);
-    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
-    EXPECT_EQ(entry0->_reserved0, 0u);
-    EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
+    // Harts 0 and 4 are DM harts, so under DFB_IFACE_IMAGE their entries are an 8B control
+    // prefix + a verbatim LocalDFBInterface image -- NOT a classic dfb_hart_init_entry_t. This
+    // block used to cast to the classic struct and read entry_size/capacity/producer_signal_bit
+    // out of the wrong bytes; it passed only because those fields happened to overlap before the
+    // image landed. TRISC harts keep the classic layout and are checked that way elsewhere.
+    EXPECT_EQ(ghdr->hart_desc[0].num_entries, 1u);
+    const uint8_t* entry0 = buf.data() + ghdr->hart_desc[0].blob_start;
+    // logical_dfb_id is premultiplied by sizeof(LocalDFBInterface) into iface_byte_off.
+    EXPECT_EQ(dfb_dm_image_entry_iface_byte_off(entry0) / DFB_DM_IFACE_SIZE, 0u);
+    EXPECT_NE(dfb_dm_image_entry_flags(entry0) & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(dfb_dm_image_entry_size(entry0), 1024u);
+    EXPECT_EQ(dfb_dm_image_entry_capacity(entry0), 16u);  // STRIDED 1P1C: capacity == num_entries
+    EXPECT_EQ(dfb_dm_image_entry_sig_slot(entry0), 0u);   // first producer -> signal slot 0
 
-    // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
-    EXPECT_EQ(ghdr->participation_mask[4], 1u);
-    const auto* entry4 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        buf.data() + ghdr->hart_blob_offset[4]);
-    EXPECT_EQ(entry4->logical_dfb_id, 0u);
-    EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
-    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
-    EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
+    // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag, no signal slot.
+    EXPECT_EQ(ghdr->hart_desc[4].num_entries, 1u);
+    const uint8_t* entry4 = buf.data() + ghdr->hart_desc[4].blob_start;
+    EXPECT_EQ(dfb_dm_image_entry_iface_byte_off(entry4) / DFB_DM_IFACE_SIZE, 0u);
+    EXPECT_EQ(dfb_dm_image_entry_flags(entry4) & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(dfb_dm_image_entry_capacity(entry4), 0u);  // consumers leave capacity 0
+    EXPECT_EQ(dfb_dm_image_entry_sig_slot(entry4), DFB_SIG_SLOT_NONE);
 
     // participation_mask drives device init entry count; non-participating harts are zero.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         if (h != 0 && h != 4) {
-            EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+            EXPECT_EQ(ghdr->hart_desc[h].num_entries, 0u) << "hart " << static_cast<int>(h);
         }
     }
 

@@ -140,22 +140,48 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
       96 + (4+4*16) + (8+20)*8 + per_hart_blobs(~3.2KB) + signal_region(256B) ≈ 3.7KB
 */
 
+// Everything setup_local_dfb_interfaces() needs from the global header before it can start
+// walking, in ONE naturally-aligned 8B record per hart -- so the prologue makes one uncached load
+// where it used to make four.
+//
+// Two of these fields are stored differently from the canonical header above, because the device's
+// access pattern differs from the host's:
+//  * num_entries, not participation_mask. The device reads the 32-bit mask solely to popcount it;
+//    storing the count instead costs 1 byte instead of 4, frees the room that lets
+//    signal_region_off join the record, and deletes the cpopw.
+//  * signal_region_off is replicated into every hart's record. It is one global value, but reading
+//    it from its own header slot is a second uncached round trip; 2 bytes x 12 harts buys it.
+struct dfb_hart_desc_t {
+    uint8_t num_entries;  // popcount(participation_mask[h])
+    uint8_t _rsvd;
+    uint16_t blob_start;         // mirrors hart_blob_offset[h]
+    uint16_t blob_len;           // bytes, so the device needs no end-start subtract
+    uint16_t signal_region_off;  // mirrors dfb_signal_region_off
+};
+static_assert(sizeof(dfb_hart_desc_t) == 8, "dfb_hart_desc_t must be exactly 8B for the single ld");
+
 // Fixed header at the start of the DFB config region.
+//
+// Repacked. hart_desc[] now supersedes two arrays the device no longer reads:
+//   * participation_mask[12] (48B) -- the device read it only to popcount; hart_desc carries the
+//     count. The mask is still needed by the HOST emitter and its validation, so it moved to a
+//     host-local array in dataflow_buffer.cpp rather than into device-visible memory.
+//   * hart_blob_offset[12] (24B)  -- fully duplicated by hart_desc[h].blob_start.
+// The three region offsets were uint32_t; every offset in this region already fits uint16_t
+// (hart_blob_offset always was one), so they narrow with no loss of range.
+//
+// hart_desc sits at offset 0 deliberately: the device prologue's single uncached load becomes
+// config_base + hart*8 with no constant to add.
 struct dfb_global_header_t {
-    uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob
-    uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (core header + txn pools)
-    uint32_t dfb_signal_region_off;     // → signal region: per-producer byte slots then dfb_expected_signal[NUM_DFBS]
+    dfb_hart_desc_t hart_desc[dfb::NUM_PARTICIPATING_HARTIDS];  // 96B at offset 0
+
+    uint16_t dm1_remapper_blob_offset;  // -> DM1 remapper blob
+    uint16_t dm0_isr_blob_offset;       // -> DM0 ISR blob (core header + txn pools)
+    uint16_t dfb_signal_region_off;     // -> signal region; still read by DM0 and dm.cc
     uint8_t  num_dfbs;
     uint8_t  dm0_isr_ready;             // cleared by host; set by DM0 when ISR is armed
-    uint8_t  has_dm0_isr;               // 1 if any DFB uses implicit sync (replaces per_dfb_layout_offset > dm0 check)
-    uint8_t  _pad;
-    // participation_mask[h] bit i set → hartid h participates in DFB i.
-    // Device init uses popcount(participation_mask[h]) as this hart's init/wait entry count.
-    uint32_t participation_mask[dfb::NUM_PARTICIPATING_HARTIDS];  // 48B
-    // Byte offset from config_base to each hartid's init blob (first init entry).
-    // Non-participating harts point to an emitted minimal {0,0,0,0} blob.
-    uint16_t hart_blob_offset[dfb::NUM_PARTICIPATING_HARTIDS];    // 24B
-    uint8_t  _pad2[8];  // pad to 96B
+    uint8_t has_dm0_isr;                // 1 if any DFB uses implicit sync
+    uint8_t _rsvd[7];                   // pad 105 -> 112 (multiple of alignof(dfb_hart_desc_t))
 };
 
 // DM1/DM0 blobs begin immediately after the header; no prefix tables.
@@ -266,6 +292,192 @@ inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_byte
 inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     const uint32_t tc_bytes = num_tcs * 9u;
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
+}
+
+// ---------------------------------------------------------------------------------------------
+// DM init via a host-built LocalDFBInterface image.
+//
+// The host already knows every value that ends up in a DM's LocalDFBInterface, so it emits the
+// finished interface bytes and the device copies them. The DM's per-entry work becomes a control
+// read plus a word copy: no unpack, no bit extraction, no per-field or per-TC-slot stores, and no
+// multiply to find the interface slot.
+//
+// DM entry layout:
+//   [0] u16 iface_byte_off        logical_dfb_id * sizeof(LocalDFBInterface), premultiplied
+//   [2] u8  flags
+//   [3] u8  sig_slot              precomputed dfb_signal[] index, 0xFF = consumer
+//   [4] u16 capacity
+//   [6] u8  remapper_pair_index
+//   [7] u8  num_tcs
+//   [8] LocalDFBInterface image, 24 + 20*num_tcs bytes, copied verbatim
+//
+// The 8B control prefix holds exactly what cannot be part of a copy: these five drive branches,
+// the remapper spin and tile-counter HW register writes rather than landing in the interface.
+//
+// Cost: the image materializes rd_ptr/wr_ptr/base_addr (the device used to store one loaded value
+// three times) plus slot padding, so a 1-TC entry grows 40B -> 52B. That enlarges the config
+// region, which DM0's central invalidate covers.
+//
+// TRISC is unaffected and keeps the 28B header + packed TC tail.
+
+// DM0 invalidates the whole DFB config region once, before releasing the subordinates, instead of
+// every worker invalidating its own blob. The single range is a superset of the per-worker ones.
+// Lives in this header so the worker (dataflow_buffer_init.h) and DM0 (dm.cc) agree on it.
+
+// DM LocalDFBInterface geometry. dataflow_buffer_init.h static_asserts these against the real
+// type; they are mirrored here so this header stays independent of the device interface header.
+constexpr uint32_t DFB_DM_IFACE_SCALAR_BYTES = 32u;  // offsetof(LocalDFBInterface, tc_slots)
+constexpr uint32_t DFB_DM_IFACE_SLOT_BYTES = 16u;    // sizeof(DFBTCSlot)
+constexpr uint32_t DFB_DM_IFACE_SIZE = 128u;         // sizeof(LocalDFBInterface)
+constexpr uint32_t DFB_IFACE_IMAGE_CTRL_BYTES = 8u;
+
+// Accessors for the DM image entry's 8B control prefix and the image behind it.
+//
+// The layout above lived only in a comment, so readers hand-rolled their casts. The config gtest
+// read DM entries as a classic dfb_hart_init_entry_t -- correct until DFB_IFACE_IMAGE, and
+// silently wrong after: entry_size came back as 822018064 (which is capacity | rmp<<16 |
+// stride<<24) and nobody noticed because the test was already red for an unrelated reason.
+// Byte-wise so these are safe on an unaligned pointer.
+inline uint16_t dfb_dm_image_entry_iface_byte_off(const uint8_t* e) {
+    return static_cast<uint16_t>(e[0] | (e[1] << 8));
+}
+inline uint8_t dfb_dm_image_entry_flags(const uint8_t* e) { return e[2]; }
+// Precomputed dfb_signal[] index; DFB_SIG_SLOT_NONE (0xFF) means this hart is not a producer.
+inline uint8_t dfb_dm_image_entry_sig_slot(const uint8_t* e) { return e[3]; }
+inline uint16_t dfb_dm_image_entry_capacity(const uint8_t* e) { return static_cast<uint16_t>(e[4] | (e[5] << 8)); }
+inline uint8_t dfb_dm_image_entry_remapper_pair_index(const uint8_t* e) { return e[6]; }
+// Byte 7 is the finished entry stride when DFB_PRECOMP_ENTRY_BYTES is on, else num_tcs.
+inline uint8_t dfb_dm_image_entry_byte7(const uint8_t* e) { return e[7]; }
+// entry_size is not in the control prefix -- it is the first word of the interface image.
+inline uint32_t dfb_dm_image_entry_size(const uint8_t* e) {
+    const uint8_t* img = e + DFB_IFACE_IMAGE_CTRL_BYTES;
+    return static_cast<uint32_t>(img[0]) | (static_cast<uint32_t>(img[1]) << 8) |
+           (static_cast<uint32_t>(img[2]) << 16) | (static_cast<uint32_t>(img[3]) << 24);
+}
+constexpr uint8_t DFB_SIG_SLOT_NONE = 0xFFu;
+// offsetof(LocalDFBInterface, num_tcs_to_rr) -- byte 0 of the third image word.
+constexpr uint32_t DFB_DM_IFACE_NUM_TCS_BYTE_OFF = 8u;
+
+// Control byte 7 carries the finished entry stride instead of num_tcs, so the device advances to
+// the next entry with an add instead of the multiply-add that sits on the pointer's dependency
+// chain. Fits a byte (32 + 20*6 = 152), and num_tcs is recovered from the image's own
+// num_tcs_to_rr, which the copy loads anyway -- so the blob does not grow.
+// Defaults on: it has no effect unless DFB_IFACE_IMAGE is also on (both the host store and the
+// device read are gated on it), and when the image is on it is strictly better -- it removes the
+// num_tcs duplication rather than adding a field, so it costs no blob bytes, and measured
+// -27 retired instructions and -1..-2 D$ misses.
+
+// A blob TC slot is NOT a full DFBTCSlot image. At init rd_ptr == wr_ptr == base_addr, so storing
+// the interface slot verbatim would carry base three times -- 8 redundant bytes per slot and two
+// extra loads. The blob stores {base, limit, ptc_word} and the device fans base out to the three
+// pointers from one register: 12 B and 3 loads per slot instead of 20 B and 5.
+//
+// ptc keeps its own word rather than being packed across slots the way the classic tail does.
+// That packing is what forces the guarded ptc_w0/ptc_w1 preloads plus a per-slot
+// select/variable-shift/mask, measured at +230 retired instructions -- far more than the 3 bytes
+// per slot it saves.
+constexpr uint32_t DFB_DM_BLOB_SLOT_BYTES = 8u;  // {base, limit}; ptc moved to the scalar head
+// Entry = 8 ctrl + 32 scalars + 8*num_tcs -> a multiple of 8 for EVERY num_tcs, so the whole
+// blob stays 8B-aligned and GCC can pair lw->ld on the copy.
+
+inline constexpr uint32_t dfb_dm_iface_image_bytes(uint32_t num_tcs) {
+    return DFB_DM_IFACE_SCALAR_BYTES + DFB_DM_BLOB_SLOT_BYTES * num_tcs;
+}
+inline constexpr uint32_t dfb_dm_image_entry_byte_size(uint32_t num_tcs) {
+    // Rounded up to 8 so every entry -- and therefore the image inside it -- starts 8B-aligned.
+    // Without this the device copy is stuck at lw/sw pairs: a uint32_t* only promises 4B, so GCC
+    // cannot merge to ld/sd however the data actually lands.
+    const uint32_t raw = DFB_IFACE_IMAGE_CTRL_BYTES + dfb_dm_iface_image_bytes(num_tcs);
+    return (raw + 7u) & ~7u;
+}
+
+// Entry size for a given hart class. TRISC always keeps the classic layout.
+inline constexpr uint32_t dfb_hart_init_entry_byte_size_for(uint32_t num_tcs, [[maybe_unused]] bool is_dm) {
+    return is_dm ? dfb_dm_image_entry_byte_size(num_tcs) : dfb_hart_init_entry_byte_size(num_tcs);
+}
+
+// dfb_signal[] index for a producer, folded on the host: logical_dfb_id * MAX_PRODUCERS_PER_DFB +
+// bit. Max is 31*6+5 = 191 against a 192B signal region, so 0xFF stays free as the consumer
+// sentinel and the whole thing fits in one byte.
+inline uint8_t dfb_precomp_signal_slot(uint8_t logical_dfb_id, uint8_t producer_signal_bit) {
+    if (producer_signal_bit == DFB_SIG_SLOT_NONE) {
+        return DFB_SIG_SLOT_NONE;
+    }
+    return static_cast<uint8_t>(
+        logical_dfb_id * static_cast<uint8_t>(dfb::MAX_PRODUCERS_PER_DFB) + producer_signal_bit);
+}
+
+inline void dfb_put_u32_le(uint8_t* p, uint32_t v) {
+    p[0] = static_cast<uint8_t>(v);
+    p[1] = static_cast<uint8_t>(v >> 8);
+    p[2] = static_cast<uint8_t>(v >> 16);
+    p[3] = static_cast<uint8_t>(v >> 24);
+}
+
+// Build one DM entry: control prefix + the finished LocalDFBInterface bytes. Field placement
+// mirrors, byte for byte, what the device used to store one field at a time.
+inline void dfb_write_dm_image_entry(
+    uint8_t* entry,
+    uint16_t iface_byte_off,
+    uint8_t flags,
+    uint8_t sig_slot,
+    uint16_t capacity,
+    uint8_t remapper_pair_index,
+    uint8_t num_tcs,
+    uint32_t entry_size,
+    uint32_t stride_size,
+    const uint8_t txn_ids[dfb::NUM_TXN_IDS],
+    uint8_t threshold,
+    uint8_t num_entries_per_txn_id,
+    uint8_t num_entries_per_txn_id_per_tc,
+    uint8_t num_txn_ids,
+    uint8_t broadcast_tc,
+    uint16_t num_entries,
+    const uint32_t* tc_base_addrs,
+    const uint32_t* tc_limits,
+    const uint8_t* tc_ptcs) {
+    for (uint32_t i = 0; i < dfb_dm_image_entry_byte_size(num_tcs); i++) {
+        entry[i] = 0u;
+    }
+    entry[0] = static_cast<uint8_t>(iface_byte_off);
+    entry[1] = static_cast<uint8_t>(iface_byte_off >> 8);
+    entry[2] = flags;
+    entry[3] = sig_slot;
+    entry[4] = static_cast<uint8_t>(capacity);
+    entry[5] = static_cast<uint8_t>(capacity >> 8);
+    entry[6] = remapper_pair_index;
+    // Finished stride, so the device does not multiply. Max 40 + 8*6 = 88, fits a byte.
+    entry[7] = static_cast<uint8_t>(dfb_dm_image_entry_byte_size(num_tcs));
+
+    uint8_t* img = entry + DFB_IFACE_IMAGE_CTRL_BYTES;
+    dfb_put_u32_le(img + 0, entry_size);   // iface.entry_size  (cb_addr_shift == 0 on DM)
+    dfb_put_u32_le(img + 4, stride_size);  // iface.stride_size
+    img[8] = num_tcs;                      // iface.num_tcs_to_rr
+    img[9] = 0u;                           // iface.tc_idx
+    img[10] = txn_ids[0];
+    img[11] = txn_ids[1];
+    img[12] = txn_ids[2];
+    img[13] = txn_ids[3];
+    img[14] = threshold;
+    img[15] = num_entries_per_txn_id;
+    img[16] = num_entries_per_txn_id_per_tc;
+    img[17] = num_txn_ids;
+    img[18] = broadcast_tc;
+    img[19] = 0u;  // iface._tc_align_pad
+    img[20] = static_cast<uint8_t>(num_entries);
+    img[21] = static_cast<uint8_t>(num_entries >> 8);
+    // iface.ptc[]: hoisted out of DFBTCSlot, so it is part of the scalar head and rides the
+    // straight-line copy instead of costing a per-slot store on the device.
+    for (uint32_t t = 0; t < num_tcs; t++) {
+        img[22 + t] = tc_ptcs[t];
+    }
+    // img[22+num_tcs, 32) is iface.ptc[] tail + _pad1; already zero.
+
+    for (uint32_t t = 0; t < num_tcs; t++) {
+        uint8_t* s = img + DFB_DM_IFACE_SCALAR_BYTES + DFB_DM_BLOB_SLOT_BYTES * t;
+        dfb_put_u32_le(s + 0, tc_base_addrs[t]);  // base -> rd_ptr, wr_ptr and base_addr on device
+        dfb_put_u32_le(s + 4, tc_limits[t]);      // limit
+    }
 }
 
 struct dfb_txn_id_descriptor_t {
@@ -387,7 +599,10 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
            dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
 }
 
-static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
+static_assert(sizeof(dfb_global_header_t) == 112, "dfb_global_header_t size changed — check field alignment");
+static_assert(
+    offsetof(dfb_global_header_t, hart_desc) == 0,
+    "hart_desc[] must be at offset 0 so the prologue address is config_base + hart*8");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");

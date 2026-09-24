@@ -32,7 +32,7 @@
 
 inline void preload_posted_counter(DataflowBuffer& dfb, uint16_t value) {
     for (uint8_t i = 0; i < dfb.local_dfb_interface_.num_tcs_to_rr; i++) {
-        dfb::PackedTileCounter ptc = dfb.local_dfb_interface_.tc_slots[i].packed_tile_counter;
+        dfb::PackedTileCounter ptc = dfb_iface_ptc(dfb.local_dfb_interface_, i);
         overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), value);
     }
     const uint16_t per_tc = dfb.local_dfb_interface_.num_entries_per_txn_id_per_tc;
@@ -47,7 +47,7 @@ inline void preload_posted_counter(DataflowBuffer& dfb, uint16_t value) {
 
 inline void preload_acked_counter(DataflowBuffer& dfb, uint16_t value) {
     for (uint8_t i = 0; i < dfb.local_dfb_interface_.num_tcs_to_rr; i++) {
-        dfb::PackedTileCounter ptc = dfb.local_dfb_interface_.tc_slots[i].packed_tile_counter;
+        dfb::PackedTileCounter ptc = dfb_iface_ptc(dfb.local_dfb_interface_, i);
         overlay::llk_intf_inc_acked(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), value);
     }
     const uint16_t per_tc = dfb.local_dfb_interface_.num_entries_per_txn_id_per_tc;

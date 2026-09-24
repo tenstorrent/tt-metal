@@ -147,8 +147,12 @@ struct DataflowBufferImpl {
 
 // Host-precomputed init indices in dfb_global_header_t (participation masks; dfb_byte_offset filled during layout
 // write). Device uses these instead of walking all DFBs on the merged-loop hot path.
+// participation_mask is no longer a device-visible header field (hart_desc[h].num_entries
+// replaces it). It is returned here so the emitter and its validation can still use the bits.
 void populate_dfb_global_header_participation(
-    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+    dfb_global_header_t& ghdr,
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS>& participation_mask,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);

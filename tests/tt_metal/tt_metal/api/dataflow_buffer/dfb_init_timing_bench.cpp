@@ -1148,10 +1148,10 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;  // Neo0 unpack hart
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
+        cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start + sizeof(dfb_hart_init_entry_t));
     log_info(
         tt::LogTest,
         "BenchmarkCaseSix preflight: Neo0 dfb{} entry_size={} tc0 base=0x{:x} limit=0x{:x} ring_tiles={}",
@@ -1242,10 +1242,10 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
+        cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start + sizeof(dfb_hart_init_entry_t));
     log_info(
         tt::LogTest,
         "BenchmarkCaseSixDebug preflight: Neo0 dfb{} entry_size={} tc0 base=0x{:x} limit=0x{:x} ring_tiles={}",
@@ -1411,6 +1411,7 @@ struct DfbInitTimingBenchCase {
 void print_usage(const char* argv0) {
     std::cerr << "Usage: " << argv0 << " [--case NAME]\n"
               << "  NAME: base, two, three, four, five, six, seven, eight,\n"
+              << "  --repeat N: run the case N times against one emulator launch\n"
               << "        six-debug, six-debug-implicit-sync, six-debug-implicit-sync-program-spec, all\n"
               << "\nRequires TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_MEASURE_DFB_INIT_TIME=1 on Quasar.\n";
 }
@@ -1421,6 +1422,8 @@ int main(int argc, char** argv) {
     using namespace tt::tt_metal;
 
     std::string case_name = "all";
+    int repeat = 1;
+    bool reopen = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -1429,6 +1432,21 @@ int main(int argc, char** argv) {
         }
         if (arg == "--case" && i + 1 < argc) {
             case_name = argv[++i];
+            continue;
+        }
+        // Repeat the selected case N times against ONE MeshDevice / one emulator launch. The RTL
+        // emulator costs ~50 s to start and only a few seconds per launch, so a sweep of N samples
+        // is ~N x faster this way than N separate invocations.
+        if (arg == "--repeat" && i + 1 < argc) {
+            repeat = std::max(1, std::atoi(argv[++i]));
+            continue;
+        }
+        // Close and reopen the MeshDevice between iterations. The emulator connection lives above
+        // MeshDevice, so this reloads firmware (cold i-cache, cold L1) WITHOUT paying the ~50 s
+        // RTL startup again -- the point being to measure cold-state init, which is what separate
+        // invocations measure, rather than the warm-state init a plain --repeat gives.
+        if (arg == "--reopen") {
+            reopen = true;
             continue;
         }
         std::cerr << "Unknown argument: " << arg << "\n";
@@ -1464,13 +1482,24 @@ int main(int argc, char** argv) {
     // TT_METAL_DPRINT_CORES / watcher dprint to compare cold vs warm case-two init.
     auto ctx = create_dfb_init_timing_bench_context();
     bool ran_any = false;
-    for (const auto& bench_case : kCases) {
-        if (!selected.contains(bench_case.cli_name)) {
-            continue;
+    for (int r = 0; r < repeat; r++) {
+        if (reopen && r > 0) {
+            ctx.mesh_device->close();
+            ctx = create_dfb_init_timing_bench_context();
         }
-        log_info(tt::LogTest, "Running DFB init timing benchmark case: {}", bench_case.cli_name);
-        bench_case.run(ctx);
-        ran_any = true;
+        for (const auto& bench_case : kCases) {
+            if (!selected.contains(bench_case.cli_name)) {
+                continue;
+            }
+            log_info(
+                tt::LogTest,
+                "Running DFB init timing benchmark case: {} [iteration {}/{}]",
+                bench_case.cli_name,
+                r + 1,
+                repeat);
+            bench_case.run(ctx);
+            ran_any = true;
+        }
     }
 
     if (!ran_any) {
