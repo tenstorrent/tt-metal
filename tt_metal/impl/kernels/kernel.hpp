@@ -258,28 +258,28 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
-    void process_dataflow_buffer_binding_handles(std::function<void(
+    void process_dataflow_buffer_binding_handles(const std::function<void(
                                                      const std::string& accessor_name,
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const std::optional<LLKMetadata>&)>) const override;
+                                                     const std::optional<LLKMetadata>&)>&) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
-    void process_tensor_binding_handles(std::function<void(
+    void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words,
-                                            const std::optional<LLKMetadata>&)>) const override;
+                                            const std::optional<LLKMetadata>&)>&) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    void process_scratchpad_binding_handles(std::function<void(
+    void process_scratchpad_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t size_bytes,
                                                 uint32_t addr_crta_word,
-                                                const std::optional<LLKMetadata>&)>) const override;
+                                                const std::optional<LLKMetadata>&)>&) const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {

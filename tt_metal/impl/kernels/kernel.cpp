@@ -320,7 +320,7 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          uint16_t logical_dfb_id,
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
-                                                         const std::optional<LLKMetadata>&)> callback) const {
+                                                         const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
         callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
     }
@@ -340,7 +340,7 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
                                                 uint32_t num_runtime_field_crta_words,
-                                                const std::optional<LLKMetadata>&)> callback) const {
+                                                const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
@@ -355,7 +355,7 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
                                                     const std::string& accessor_name,
                                                     uint32_t size_bytes,
                                                     uint32_t addr_crta_word,
-                                                    const std::optional<LLKMetadata>&)> callback) const {
+                                                    const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
     }
