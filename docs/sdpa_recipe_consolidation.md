@@ -26,10 +26,10 @@ kernels.
 | --- | --- | --- |
 | 1 | Contract + input recommendations docs | done (5cffae00) |
 | 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint implemented (b3c7d066), validating on bh-32; ring/exp follow task 4 |
-| 3 | Op-selected blocking and grid; `program_config` becomes an optional override | in progress (`cglagovich/sdpa-recipe-auto-blocking`) |
+| 3 | Op-selected blocking and grid; `program_config` becomes an optional override | code done on `cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204 (host tests pass); device runs and perf table queued |
 | 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | in progress (`cglagovich/sdpa-recipe-ring-factories`) |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
-| 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks in progress (`cglagovich/sdpa-recipe-masks`; Ideogram4, LTX-2); lengths/exp geometry after task 4 |
+| 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done on `cglagovich/sdpa-recipe-masks` @ f365ffc8 (131 mask tests, unmasked digests unchanged; merge after task 2 validates); lengths/exp geometry after task 4 |
 | 7 | Parity gates, then default flip for the four ops; drop model compute configs and tuning tables | planned |
 | 8 | Restack into reviewable PRs | planned |
 
@@ -59,6 +59,21 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 - Ring and exp ring keep their current limits until task 4 moves them onto
   recipe-owned factories; `recipe_q_tiles` / `recipe_k_tiles` remain their checks.
 - Test: `test_sdpa_recipe_geometry.py`.
+
+## Task 2 findings
+
+- One-tile BF16 Q chunks hung: the first PV group assumed two tile rows (fixed in 352a6f49).
+- Reported, not yet reproduced here: dense D64 E_bfp8 Q64/K352 hang (blocking agent).
+
+## Task 6 notes (masks)
+
+- Additive `attn_mask` `[1|B, 1|H, Sq, Sk]`, BF16/BFP8/BFP4 (FP32 for C/D), on CB 15.
+  Added onto packed QK scores by L1 accumulation before the max; recipe arithmetic unchanged.
+- The op pre-scales the mask by 1/scale like legacy; C/D do it in FP32.
+- Key-padding mask == truncated K bit-identically (49 cases). Fully masked rows are finite (as legacy).
+- Masked runs cost 1.3-2.4x unmasked (per-call pre-scale, dense mask reads, no reduce overlap).
+  Open: key-padding fast path; pre-scale once.
+- Joint SDPA has no `attn_mask` argument.
 
 ## Decisions log
 
