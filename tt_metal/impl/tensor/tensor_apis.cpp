@@ -167,10 +167,19 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
 
+    auto* mesh_device = mesh_buffer->device();
+    const auto& view = mesh_device->get_view();
+    std::vector<distributed::MeshCoordinate> local_coords;
+    local_coords.reserve(distributed_host_buffer.shard_coords().size());
     size_t total_size = 0;
     for (const auto& coord : distributed_host_buffer.shard_coords()) {
+        // A complete host tensor can also hold shards for destinations owned by another process.
+        if (!view.impl().is_local(coord)) {
+            continue;
+        }
         auto buf = distributed_host_buffer.get_shard(coord);
         if (buf) {
+            local_coords.push_back(coord);
             total_size += buf->view_bytes().size();
         }
     }
@@ -178,26 +187,13 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
     const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*device(), total_size);
 
     if (use_pinned) {
-        auto* mesh_device = mesh_buffer->device();
-        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
-        transfers.reserve(distributed_host_buffer.shard_coords().size());
+        transfers.reserve(local_coords.size());
         bool any_pinned = false;
 
-        for (const auto& coord : distributed_host_buffer.shard_coords()) {
-            // get_shard yields a buffer only for shards owned by this host, so remote chips are
-            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
+        for (const auto& coord : local_coords) {
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
-                // The host buffer's distribution must agree with the device's: host memory can only
-                // be pinned to MMIO devices local to this process, so a populated shard for a coord
-                // the device owns on another host must never reach try_pin (which would fault while
-                // resolving the remote device).
-                TT_FATAL(
-                    view.impl().is_local(coord),
-                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
-                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
-                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
