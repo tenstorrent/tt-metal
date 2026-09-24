@@ -376,11 +376,11 @@ WORKLOAD_CONFIGS = {
     (1, 512): {"batched_l1": False, "dram_grid": False},  # 2.5 MB -> L1
     (1, 1024): {"batched_l1": False, "dram_grid": True},  # 5 MB -> DRAM
     (1, 2048): {"batched_l1": False, "dram_grid": True},  # 10 MB -> DRAM
-    # bs=4 ISL=512: 10.5 MB activation fits L1 (12 MiB cap). Batched-L1 activations
-    # PLUS the 130-core (13x10) MinimalMatmul grid is the throughput-optimal config:
-    # 74.8 ms vs 90.8 ms DRAM (+21%, 27.4k tok/s — highest of any batch size).
-    # (dram_grid=True here just selects the wide matmul grid; activations are L1.)
-    (4, 512): {"batched_l1": True, "dram_grid": True},  # 10.5 MB -> L1 + 130 grid
+    # bs=4 ISL=512: 10.5 MB activation. The batched-L1 placement clashes with the fused ops' static circular
+    # buffers since the 2026-09-24 landings (program 309: L1 buffer at 1440128 inside the CB region), and the
+    # DRAM path is faster with them anyway: 65.3 ms best of 10 (2026-09-24) against the 74.8 ms the L1 path
+    # read before. TT_BATCHED_L1_PREFILL=1 opts back in if the CB budget changes.
+    (4, 512): {"batched_l1": False, "dram_grid": True},  # 10.5 MB -> DRAM + full grid
     # DRAM-resident batched activations -> 130-core matmul grid (bs>=8: L1 OOMs).
     (8, 512): {"batched_l1": False, "dram_grid": True},  # 20 MB
     (16, 512): {"batched_l1": False, "dram_grid": True},  # 40 MB
