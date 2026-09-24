@@ -56,16 +56,18 @@ jobs:
           sku-config: ./.github/sku_config.yaml
       - name: Apply test selection
         id: apply-test-selection
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TEST_SELECTION: ${{ inputs.test-selection }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.test-selection }}" = "all" ]; then
+          if [ "$TEST_SELECTION" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
+            FILTERED=$(jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]' <<<"$MATRIX")
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/stress_tests.yaml and enabled-skus includes the needed SKU."
+              echo "::error::No tests found for test-selection '$TEST_SELECTION'. Ensure id matches tests/pipeline_reorg/stress_tests.yaml and enabled-skus includes the needed SKU."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -74,16 +76,19 @@ jobs:
           fi
       - name: Apply runner labels (topology / extra-tag)
         id: apply-runner-labels
+        env:
+          MATRIX: ${{ steps.apply-test-selection.outputs.matrix }}
+          EXTRA_TAG: ${{ inputs.extra-tag }}
+          TOPOLOGY: ${{ inputs.topology }}
         run: |
-          MATRIX='${{ steps.apply-test-selection.outputs.matrix }}'
-          UPDATED=$(echo "$MATRIX" | jq -c \
-            --arg tag "${{ inputs.extra-tag }}" \
-            --arg topology "${{ inputs.topology }}" \
+          UPDATED=$(jq -c \
+            --arg tag "$EXTRA_TAG" \
+            --arg topology "$TOPOLOGY" \
             'map(.runs_on |= map(
               if . == "in-service" then $tag
               elif startswith("topology-") then $topology
               else . end
-            ))')
+            ))' <<<"$MATRIX")
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$UPDATED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
