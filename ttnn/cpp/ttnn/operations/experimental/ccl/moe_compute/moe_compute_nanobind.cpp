@@ -176,8 +176,11 @@ void bind_moe_compute(nb::module_& mod) {
           may be opened without a fabric config); ``topology``, ``num_links``,
           ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
           On a multi-device mesh every coordinate must receive the same replicated token set and
-          returns the partial of its own experts (the rows its experts own; other rows are left
-          untouched), which the caller reduces across the other axis. The output is written one
+          routing metadata (expert indices, scores and mapping) and returns the partial of its own
+          experts: the rows its experts own hold their results and every other row of the
+          ``[k, tokens, hidden]`` output is written as zero, so the caller sums the partials
+          across the other axis directly (a reused ``optional_output_tensor`` needs no clearing:
+          the whole output is what the op wrote). The output is written one
           token row (2 x H bytes) per page, so its memory config (``output_memory_config``, or the
           ``optional_output_tensor``'s) must be row-major INTERLEAVED or HEIGHT_SHARDED with whole
           rows per shard, DRAM or L1; WIDTH_SHARDED, BLOCK_SHARDED and ND sharding are rejected

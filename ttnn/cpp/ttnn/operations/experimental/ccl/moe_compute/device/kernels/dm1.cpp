@@ -70,7 +70,9 @@ void kernel_main() {
     // LOCAL_OUTPUT (a cluster axis of extent 1): no combine kernels. Each token row slice this core
     // produces goes straight into the final [k, T, H] row-major output, page k * T + t, where (t, k)
     // are the expert's e_t entries (word 0 token id, word 1 k slot) that the tilize drain publishes
-    // before it releases the matmul cores; dm1 fetches one chunk's entries per chunk.
+    // before it releases the matmul cores; dm1 fetches one chunk's entries per chunk. The rows of
+    // experts this device does not hold are written as zero first (see the zero fill below), so
+    // every row of the output is what this op wrote.
     constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
     // The matmul<->combine handshake exists only when combine kernels are built.
     constexpr bool has_combine = !compute_only && !local_output;
@@ -182,6 +184,35 @@ void kernel_main() {
         CircularBuffer cb_local_output_map(get_named_compile_time_arg_val("local_output_map_cb_id"));
         cb_local_output_map.reserve_back(1);
         local_output_map_addr = cb_local_output_map.get_write_ptr();
+    }
+
+    // LOCAL_OUTPUT zero fill. The output contract is "every row of [k, T, H] is what this op
+    // wrote": the rows of the experts this device holds carry their W2 results and every other row
+    // is zero, so the per-device partials of a 1xN mesh sum directly, also into a reused caller
+    // tensor. Before the tilize release (metadata_ready below) this core writes its column slice of
+    // all k x T rows from a pre-zeroed L1 row slice: one non-posted write per row on the same NoC
+    // as the later row writes, issued while dm1 would otherwise wait for the tilize phase. The
+    // write barrier before the first owned-row write (local_output_fill_pending) orders the fill
+    // ahead of the rows that overwrite it; both come from this core, so the barrier is the order.
+    bool local_output_fill_pending = false;
+    if constexpr (local_output) {
+        constexpr uint32_t local_output_num_rows = get_named_compile_time_arg_val("local_output_num_rows");
+        CircularBuffer cb_local_output_zero(get_named_compile_time_arg_val("local_output_zero_cb_id"));
+        cb_local_output_zero.reserve_back(1);
+        const uint32_t zero_addr = cb_local_output_zero.get_write_ptr();
+        volatile tt_l1_ptr uint32_t* zero_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_addr);
+        for (uint32_t i = 0; i < local_output_row_bytes / sizeof(uint32_t); ++i) {
+            zero_ptr[i] = 0;
+        }
+        const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
+        for (uint32_t row = 0; row < local_output_num_rows; ++row) {
+            noc_async_write(
+                zero_addr,
+                output_accessor.get_noc_addr(row, local_output_col_offset_bytes, /*noc=*/1),
+                local_output_row_bytes,
+                /*noc=*/1);
+        }
+        local_output_fill_pending = local_output_num_rows > 0;
     }
 
     //-------------------------------------------------------------------------
@@ -422,6 +453,11 @@ void kernel_main() {
                 // Final output rows: row bt of this chunk belongs to token (t, k) of the expert's e_t
                 // page; this core's slice of it lands in page k * T + t of [k, T, H] at the core's
                 // column offset. Non-posted writes; the flush before pop_front below frees the source.
+                if (local_output_fill_pending) {
+                    // The zero fill of these same bytes must be committed before the rows overwrite it.
+                    noc1_obj.async_write_barrier();
+                    local_output_fill_pending = false;
+                }
                 noc_async_read_barrier(/*noc=*/1);
                 volatile tt_l1_ptr uint32_t* map =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
@@ -540,8 +576,8 @@ void kernel_main() {
         // (compute_only branch: nothing to do -- the next expert's first chunk flushes any
         //  in-flight writes via the inter-chunk flush before its set_state. Output buffer
         //  toggle below picks the other half so there's no destination overlap either.
-        //  local_output: every chunk's writes were flushed before pop_front; DRAM commit is
-        //  waited for once at the end.)
+        //  local_output: every chunk's writes were flushed before pop_front; the commit of the
+        //  output is waited for once at the end.)
         output_buffer_idx = !output_buffer_idx;
     }
 

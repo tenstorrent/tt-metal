@@ -804,6 +804,35 @@ MoEComputeMeshWorkloadFactory::create_at(
                 .set_page_size(local_output_map_cb_id, map_bytes));
     }
 
+    // LOCAL_OUTPUT: the output contract is "every row of [k, T, H] is what this op wrote": the rows
+    // of experts this device holds carry their W2 results and every other row is zero, so the
+    // per-device partials of a 1xN mesh sum directly, also into a reused caller tensor. Before its
+    // first row write dm1 writes its W2 column slice of all k x T rows from this pre-zeroed L1
+    // region (one row slice: the widest W2 column slice of the ring), overlapped with the tilize
+    // phase. c_10 is free on the matmul cores (c_10..c_14 are tilize-core CBs).
+    constexpr uint32_t local_output_zero_cb_id = tt::CBIndex::c_10;
+    uint32_t local_output_num_rows = 0;
+    if (local_output) {
+        uint32_t max_w2_slice_tiles = 0;
+        for (uint32_t core = 0; core < matmul_num_cores; ++core) {
+            max_w2_slice_tiles = std::max(
+                max_w2_slice_tiles, moe_ring::w2_shard_tiles(hidden_tiles, core, intermediate_tiles, matmul_num_cores));
+        }
+        const uint32_t zero_bytes =
+            max_w2_slice_tiles * tt::constants::TILE_WIDTH * tt::datum_size(tilize_output_dataformat);
+        tt::tt_metal::CreateCircularBuffer(
+            program,
+            matmul_core_range_set,
+            tt::tt_metal::CircularBufferConfig(zero_bytes, {{local_output_zero_cb_id, tilize_output_dataformat}})
+                .set_page_size(local_output_zero_cb_id, zero_bytes));
+        TT_FATAL(
+            tensor_return_value.size() == 6,
+            "path=LocalOutput expects 6 output tensors, got {}",
+            tensor_return_value.size());
+        const auto& local_output_shape = tensor_return_value[5].logical_shape();
+        local_output_num_rows = local_output_shape[0] * local_output_shape[1];  // k x T
+    }
+
     //-------------------------------------------------------------------------
     // Tilize kernels
     //-------------------------------------------------------------------------
@@ -1289,6 +1318,9 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"total_tokens", tokens},
         {"e_t_entry_size", l1_alignment},
         {"local_output_map_cb_id", local_output_map_cb_id},
+        // Zero fill of the rows this device does not own: the pre-zeroed row-slice CB and k x T.
+        {"local_output_zero_cb_id", local_output_zero_cb_id},
+        {"local_output_num_rows", local_output_num_rows},
     };
 
     // Create kernels for the program

@@ -4,10 +4,10 @@
 
 """
 Single-card MoE compute test (1x1 mesh, cluster_axis=None). Runs on both WH
-and BH; other arches are skipped at fixture time. Three tests use a (1, 4) mesh with
-cluster_axis=0: an axis of extent 1 has no neighbours, so the ordinary fabric (FullCcl)
-combine degenerates to a local combine at every device without touching the fabric; the
-mesh_device fixture skips them on a single card.
+and BH; other arches are skipped at fixture time. A few tests use a (1, 4) mesh with
+cluster_axis=0: an axis of extent 1 has nothing to combine, so the op takes its local output
+path at every device (no combine kernels, no fabric) and returns one partial per device whose
+non-owned rows are zero; the mesh_device fixture skips them on a single card.
 
 This test exercises both paths of `ttnn.experimental.moe_compute` on a single device:
   - `compute_only=True`: bypasses the fused selective_reduce_combine stage entirely.
@@ -168,6 +168,7 @@ def _run_moe_compute_single_card_test(
     expect_error=None,
     ccl_knobs=False,
     local_output_memory_config=None,
+    check_non_owned_rows_zero=False,
 ):
     """
     Single-card MoE compute test body. The op is called with cluster_axis=op_cluster_axis:
@@ -191,6 +192,12 @@ def _run_moe_compute_single_card_test(
     hit with a fresh tensor), slot 5 must be that tensor and every device's rows must be
     bitwise equal to the interleaved output of the same inputs: the writer addresses the
     output through a TensorAccessor built from the given buffer, one token row per page.
+
+    check_non_owned_rows_zero (1xN local output only): the output contract is that every row of
+    [k, T, H] is what the op wrote, the rows of the experts a device holds carrying its results
+    and every other row being exactly zero, so the per-device partials sum directly. Checked on
+    an op-allocated output, on a caller tensor pre-filled with a sentinel, and on that same
+    tensor reused after a routing change (its rows then hold the previous routing's results).
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
@@ -469,11 +476,17 @@ def _run_moe_compute_single_card_test(
         # every mesh coordinate; the CCL arguments may be None.
         ccl_kwargs = dict(topology=None, num_links=None, mux_core_range_set=None, optional_cross_device_semaphore=None)
 
-    def run_moe_compute_once(optional_combine_output_tensor, tilize_input_tensor=None, output_memory_config=None):
+    def run_moe_compute_once(
+        optional_combine_output_tensor,
+        tilize_input_tensor=None,
+        output_memory_config=None,
+        expert_indices_tensor=None,
+        expert_scores_tensor=None,
+    ):
         return ttnn.experimental.moe_compute(
             tt_sparse_buffer if tilize_input_tensor is None else tilize_input_tensor,
-            tt_expert_indices,
-            tt_expert_scores,
+            tt_expert_indices if expert_indices_tensor is None else expert_indices_tensor,
+            tt_expert_scores if expert_scores_tensor is None else expert_scores_tensor,
             tt_expert_mapping,
             tt_w0_w1,
             tt_w2,
@@ -534,6 +547,10 @@ def _run_moe_compute_single_card_test(
             ), f"output slot {slot} placements {placements} are not all replicated"
             assert tensor.tensor_topology() == input_topology, f"output slot {slot} topology differs from the input"
 
+    def owner_of_slots(indices_flat):
+        # [K, total_tokens]: the device whose experts own output slot (k, t).
+        return expert_mapping[0].long()[indices_flat.long()].transpose(0, 1)
+
     def validate_combine_output(tt_combine_output, pcc_threshold):
         if not multi_device_local:
             # validate_combine uses cluster_axis for the mesh composer; on 1x1, dim=1 is correct.
@@ -548,7 +565,7 @@ def _run_moe_compute_single_card_test(
         # Every device holds one full-width partial over its own experts: compare each device's
         # output against the golden rows its experts own (the caller sums the partials).
         output_ref, output_data_map = combine_goldens
-        slot_owner = expert_mapping[0].long()[expert_indices_flat.long()].transpose(0, 1)  # [K, total_tokens]
+        slot_owner = owner_of_slots(expert_indices_flat)
         all_passed = True
         for device_idx, device_tensor in enumerate(ttnn.get_device_tensors(tt_combine_output)):
             device_data_map = output_data_map * (slot_owner == device_idx).unsqueeze(0)
@@ -792,6 +809,156 @@ def _run_moe_compute_single_card_test(
                 deallocate_l1_moe_compute_outputs(placed_outputs)
                 ttnn.deallocate(placed_output)
                 ttnn.synchronize_device(mesh_device)
+
+        if check_non_owned_rows_zero:
+            # The output contract on a 1xN mesh: every row of [k, T, H] is what the op wrote. The
+            # rows of the experts a device holds carry its results; every other row is zero (the
+            # writer zero-fills them before its first row write), so the partials sum directly.
+            # Checked bitwise (an int16 view: -0.0 or NaN cannot pass as zero) on an op-allocated
+            # output, on a caller tensor pre-filled with a sentinel, and on that same tensor
+            # reused after a routing change, when its rows hold the previous routing's results
+            # exactly where the new routing may own nothing.
+            assert multi_device_local and local_output_path, "check_non_owned_rows_zero needs the 1xN local output path"
+
+            def assert_partial_output(tt_output, slot_owner, goldens, what):
+                output_ref, output_data_map = goldens
+                for device_idx, device_tensor in enumerate(ttnn.get_device_tensors(tt_output)):
+                    rows = ttnn.to_torch(device_tensor, mesh_composer=None)
+                    assert rows.shape == (
+                        selected_experts_k,
+                        total_tokens,
+                        hidden_size,
+                    ), f"{what}: device {device_idx} output shape {tuple(rows.shape)}"
+                    owned = slot_owner == device_idx  # [K, total_tokens]
+                    num_owned = int(owned.sum())
+                    num_non_owned = int((~owned).sum())
+                    assert num_owned > 0 and num_non_owned > 0, (
+                        f"{what}: device {device_idx} owns {num_owned} of {owned.numel()} slots; the check needs "
+                        "both owned and non-owned rows"
+                    )
+                    non_owned_bits = rows.contiguous().view(torch.int16)[~owned]
+                    nonzero = int((non_owned_bits != 0).sum())
+                    assert nonzero == 0, (
+                        f"{what}: device {device_idx} has {nonzero} non-zero bf16 values in the {num_non_owned} rows "
+                        "its experts do not own"
+                    )
+                    passed = validate_combine_torch(
+                        layer_id, rows, (output_ref, output_data_map * owned.unsqueeze(0)), base_pcc_threshold
+                    )
+                    assert passed, f"{what}: device {device_idx} owned rows do not match the golden"
+                    logger.info(
+                        f"{what}: device {device_idx} owned rows ({num_owned}) match the golden, "
+                        f"{num_non_owned} non-owned rows exactly zero"
+                    )
+
+            slot_owner = owner_of_slots(expert_indices_flat)
+
+            logger.info("\n========== Running op, op-allocated output ==========")
+            allocated_outputs = run_moe_compute_once(None)
+            assert len(allocated_outputs) == expected_n, f"expected {expected_n} tensors, got {len(allocated_outputs)}"
+            assert_partial_output(allocated_outputs[5], slot_owner, combine_goldens, "Op-allocated output")
+            deallocate_l1_moe_compute_outputs(allocated_outputs)
+            ttnn.deallocate(allocated_outputs[5])
+
+            logger.info("\n========== Running op, caller tensor pre-filled with 1.0 ==========")
+            sentinel_tensor = ttnn.from_torch(
+                torch.ones([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=token_mesh_mapper,
+            )
+            sentinel_outputs = run_moe_compute_once(sentinel_tensor)
+            assert (
+                sentinel_outputs[5].buffer_address() == sentinel_tensor.buffer_address()
+            ), "slot 5 must be the caller's optional_output_tensor"
+            assert_partial_output(sentinel_outputs[5], slot_owner, combine_goldens, "Sentinel-filled caller tensor")
+            deallocate_l1_moe_compute_outputs(sentinel_outputs)
+
+            # A routing change: new tokens, indices and scores over the same weights, run through the
+            # cached program into the same caller tensor, which still holds the previous results.
+            torch.manual_seed(2004)
+            random.seed(2004)
+            sparse_buffer_b, expert_indices_b, expert_scores_b, original_tokens_b = gen_sparse_buffer_and_indices(
+                tokens_per_device,
+                hidden_size,
+                experts,
+                selected_experts_k,
+                mesh_shape,
+                cluster_axis,
+                dtype=tt_to_torch_dtype(dtype),
+            )
+            tilize_golden_b, _ = compute_selective_tilize_golden(
+                sparse_buffer_b, expert_indices_b, expert_scores_b, expert_mapping, mesh_shape, cluster_axis
+            )
+            activation_b, _ = compute_expert_activation_golden(
+                expert_indices_b, expert_scores_b, expert_mapping, mesh_shape, cluster_axis
+            )
+            matmul_goldens_b = compute_matmul_golden(
+                tilize_golden_b.unsqueeze(0),
+                torch_w0,
+                torch_w1,
+                torch_w2,
+                num_layers,
+                experts,
+                num_devices,
+                tokens_per_device,
+                hidden_size,
+                torch_b0=torch_b0,
+                torch_b1=torch_b1,
+                torch_b2=torch_b2,
+                activation_type=activation_type,
+            )
+            combine_goldens_b = compute_combine_golden(
+                num_layers,
+                experts,
+                total_tokens,
+                hidden_size,
+                selected_experts_k,
+                mesh_shape,
+                matmul_goldens_b,
+                [activation_b],
+                cluster_axis=-1,
+            )
+            expert_indices_b_flat = expert_indices_b.reshape(total_tokens, selected_experts_k)
+            slot_owner_b = owner_of_slots(expert_indices_b_flat)
+            assert not torch.equal(
+                slot_owner_b, slot_owner
+            ), "the routing change must move at least one output slot to another device"
+            tt_input_b = upload_tilize_input(original_tokens_b.reshape(1, total_tokens, hidden_size), token_mesh_mapper)
+            tt_indices_b = ttnn.from_torch(
+                expert_indices_b_flat.unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint16,
+                memory_config=expert_indices_mem_config,
+                mesh_mapper=token_mesh_mapper,
+            )
+            tt_scores_b = ttnn.from_torch(
+                expert_scores_b.reshape(total_tokens, selected_experts_k).unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=dtype,
+                memory_config=expert_scores_mem_config,
+                mesh_mapper=token_mesh_mapper,
+            )
+            logger.info("\n========== Running op, caller tensor reused after a routing change ==========")
+            reused_outputs = run_moe_compute_once(
+                sentinel_tensor,
+                tilize_input_tensor=tt_input_b,
+                expert_indices_tensor=tt_indices_b,
+                expert_scores_tensor=tt_scores_b,
+            )
+            assert (
+                reused_outputs[5].buffer_address() == sentinel_tensor.buffer_address()
+            ), "slot 5 must be the caller's optional_output_tensor"
+            assert_partial_output(
+                reused_outputs[5], slot_owner_b, combine_goldens_b, "Caller tensor reused after a routing change"
+            )
+            deallocate_l1_moe_compute_outputs(reused_outputs)
+            for tensor in (sentinel_tensor, tt_input_b, tt_indices_b, tt_scores_b):
+                ttnn.deallocate(tensor)
+            ttnn.synchronize_device(mesh_device)
 
         if multi_device_local:
             # A per-device (sharded) token set is rejected: every device must see the whole
@@ -1106,6 +1273,43 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
         op_cluster_axis=0,
         expect_error=expect_error,
         ccl_knobs=ccl_knobs,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])
+def test_moe_compute_multi_device_local_axis_zero_fills_non_owned_rows(mesh_device, mesh_shape, expect_error):
+    """The local output on a 1x4 mesh is one partial per device whose every row is what the op
+    wrote: the rows of the experts a device holds carry its results and every other row is exactly
+    zero, so the caller sums the partials without a zero-filled sink. Checked on an op-allocated
+    output, on a caller tensor pre-filled with 1.0, and on that tensor reused after a routing
+    change (its rows then hold the previous routing's results). The mesh_device fixture skips this
+    on machines with fewer than four devices."""
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("the non-owned-row check needs at least two devices")
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=8,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+        op_cluster_axis=0,
+        expect_error=expect_error,
+        check_non_owned_rows_zero=True,
     )
 
 
