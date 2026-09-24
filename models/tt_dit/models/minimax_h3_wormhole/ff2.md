@@ -29,7 +29,7 @@ best tuned unfused path; over 50 layers that is **-88 ms/fwd (-0.73%)** / -62 ms
 
 `eab3dfbd599` (2026-09-16) gated Wormhole off the fused path because every ff2 was falling to the warned default
 config (8x7 grid, M_block 2, subblock 1x1) -- the best explanation for the mid-denoise hang
-(`../MiniMaxH3_wormhole_hang.md`) and a measured 2-4% end-to-end loss. The 2026-09-17 follow-up swept the fused op at
+(closed in `eab3dfbd599`) and a measured 2-4% end-to-end loss. The 2026-09-17 follow-up swept the fused op at
 three matmul grids and concluded "all worse than unfused; stays disabled". That sweep had four problems, found 2026-09-22:
 
 1. It ran at **M = 4736** (the 5 s shape), not the 13664 the model is tuned for.

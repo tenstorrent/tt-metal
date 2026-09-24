@@ -562,7 +562,7 @@ field and lighting with a different pose and gait in every frame: a different sa
 The TP8 experiment in the README, which also changed only bf16 reduction order, moved frames by 12-19; ff1 alone sits in
 that range, both ops together are twice it.
 
-**Pipeline, 50 steps with the CLIP gate (`test_t2va_end_to_end[wormhole_b0-4x8nl4-16x9_15s]`, FSDP on, `RUN_VBENCH=0`), ff1 only off:**
+**Pipeline, 50 steps with the CLIP gate (`test_t2va_end_to_end[wormhole_b0-4x8_WH-16x9_15s]`, FSDP on, `RUN_VBENCH=0`), ff1 only off:**
 
 | | ff1 only off (02:00) | production, same session (02:22) | production, this host, 2026-09-17 (README Part 4) |
 |---|---|---|---|

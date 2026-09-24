@@ -465,7 +465,7 @@ L1 forces streamed Q and the sequential schedule, and both ops share the inner l
 * Turn `TT_EXP_SDPA_Q_GROUPS` and `TT_EXP_SDPA_MUX_BOTTOM_ROW` into op parameters (program config or
   `ExpRingJointSDPAParams`) so they are in the program-cache key; same for the `num_workers_per_link`
   derivation. Keep `kMaxPasses` semantics.
-* Then the same-host pipeline A/B (README Part 4, *Optimization target*): `test_pipeline_minimax_h3.py -k 4x8nl4`,
+* Then the same-host pipeline A/B (README Part 4, *Optimization target*): `test_pipeline_minimax_h3.py -k 4x8_WH`,
   15 s / 16:9 only, exp on vs off, ms/fwd and CLIP (bar 33.0; 36.31 on the other host's baseline, 35.88 on this host's later run).
 
 5. **Correctness at 15 s.** The torch reference is infeasible at 114688 tokens. Add an on-device check: run the normal ring op on the same inputs and compare outputs (PCC on device or via `to_torch` of both). The 3424-row PCC covers the kernel logic; this covers the 14336-row schedule (56 chunks, 7 segment-passes, group forwarding).

@@ -33,7 +33,7 @@ A plain matmul + reduce-scatter (ff2) runs on the full grid and moves (R - 1) * 
 
 Every constant in those artifacts is Blackhole Galaxy (12x9 = 108-core ring-matmul grid at 1.35 GHz =
 298.6 TFLOP/s HiFi2, 512 GB/s DRAM, 2 links x 25 GB/s). The Wormhole Galaxy the model ships on
-(`MESH_4X8_RING_WH` = `4x8nl4`, TP=4 / SP=8, Ring, 4 links) is a different part on every axis; the
+(`MESH_4X8_RING_WH` = `4x8_WH`, TP=4 / SP=8, Ring, 4 links) is a different part on every axis; the
 `WH` constants below are each traced to the repo file that defines them, and the `BH` constants are
 kept verbatim, labelled as inherited, for the side-by-side. Note the two fabrics coincide on aggregate
 ingress (4 x 12.5 = 2 x 25 = 50 GB/s per direction), so the fabric bars are identical across arches.
@@ -120,7 +120,7 @@ class Arch:
 WH_DRAM_BW = {"spec": 288e9, "measured": 267e9, "perf_model": 258e9}
 
 WH = Arch(
-    name="Wormhole Galaxy 4x8 (4x8nl4: TP=4 / SP=8, Ring, 4 links)",
+    name="Wormhole Galaxy 4x8 (4x8_WH: TP=4 / SP=8, Ring, 4 links)",
     short="WH",
     clock_hz=1.0e9,  # tests/nightly/sdpa_perf_utils.py:31
     ring_matmul_cores=64,  # 8x8: agmm_worker_grid reserves the bottom row of the 8x9 grid (utils/matmul.py:407)

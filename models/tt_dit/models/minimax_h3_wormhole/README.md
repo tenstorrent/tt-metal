@@ -2,7 +2,7 @@
 
 Re-measured 2026-09-17 on `tt-metal` @ `eab3dfbd599` (Wormhole bringup + the fused MM/RS
 gate fix). Supersedes the 2026-09-16 run at `3a016b74847`, which stalled at 13/18.
-Mesh param `MESH_4X8_RING_WH` (`4x8nl4`), TP=4 axis 0 / SP=8 axis 1, Ring, 4 links.
+Mesh param `MESH_4X8_RING_WH` (`4x8_WH`), TP=4 axis 0 / SP=8 axis 1, Ring, 4 links.
 50 scheduler steps => 49 forwards. `RUN_VBENCH=0` (CLIP still gated).
 
 Raw logs are **not** committed (too large to be useful in-tree); they were kept at
@@ -24,7 +24,7 @@ configuration sweep, open issues and VBench.
 ```bash
 TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
   python -m pytest models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py \
-  -k "4x8nl4" -q
+  -k "4x8_WH" -q
 ```
 
 Drop `RUN_VBENCH=0` for the VBench gate (verified working, see below).
@@ -432,7 +432,7 @@ python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dum
 
 # the 15 s / 16:9 video, 50 steps, with the CLIP gate (~25 min with the weight cache; artifacts in ~/h3_t2va_artifacts/)
 TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
-  python -m pytest "models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py::test_t2va_end_to_end[wormhole_b0-4x8nl4-16x9_15s]" \
+  python -m pytest "models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py::test_t2va_end_to_end[wormhole_b0-4x8_WH-16x9_15s]" \
   -q -s --timeout 7200
 ```
 
