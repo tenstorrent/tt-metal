@@ -1,2 +1,0 @@
-supported=False
-reason=missing collector plugin tests/plugins/up_front_collect.py

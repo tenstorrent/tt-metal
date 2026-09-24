@@ -24,8 +24,7 @@ is inactive (`IsProgramRealtimeProfilerActive() == False`), so per-program
 device ns is unavailable here and warm host-to-host latency is the honest
 proxy.  The op is ONE dispatch, so the number is dominated by device time on
 every shape big enough to matter.  It is a RELATIVE instrument: compare a
-refinement's table against the table in `verification_report.md`, taken on the
-same machine.
+refinement's table against a baseline table taken on the same machine.
 
 MEASURED RUN-TO-RUN DRIFT IS ~3% on `min` (device clock / dispatch state), so a
 perf refinement must clear ~5% on `min`, or repeat the file 3x and compare the

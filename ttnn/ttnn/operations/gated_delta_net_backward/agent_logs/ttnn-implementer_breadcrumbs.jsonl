@@ -1,4 +1,0 @@
-{"event":"test_run","status":"fail","classification":"hang","test":"probes/probe_smoke.py","detail":"kernel-config ring buffer fit achieved (-Os + LLK op-variety reduction); first device run hangs","ts":"2026-09-17T11:08:29+00:00"}
-{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/gated_delta_net_backward/test_gated_delta_net_backward.py","detail":"50/50 acceptance tests pass (fp32+bf16, chunk 32/64, ragged, dht-only, num_v_blocks>1)","ts":"2026-09-17T11:29:07+00:00"}
-{"event":"test_run","status":"pass","test":"acceptance both modes + perf pass","detail":"50/50 prod and --dev; gather unroll 1.04-1.09x, gather_depth=2 1.01-1.02x","ts":"2026-09-17T12:15:05+00:00"}
-{"event":"test_run","status":"pass","test":"final","detail":"acceptance 50/50 prod + 50/50 --dev; debug harness 4/4; golden 150 passed / 66 skipped / 1 precision miss (saturated-gate dg); exactly one generic_op dispatch","ts":"2026-09-17T12:25:00+00:00"}
