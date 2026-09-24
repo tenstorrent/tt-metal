@@ -105,22 +105,29 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~90 s. 113 tests.
+# host tier: no device, no silicon, ~90 s. 117 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent. 37 device tests here, 14 more in perf below;
-# the host tier lives in tests/pcc/ and runs here too, so this collects 150.
+# device tier: needs /dev/tenstorrent. 54 device tests here, 14 more in perf below;
+# the host tier lives in tests/pcc/ and runs here too, so this collects 171.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
 # performance -- every numeric threshold is asserted, not printed; see
 # tests/perf/gates.py for how each threshold is enforced, met or not,
-# and PERF.md for what the numbers mean.
+# and PERF.md for what the numbers mean. The first-audio latency test is
+# opt-in (COSYVOICE_RUN_STREAMING_PERF=1): it wedges n300 and can take a
+# CI host down, see docs/VALIDATION.md.
 pytest models/demos/cosyvoice/tests/perf/ -v -s
 
 # two of those device tests want prompt .npz files from prepare_inputs.py and
 # skip without them; point COSYVOICE_INPUTS at the directory it wrote.
 COSYVOICE_INPUTS=/path/to/inputs pytest models/demos/cosyvoice/tests/e2e/ -v
 ```
+
+Without the goldens and the weight exports in `tests/golden` (Quick start, step 3), the
+device tests skip and pytest still reports the run as passed. `tests/conftest.py` names
+what is absent in the header and counts the skipped tests in a red summary at the end;
+a run that prints it has not tested the port.
 
 ### Demo
 
@@ -201,6 +208,11 @@ encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — stays on host by desi
 of the four are ONNX blobs, and none is on the critical path for this port.
 `prepare_inputs.py` writes a flat `.npz` the device side loads without importing
 CosyVoice or `onnxruntime` — the same split `export_weights.py` draws.
+
+Between the three stages only token IDs cross the host. Inside the LLM stage, every
+generated token makes one round trip: the logits are read back to the host, the RAS
+sampler picks the token there, and that token's embedding row is uploaded for the next
+decode step. PERF.md Part II §1.6 measures that tail and why sampling stays on the host.
 
 <details>
 <summary>Each stage in detail</summary>
