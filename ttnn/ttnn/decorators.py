@@ -289,8 +289,10 @@ def register_pre_operation_hook(hook):
 
     global PRE_OPERATION_HOOKS
     PRE_OPERATION_HOOKS.append(hook)
-    yield
-    PRE_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        PRE_OPERATION_HOOKS.pop()
 
 
 @contextmanager
@@ -345,8 +347,10 @@ def register_post_operation_hook(hook):
 
     global POST_OPERATION_HOOKS
     POST_OPERATION_HOOKS.append(hook)
-    yield
-    POST_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        POST_OPERATION_HOOKS.pop()
 
 
 def get_devices(object_value):
@@ -363,6 +367,19 @@ def get_devices(object_value):
         for value in object_value.values():
             devices |= get_devices(value)
     return devices
+
+
+_warned_comparison_skipped_during_trace_capture = False
+
+
+def _warn_once_comparison_skipped_during_trace_capture(operation_name):
+    global _warned_comparison_skipped_during_trace_capture
+    if not _warned_comparison_skipped_during_trace_capture:
+        _warned_comparison_skipped_during_trace_capture = True
+        logger.warning(
+            f"{operation_name}: comparison mode is skipped for operations inside a metal trace capture, since their "
+            "inputs and outputs cannot be read back until the trace runs"
+        )
 
 
 def get_tensors(object_value, tensor_type):
@@ -491,17 +508,7 @@ def get_output_tensor_ids(output):
     return ids
 
 
-def _convert_ttnn_to_torch_for_comparison(tensor, **kwargs):
-    if tensor.dtype == ttnn.DataType.FP8_E4M3:
-        # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
-        # This matches the FP8 golden's dequantized torch.float32 representation.
-        if ttnn.is_tensor_storage_on_device(tensor):
-            tensor = ttnn.from_device(tensor)
-        tensor = ttnn.to_dtype(tensor, ttnn.float32)
-    return ttnn.to_torch(tensor, **kwargs)
-
-
-def to_torch_for_comparison(tensor, golden_tensor=None):
+def to_torch_for_comparison(tensor, golden_tensor=None, *, preserve_fp8_bytes=False):
     import math
     import torch
 
@@ -510,12 +517,22 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
+    def convert(tensor, **kwargs):
+        # Mixed-format rows stored as FP8 bytes (e.g. scaled-FP8 sparse KV) must bypass value conversion.
+        if tensor.dtype == ttnn.DataType.FP8_E4M3 and not preserve_fp8_bytes:
+            # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
+            # This matches the FP8 golden's dequantized torch.float32 representation.
+            if ttnn.is_tensor_storage_on_device(tensor):
+                tensor = ttnn.from_device(tensor)
+            tensor = ttnn.to_dtype(tensor, ttnn.float32)
+        return ttnn.to_torch(tensor, **kwargs)
+
     mesh_index = getattr(golden_tensor, "_ttnn_mesh_index", None)
     if mesh_index is not None:
         device_tensors = list(ttnn.get_device_tensors(tensor))
         if not 0 <= mesh_index < len(device_tensors):
             raise ValueError(f"Runtime output has no shard at mesh index {mesh_index}")
-        return _convert_ttnn_to_torch_for_comparison(device_tensors[mesh_index])
+        return convert(device_tensors[mesh_index])
 
     try:
         topology = tensor.tensor_topology()
@@ -540,7 +557,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
         if not device_tensors:
             return None
 
-        torch_shards = [_convert_ttnn_to_torch_for_comparison(device_tensor) for device_tensor in device_tensors]
+        torch_shards = [convert(device_tensor) for device_tensor in device_tensors]
         # Device tensors arrive in physical storage order; compose them in that order.
         if len(torch_shards) == 1:
             return torch_shards[0]
@@ -587,7 +604,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
                 for placement in placements
             ):
-                return _convert_ttnn_to_torch_for_comparison(device_tensors[0])
+                return convert(device_tensors[0])
 
         if not has_shard:
             composed = compose_device_tensors()
@@ -616,13 +633,13 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                     mesh_shape_override=ttnn.MeshShape(composer_shape),
                 ),
             )
-            return _convert_ttnn_to_torch_for_comparison(tensor, mesh_composer=mesh_composer)
+            return convert(tensor, mesh_composer=mesh_composer)
 
     composed = compose_device_tensors()
     if composed is not None:
         return composed
 
-    return _convert_ttnn_to_torch_for_comparison(tensor)
+    return convert(tensor)
 
 
 def _structured_output_leaves(golden_outputs, outputs):
@@ -979,7 +996,7 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in
 # place; the tensor's contents are overwritten so any pre-existing global golden becomes stale.
-INPLACE_OUTPUT_KWARG_NAMES = (
+DEFAULT_OUTPUT_TENSOR_KWARG_NAMES = (
     "output_tensor",
     "optional_tensor",
     "optional_output_tensor",
@@ -990,9 +1007,9 @@ INPLACE_OUTPUT_KWARG_NAMES = (
 )
 
 
-def get_inplace_output_tensors(function_kwargs):
+def get_inplace_output_tensors(function_kwargs, output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES):
     tensors = []
-    for name in INPLACE_OUTPUT_KWARG_NAMES:
+    for name in output_tensor_kwarg_names:
         if name in function_kwargs:
             tensors += get_ttnn_tensors(function_kwargs[name])
     return tensors
@@ -1045,6 +1062,7 @@ class FastOperation:
     postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
+    output_tensor_kwarg_names: tuple[str, ...] = DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
     _slow_operation: "Operation | None" = dataclasses.field(default=None, init=False, repr=False)
 
     @property
@@ -1066,11 +1084,12 @@ class FastOperation:
                 postprocess_golden_function_outputs=self.postprocess_golden_function_outputs,
                 is_cpp_operation=self.is_cpp_operation,
                 is_experimental=self.is_experimental,
+                output_tensor_kwarg_names=self.output_tensor_kwarg_names,
             )
             self._slow_operation.__post_init__()
         return self._slow_operation
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
@@ -1260,12 +1279,13 @@ class Operation:
     postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
+    output_tensor_kwarg_names: tuple[str, ...] = DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
 
     @property
     def __name__(self):
         return self.python_fully_qualified_name
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
@@ -1333,7 +1353,9 @@ class Operation:
                     # An op without a golden (e.g. dropout) can still mutate a caller tensor in
                     # place; invalidate its stale global golden so later reads don't mismatch.
                     if ttnn.CONFIG.report_path is not None:
-                        refresh_or_invalidate_global_goldens(get_inplace_output_tensors(function_kwargs), None)
+                        refresh_or_invalidate_global_goldens(
+                            get_inplace_output_tensors(function_kwargs, self.output_tensor_kwarg_names), None
+                        )
                     TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(function_return_value))
                     return function_return_value, (
                         local_tensor_comparison_records,
@@ -1443,7 +1465,8 @@ class Operation:
                 # the fresh global golden onto the caller's tensor to keep later reads consistent.
                 if ttnn.CONFIG.report_path is not None:
                     refresh_or_invalidate_global_goldens(
-                        get_inplace_output_tensors(function_kwargs), global_golden_function_output
+                        get_inplace_output_tensors(function_kwargs, self.output_tensor_kwarg_names),
+                        global_golden_function_output,
                     )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
@@ -1486,10 +1509,6 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
-                    if not ttnn.tracer.is_tracing_enabled():
-                        ttnn.tracer.enable_tracing()
-
                 if ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
@@ -1511,20 +1530,28 @@ class Operation:
                         )
                         raise
 
+                host_sync_allowed = True
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
                     decorated_function = set_output_tensor_id_decorator(decorated_function)
+                    devices = get_devices((function_args, function_kwargs))
+                    # Synchronizing with or reading from a device is illegal while a metal trace is being captured
+                    # on it, so logging and comparison mode both have to stay off the device there.
+                    host_sync_allowed = not any(ttnn.is_trace_capture_active(device) for device in devices)
 
                 if ttnn.CONFIG.enable_logging:
-                    devices = get_devices((function_args, function_kwargs))
-                    for device in devices:
-                        ttnn.synchronize_device(device)
+                    if host_sync_allowed:
+                        for device in devices:
+                            ttnn.synchronize_device(device)
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
-                if ttnn.CONFIG.enable_comparison_mode:
+                compare_against_golden = ttnn.CONFIG.enable_comparison_mode and host_sync_allowed
+                if compare_against_golden:
                     decorated_function = comparison_decorator(decorated_function)
+                elif ttnn.CONFIG.enable_comparison_mode:
+                    _warn_once_comparison_skipped_during_trace_capture(self.python_fully_qualified_name)
 
                 # Initialize variables for comparison mode
                 local_tensor_comparison_records = []
@@ -1543,7 +1570,7 @@ class Operation:
                             output = decorated_function(*function_args, **function_kwargs)
 
                     # Success path - only runs if no exception
-                    if ttnn.CONFIG.enable_comparison_mode:
+                    if compare_against_golden:
                         (
                             output,
                             (
@@ -1555,13 +1582,14 @@ class Operation:
                         ) = output
 
                     if ttnn.CONFIG.enable_logging:
-                        for device in devices:
-                            ttnn.synchronize_device(device)
+                        if host_sync_allowed:
+                            for device in devices:
+                                ttnn.synchronize_device(device)
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
                     # Comparison mode: record Python-specific golden comparison data
                     # for offline graph_report import.
-                    if ttnn.CONFIG.enable_comparison_mode:
+                    if compare_against_golden:
                         golden_tensors = get_all_tensors((local_golden_function_output, global_golden_function_output))
                         ttnn.graph.record_tensor_comparison_data(
                             local_tensor_comparison_records=local_tensor_comparison_records,
@@ -1752,6 +1780,7 @@ def attach_golden_function(
     *,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
+    output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES,
 ):
     operation.golden_function = golden_function
     operation.preprocess_golden_function_inputs = (
@@ -1760,6 +1789,7 @@ def attach_golden_function(
     operation.postprocess_golden_function_outputs = (
         postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
     )
+    operation.output_tensor_kwarg_names = tuple(output_tensor_kwarg_names)
 
 
 def create_module_if_not_exists(module_name):
@@ -1817,6 +1847,7 @@ def register_python_operation(
     golden_function=None,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
+    output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES,
     doc=None,
 ):
     python_fully_qualified_name = name
@@ -1854,6 +1885,7 @@ def register_python_operation(
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_operation=False,
             is_experimental=is_experimental,
+            output_tensor_kwarg_names=tuple(output_tensor_kwarg_names),
         )
 
         attach_golden_function(
@@ -1861,6 +1893,7 @@ def register_python_operation(
             golden_function,
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
+            output_tensor_kwarg_names=output_tensor_kwarg_names,
         )
 
         if not is_method:  # Do not export methods

@@ -21,24 +21,30 @@ from diffusers.models.transformers.transformer_minimax_h3 import (
 from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3TransformerBlock as TorchMiniMaxH3Block
 from loguru import logger
 from safetensors import safe_open
+from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
-from ....models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import (
-    MODALITY_NUM,
-    NUM_MODULATION_PARAMS,
-    MiniMaxH3TransformerBlock,
-)
+from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3 import adaln_precompute as ap
+from ....pipelines.minimax_h3.packing import (
+    MINIMAX_H3_AUDIO_CHANNELS,
+    MINIMAX_H3_FPS,
+    align_num_frames,
+    audio_latent_num_frames,
+    packed_sequence_length,
+    padded_sequence_length,
+    resolve_canvas_size,
+    video_latent_num_frames,
+)
 from ....utils.check import assert_quality
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
+from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
     REAL_BLOCK_CONFIG,
@@ -52,6 +58,18 @@ from .common import (
     randomize_norm_weights,
     upload_rope,
 )
+
+
+def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
+    """The `logical_n` device tensor the forwards take: [1, 1, 1, 1] uint32 ROW_MAJOR, replicated."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+
 
 NUM_ATTENTION_HEADS = REAL_BLOCK_CONFIG["num_attention_heads"]
 ATTENTION_HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
@@ -248,25 +266,103 @@ def _prepare_tt_inputs(
             mesh_axes=[..., None, sp_axis],
         )
 
+    def upload_replicated_indices(arr: torch.Tensor) -> ttnn.Tensor:
+        return from_torch(
+            arr.to(torch.int32).reshape(1, 1, 1, -1),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[..., None, None],
+        )
+
+    tile = ttnn.TILE_SIZE
+
+    def rup(n: int) -> int:
+        return ((n + tile - 1) // tile) * tile
+
+    def pad_stream(t: torch.Tensor, cap: int) -> torch.Tensor:
+        if t.shape[1] == cap:
+            return t
+        return torch.cat([t, torch.zeros(t.shape[0], cap - t.shape[1], t.shape[2], dtype=t.dtype)], dim=1)
+
+    l_cap, v_cap, a_cap = rup(num_text), rup(num_video), rup(num_audio)
+    video_cond = [b["input"] for b in cond_blocks if b["modality"] == "video"]
+    audio_cond = [b["input"] for b in cond_blocks if b["modality"] == "audio"]
+    cv_total = sum(b["rows"] for b in cond_blocks if b["modality"] == "video")
+    ca_total = sum(b["rows"] for b in cond_blocks if b["modality"] == "audio")
+    kv_cap = rup(cv_total) if cv_total else 0
+    ka_cap = rup(ca_total) if ca_total else 0
+
+    cursor = l_cap
+    off_cv, cursor = cursor, cursor + kv_cap
+    off_ca, cursor = cursor, cursor + ka_cap
+    off_audio, cursor = cursor, cursor + a_cap
+    off_video = cursor
+
+    asm = torch.zeros(padded_len, dtype=torch.int64)
+    asm[:num_text] = torch.arange(num_text)
+    pos, cv_cur, ca_cur = num_text, 0, 0
+    for block in cond_blocks:
+        rows = block["rows"]
+        if block["modality"] == "video":
+            base, cv_cur = off_cv + cv_cur, cv_cur + rows
+        else:
+            base, ca_cur = off_ca + ca_cur, ca_cur + rows
+        asm[pos : pos + rows] = torch.arange(base, base + rows)
+        pos += rows
+    asm[pos : pos + num_audio] = torch.arange(off_audio, off_audio + num_audio)
+    pos += num_audio
+    asm[pos : pos + num_video] = torch.arange(off_video, off_video + num_video)
+
+    audio_start = num_text + cv_total + ca_total
+    video_start = audio_start + num_audio
+    v_out = torch.full((v_cap,), video_start, dtype=torch.int64)
+    v_out[:num_video] = torch.arange(video_start, video_start + num_video)
+    a_out = torch.full((a_cap,), audio_start, dtype=torch.int64)
+    a_out[:num_audio] = torch.arange(audio_start, audio_start + num_audio)
+
+    prompt_windows = None
+    if l_cap != num_text:
+        prompt_windows = from_torch(
+            torch.tensor([0, num_text, l_cap], dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None],
+        )
+
+    def cond_arena(inputs: list[torch.Tensor], cap: int) -> ttnn.Tensor | None:
+        if not inputs:
+            return None
+        return bf16_tensor(pad_stream(torch.cat(inputs, dim=1), cap).unsqueeze(0), device=mesh_device)
+
+    tt_static = dict(
+        prompt_1BLP=bf16_tensor(pad_stream(prompt_input, l_cap).unsqueeze(0), device=mesh_device),
+        prompt_windows=prompt_windows,
+        condition_video_1BKC=cond_arena(video_cond, kv_cap),
+        condition_audio_1BKC=cond_arena(audio_cond, ka_cap),
+    )
     tt = dict(
-        video_1BVC=bf16_tensor(video_input.unsqueeze(0), device=mesh_device),
-        audio_1BAC=bf16_tensor(audio_input.unsqueeze(0), device=mesh_device),
-        prompt_1BLP=bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device),
-        condition_blocks=[
-            (bf16_tensor(block["input"].unsqueeze(0), device=mesh_device), block["modality"]) for block in cond_blocks
-        ]
-        or None,
+        video_1BVC=bf16_tensor(pad_stream(video_input, v_cap).unsqueeze(0), device=mesh_device),
+        audio_1BAC=bf16_tensor(pad_stream(audio_input, a_cap).unsqueeze(0), device=mesh_device),
+        assembly_indices=upload_replicated_indices(asm),
+        video_out_indices=upload_replicated_indices(v_out),
+        audio_out_indices=upload_replicated_indices(a_out),
         timestep=from_torch(timestep.reshape(1, 1, num_timesteps, 1), device=mesh_device, dtype=ttnn.float32),
         adaln_indices=upload_row_metadata(ts_idx * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)),
         timestep_indices=upload_row_metadata(ts_idx),
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
+        logical_n=logical_length_tensor(mesh_device, seq_len),
+        pad_to=padded_len,
     )
 
     return SimpleNamespace(
         seq_len=seq_len,
         padded_len=padded_len,
         num_timesteps=num_timesteps,
+        num_video=num_video,
+        num_audio=num_audio,
         position_ids=position_ids,
         tags=tags,
         ts_idx=ts_idx,
@@ -276,6 +372,7 @@ def _prepare_tt_inputs(
         timestep=timestep,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        tt_static=tt_static,
         tt=tt,
     )
 
@@ -428,6 +525,7 @@ def test_minimax_h3_transformer(
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     logger.info("Running TT model")
+    tt_model.prepare_static_sources(**inputs.tt_static)
     tt_video_out, tt_audio_out = tt_model(**inputs.tt)
 
     def compose_replicated(t: ttnn.Tensor) -> torch.Tensor:
@@ -441,8 +539,8 @@ def test_minimax_h3_transformer(
             torch.testing.assert_close(flat[0], flat[d], rtol=0, atol=0, msg=f"replica {d} diverged")
         return flat[:1]
 
-    tt_video_out = compose_replicated(tt_video_out)
-    tt_audio_out = compose_replicated(tt_audio_out)
+    tt_video_out = compose_replicated(tt_video_out)[:, :num_video]
+    tt_audio_out = compose_replicated(tt_audio_out)[:, :num_audio]
 
     logger.info("Checking video output")
     assert_quality(torch_video_out, tt_video_out, pcc=MIN_PCC)
@@ -572,6 +670,8 @@ def test_minimax_h3_transformer_real_weights(
         f"{inputs.padded_len // sp_factor} rows/device), cond blocks={[(b['modality'], b['rows']) for b in cond_blocks]}"
     )
 
+    tt_model.prepare_static_sources(**inputs.tt_static)
+
     def forward():
         out = tt_model(**inputs.tt)
         ttnn.synchronize_device(mesh_device)
@@ -591,7 +691,7 @@ def test_minimax_h3_transformer_real_weights(
             tensor,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=[0, 1], mesh_shape=tuple(mesh_device.shape)),
         )
-        out = out.reshape(-1, *out.shape[2:])[0].float()
+        out = out.reshape(-1, *out.shape[2:])[0].float()[:rows]
         assert out.shape == (rows, channels), f"{name}: got {tuple(out.shape)}, want {(rows, channels)}"
         assert torch.isfinite(out).all(), f"{name}: contains NaN or Inf"
         std, absmax = out.std().item(), out.abs().max().item()
@@ -706,7 +806,7 @@ def test_minimax_h3_attention(
     logger.info("Running TT model")
     tt_out = tt_model(
         tt_spatial,
-        N=seq_len,
+        logical_n=logical_length_tensor(mesh_device, seq_len),
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
     )
@@ -809,7 +909,7 @@ def _block_setup(
     def run(block, **extra) -> torch.Tensor:
         out = block(
             tt_spatial,
-            N=seq_len,
+            logical_length_tensor(mesh_device, seq_len),
             temb=extra.pop("temb", tt_temb),
             adaln_indices=tt_adaln_indices,
             rope_cos=tt_rope_cos,
@@ -882,6 +982,180 @@ def test_minimax_h3_transformer_block(
     tt_out = fixture.run(tt_model)
 
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
+
+
+# ---- production-geometry block device-perf (Tracy signposts) ----
+#
+# Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
+
+VAE_SPATIAL_DOWNSAMPLE = 16
+# The perf gate's prompt (`CALIBRATED_FOX_PROMPT`) tokenizes to 39. This used to be 512, which -- together
+# with audio being counted once per latent below -- put this harness at 4768 / 9216 / 13632 rows/device
+# against the pipeline's 4736 / 9184 / 13664, so every M-keyed table derived from it was keyed on lengths
+# the pipeline never runs. The exact count matters less than the bucket: padding is to `sp_factor * TILE`
+# = 256 rows, so at 15 s any prompt from 1 to 250 tokens gives the same rows/device.
+NUM_TEXT_TOKENS = 39
+PERF_ASPECT = (16, 9)
+
+
+def _packed_sizes(duration_s: float) -> dict:
+    """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
+    height, width = resolve_canvas_size(*PERF_ASPECT)
+    tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
+        width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2]
+    )
+    num_frames = align_num_frames(int(duration_s * MINIMAX_H3_FPS))
+    latent_frames = video_latent_num_frames(num_frames)
+    num_audio_latents = audio_latent_num_frames(num_frames)
+    # ROWS, not latents: `packed_layout`, `seq_len` and `sim_seq_len` all count rows, and the pipeline
+    # packs `MINIMAX_H3_AUDIO_CHANNELS` rows per audio latent (`packing.py`, `build_packed_sequence`).
+    num_audio = num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS
+    num_video = latent_frames * tokens_per_latent_frame
+    return {
+        "height": height,
+        "width": width,
+        "num_frames": num_frames,
+        "latent_frames": latent_frames,
+        "grid_h": height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1],
+        "grid_w": width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2],
+        "num_video": num_video,
+        "num_audio": num_audio,
+        "num_audio_latents": num_audio_latents,
+        "num_text": NUM_TEXT_TOKENS,
+        "seq_len": packed_sequence_length(NUM_TEXT_TOKENS, num_audio_latents, num_video),
+    }
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    "duration_s",
+    [
+        pytest.param(5.0, id="5s_768p"),
+        pytest.param(10.0, id="10s_768p"),
+        pytest.param(15.0, id="15s_768p"),
+    ],
+)
+@pytest.mark.parametrize(
+    "sp_simulate",
+    [
+        pytest.param(1, id="sp_sim1"),
+        pytest.param(4, id="sp_sim4"),
+    ],
+)
+def test_minimax_h3_transformer_block_perf(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    duration_s: float,
+    sp_simulate: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
+    # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
+    # nothing there; the WH rows are only meaningful at sp_sim1.
+    if sp_simulate > 1 and not is_blackhole():
+        pytest.skip("SP simulation targets the Blackhole 4x32 quad; there is no Wormhole equivalent")
+    SIM = sp_simulate
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    sizes = _packed_sizes(duration_s)
+    seq_len = sizes["seq_len"]
+    padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
+    logger.info(
+        f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
+        f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
+        f"{sizes['num_video']} video + {sizes['num_audio']} audio + {sizes['num_text']} text "
+        f"= seq_len {seq_len} (padded {padded_len}, {padded_len // sp_factor} rows/device)"
+    )
+
+    num_timesteps = 2
+    frame = sizes["grid_h"] * sizes["grid_w"]
+    sim_num_video = (sizes["num_video"] // SIM // frame) * frame
+    sim_seq_len = sizes["num_text"] // SIM + sizes["num_audio"] // SIM + sim_num_video
+    position_ids, tags, timestep_indices = packed_layout(
+        sizes["num_text"] // SIM,
+        sizes["num_audio"] // SIM,
+        sim_num_video,
+        (sizes["grid_h"], sizes["grid_w"]),
+        padded_len,
+    )
+    adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
+
+    torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+
+    rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+    with torch.no_grad():
+        rope_cos, rope_sin = rope(position_ids)
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, ATTENTION_HEAD_DIM)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
+
+    tt_block = MiniMaxH3TransformerBlock(
+        **TT_BLOCK_CONFIG,
+        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+    )
+    tt_block.load_torch_state_dict(torch_block.state_dict())
+    del torch_block
+
+    tt_spatial = bf16_tensor_2dshard(
+        torch.randn(1, 1, padded_len, HIDDEN_SIZE),
+        device=mesh_device,
+        shard_mapping={sp_axis: 2, tp_axis: 3},
+    )
+    tt_temb = from_torch(torch.randn(1, 1, num_timesteps, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
+    tt_adaln = from_torch(
+        adaln_indices.to(torch.int32).reshape(1, 1, 1, padded_len),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, sp_axis],
+    )
+    tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
+
+    def run_block() -> ttnn.Tensor:
+        out = tt_block(
+            tt_spatial,
+            logical_length_tensor(mesh_device, sim_seq_len),
+            temb=tt_temb,
+            adaln_indices=tt_adaln,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        ttnn.synchronize_device(mesh_device)
+        return out
+
+    logger.info("iteration 1: compiling kernels and populating the program cache")
+    run_block()
+
+    logger.info("iteration 2: warm run (the profiled region)")
+    signpost("start")
+    tt_out = run_block()
+    signpost("stop")
+
+    assert tuple(tt_out.shape) == (
+        1,
+        1,
+        padded_len // sp_factor,
+        HIDDEN_SIZE // tp_factor,
+    ), f"unexpected output shape {tuple(tt_out.shape)}"
+    local = local_device_to_torch(tt_out).float()
+    assert torch.isfinite(local).all(), "block output contains NaN or Inf"
+    logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
 
 
 # ---- the token refiner ----
@@ -976,83 +1250,3 @@ def test_minimax_h3_token_refiner(
 
     tt_out = tt_out[:1]
     assert_quality(torch_out, tt_out, pcc=MIN_PCC)
-
-
-# ---- precomputed-AdaLN block: table self-consistency misses wiring bugs, so compare vs torch AND the projected path ----
-
-
-MIN_PCC = 0.9995
-MIN_PCC_PATHS_AGREE = 0.9999  # same weights by construction: anything looser is a wiring bug
-
-
-class _SingleLayerTable:
-    """One-layer stand-in for `precompute_adaln_table`, projected by the real `adaln_precompute` code."""
-
-    def __init__(self, temb: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, hidden_size: int) -> None:
-        projected = ap.project_block_adaln(temb, weight, bias, hidden_size)
-        self.block_params = projected.unsqueeze(0)  # [1 layer, rows * MODALITY_NUM, params, hidden]
-        rows = temb.shape[0]
-        self.final_shift = torch.zeros(rows, hidden_size, dtype=torch.bfloat16)
-        self.final_scale = torch.zeros(rows, hidden_size, dtype=torch.bfloat16)
-        self.step_offsets = torch.tensor([0, rows])
-        self.num_layers = 1
-        self.hidden_size = hidden_size
-        self.num_steps = 1
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "is_fsdp", "topology"),
-    [
-        pytest.param((4, 8), 1, 0, 2, False, ttnn.Topology.Ring, id="4x8sp1tp0nl2_ring_is_fsdp0"),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [ring_params_req_exact_devices], indirect=True)
-@pytest.mark.parametrize(("num_text", "num_audio", "num_video"), [pytest.param(512, 256, 1280, id="small_s2048")])
-def test_precomputed_adaln_matches_projected_path(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    num_text: int,
-    num_audio: int,
-    num_video: int,
-    is_fsdp: bool,
-    topology: ttnn.Topology,
-    reset_seeds,
-) -> None:
-    skip_if_unsupported_num_links(mesh_device, num_links)
-
-    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, num_text, num_audio, num_video)
-
-    projected_block = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
-    projected_block.load_torch_state_dict(fixture.torch_model.state_dict())
-    projected_out = fixture.run(projected_block)
-
-    state = fixture.torch_model.state_dict()
-    table = _SingleLayerTable(
-        fixture.temb_input,
-        state["adaln_proj.linear.weight"].bfloat16(),
-        state["adaln_proj.linear.bias"].bfloat16(),
-        HIDDEN_SIZE,
-    )
-    cache = MiniMaxH3AdalnCache(
-        table,
-        mesh_device=mesh_device,
-        parallel_config=fixture.parallel_config,
-        num_layers=1,
-        hidden_size=HIDDEN_SIZE,
-    )
-    precomputed_block = MiniMaxH3TransformerBlock(**fixture.block_kwargs, precomputed_adaln=True)
-    precomputed_block.load_torch_state_dict(fixture.torch_model.state_dict())
-    tables = cache.block_tables(0)
-    assert len(tables) == NUM_MODULATION_PARAMS
-    assert tuple(tables[0].shape)[-2:] == (fixture.num_timesteps * MODALITY_NUM, HIDDEN_SIZE // fixture.tp_factor)
-    precomputed_out = fixture.run(precomputed_block, temb=None, modulation_tables=tables)
-
-    logger.info("projected path vs torch")
-    assert_quality(fixture.torch_out, projected_out, pcc=MIN_PCC)
-    logger.info("precomputed path vs torch")
-    assert_quality(fixture.torch_out, precomputed_out, pcc=MIN_PCC)
-    logger.info("precomputed vs projected -- same weights, so this is the wiring check")
-    assert_quality(projected_out, precomputed_out, pcc=MIN_PCC_PATHS_AGREE)

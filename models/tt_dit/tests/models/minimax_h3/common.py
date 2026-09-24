@@ -120,21 +120,30 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 # cannot resolve a forwarding direction (`TT_FATAL fabric.cpp:174 forwarding_direction.has_value()`).
 # 4x32 additionally takes the 8 KB router payload, matching Wan's 4x32 rows, and a trace region for
 # the quad's `trace_denoise`; the region is only reserved, so 4x8 pays nothing but address space.
+# The trace region holds one denoise capture per `bucket_ladder` rung resident at once.
 _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
-_ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 150_000_000, "l1_small_size": _L1_SMALL}
+_ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1_175_000_000, "l1_small_size": _L1_SMALL}
 
-MESH_4X8_RING = pytest.param((4, 8), 2, _ring_8k, id="4x8nl2")
-MESH_4X32_RING = pytest.param((4, 32), 2, _ring_8k_trace, id="4x32nl2")
 # Wormhole has 1.5 MB L1/core against Blackhole's larger budget, so the 64 KB reservation the
-# Blackhole meshes use leaves too little for the DiT's static circular buffers.
+# Blackhole meshes use leaves too little for the DiT's static circular buffers. Its fabric also caps
+# the router payload below 8 KB (conftest skips an 8 KB request on wormhole_b0), hence 4 KB.
 _L1_SMALL_WH = 32768
 _ring_4k = {**ring_params_4k_req_exact_devices, "l1_small_size": _L1_SMALL_WH}
-MESH_4X8_RING_WH = pytest.param((4, 8), 4, _ring_4k, id="4x8nl4")
 
+# Both 4x8 rows ask for 32 devices, so `require_exact_physical_num_devices` cannot tell them apart the
+# way it separates 4x8 from 4x32 -- only the arch can. Without these marks a Wormhole cluster would also
+# collect the Blackhole row and open it with the wrong L1-small and payload.
+_BH_ONLY = pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only mesh configuration")
+_WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configuration")
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING, MESH_4X8_RING_WH]
+MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8", marks=_BH_ONLY)
+MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED", marks=_BH_ONLY)
+# Links and residency come from the pipeline's `_PRESETS_WH`, so the row carries only device params.
+MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
+
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
@@ -146,12 +155,6 @@ def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> to
 
 
 # ---- transformer test fixtures, shared by the correctness and perf tests so they cannot drift ----
-
-# Both Galaxy 4x8 rows below ask for 32 devices, so `require_exact_physical_num_devices` cannot tell
-# them apart the way it separates 4x8 from 4x32 -- only the arch can. Without these marks a Wormhole
-# cluster would also collect the Blackhole row and silently measure it at nl2 with an 8 KB payload.
-_BH_ONLY = pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only mesh configuration")
-_WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configuration")
 
 # The transformer tests take the axes explicitly: TP stays on axis 0 at factor 4 and SP absorbs the
 # rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.

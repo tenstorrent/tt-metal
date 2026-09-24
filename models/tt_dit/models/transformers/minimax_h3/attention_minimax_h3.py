@@ -81,13 +81,9 @@ class MiniMaxH3Attention(Module):
     # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
     # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
     # 4736 / 9184 / 13664 are 768P at 5s / 10s / 15s with the perf gate's 39-token prompt, packed and
-    # padded to SP * TILE, divided by SP=8 -- the values the pipeline logs as "rows/device". These keys
-    # were 4768 / 9216 / 13632 until 2026-09-17, taken from a harness that counted audio latents once
-    # (the pipeline packs two rows per latent) and assumed a 512-token prompt; the pipeline never
-    # produced them, so this table never hit and every duration ran the fallback. 10 s and 15 s were
-    # unaffected (measured == fallback); 5 s now applies (320, 384) as originally intended -- measured
-    # on Blackhole's 110 SDPA cores, and not yet re-checked on Wormhole's 63. Padding buckets prompt
-    # length: at 15 s any prompt of 1-250 tokens lands on 13664. See MiniMaxH3_rows_per_device_mismatch.md.
+    # padded to SP * TILE, divided by SP=8 -- the values the pipeline logs as "rows/device". Padding
+    # buckets prompt length: at 15 s any prompt of 1-250 tokens lands on 13664. The 5 s entry was
+    # measured on Blackhole's 110 SDPA cores and not yet re-checked on Wormhole's 63.
     measured_sdpa_chunk_sizes = {
         4736: (320, 384),
         9184: (256, 512),
@@ -186,7 +182,7 @@ class MiniMaxH3Attention(Module):
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
-        self._sdpa_program_configs: dict[tuple[int, bool], ttnn.SDPAProgramConfig] = {}
+        self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
 
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
         # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
@@ -266,7 +262,7 @@ class MiniMaxH3Attention(Module):
 
     # ------------------------------------------------------------------ helpers
 
-    def _sdpa_program_config(self, seq_local: int, *, ring: bool) -> ttnn.SDPAProgramConfig:
+    def _sdpa_program_config(self, seq_local: int, *, ring: bool, windowed: bool = False) -> ttnn.SDPAProgramConfig:
         """Ring SDPA chunk sizes for a given per-device sequence length.
 
         Measured points come from the sweep in
@@ -291,8 +287,10 @@ class MiniMaxH3Attention(Module):
         optimum in it is sharp rather than a plateau: at 5s q=288 measured 10.43 ms against q=320's
         7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
         the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
+
+        `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
-        key = (seq_local, ring)
+        key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
@@ -301,6 +299,8 @@ class MiniMaxH3Attention(Module):
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if windowed:
+                k_chunk = min(k_chunk, 256)
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
@@ -353,14 +353,17 @@ class MiniMaxH3Attention(Module):
         when the resident total does not fit, the factory sizes c_0 to a single chunk and the reader
         re-reads each pass's Q every ring iteration. The op selects the mode itself from this same
         arithmetic; the model only needs it to know which (q, k) shapes are buildable.
+
+        The state FIFO holds `p + 1` entries; this MUST match the factory's `state_fifo_entries`.
         """
         dh_t = self.head_dim // ttnn.TILE_SIZE
+        fifo_entries = p + 1
         tiles = (
             (p if resident_q else 1) * sq_t * dh_t  # c_0 Q: one chunk per pass, or one when streamed
             + 4 * sk_t * dh_t  # c_1/c_14 K and c_2/c_15 V, double buffered
             + 7  # c_3 mask, scalars, reciprocal scratch
-            + 2 * p * sq_t  # c_6 / c_11 state FIFO running max and sum
-            + p * sq_t * dh_t  # c_7 state FIFO partial output
+            + 2 * fifo_entries * sq_t  # c_6 / c_11 state FIFO running max and sum
+            + fifo_entries * sq_t * dh_t  # c_7 state FIFO partial output
             + sq_t  # c_17 stats out (c_10 is dead on this path and not allocated)
             + 16  # c_16 streaming output ping-pong
             + sq_t * sk_t  # c_24 qk intermediate
@@ -448,25 +451,32 @@ class MiniMaxH3Attention(Module):
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
-        N: int | None = None,
+        logical_n: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        cu_window_seqlens: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
             otherwise replicated on SP.
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP. Both
             None skips the rotary embedding entirely, as the token refiner requires.
-        N: logical (unfractured) sequence length. Only needed for ring attention.
+        logical_n: logical (unfractured) sequence length as a [1, 1, 1, 1] uint32 device tensor;
+            `None` on the non-ring path (token refiner).
         addcmul_residual/addcmul_gate: when both are given, the gated residual
             `addcmul_residual + to_out(...) * addcmul_gate` is folded into the to_out matmul's
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
+        cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
+            tensor), plain-SDPA (non-ring) path only.
 
         Returns the attention output with the same distribution as the input.
         """
         assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
+        assert (
+            cu_window_seqlens is None or not self.use_ring
+        ), "cu_window_seqlens is only for the plain-SDPA (non-ring) path"
         assert (rope_cos is None) == (rope_sin is None), "rope_cos and rope_sin must be given together"
         # The fused RoPE consumes head_dim-wide tables, not the reference's rotary_dim-wide ones: the
         # pass-through channels must be present as cos=1 / sin=0. Passing the raw reference tables
@@ -479,7 +489,7 @@ class MiniMaxH3Attention(Module):
             raise ValueError(msg)
 
         tp_factor = self.parallel_config.tensor_parallel.factor
-        assert not (self.use_ring and N is None), "ring attention needs the logical sequence length N"
+        assert not (self.use_ring and logical_n is None), "ring attention needs the logical sequence length logical_n"
 
         # Passing parallel_config puts ColParallelLinear on all_gather_minimal_matmul_async: the TP
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
@@ -487,15 +497,18 @@ class MiniMaxH3Attention(Module):
         # which is the same condition WanAttention uses.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+            spatial_1BND = self.ccl_manager.all_gather(
+                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor),
+            default_block_size=agmm_block_size(
+                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            force_transpose=False,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -538,7 +551,7 @@ class MiniMaxH3Attention(Module):
                     v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
                 ),
                 joint_strategy="rear",
-                logical_n=N,
+                logical_n=logical_n,
                 program_config=exp_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
@@ -566,7 +579,7 @@ class MiniMaxH3Attention(Module):
                     v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
                 ),
                 joint_strategy="rear",
-                logical_n=N,
+                logical_n=logical_n,
                 program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
@@ -584,11 +597,13 @@ class MiniMaxH3Attention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
+                cu_window_seqlens=cu_window_seqlens,
                 is_causal=False,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=False),
+                program_config=self._sdpa_program_config(
+                    q_BHNE.shape[2], ring=False, windowed=cu_window_seqlens is not None
+                ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
-
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
@@ -596,8 +611,8 @@ class MiniMaxH3Attention(Module):
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
         # use_fused_agmm.
         if not self.use_fused_agmm and tp_factor > 1:
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+            spatial_1BND = self.ccl_manager.all_gather(
+                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
         # The gated residual rides along in the matmul epilogue on the fused path; on the unfused
@@ -607,7 +622,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+            default_block_size=agmm_block_size(
+                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
         )

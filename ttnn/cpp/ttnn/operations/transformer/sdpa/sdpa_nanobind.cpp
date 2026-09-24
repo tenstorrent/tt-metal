@@ -35,8 +35,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
-    std::size_t logical_l,
+    const ttnn::transformer::LogicalLength& logical_n,
+    const ttnn::transformer::LogicalLength& logical_l,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -171,7 +171,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
+    const ttnn::transformer::LogicalLength& logical_n,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -622,11 +622,17 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
-            logical_n (int): The logical sequence length N before sharding across devices.
-            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+            logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
+                A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
+                trace can replay at different lengths (rewrite the tensor between replays). Not supported
+                with sliding-window attention, chunked-shaped prefill, or the kv_actual_isl KV-pad path.
+            logical_l (int or ttnn.Tensor, optional): The full prompt (joint) sequence length L before sharding.
                 Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
-                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
-                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
+                Omit (or pass 0) when the joint is replicated; that is the default, backward-compatible path.
+                The scalar form infers sharded only when per-device joint seq < logical_l (a scalar equal to
+                the per-device length still resolves to replicated). The tensor form makes the value
+                trace-dynamic and ALWAYS selects the sharded path (its placeholder is the padded ring total),
+                so never pass a tensor with a replicated joint. Requires joint tensors present and ring_size > 1.
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
@@ -689,6 +695,12 @@ void bind_sdpa(nb::module_& mod) {
         dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
         to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
         while kv_actual_isl marks the prior valid cache length before the current chunk.
+
+        Metadata (trace-safe) path: slot_id / kv_actual_isl_tensor replace the host kv_cache_batch_idx /
+        kv_actual_isl (mixing the two forms is rejected) and the cache batch is slot * kv_cache_num_layers +
+        kv_cache_layer_idx on both forms. logical_n stays the real total valid length: on chunked shapes the
+        kernels derive it on-device as kv_actual_isl[0] + chunk and the program hash does not key it, so one
+        program serves every chunk depth.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -785,6 +797,8 @@ void bind_sdpa(nb::module_& mod) {
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
 
+        Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
               - Attention output [b x nqh x N/num_devices x head_dim_v].
@@ -847,7 +861,9 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
-            logical_n (int): The logical sequence length N before sharding across devices.
+            logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
+                A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
+                trace can replay at different lengths (rewrite the tensor between replays).
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.

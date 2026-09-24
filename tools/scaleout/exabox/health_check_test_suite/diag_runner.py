@@ -7,14 +7,16 @@
 """Blackhole Galaxy system diagnostic tool (DRAFT).
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
-reset stability loop, and tt-metal deployment-test gtest invocation.
-Emits a single JSON pass/fail report.
+reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
+first-step tools, and — where the host has the package — the QSFP tests.
+ Emits a single JSON pass/fail report.
 
 Run via run_diag.sh which sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -262,12 +264,57 @@ TIER_TRIAGE = {
     "deploy": ["host_side", "device_side"],
 }
 
+# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
+# count host state accumulated over a boot — correctable AER, kernel-log fault
+# lines — so they WARN on units everything else calls healthy, and one phase
+# WARN is a run WARN. FAIL continues to follow the normal triage gating policy.
+TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_kernel_log"})
+
 # The scripts' home, relative to the repo root.
 TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
 
 # Override for the above, so a working copy of the scripts can be run against a
 # deployed checkout without editing anything.
 TRIAGE_DIR_ENV = "HC_TRIAGE_DIR"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QSFP tests — the syseng ETH dump, when the host has it
+# ─────────────────────────────────────────────────────────────────────────────
+
+# `tt-bh-glx-cluster-debug` ships as a .deb built with PyInstaller, so it is one
+# binary on PATH with no repo, no venv and no import path to arrange — which is
+# why this phase probes for a command rather than for a checkout the way the
+# triage phase probes for its scripts. A host that has not had the package
+# installed simply does not have it, and that is a SKIP: an optional tool is
+# lost coverage when it is absent, never a failure.
+QSFP_TOOL_BIN = "tt-bh-glx-cluster-debug"
+
+# `collect` reads one galaxy into a JSONL snapshot: per-ASIC telemetry, the
+# per-port ERISC blobs for all 448 ETH ports, and the QSFP cages over I2C.
+# --parallelize reads the four UBBs' cages at once, about twice as fast, and the
+# cage sweep is where most of a run's time goes.
+QSFP_COLLECT_ARGS = ["collect", "--parallelize"]
+
+# A backstop, not the expected duration: the cage sweep self-bounds at the
+# tool's own 600 s --qsfp-budget and a full run measures ~7 min. It has to stay
+# well inside run_health_check.py's whole-run --timeout-minutes (30 by default),
+# because that one kills the process group and takes the report with it, while
+# overrunning this one only costs this phase.
+QSFP_TIMEOUT_S = 1200
+
+# Tiers that collect a dump. Same shape as TIER_TRIAGE and for the same reason:
+# light is a ~75 s smoke check and a minutes-long ETH sweep does not belong in
+# it. medium and deploy already pay for the triage phase in the same slot.
+TIER_QSFP_TESTS = {
+    "light": False,
+    "medium": True,
+    "deploy": True,
+}
+
+# Where the conversion from the dump's records to checks lives. Kept out of this
+# file because it is pure data shaping with no hardware in it: a stored dump is
+# all it needs, so it can be iterated on and tested at a desk.
+QSFP_INGEST_MODULE = "qsfp_ingest"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result model
@@ -293,6 +340,13 @@ class Phase:
     duration_s: float = 0.0
     checks: list[Check] = field(default_factory=list)
     error: str = ""
+    # False → the phase's findings are recorded at their real status but do not
+    # reach the run's verdict: not the exit code, not the JIRA gate, not the CSV
+    # rollup. For a tool still being validated against the fleet, which has to
+    # report honestly without being able to take nodes out of service. The flag
+    # travels in the JSON so the consumers downstream apply one decision rather
+    # than each keeping its own list of which phases count.
+    gates: bool = True
 
     def add(self, c: Check) -> None:
         self.checks.append(c)
@@ -1686,35 +1740,65 @@ def default_triage_dir() -> Path:
     return Path(raw) if raw else default_tt_metal_path() / TRIAGE_SUBDIR
 
 
-def normalize_triage_check(payload: dict, gating: bool) -> Check:
-    """Turn one entry of the tool's JSON into a Check, defensively.
+def normalize_external_check(
+    payload: dict,
+    *,
+    prefix: str,
+    hold_fail_at: str | None = None,
+    hold_warn_at: str | None = None,
+    gating_flag: str = "",
+) -> Check:
+    """Turn one entry of an external tool's JSON into a Check, defensively.
 
-    Two normalizations matter, both because the report is consumed by code that
-    doesn't know this phase exists:
+    Shared by every phase that ingests findings produced outside this file — the
+    triage scripts and the QSFP tests' dump — because they write one shape
+    (see ``kmd_triage/triage_json.sh``) and the defences below are properties of
+    ingesting *any* of it, not of either producer.
 
-    * Names get a ``triage_`` prefix. CHECK_CATEGORY, EXCLUDED_CHECKS,
+    Two normalizations are unconditional, both because the report is consumed by
+    code that doesn't know these phases exist:
+
+    * Names get a per-phase prefix. CHECK_CATEGORY, EXCLUDED_CHECKS,
       ACKNOWLEDGED_CHECKS and _find_check() in the analyzer are all keyed on the
       bare check name with no phase qualifier, so an unprefixed ``pcie_gen``
-      from the triage scripts would silently inherit that check's routing.
+      from an external tool would silently inherit that check's routing.
     * An unrecognised status becomes WARN. Anything outside PASS/WARN/FAIL/SKIP
       falls through the analyzer's SEVERITY map to UNKNOWN and won't validate
       against the CheckStatus enum, so a typo would land as a junk CSV row.
 
+    ``hold_fail_at`` and ``hold_warn_at`` are how a phase says how much authority
+    its tool has yet earned: each names the status to record that finding as, or
+    is None to leave it alone. They are applied to the tool's own verdict and
+    never to each other's output, so holding a FAIL at PASS is one step and not
+    a FAIL quietly sliding down through WARN. Both annotate the details with
+    what was done, because a status that reads lower than the finding beneath it
+    sounds is otherwise indistinguishable from a bug.
+
     An `ip` outside IP_ORDER is folded to "other" for the same reason:
     print_phase_summary() iterates IP_ORDER, so an unrecognised group would
     reach the JSON and the CSV but never appear in the console summary.
+
+    ``console_visible`` is optional and defaults to true, so a producer that
+    never sets it (the triage scripts) is unaffected; a producer that does can
+    keep store-only forensics in the JSON without crowding the console, which is
+    how the snapshot phase treats its own ``gddr_info_*`` counters.
     """
     name = str(payload.get("name") or "unnamed")
-    if not name.startswith("triage_"):
-        name = f"triage_{name}"
+    if not name.startswith(prefix):
+        name = f"{prefix}{name}"
     details = str(payload.get("details") or "")
     status = str(payload.get("status") or "").upper()
     if status not in _TRIAGE_STATUSES:
         details = f"[unrecognised status {payload.get('status')!r}] {details}".rstrip()
         status = WARN
-    elif status == FAIL and not gating:
-        details = f"[advisory: FAIL held at WARN, --triage-gating off] {details}".rstrip()
-        status = WARN
+    # On the tool's own verdict, so the two are alternatives rather than a chain.
+    if status == FAIL and hold_fail_at:
+        flag = f", {gating_flag} off" if gating_flag else ""
+        details = f"[advisory: FAIL recorded as {hold_fail_at}{flag}] {details}".rstrip()
+        status = hold_fail_at
+    elif status == WARN and hold_warn_at:
+        details = f"[advisory: WARN recorded as {hold_warn_at}] {details}".rstrip()
+        status = hold_warn_at
     data = payload.get("data")
     ip = str(payload.get("ip") or "other")
     return Check(
@@ -1723,6 +1807,48 @@ def normalize_triage_check(payload: dict, gating: bool) -> Check:
         details=details,
         data=data if isinstance(data, dict) else {},
         ip=ip if ip in IP_ORDER else "other",
+        console_visible=payload.get("console_visible", True) is not False,
+    )
+
+
+def normalize_triage_check(payload: dict, gating: bool) -> Check:
+    """One triage-script finding as a Check. See normalize_external_check.
+
+    TRIAGE_ADVISORY_WARN checks record their WARN as PASS. Keyed on the status
+    the tool wrote, so an unparseable one still lands on WARN; independent of
+    ``--triage-gating``, which decides what a FAIL does and never gated a WARN.
+    """
+    name = str(payload.get("name") or "")
+    advisory_warn = (
+        str(payload.get("status") or "").upper() == WARN and name.removeprefix("triage_") in TRIAGE_ADVISORY_WARN
+    )
+    return normalize_external_check(
+        payload,
+        prefix="triage_",
+        hold_fail_at=None if gating else WARN,
+        hold_warn_at=PASS if advisory_warn else None,
+        gating_flag="--triage-gating",
+    )
+
+
+def normalize_qsfp_check(payload: dict, gating: bool) -> Check:
+    """One QSFP-test finding as a Check. See normalize_external_check.
+
+    Until ``--qsfp-gating`` says otherwise the phase reports only PASS and SKIP:
+    the tool is still being validated against the fleet, and a finding it is not
+    yet trusted to have got right should not be the thing an operator's eye is
+    drawn to. Everything it found is still on the record — the details line is
+    the tool's own, the ``data`` is untouched, and the annotation says what was
+    held — so the fleet data needed to decide whether to turn gating on is
+    collected either way. Both holds lift together; a held FAIL is one step,
+    straight to PASS, so nothing lands on the WARN the phase does not raise.
+    """
+    return normalize_external_check(
+        payload,
+        prefix="qsfp_",
+        hold_fail_at=None if gating else PASS,
+        hold_warn_at=None if gating else PASS,
+        gating_flag="--qsfp-gating",
     )
 
 
@@ -1883,6 +2009,317 @@ def _as_text(v) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 6 — QSFP tests (ETH link, cabling and module state)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def import_qsfp_ingest():
+    """The sibling ingest module, or None if it didn't ship with this copy.
+
+    Imported here rather than at module scope because a missing ingest module is
+    lost coverage for one phase, not a broken suite — an unguarded top-level
+    import would turn a partial deployment into a run that produces no report at
+    all. The path guard covers the second way this file is loaded: it normally
+    runs as a script, so its own directory is ``sys.path[0]``, but ``run_diag()``
+    is also a programmatic entry point and an importing caller need not have put
+    the suite directory on the path.
+    """
+    try:
+        return importlib.import_module(QSFP_INGEST_MODULE)
+    except ImportError:
+        pass
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.append(here)
+    try:
+        return importlib.import_module(QSFP_INGEST_MODULE)
+    except ImportError:
+        return None
+
+
+def resolve_qsfp_tool(override: str | None) -> tuple[str | None, str]:
+    """The QSFP collector binary, or None plus the reason this phase can't run.
+
+    A reason rather than an exception, unlike resolve_tt_smi: the tool is
+    optional, so taking a whole diagnostic run down over a package that isn't
+    installed would trade real coverage for none. An override that doesn't
+    resolve is reported as its own case, since an operator who passed a path
+    meant it and should not have it silently ignored.
+    """
+    if override:
+        candidate = Path(override)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate), ""
+        return None, f"--qsfp-tool-path={override} is not an executable file"
+    found = shutil.which(QSFP_TOOL_BIN)
+    if found:
+        return found, ""
+    return None, (
+        f"{QSFP_TOOL_BIN} not on PATH — it ships in the syseng cluster-debug .deb, "
+        f"so a host without that package collects no ETH dump"
+    )
+
+
+# tt-smi's board_id prefix and the collector's board_id bit field are two reads
+# of one 64-bit register down two independent paths, so they agree or one of
+# them is wrong. Worth stating because the revision selects the collector's
+# internal topology table, and the wrong table resolves 24 confident wrong
+# inter-UBB partners per galaxy — which would surface above as miscabling on a
+# correctly cabled machine.
+QSFP_REV_EQUIVALENT = {
+    "RevA/B": "BH_GALAXY_REV_AB",
+    "RevC": "BH_GALAXY_REV_C",
+}
+
+# The ingest check this cross-check reads its half of the comparison from, after
+# normalize_external_check has applied the phase prefix.
+QSFP_REV_CHECK = "qsfp_board_rev"
+
+
+def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: bool) -> Check:
+    """Compare the dump's board revision against the snapshot phase's.
+
+    The one finding in this phase that this file derives rather than reads out
+    of the dump, since only the runner knows both halves. It still goes out
+    through the same normalizer as everything else here, so one check cannot
+    end up carrying a status the rest of the phase would not have been given.
+    """
+    found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
+    dump_rev = (found.data or {}).get("rev") if found else None
+    if detected_rev is None or dump_rev in (None, "unknown"):
+        missing = "the tt-smi snapshot" if detected_rev is None else "the dump"
+        payload = {
+            "name": "board_rev_agrees",
+            "status": SKIP,
+            "details": f"no revision to compare: {missing} did not determine one",
+            "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev},
+            "ip": "board",
+        }
+    else:
+        expected = QSFP_REV_EQUIVALENT.get(detected_rev)
+        agrees = expected == dump_rev
+        payload = {
+            "name": "board_rev_agrees",
+            "status": PASS if agrees else FAIL,
+            "details": (
+                f"tt-smi and the dump agree: {detected_rev} == {dump_rev}"
+                if agrees
+                else f"tt-smi read {detected_rev} (expects {expected}) but the dump read {dump_rev}; "
+                f"the dump's internal topology table, and so every partner finding above, is "
+                f"resolved against its own value"
+            ),
+            "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev, "expected_dump_rev": expected},
+            "ip": "board",
+        }
+    return normalize_qsfp_check(payload, gating)
+
+
+def run_qsfp_tests(
+    tier: str,
+    phase: Phase,
+    dry_run: bool,
+    logs_dir: Path,
+    gating: bool = False,
+    binary_override: str | None = None,
+    descriptor: Path | None = None,
+    reason: str | None = None,
+    detected_rev: str | None = None,
+) -> None:
+    """Run the QSFP tests: collect an ETH dump and fold its findings in.
+
+    The dump answers a question nothing else in this suite reaches: the
+    snapshot phase reads ``ETH_LIVE_STATUS`` out of tt-smi telemetry, a bitmask
+    per chip, and the eth gtests push traffic over links that already came up —
+    neither can say *which far end* a port is actually talking to. The dump
+    carries the expected partner and the firmware's own ``remote_info`` on every
+    one of the 448 port records, so a miscabled or half-trained link is a
+    comparison rather than an inference. Its cage and module records are also
+    the only inventory of what is physically plugged in.
+
+    By default the phase reports only **SKIP** and **PASS**, because the tool is
+    still being validated against the fleet:
+
+    * **SKIP** — no reading was taken. The tier doesn't ask for one, the package
+      isn't installed, the module that reads the dump is missing, the collect
+      timed out, or the dump would not parse. Always with the reason attached,
+      on the same reasoning as the triage phase: a check that silently vanishes
+      reads as coverage we had.
+    * **PASS** — a reading was taken. Whatever the dump found is in the check's
+      details and data, annotated with what was held, but it is not yet allowed
+      to draw the eye of someone triaging a rack.
+
+    ``--qsfp-gating`` is the one switch that changes this, and it changes it
+    completely: findings then report at their real severity and the phase gates
+    the run like any other. Turning it on is the decision to be made once there
+    is enough fleet data to say the findings are right, which is why the phase
+    collects that data from the first run either way.
+    """
+    if not TIER_QSFP_TESTS.get(tier, False):
+        phase.add(
+            Check(
+                name="qsfp_collect",
+                status=SKIP,
+                details=f"no QSFP tests for tier '{tier}'",
+                ip="other",
+            )
+        )
+        return
+
+    binary, unavailable = resolve_qsfp_tool(binary_override)
+    if binary is None:
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=unavailable, ip="other"))
+        return
+
+    ingest = import_qsfp_ingest()
+    if ingest is None:
+        # Collecting a dump nothing will read would spend minutes of hardware
+        # access to produce a file and no findings.
+        phase.add(
+            Check(
+                name="qsfp_collect",
+                status=SKIP,
+                details=f"{QSFP_INGEST_MODULE}.py is not importable beside diag_runner.py",
+                ip="other",
+            )
+        )
+        return
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    # Named for the host rather than the tool's default host+UTC stamp so the
+    # artifact collector and a ticket reader see a predictable filename. The
+    # collector insists on the .jsonl suffix, which is also what keeps a
+    # truncated dump readable up to its last newline. The hostname is reduced to
+    # filename-safe characters because it reaches this path from the system, not
+    # from the caller, and a separator in it would write outside logs_dir.
+    safe_host = re.sub(r"[^A-Za-z0-9._-]", "_", socket.gethostname()) or "unknown"
+    dump_path = logs_dir / f"qsfp_dump_{safe_host}.jsonl"
+    log_path = logs_dir / "qsfp.log"
+    text_path = logs_dir / "qsfp.txt"
+    # A dump left by an earlier run would be read as this run's ETH state.
+    dump_path.unlink(missing_ok=True)
+
+    cmd = [binary, *QSFP_COLLECT_ARGS, "--out", str(dump_path)]
+    if descriptor is not None:
+        cmd += ["--factory-descriptor-path", str(descriptor)]
+    # Free text on the envelope. Recording why a dump exists is what the field
+    # is for, and a dump found later with no reason on it is a dump nobody can
+    # place.
+    cmd += ["--reason", reason or f"tt-metal health check, {tier} tier"]
+
+    log("--- qsfp tests: collect ---")
+    log(f"  cmd:  {shlex.join(cmd)}")
+    log(f"  dump: {dump_path}")
+
+    if dry_run:
+        print(f"  {'qsfp_collect':30} (dry-run)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"(dry) {shlex.join(cmd)}", ip="other"))
+        return
+
+    _emit_running("qsfp_collect")
+    t0 = time.time()
+    timed_out = False
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=QSFP_TIMEOUT_S)
+        rc, out, err = cp.returncode, cp.stdout or "", cp.stderr or ""
+    except subprocess.TimeoutExpired as e:
+        timed_out, rc = True, 124
+        out, err = _as_text(e.stdout), _as_text(e.stderr)
+    except OSError as e:
+        dt = time.time() - t0
+        _emit_result("qsfp_collect", SKIP, suffix=f"({dt:.1f}s)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"could not run {binary}: {e!r}", ip="other"))
+        return
+    dt = time.time() - t0
+
+    try:
+        log_path.write_text(
+            f"$ {shlex.join(cmd)}\nrc={rc}  duration={dt:.1f}s\n"
+            f"\n--- stdout ---\n{out or '(empty)'}"
+            f"\n--- stderr ---\n{err or '(empty)'}\n"
+        )
+    except OSError as e:
+        log(f"  could not write {log_path}: {e!r}")
+
+    # The dump, not the exit code, is what this phase is here for. `collect`
+    # exits non-zero only when nothing at all could be collected — a descriptor
+    # it couldn't open, a BMC that wouldn't answer and a cage sweep that fell
+    # over are all recorded in the dump as findings and still exit 0 — so a
+    # readable dump after a non-zero exit is still worth reading, and a clean
+    # exit with no dump is still a failure to collect.
+    checks: list[Check] = []
+    problem = ""
+    records: list = []
+    malformed = 0
+    if timed_out:
+        log("  timed out; leaving the partial dump unread")
+    elif not dump_path.is_file():
+        problem = f"wrote no {dump_path.name}"
+    else:
+        try:
+            records, malformed = ingest.load_dump(dump_path)
+            payload = ingest.build_report(records, malformed)
+            checks = [normalize_qsfp_check(c, gating) for c in payload.get("checks", []) if isinstance(c, dict)]
+            if not checks:
+                problem = "the dump yielded no usable checks"
+        except (OSError, ValueError) as e:
+            problem = repr(e)
+        else:
+            # The readable copy is a convenience for whoever opens the ticket;
+            # losing it must not cost the findings themselves, which are already
+            # in hand and on their way to the report.
+            try:
+                text_path.write_text(ingest.render(payload, source=str(dump_path)))
+            except OSError as e:
+                log(f"  could not write {text_path}: {e!r}")
+
+    if timed_out:
+        status = SKIP
+        details = f"timed out after {QSFP_TIMEOUT_S}s; " + (
+            "the partial dump is kept as an artifact but not read" if dump_path.is_file() else "no dump was written"
+        )
+    elif problem:
+        status = SKIP
+        # Why it produced nothing is the only useful thing left to report, and
+        # it is almost always the tool's first line of stderr.
+        first = next((ln.strip() for ln in err.splitlines() if ln.strip()), "")
+        details = f"rc={rc} but no usable findings ({problem})"
+        if first:
+            details += f": {first[:200]}"
+    else:
+        status = PASS
+        details = f"rc={rc} {len(records)} record(s), {len(checks)} check(s)"
+    details += f" dur={dt:.1f}s log={log_path}"
+
+    _emit_result("qsfp_collect", status, suffix=f"({dt:.1f}s)")
+    phase.add(
+        Check(
+            name="qsfp_collect",
+            status=status,
+            details=details,
+            data={
+                "command": shlex.join(cmd),
+                "rc": rc,
+                "duration_s": dt,
+                "timed_out": timed_out,
+                "records": len(records),
+                "malformed_lines": malformed,
+                "checks_collected": len(checks),
+                "dump_file": str(dump_path),
+                "dump_bytes": dump_path.stat().st_size if dump_path.is_file() else 0,
+                "report_file": str(text_path),
+                "stdout_tail": out[-2000:],
+                "stderr_tail": err[-2000:],
+            },
+            ip="other",
+        )
+    )
+    for c in checks:
+        phase.add(c)
+    if checks:
+        phase.add(qsfp_rev_crosscheck(checks, detected_rev, gating))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1921,6 +2358,33 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
+        "--skip-qsfp-tests",
+        action="store_true",
+        help="Skip the QSFP tests entirely.",
+    )
+    ap.add_argument(
+        "--qsfp-tool-path",
+        help=f"The {QSFP_TOOL_BIN} binary. Default: whatever is on PATH (the syseng .deb installs it).",
+    )
+    ap.add_argument(
+        "--qsfp-descriptor",
+        type=Path,
+        help=(
+            "factory_system_descriptor.textproto, which gives the cage-attached links an expected "
+            "partner. Without one only the soldered internal links are checked against a topology, "
+            "and the cabling checks say so rather than reporting coverage they don't have."
+        ),
+    )
+    ap.add_argument(
+        "--qsfp-gating",
+        action="store_true",
+        help=(
+            "Let QSFP test FAILs gate the run. Off by default for the same reason as "
+            "--triage-gating: findings are recorded either way, but a tool still bedding in "
+            "cannot ticket the fleet."
+        ),
+    )
+    ap.add_argument(
         "--input-snapshot", type=Path, help="Use pre-captured tt-smi snapshot JSON instead of live tt-smi call."
     )
     ap.add_argument(
@@ -1944,15 +2408,19 @@ def run_diag(
     skip_reset: bool = False,
     skip_tests: bool = False,
     skip_triage: bool = False,
+    skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
     triage_dir: Path | None = None,
     triage_gating: bool = False,
+    qsfp_tool_path: str | None = None,
+    qsfp_descriptor: Path | None = None,
+    qsfp_gating: bool = False,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full diagnostic pipeline (snapshot → reset loop → gtests → triage).
+    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -2165,10 +2633,50 @@ def run_diag(
     report["phases"]["triage"] = asdict(triage_phase)
     print_phase_summary("triage", report["phases"]["triage"])
 
+    # Phase 6: the QSFP tests, when the host has the package. Last,
+    # and after the post-test reset for the same two reasons the triage phase
+    # sits there: it opens every chip, so it must not overlap the tests, and the
+    # tool has no SIGBUS handler, so a concurrent reset would kill it outright
+    # rather than being reported. Reading the links after that reset is also the
+    # reading that matters — it is the state the machine is being left in.
+    # The tool is still being validated against the fleet, so its findings are
+    # recorded at their real severity but do not vote: --qsfp-gating is what
+    # lets them, once the fleet data says they can be trusted.
+    qsfp_phase = Phase(name="qsfp_tests", gates=qsfp_gating)
+    t0 = time.time()
+    if skip_qsfp_tests:
+        qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details="--skip-qsfp-tests", ip="other"))
+    else:
+        try:
+            run_qsfp_tests(
+                tier,
+                qsfp_phase,
+                dry_run,
+                logs_dir,
+                qsfp_gating,
+                binary_override=qsfp_tool_path,
+                descriptor=qsfp_descriptor,
+                detected_rev=report.get("detected_board_rev"),
+            )
+        except Exception as e:
+            # Same rule as triage: a crash in an optional phase is lost
+            # coverage, not a hardware finding, and must not take the run down.
+            qsfp_phase.error = repr(e)
+            qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details=repr(e), ip="other"))
+    qsfp_phase.duration_s = time.time() - t0
+    if any(c.status != SKIP for c in qsfp_phase.checks):
+        qsfp_phase.rollup()
+    report["phases"]["qsfp_tests"] = asdict(qsfp_phase)
+    print_phase_summary("qsfp_tests", report["phases"]["qsfp_tests"])
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
-    statuses = [p["status"] for p in report["phases"].values()]
+    # Only phases that gate reach the verdict. A non-gating phase still rolls up
+    # and still prints, so its findings are as visible as anyone else's — it
+    # simply has no vote, which is the one honest way to carry a tool whose
+    # findings are worth recording before they are worth acting on.
+    statuses = [p["status"] for p in report["phases"].values() if p.get("gates", True)]
     if FAIL in statuses:
         report["overall_status"] = FAIL
     elif WARN in statuses:
@@ -2187,17 +2695,23 @@ def run_diag(
     print("  " + "─" * 70)
     print(f"  OVERALL        {report['overall_status']}")
     # Per-phase rollup. For non-PASS phases, list the offending checks (ip:name=status).
+    # A phase that does not gate says so on its own line: otherwise a reader
+    # seeing a FAIL here above an OVERALL that is not FAIL would reasonably
+    # conclude the report had contradicted itself.
     for phase_name, p in report["phases"].items():
         status = p["status"]
+        # Only worth saying when there is something for it to explain: a passing
+        # phase that does not gate looks no different from one that does.
+        note = "" if p.get("gates", True) or status == PASS else "  (does not gate)"
         if status == PASS:
-            print(f"    {phase_name:11} {status}")
+            print(f"    {phase_name:14} {status}")
             continue
         bad = [c for c in p["checks"] if c["status"] in (WARN, FAIL)]
         if bad:
             items = ", ".join(f"{c.get('ip','other')}:{c['name']}={c['status']}" for c in bad)
-            print(f"    {phase_name:11} {status} — {items}")
+            print(f"    {phase_name:14} {status}{note} — {items}")
         else:
-            print(f"    {phase_name:11} {status}")
+            print(f"    {phase_name:14} {status}{note}")
 
     return (0 if report["overall_status"] != FAIL else 1), report
 
@@ -2210,11 +2724,15 @@ def main() -> int:
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
         skip_triage=args.skip_triage,
+        skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
         triage_dir=args.triage_dir,
         triage_gating=args.triage_gating,
+        qsfp_tool_path=args.qsfp_tool_path,
+        qsfp_descriptor=args.qsfp_descriptor,
+        qsfp_gating=args.qsfp_gating,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

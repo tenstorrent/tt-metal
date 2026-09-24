@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "topk_large_indices_runtime_args.hpp"
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
@@ -80,9 +81,9 @@ FORCE_INLINE void issue_contiguous_row_write(
 }  // namespace
 
 void kernel_main() {
-    const uint32_t indices_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t num_rows = get_arg_val<uint32_t>(2);
+    const uint32_t indices_addr = get_common_arg_val<uint32_t>(topk_common_args::output_address);
+    const uint32_t start_row = get_arg_val<uint32_t>(0);
+    const uint32_t num_rows = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);

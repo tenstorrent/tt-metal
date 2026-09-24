@@ -42,6 +42,18 @@ def _same_m_per_core_match(grid_dict, M, K, N, grid_x):
 
 
 _warned_1d_matmul_signatures = set()
+_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
+
+
+def log_warning(message):
+    if _ENABLE_MM_LOG:
+        logger.warning(message)
+
+
+def log_info(message):
+    if _ENABLE_MM_LOG:
+        logger.info(message)
+
 
 # ---------------------------------------------------------------------------
 # Known-best 1D mcast_in0 configs for specific (M, K, N, grid_x, grid_y).
@@ -136,8 +148,14 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
-    # MiniMax-H3 ff1, 15 s @ 768P on the WH Galaxy 8x8 AGMM grid (13664 rows/device): sweep winner, rank 1/320; keyed per-M, see MiniMaxH3_wormhole_perf.md.
+    # MiniMax-H3 at 15 s / 768P on the WH Galaxy 8x8 AGMM worker grid (13664 rows/device), keyed per-M
+    # because the winner moves with M on this grid. ff1 is the sweep winner (rank 1/320); to_qkv and
+    # to_out are the merge-base defaults the WH sweeps ranked within 0.5% of best -- listed so main's
+    # `agmm_block_size`, whose per-core-M key assumes Blackhole's 12 M-cores, does not hand Wormhole an
+    # unmeasured Blackhole blocking. Blackhole never resolves an 8x8 AGMM grid, so these are WH-only.
     (13664, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15709.9 us
+    (13664, 5376, 5376): (8, 7, 12, (2, 2)),  # to_qkv
+    (13664, 7168, 1344): (8, 8, 6, (2, 2)),  # to_out
 }
 
 
@@ -605,7 +623,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
                 matched_m, config_tuple = near
                 signature = (M, K, N, grid_x, grid_y)
                 if signature not in _logged_m_per_core_signatures:
-                    logger.info(
+                    log_info(
                         f"No exact blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}; using the "
                         f"entry swept at M={matched_m}, which has the same M_per_core "
                         f"({math.ceil(math.ceil(M / 32) / grid_x)} M tiles per core)"
@@ -647,7 +665,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:
-            logger.warning(
+            log_warning(
                 f"No known best blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using default {M_block_size}x{K_block_size}x{N_block_size}"
             )
             _warned_matmul_signatures.add(signature)
@@ -684,7 +702,7 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
     safe = max(d for d in range(1, min(k_block, k_tiles_per_device) + 1) if k_tiles_per_device % d == 0)
     signature = (M, K, N, cluster_size)
     if signature not in _logged_ring_safe_k_block_signatures:
-        logger.warning(
+        log_warning(
             f"AGMM generic fallback for (M, K, N) = ({M}, {K}, {N}) at TP={cluster_size}: K_block {k_block} does not "
             f"divide the {k_tiles_per_device} K tiles per device the ring delivers; using K_block {safe}. Sweep the "
             f"shape with sweep_mm_block_sizes.py and add a table entry to replace this."
@@ -748,7 +766,8 @@ def get_agmm_config(
     # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
     legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
     _legacy_table = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
-    table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, legacy_grid.x) is not None
+    m_cores = legacy_grid.x if transpose_core_grid else legacy_grid.y
+    table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
         return legacy_grid, config, legacy_workers
@@ -776,7 +795,7 @@ def get_agmm_config(
     sub_h, sub_w = v3["subblock"]
     signature = (M, K, N, grid_x, grid_y)
     if signature not in _logged_agmm_v3_signatures:
-        logger.info(
+        log_info(
             f"AGMM v3 rule config for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}"
             f"{' transposed' if v3['transposed'] else ''}: "
             f"({M}, {K}, {N}): ({m_blk}, {k_blk}, {n_blk}, ({sub_h}, {sub_w}))  "
@@ -825,7 +844,7 @@ def get_1d_matmul_config(
         in0_block_w, per_core_N, out_subblock_w = config_tuple
     else:
         if signature not in _warned_1d_matmul_signatures:
-            logger.warning(
+            log_warning(
                 f"1D matmul: no swept config for (M, K, N) = ({M}, {K}, {N}) on "
                 f"{core_grid.x}x{core_grid.y} grid; using default blocking — "
                 f"run test_1d_matmul_sweep_bh4x8_ring to find optimal params"
@@ -1017,7 +1036,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     config = _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=True)
 
     if config is None:
-        logger.warning(
+        log_warning(
             f"No fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid "
             "and the rule engine does not cover it; using default, which is likely slower than not "
             "fusing at all"
@@ -1049,7 +1068,7 @@ def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
             if log:
                 signature = (M, K, N, device_core_grid.x, device_core_grid.y)
                 if signature not in _logged_mmrs_rule_signatures:
-                    logger.info(
+                    log_info(
                         f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
                         f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
                         f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "

@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
 L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
 
-def _explicit_height_shard_config(device, ncores, sh, sw):
+def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
     compute_grid = device.compute_with_storage_grid_size()
     if ncores > compute_grid.x * compute_grid.y:
         pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
@@ -23,7 +23,7 @@ def _explicit_height_shard_config(device, ncores, sh, sw):
         (sh, sw),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, spec)
 
 
 def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
@@ -79,3 +79,16 @@ def test_quasar_slice_row_major_height_sharded_nontile_aligned(shape, begins, en
     imc = _explicit_height_shard_config(device, *in_shard)
     omc = _explicit_height_shard_config(device, *out_shard) if out_shard is not None else L1_INTERLEAVED
     _run_quasar_slice(shape, begins, ends, step, imc, omc, device)
+
+
+def test_quasar_slice_tile_tensor_args(device):
+    shape = (1, 1, 64, 64)
+    starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    start_t = ttnn.from_torch(torch.tensor(starts), device=device)
+    end_t = ttnn.from_torch(torch.tensor(ends), device=device)
+    result = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)

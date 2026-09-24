@@ -13,6 +13,9 @@
 #if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_unpack_AB_custom_mm_api.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_custom_mm.h"
+#endif
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
@@ -65,11 +68,7 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    if constexpr (dense_packing) {
-        // Reduce packing stride from tile to tile to 32 rows instead of 64
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
 
 // clang-format off
@@ -109,11 +108,7 @@ ALWI void custom_mm_block_init_short(
 
     MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    if constexpr (dense_packing) {
-        // Reduce packing stride from tile to tile to 32 rows instead of 64
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
 
 // clang-format off
@@ -256,10 +251,7 @@ ALWI void custom_mm_block_math(
 // clang-format on
 template <bool dense_packing = false>
 ALWI void custom_mm_block_uninit() {
-    if constexpr (dense_packing) {
-        // Restore default packing stride of 64 rows between tiles
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));
 }
 
 #endif  // ARCH_BLACKHOLE

@@ -20,6 +20,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <filesystem>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -454,6 +456,122 @@ static std::string generate_golden_output(const std::vector<uint32_t>& data, tt:
     return ss.str();
 }
 
+// Quasar rejects the legacy CreateKernel/CreateCircularBuffer host API, so the same three kernels are
+// declared as a metal 2.0 ProgramSpec over dataflow buffers instead. The DFB ids reach the compute
+// kernel as dfb::in / dfb::out, and its compile args are named rather than positional.
+static Program build_quasar_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const DevicePrintDestTestConfig& config,
+    const DramBuffer& input_dram_buffer,
+    const DramBuffer& output_dram_buffer) {
+    constexpr experimental::NodeCoord node{0, 0};
+    const experimental::DFBSpecName IN_DFB{"in_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    const auto tile_bytes = static_cast<uint32_t>(config.get_tile_size());
+    const auto num_tiles = static_cast<uint32_t>(config.num_tiles);
+
+    // The compute kernel waits on the whole batch at once, so the buffers hold every tile.
+    experimental::DataflowBufferSpec in_dfb_spec{
+        .unique_id = IN_DFB,
+        .entry_size = tile_bytes,
+        .num_entries = num_tiles,
+        .data_format_metadata = config.data_format,
+    };
+    experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = tile_bytes,
+        .num_entries = num_tiles,
+        .data_format_metadata = config.data_format,
+    };
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    // A 32-bit dest fed by an FP32 buffer has to state how the unpacker routes it. Float32 datacopy
+    // needs UnpackToDest: SrcA cannot carry a full fp32 mantissa, so going via Src would lose precision.
+    const bool enable_32_bit_dest = config.data_format == tt::DataFormat::Float32;
+    experimental::ComputeUnpackModes unpack_modes{};
+    if (enable_32_bit_dest) {
+        unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path{config.compute_kernel},
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN_DFB,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args =
+            {{"per_core_tile_cnt", num_tiles}, {"dest_data_format", static_cast<uint32_t>(config.data_format)}},
+        .hw_config =
+            experimental::ComputeGen2Config{.enable_32_bit_dest = enable_32_bit_dest, .unpack_modes = unpack_modes},
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "dprint_tensix_dest",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    const uint32_t per_tile_stride =
+        num_tiles == 0 ? 0 : static_cast<uint32_t>(input_dram_buffer->device_local_size() / num_tiles);
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", static_cast<uint32_t>(input_dram_buffer->address())},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", per_tile_stride}})},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(output_dram_buffer->address())},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", per_tile_stride}})},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
+    return program;
+}
+
 // Performs DRAM --> Reader --> CB --> Datacopy --> CB --> Writer --> DRAM on a single core
 static bool reader_datacopy_writer(
     DevicePrintFixture* fixture,
@@ -464,18 +582,29 @@ static bool reader_datacopy_writer(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
     auto& cq = mesh_device->mesh_command_queue();
 
-    // Prepare reader kernel and get input DRAM buffer
-    auto input_dram_buffer = prepare_reader(mesh_device, workload, config);
+    DramBuffer input_dram_buffer;
+    DramBuffer output_dram_buffer;
 
-    // Prepare writer kernel and get output DRAM buffer
-    auto output_dram_buffer = prepare_writer(mesh_device, workload, config);
+    if (arch == ARCH::QUASAR) {
+        input_dram_buffer = create_dram_mesh_buffer(mesh_device, config.get_input_buffer_size());
+        output_dram_buffer = create_dram_mesh_buffer(mesh_device, config.get_output_buffer_size());
+        workload.add_program(
+            device_range, build_quasar_program(mesh_device, config, input_dram_buffer, output_dram_buffer));
+    } else {
+        tt_metal::Program program = tt_metal::CreateProgram();
+        workload.add_program(device_range, std::move(program));
 
-    // Prepare compute kernel
-    [[maybe_unused]] auto compute_kernel = prepare_compute(workload, config);
+        // Prepare reader kernel and get input DRAM buffer
+        input_dram_buffer = prepare_reader(mesh_device, workload, config);
+
+        // Prepare writer kernel and get output DRAM buffer
+        output_dram_buffer = prepare_writer(mesh_device, workload, config);
+
+        // Prepare compute kernel
+        [[maybe_unused]] auto compute_kernel = prepare_compute(workload, config);
+    }
 
     // Generate input data
     auto input_data = generate_inputs(config);
@@ -495,6 +624,17 @@ static bool reader_datacopy_writer(
     if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
         // Skip all device-side warning lines added before each tile print
         DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+    }
+    if (arch == ARCH::QUASAR) {
+        // The Quasar data movement and compute firmware both trace their own progress, and every
+        // processor on the core shares this print stream, so drop those lines before comparing the
+        // compute output.
+        DeleteLinesStartingWith(fixture->dprint_file_name, "DM-FW:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "DM0-FW:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "hartid:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "TRISC-FW:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "SIGNALING COMPLETION");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "COMPLETION SIGNED OFF");
     }
     EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
@@ -534,6 +674,17 @@ protected:
     void RunDestPrintTest(const DevicePrintDestTestConfig& config) {
         if (config.data_format == tt::DataFormat::Int32 && this->arch_ != ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Int32 dest is not supported on non-blackhole.";
+        }
+        if (this->arch_ == ARCH::QUASAR) {
+            if (config.data_format != tt::DataFormat::Float16_b && config.data_format != tt::DataFormat::Float32) {
+                GTEST_SKIP() << "Quasar dest print currently covers Float16_b and Float32 only.";
+            }
+            if (config.remap || config.swizzle) {
+                GTEST_SKIP() << "Dest remap/swizzle are Blackhole-only config fields.";
+            }
+            if (config.num_tiles > 1) {
+                GTEST_SKIP() << "Multi-tile dest print is not yet validated on Quasar.";
+            }
         }
 
         this->RunTestOnDevice(

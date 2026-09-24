@@ -47,9 +47,6 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -111,9 +108,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -152,9 +146,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -216,8 +207,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
-    std::size_t logical_l,
+    const LogicalLength& logical_n,
+    const LogicalLength& logical_l,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -249,6 +240,24 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
     const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
 
+    // Split each logical length into (scalar attribute, optional device tensor); on the tensor path the
+    // attribute becomes the worst-case placeholder (see RingJointSDPAInputs).
+    const std::size_t ring_size =
+        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
+    const std::size_t padded_ring_l =
+        joint_k.has_value() ? static_cast<std::size_t>(joint_k->logical_shape()[2]) * ring_size : 0;
+    const auto split_logical_length =
+        [](const LogicalLength& length,
+           std::size_t placeholder) -> std::pair<std::size_t, std::optional<ttnn::Tensor>> {
+        if (const auto* scalar = std::get_if<std::size_t>(&length)) {
+            return {*scalar, std::nullopt};
+        }
+        return {placeholder, std::get<ttnn::Tensor>(length)};
+    };
+    const auto [logical_n_scalar, logical_n_tensor] = split_logical_length(logical_n, padded_ring_n);
+    const auto [logical_l_scalar, logical_l_tensor] = split_logical_length(logical_l, padded_ring_l);
+
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
@@ -262,8 +271,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_joint_k,
         persistent_output_buffer_joint_v,
         joint_strategy,
-        logical_n,
-        logical_l,
+        logical_n_scalar,
+        logical_l_scalar,
         std::move(program_config),
         dim,
         multi_device_global_semaphore,
@@ -290,7 +299,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
         sliding_window_size,
-        circular_kv_cache);
+        circular_kv_cache,
+        logical_n_tensor,
+        logical_l_tensor);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -373,7 +384,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
+    const LogicalLength& logical_n,
     operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -391,6 +402,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
     const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
 
+    // Tensor path: the scalar attribute becomes the worst-case placeholder (see ExpRingJointSDPAInputs).
+    const std::size_t ring_size =
+        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
+    std::size_t logical_n_scalar = padded_ring_n;
+    std::optional<ttnn::Tensor> logical_n_tensor;
+    if (const auto* scalar = std::get_if<std::size_t>(&logical_n)) {
+        logical_n_scalar = *scalar;
+    } else {
+        logical_n_tensor = std::get<ttnn::Tensor>(logical_n);
+    }
+
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -401,7 +424,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,
-        logical_n,
+        logical_n_scalar,
         std::move(program_config),
         dim,
         multi_device_global_semaphore,
@@ -413,7 +436,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        logical_n_tensor);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -431,9 +455,6 @@ ttnn::Tensor flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -466,9 +487,6 @@ ttnn::Tensor chunked_flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -504,9 +522,6 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

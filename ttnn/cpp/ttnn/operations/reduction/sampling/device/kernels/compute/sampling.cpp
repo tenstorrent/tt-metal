@@ -447,9 +447,7 @@ void kernel_main() {
     constexpr auto seed = get_arg(args::seed);
     constexpr auto tile_width = get_arg(args::tile_width);
     // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
-    // token does not depend on how the bitonic network happens to swap equal values. Set by the
-    // host only on architectures whose top-k LLK implements a stable network; elsewhere it is 0
-    // and ties keep the previous (network-order) behaviour rather than failing to compile.
+    // token does not depend on how the bitonic network happens to swap equal values.
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
