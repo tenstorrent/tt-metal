@@ -127,6 +127,9 @@ class TestConfig:
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
     ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr"  ## TODO NEED TO CONFIRM IF THESE EXTENSIONS ARE CORRECT
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -907,6 +910,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        requires_vector_ext: bool = False,
         expected_nondeterministic: bool = False,
         include_dirs: list = None,
         src_include_dirs: list = None,
@@ -962,6 +966,10 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        # Quasar wires the RISC-V vector unit to TRISC0 (unpack) only, so the vector
+        # extension is opted into per test and applied to that one build. Turning it on
+        # suite-wide would let GCC auto-vectorize every existing unpack kernel.
+        self.requires_vector_ext = requires_vector_ext
         self.expected_nondeterministic = expected_nondeterministic
         # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
         # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
@@ -1073,6 +1081,11 @@ class TestConfig:
         ):
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
+            )
+
+        if self.requires_vector_ext and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            raise RuntimeError(
+                "requires_vector_ext=True is currently supported for Quasar-only"
             )
 
     def generate_runtime_args_struct(self):
@@ -1708,6 +1721,11 @@ class TestConfig:
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+                # Only TRISC0 has the vector unit on Quasar. The flag is after
+                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                if self.requires_vector_ext and name == "unpack":
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
                 # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
                 # Quasar is intentionally excluded: it adds a 4th compute thread
