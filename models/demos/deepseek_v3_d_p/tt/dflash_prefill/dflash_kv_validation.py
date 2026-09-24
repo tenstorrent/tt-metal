@@ -241,6 +241,25 @@ def _dflash_config_ids(table):
     )
 
 
+def _dflash_layer_rows(table, config_id: int, slot_id: int) -> range:
+    """The table rows that hold the drafter's layers, as a range over the published layer axis.
+
+    The drafter's configs span the merged table's GLOBAL layer axis (the verifier's layers, then the
+    draft ones), so only the tail of that axis is populated. Recover it by probing rather than by
+    re-deriving the verifier's depth: the table is the only thing this reader and the builder share,
+    and a golden indexed off a guessed offset fails as a bad PCC instead of as a missing row."""
+    cfg = table.config(config_id)
+    first = cfg.num_layers
+    while first > 0 and table.lookup(first - 1, 0, slot_id, config_id).noc_addr != 0:
+        first -= 1
+    if first == cfg.num_layers:
+        raise RuntimeError(
+            f"drafter config {config_id} spans {cfg.num_layers} layers but its last row is unpopulated at "
+            f"slot {slot_id}; the table was built with a different layer offset than it is read at"
+        )
+    return range(first, cfg.num_layers)
+
+
 def dflash_kv_table_pcc_check(
     table,
     slot_id: int,
@@ -271,7 +290,10 @@ def dflash_kv_table_pcc_check(
         return None
 
     cfg = table.config(cfg_ids["k"][0])
-    n_layers = cfg.num_layers  # the DRAFTER's layer count, not the verifier's NUM_LAYERS
+    # Two axes: `layer_rows` indexes the table (global ids), `n_layers` sizes the golden (the drafter's
+    # own depth). cfg.num_layers is neither on its own -- it is the global total.
+    layer_rows = _dflash_layer_rows(table, cfg_ids["k"][0], slot_id)
+    n_layers = len(layer_rows)
     # head_dim inferred from the physical chunk size; _load_golden_kv then cross-checks it against the
     # golden's own head_dim (shape[3]), so a mismatch fails on shape rather than as a bad PCC.
     head_dim = {(d // 32) * _BFP8_TILE_BYTES: d for d in (64, 128, 256)}.get(cfg.chunk_size_bytes)
@@ -306,7 +328,7 @@ def dflash_kv_table_pcc_check(
     mins = {}
     for kind, golden in (("v", golden_v), ("k", golden_k)):
         layers = []
-        for layer in range(n_layers):
+        for layer in layer_rows:
             heads = [
                 read_config_slice(cfg_ids[kind][h], layer, slot_id, read_len, head_dim)[:cmp_len]
                 for h in range(num_kv_heads)

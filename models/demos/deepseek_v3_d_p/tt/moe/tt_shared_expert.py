@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
@@ -506,7 +507,8 @@ class TtSharedExpert(LightweightModule):
             Output tensor [batch, seq_len, emb_dim / num_devices]
         """
         batch_size = x.shape[0]
-        logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
 
         # Verify input is replicated (full emb_dim) when multiple mesh columns
         if self.mesh_device.shape[1] > 1:
@@ -639,6 +641,7 @@ class TtSharedExpert(LightweightModule):
             self.tt_ccl.set_shared_rs_input_keepalive(output_full)
         else:
             output = output_full
-        logger.debug(f"After shared_expert_ffn: {output.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"After shared_expert_ffn: {output.shape}")
 
         return output

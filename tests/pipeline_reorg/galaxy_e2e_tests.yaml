@@ -1,7 +1,7 @@
 # This file defines the test matrix for the Galaxy e2e tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
-#   id: Stable slug for workflow_dispatch / jq filtering (must match pipeline-select-galaxy).
+#   id: Stable slug for workflow_dispatch / jq filtering (must match galaxy-tests).
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run for the test.
 #   skus: A mapping of SKU names to their configuration.

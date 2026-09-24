@@ -371,10 +371,11 @@ MeshDeviceImpl::MeshDeviceImpl(
     dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
-    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
+    // Register last: Inspector keeps a raw pointer, so a throw above must not leave an entry behind.
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
 }
 
 MetalContext& MeshDeviceImpl::metal_context() const { return *metal_context_; }
@@ -494,12 +495,11 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>(),
-        ctx);
+    // Build into locals first so a failed construction never yields a MeshDevice with a null pimpl_.
+    auto mesh_device_view = std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids);
+    auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
+        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
     mesh_device->pimpl_->initialize_impl(
         mesh_device.get(),
@@ -609,12 +609,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>(),
-        ctx);
+    auto mesh_device_view =
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids);
+    auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
+        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -752,12 +751,10 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
     }
 
-    auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice());
-    submesh->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        scoped_devices_,
-        std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
-        parent_mesh,
-        metal_context());
+    auto submesh_view = std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids);
+    auto submesh_impl =
+        std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
+    auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
 
     TT_FATAL(
         submesh->impl().get_context_id() == context_id_,
@@ -1397,6 +1394,11 @@ CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical
         return device->worker_core_from_logical_core(logical_core);
     });
 }
+CoreCoord MeshDeviceImpl::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return validate_and_get_reference_value(this->get_devices(), [virtual_coord](const auto* device) {
+        return device->logical_core_from_worker_core(virtual_coord);
+    });
+}
 CoreCoord MeshDeviceImpl::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
     return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
         return device->logical_core_from_ethernet_core(ethernet_core);
@@ -1986,7 +1988,9 @@ std::shared_ptr<distributed::MeshDevice> MeshDeviceImpl::get_mesh_device() {
     return nullptr;
 }
 
-MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
+MeshDevice::MeshDevice(std::unique_ptr<MeshDeviceImpl> impl) : pimpl_(std::move(impl)) {
+    TT_FATAL(pimpl_ != nullptr, "MeshDevice requires a non-null MeshDeviceImpl");
+}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
@@ -2029,6 +2033,9 @@ CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_co
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->worker_core_from_logical_core(logical_core);
+}
+CoreCoord MeshDevice::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return pimpl_->logical_core_from_worker_core(virtual_coord);
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->ethernet_core_from_logical_core(logical_core);

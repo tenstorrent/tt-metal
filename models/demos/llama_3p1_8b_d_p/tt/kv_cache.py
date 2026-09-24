@@ -1,0 +1,271 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Packed, block-cyclic Llama-3.1 K/V cache for Galaxy prefill."""
+
+from dataclasses import dataclass, field
+
+import torch
+
+import ttnn
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
+
+SUPPORTED_CACHE_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
+
+
+@dataclass
+class LlamaKVCache:
+    """Externally owned, user-major Llama K/V caches."""
+
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+    num_users: int
+    num_layers: int
+    max_seq_len: int
+    sp: int
+    _populated_ends: dict[tuple[int, int], int] = field(default_factory=dict, init=False, repr=False)
+
+    def populated_end(self, slot_idx, num_layers):
+        """Return the contiguous prefix written in every requested layer of this slot.
+
+        This tracks successful K/V enqueue operations, not device completion. Callers must
+        preserve the same execution order as cache writes. Only writes through this object
+        count; external DMA is not detected, and imported tensors start with no advertised prefix.
+        """
+        _validate_scalar("slot_idx", slot_idx)
+        _validate_scalar("num_layers", num_layers)
+        if not 0 <= slot_idx < self.num_users:
+            raise ValueError(f"slot_idx {slot_idx} out of range [0, {self.num_users})")
+        if not 1 <= num_layers <= self.num_layers:
+            raise ValueError(f"num_layers must be in [1, {self.num_layers}], got {num_layers}")
+        return min(self._populated_ends.get((slot_idx, layer_idx), 0) for layer_idx in range(num_layers))
+
+    def truncate_prefix(self, slot_idx, actual_start):
+        """Invalidate a slot suffix in every layer before a model call can partially fail.
+
+        All layers are truncated, even when the caller executes a reduced layer count, so
+        later full-model calls cannot inherit downstream cache state from an older prompt.
+        """
+        _validate_scalar("slot_idx", slot_idx)
+        _validate_scalar("actual_start", actual_start)
+        if not 0 <= slot_idx < self.num_users:
+            raise ValueError(f"slot_idx {slot_idx} out of range [0, {self.num_users})")
+        if not 0 <= actual_start <= self.max_seq_len:
+            raise ValueError(f"actual_start must be in [0, {self.max_seq_len}], got {actual_start}")
+        for layer_idx in range(self.num_layers):
+            key = (slot_idx, layer_idx)
+            self._populated_ends[key] = min(self._populated_ends.get(key, 0), actual_start)
+
+
+def _validate_target(mesh_device, mesh_config, *, num_users, num_layers, max_seq_len, cache_dtype):
+    validate_mesh(mesh_device, mesh_config, "Llama KV cache")
+    if type(num_users) is not int or num_users != layout.num_users:
+        raise ValueError(f"Llama KV cache requires num_users={layout.num_users}, got {num_users!r}")
+    if type(num_layers) is not int or num_layers != Model.NUM_LAYERS:
+        raise ValueError(f"Llama KV cache requires num_layers={Model.NUM_LAYERS}, got {num_layers!r}")
+    PrefillGeometry(max_seq_len)
+    if cache_dtype not in SUPPORTED_CACHE_DTYPES:
+        raise ValueError(f"Llama KV cache dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
+
+
+def _cache_memory_config(mesh_device):
+    bank_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
+            for bank_id in range(mesh_device.dram_grid_size().x)
+        ]
+    )
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, layout.cache_page_size, Model.HEAD_DIM],
+            grid=bank_grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def allocate_kv_cache(
+    mesh_device,
+    mesh_config,
+    *,
+    num_users=layout.num_users,
+    num_layers=Model.NUM_LAYERS,
+    max_seq_len=DEFAULT_MAX_SEQ_LEN,
+    cache_dtype=ttnn.bfloat8_b,
+):
+    """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout."""
+    _validate_target(
+        mesh_device,
+        mesh_config,
+        num_users=num_users,
+        num_layers=num_layers,
+        max_seq_len=max_seq_len,
+        cache_dtype=cache_dtype,
+    )
+    memory_config = _cache_memory_config(mesh_device)
+    geometry = PrefillGeometry(max_seq_len)
+
+    def allocate_one():
+        return ttnn.from_torch(
+            torch.zeros(geometry.cache_shape),
+            device=mesh_device,
+            dtype=cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    return LlamaKVCache(
+        k=allocate_one(),
+        v=allocate_one(),
+        num_users=num_users,
+        num_layers=num_layers,
+        max_seq_len=max_seq_len,
+        sp=layout.sp,
+    )
+
+
+def _validate_scalar(name, value):
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an eager Python int, got {type(value).__name__}")
+
+
+def _validate_cache_tensor(name, tensor, mesh_device, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
+    cache_shape = PrefillGeometry(max_seq_len).cache_shape
+    if not isinstance(tensor, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(tensor):
+        raise ValueError(f"Llama KV cache {name} must be a device ttnn.Tensor")
+    if tensor.device() != mesh_device:
+        raise ValueError(f"Llama KV cache {name} must reside on the input mesh")
+    if tuple(tensor.shape) != cache_shape:
+        raise ValueError(f"Llama KV cache {name} must have local shape {cache_shape}, got {tuple(tensor.shape)}")
+    if tensor.dtype not in SUPPORTED_CACHE_DTYPES:
+        raise ValueError(f"Llama KV cache {name} has unsupported dtype {tensor.dtype}")
+    if tensor.layout != ttnn.TILE_LAYOUT:
+        raise ValueError(f"Llama KV cache {name} must use TILE_LAYOUT, got {tensor.layout}")
+    memory_config = tensor.memory_config()
+    shard_spec = memory_config.nd_shard_spec
+    if memory_config.buffer_type != ttnn.BufferType.DRAM or shard_spec is None:
+        raise ValueError(f"Llama KV cache {name} must use NdShard DRAM")
+    if tuple(shard_spec.shard_shape) != (1, 1, layout.cache_page_size, Model.HEAD_DIM):
+        raise ValueError(f"Llama KV cache {name} must use shard [1,1,32,128], got {tuple(shard_spec.shard_shape)}")
+    if shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise ValueError(f"Llama KV cache {name} must use ROW_MAJOR shard orientation")
+    if shard_spec.shard_distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D:
+        raise ValueError(f"Llama KV cache {name} must use ROUND_ROBIN_1D shard distribution")
+    if len(ttnn.get_device_tensors(tensor)) != layout.num_devices:
+        raise ValueError(f"Llama KV cache {name} must cover {layout.num_devices} mesh devices")
+
+
+def _validate_input(name, tensor, mesh_device):
+    if not isinstance(tensor, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(tensor):
+        raise ValueError(f"{name} input must be a device ttnn.Tensor")
+    if tensor.device() != mesh_device:
+        raise ValueError(f"{name} input must reside on the cache mesh")
+    expected_shape = (1, 1, layout.local_sequence, Model.HEAD_DIM)
+    if tuple(tensor.shape) != expected_shape:
+        raise ValueError(f"{name} input must have local shape {expected_shape}, got {tuple(tensor.shape)}")
+    if tensor.dtype != ttnn.bfloat16:
+        raise ValueError(f"{name} input must be bfloat16, got {tensor.dtype}")
+    if tensor.layout != ttnn.TILE_LAYOUT:
+        raise ValueError(f"{name} input must use TILE_LAYOUT, got {tensor.layout}")
+    if tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+        raise ValueError(f"{name} input must use interleaved DRAM, got {tensor.memory_config()}")
+    if len(ttnn.get_device_tensors(tensor)) != layout.num_devices:
+        raise ValueError(f"{name} input must cover {layout.num_devices} mesh devices")
+
+
+def _validate_write(kv_cache, k, v, *, slot_idx, layer_idx, actual_start, actual_end):
+    if not isinstance(kv_cache, LlamaKVCache):
+        raise ValueError(f"kv_cache must be LlamaKVCache, got {type(kv_cache).__name__}")
+    for name, value in (
+        ("slot_idx", slot_idx),
+        ("layer_idx", layer_idx),
+        ("actual_start", actual_start),
+        ("actual_end", actual_end),
+    ):
+        _validate_scalar(name, value)
+    geometry = PrefillGeometry(kv_cache.max_seq_len)
+    geometry.validate_cache_metadata(kv_cache)
+    if not 0 <= slot_idx < layout.num_users:
+        raise ValueError(f"slot_idx {slot_idx} out of range [0, {layout.num_users})")
+    if not 0 <= layer_idx < Model.NUM_LAYERS:
+        raise ValueError(f"layer_idx {layer_idx} out of range [0, {Model.NUM_LAYERS})")
+    geometry.validate_chunk_range(actual_start, actual_end, allow_empty=True)
+    mesh_device = kv_cache.k.device()
+    _validate_cache_tensor("k", kv_cache.k, mesh_device, max_seq_len=geometry.max_seq_len)
+    _validate_cache_tensor("v", kv_cache.v, mesh_device, max_seq_len=geometry.max_seq_len)
+    if kv_cache.k.dtype != kv_cache.v.dtype:
+        raise ValueError(f"Llama K/V cache dtypes must match, got {kv_cache.k.dtype} and {kv_cache.v.dtype}")
+    _validate_input("K", k, mesh_device)
+    _validate_input("V", v, mesh_device)
+
+
+def _write_one(cache, tensor, *, slot_idx, layer_idx, actual_start, actual_end):
+    staging = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache,
+        staging,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=Model.NUM_LAYERS,
+        kv_actual_global=actual_start,
+        cluster_axis=layout.sp_axis,
+        valid_global=actual_end,
+    )
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=Model.NUM_LAYERS,
+        valid_global=actual_end,
+        chunk_size_global=layout.chunk_size,
+        cluster_axis=layout.sp_axis,
+        pad_align=layout.cache_page_size,
+    )
+    if staging is not tensor:
+        staging.deallocate(True)
+
+
+def write_kv_chunk(kv_cache, k, v, *, slot_idx, layer_idx, actual_start, actual_end):
+    """Write post-RoPE K and raw V into one packed user/layer plane."""
+    _validate_write(
+        kv_cache,
+        k,
+        v,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        actual_start=actual_start,
+        actual_end=actual_end,
+    )
+    if actual_start == actual_end:
+        return
+    key = (slot_idx, layer_idx)
+    populated_end = kv_cache._populated_ends.get(key, 0)
+    # Invalidate the rewritten suffix before either enqueue can fail. In particular, a
+    # new prompt at position zero must not inherit a previously populated suffix.
+    kv_cache._populated_ends[key] = min(populated_end, actual_start)
+    _write_one(
+        kv_cache.k,
+        k,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        actual_start=actual_start,
+        actual_end=actual_end,
+    )
+    _write_one(
+        kv_cache.v,
+        v,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        actual_start=actual_start,
+        actual_end=actual_end,
+    )
+    # Arbitrary low-level writes remain supported, but a write beyond the contiguous
+    # prefix cannot make a missing range safe for model attention to read.
+    if actual_start <= populated_end:
+        kv_cache._populated_ends[key] = actual_end
