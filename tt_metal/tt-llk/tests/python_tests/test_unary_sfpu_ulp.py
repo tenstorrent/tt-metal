@@ -166,7 +166,9 @@ def measure(mathop, formats, approx_mode, dest_acc):
     """
     src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
     mask = measurable_mask(src, golden, result, formats.input_format)
-    overflowed = nonfinite_failures(src, golden, result, formats.input_format)
+    overflowed = nonfinite_failures(
+        mathop, src, golden, result, formats.input_format, formats.output_format
+    )
     stats = ulp_stats(ulp_distance(golden, result), mask)
     return golden, result, mask, overflowed, stats
 
