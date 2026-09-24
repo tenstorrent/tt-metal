@@ -115,11 +115,9 @@ void RunTestOnCore(
     if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
-    // Under the Quasar address-translation tables a coordinate is resolved through the map before any
-    // operand exists, and a coordinate the map does not list traps in the address backend, so the
-    // sanitizer never sees a bad coordinate there. The two cases that are about the coordinate itself (a
-    // core that does not exist, a DRAM tile named by coordinate) are skipped; the stateful and inline
-    // cases below aim at the buffer's real core with a bad offset instead.
+    // Under the Quasar address translation tables a bad coordinate never reaches the sanitizer: the
+    // address backend traps on it first. So the two tests about the coordinate itself are skipped, and
+    // the stateful and inline tests below target the buffer's real core with a bad offset instead.
     const bool att = is_quasar && tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().has_value();
     if (att && (feature == SanitizeNOCAddress || feature == SanitizeNOCInlineWriteDram)) {
         GTEST_SKIP() << "Coordinates outside the ATT map trap in the address backend before the sanitizer runs";

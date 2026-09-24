@@ -157,10 +157,9 @@ CoreCoord virtual_noc_coordinate(
     return cluster.get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
 }
 
-// Under the address-translation tables a unicast operand carries no coordinates. Decode it through the
-// active map (noc_att::classify_operand): the window and endpoint row it reaches and the offset inside
-// that target. Tiles are reported in the kernel-visible (descriptor) frame, which is the frame the XY
-// report calls virtual coordinates, so the messages keep the same shape.
+// Under ATT a unicast operand carries no coordinates. Decode it through the active map: the window
+// and endpoint row it reaches and the offset inside that target. Tiles are reported in the
+// kernel-visible frame, which is the frame the XY uses, so the messages keep the same shape.
 string get_att_unicast_target_str(std::string_view map_name, uint64_t operand) {
     const quasar_att::MapInfo* info = quasar_att::find_map(map_name);
     if (info == nullptr) {
@@ -184,14 +183,12 @@ string get_att_unicast_target_str(std::string_view map_name, uint64_t operand) {
     };
     using Kind = noc_att::OperandTarget::Kind;
     switch (target.kind) {
-        case Kind::Self:
-            return fmt::format("its own core (ATT self window) L1[addr=0x{:08x}]", target.local_address);
+        case Kind::Self: return fmt::format("its own core (ATT self window) L1[addr=0x{:08x}]", target.local_address);
         case Kind::Worker:
         case Kind::FullTile: {
             const auto coord = descriptor_coord(target.endpoint_word);
-            const bool dispatch_tile =
-                target.kind == Kind::FullTile && coord.has_value() &&
-                noc_att::resolve(map, noc_att::Address::dispatch(coord->x, coord->y, 0)).valid;
+            const bool dispatch_tile = target.kind == Kind::FullTile && coord.has_value() &&
+                                       noc_att::resolve(map, noc_att::Address::dispatch(coord->x, coord->y, 0)).valid;
             return fmt::format(
                 "{} core w/ virtual coords {} L1[addr=0x{:08x}]",
                 dispatch_tile ? "Dispatch" : "Tensix",
@@ -230,9 +227,6 @@ string get_noc_target_str(
     dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     const auto& hal = env.get_hal();
     auto& cluster = env.get_cluster();
-    // Under the address-translation tables a unicast operand is decoded through the active map below. A
-    // multicast operand is the software rectangle descriptor, whose corners are ordinary kernel-frame
-    // coordinates in the XY layout, so the multicast branch is shared with XY.
     const std::optional<std::string_view> att_map =
         hal.get_arch() == tt::ARCH::QUASAR ? env.get_rtoptions().get_noc_att_map() : std::nullopt;
     auto get_core_and_mem_type = [&hal, &cluster](

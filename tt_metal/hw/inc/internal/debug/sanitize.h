@@ -39,8 +39,6 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #endif
 #if defined(NOC_ATT_ENABLED)
-// Under the address-translation tables an operand is a complete 64-bit address with no coordinate field;
-// the active map (ACTIVE_ATT_MAP) says which tile and offset it reaches. See debug_sanitize_noc_addr.
 #include "internal/tt-2xx/quasar/noc/att/att_config.h"
 #endif
 
@@ -434,14 +432,13 @@ inline void debug_sanitize_check_linked_transactions(
 }
 
 #if defined(NOC_ATT_ENABLED)
-// Under the address-translation tables an operand carries no coordinates. The active map classifies it
-// (noc_att::classify_operand): the window it matched, the endpoint row (selector) it reaches and the
-// byte offset inside that target. The transfer must also stay inside the window's local field, since
-// bytes past it would carry into the selector and land on another tile. The per-kind checks then run on
-// the local offset exactly as they run on the XY local address. A multicast operand is the software
-// rectangle descriptor (four worker coordinates in the kernel-visible frame plus the offset) and is
+// ATT version of the check below. A unicast operand has no x/y: the active map decodes it into a
+// window, a selector row and an offset (noc_att::classify_operand). The transfer must fit inside the
+// window's offset field, because bytes past it spill into the selector and land on another tile. After
+// that the usual DRAM / register / L1 checks run on the offset, as they run on the XY local address.
+// A multicast operand is the software rectangle (four worker coordinates plus an offset) and is
 // checked the way the issue path resolves it.
-// Return value: the alignment mask for the kind of target, as in the XY version below.
+// Returns the alignment mask for the kind of target, like the XY version.
 uint32_t debug_sanitize_noc_addr(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -459,7 +456,7 @@ uint32_t debug_sanitize_noc_addr(
         if (!rect.valid) {
             return_code = DebugSanitizeNocTargetInvalidXY;
         } else if (rect.end_x < rect.start_x || rect.end_y < rect.start_y) {
-            // Quasar is not a torus: a rectangle never wraps.
+            // No wrap-around on Quasar: the end corner cannot be before the start corner.
             return_code = DebugSanitizeNocMulticastInvalidRange;
         } else if (
             !noc_att::resolve(ACTIVE_ATT_MAP, noc_att::Address::worker(rect.start_x, rect.start_y, 0)).valid ||
@@ -490,7 +487,6 @@ uint32_t debug_sanitize_noc_addr(
     }
 #endif
 
-    // Same per-kind checks and alignment rules as the XY version; only DRAM and tile L1 exist under ATT.
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;
     if (is_dram) {
@@ -516,7 +512,8 @@ uint32_t debug_sanitize_noc_addr(
             multicast,
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
-            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
+            debug_valid_worker_addr(
+                noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
     }
     return alignment_mask;
 }
@@ -820,10 +817,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
 }
 
 #if defined(NOC_ATT_ENABLED)
-// Under the ATT a command buffer's destination and source registers each hold a whole operand; the
-// coordinate register carries only multicast extents and is never part of an address. The legacy MID
-// alias reads a register's upper word, LO its lower word. The source of a write (and the destination of
-// a read) is the local operand, whose lower word is the L1 address.
+// Under the ATT the command buffer's source and destination registers each hold a whole 64-bit
+// operand (the coordinate register only carries multicast extents). MID reads the upper word of a
+// register, LO the lower word. The local side of a transfer is also an operand, and its lower word is
+// the L1 address.
 static_assert(
     (uint64_t{NOC_ATT_LOCAL_WINDOW_BASE} & 0xFFFFFFFFull) == 0,
     "the FROM_STATE checks take the L1 address from the lower word of a local operand");
@@ -928,9 +925,9 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
     debug_insert_delay((uint8_t)TransactionWrite);
 
 #if defined(NOC_ATT_ENABLED)
-// _WITH_ADDR_STATE macros: the legacy set_state/with_state calls keep the operand's base (window and
-// selector) in software and combine it with the per-call local address at issue. Rebuild the operand the
-// same way, so the sanitizer checks exactly what will be issued.
+// _WITH_ADDR_STATE macros: set_state/with_state keep the operand's base (window and selector) in
+// software and add the per-call address when issuing. Rebuild the operand the same way here, so the
+// sanitizer checks exactly what will be issued.
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     {                                                                                               \
         while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                           \
@@ -941,15 +938,11 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
             NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_AT_LEN_BE),                              \
             false);                                                                                 \
     }
-#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) \
-    {                                                                                         \
-        while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                     \
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                 \
-            noc_id,                                                                           \
-            noc_v3_state_operand(noc_v3_read_state_base[read_cmd_buf], noc_a_lower),          \
-            worker_a,                                                                         \
-            l,                                                                                \
-            false);                                                                           \
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                     \
+    {                                                                                                             \
+        while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                                         \
+        DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                     \
+            noc_id, noc_v3_state_operand(noc_v3_read_state_base[read_cmd_buf], noc_a_lower), worker_a, l, false); \
     }
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     {                                                                                                \
@@ -961,16 +954,12 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
             NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                              \
             false);                                                                                  \
     }
-// _ON names the command buffer the caller programmed and issues on; the plain form is the default buffer.
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc_id, cmd_buf, noc_a_lower, worker_a, l) \
-    {                                                                                                      \
-        while (!noc_cmd_buf_ready(noc_id, cmd_buf));                                                       \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                             \
-            noc_id,                                                                                        \
-            noc_v3_state_operand(noc_v3_write_state_base[cmd_buf], noc_a_lower),                           \
-            worker_a,                                                                                      \
-            l,                                                                                             \
-            false);                                                                                        \
+// _ON takes the command buffer explicitly.
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc_id, cmd_buf, noc_a_lower, worker_a, l)    \
+    {                                                                                                         \
+        while (!noc_cmd_buf_ready(noc_id, cmd_buf));                                                          \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                \
+            noc_id, noc_v3_state_operand(noc_v3_write_state_base[cmd_buf], noc_a_lower), worker_a, l, false); \
     }
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc_id, write_cmd_buf, noc_a_lower, worker_a, l)
@@ -1025,18 +1014,17 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
             l,                                                                                                         \
             false);                                                                                                    \
     }
-// _ON names the command buffer the caller programmed and issues on (the plain form above reads the
-// default buffer's registers).
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc_id, cmd_buf, noc_a_lower, worker_a, l)      \
-    {                                                                                                           \
-        while (!noc_cmd_buf_ready(noc_id, cmd_buf));                                                            \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
-            noc_id,                                                                                             \
+// _ON takes the command buffer explicitly.
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc_id, cmd_buf, noc_a_lower, worker_a, l)       \
+    {                                                                                                            \
+        while (!noc_cmd_buf_ready(noc_id, cmd_buf));                                                             \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                   \
+            noc_id,                                                                                              \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
-                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,        \
-            worker_a,                                                                                           \
-            l,                                                                                                  \
-            false);                                                                                             \
+                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,         \
+            worker_a,                                                                                            \
+            l,                                                                                                   \
+            false);                                                                                              \
     }
 #endif  // NOC_ATT_ENABLED
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)

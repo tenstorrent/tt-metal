@@ -493,8 +493,7 @@ constexpr NocAddress make_multicast_descriptor(
 }
 
 /// @brief The fields of a software multicast descriptor. valid is false when the
-/// value is not a descriptor (INVALID_MULTICAST_DESCRIPTOR, or any bit above
-/// DESCRIPTOR_BITS set); the fields are then zero.
+/// value is not a descriptor, the fields are then zero.
 struct MulticastDescriptorFields {
     std::uint32_t start_x;
     std::uint32_t start_y;
@@ -527,38 +526,36 @@ constexpr NocMulticastAddress resolve_worker_multicast(NocAddress descriptor, st
     return make_worker_multicast<Map>(rect.start_x, rect.start_y, rect.end_x, rect.end_y, rect.local_address, size);
 }
 
-
 // ---------------------------------------------------------------------------
-// Operand diagnostics: the inverse of encode(). Given a complete operand and
-// the map alone, say what it reaches. Used by the watcher's NoC sanitizer on
-// the device and by the watcher's report on the host; never on an issue path.
+// Decoding: given a finished operand and the map, say which core and address
+// it reaches. Used only by the watcher's NoC sanitizer (device) and the
+// watcher's report (host), never when issuing a transaction.
 // ---------------------------------------------------------------------------
 
-/// @brief Dram target whose selector no logical bank is bound to.
+/// @brief Bank value for a DRAM selector that no logical bank is bound to.
 inline constexpr std::uint32_t DRAM_BANK_UNKNOWN = ~std::uint32_t{0};
 
-/// @brief Where a complete operand lands.
+/// @brief What an operand reaches.
 struct OperandTarget {
     enum class Kind : std::uint8_t {
-        Invalid,   ///< matches no window, or names a selector the map does not list
-        Self,      ///< this initiator's own L1: the local window at selector 0, or the pass-through scratch aperture
+        Invalid,   ///< no window matches, or the selector has no tile in the map
+        Self,      ///< the sending core's own L1 (local window at selector 0, or the scratch aperture)
         Worker,    ///< a worker tile's L1 through the worker window
-        FullTile,  ///< a tile's address space through the full-tile window (workers, dispatch tiles, perimeter)
+        FullTile,  ///< a whole tile through the full-tile window (workers, dispatch tiles, perimeter tiles)
         Dram,      ///< a DRAM channel through the DRAM window
     };
     Kind kind;
     /// The window the operand matched; Invalid when none did.
     WindowClass window;
-    /// The selector field of that window (0 when the window is selector-free).
+    /// The selector field of that window (0 if the window has none).
     std::uint32_t selector;
-    /// The byte address the target sees: the window's local field, or the whole
-    /// operand through a selector-free pass-through aperture.
+    /// The address as the target sees it (for the scratch aperture, the operand itself).
     std::uint64_t local_address;
-    /// Whether endpoint_word names the target tile.
+    /// True when endpoint_word is known.
     bool endpoint_known;
-    /// The target tile as (y << 6) | x in the NOC_NODE_ID frame, when known.
+    /// The target tile as (y << 6) | x in the NOC_NODE_ID frame.
     std::uint32_t endpoint_word;
-    /// Dram only: the logical bank bound to the selector, else DRAM_BANK_UNKNOWN.
+    /// DRAM only: the logical bank for this selector, else DRAM_BANK_UNKNOWN.
     std::uint32_t bank;
 };
 
@@ -567,25 +564,21 @@ constexpr bool same_window(const Window& a, const Window& b) {
            a.endpoint_size == b.endpoint_size && a.endpoint_table_offset == b.endpoint_table_offset;
 }
 
-/// @brief Classify a complete unicast operand. Multicast descriptors are a
-/// different container (decode_multicast_descriptor). The checks run in the
-/// order the endpoint tables overlap: Self first (on a map whose local window
-/// is a shared window, selector 0 is the boot-patched self row), then Dram
-/// (on a map with one shared remote window only the selector tells DRAM from
-/// tiles, and DRAM selectors also appear in the full-tile table), then Worker,
-/// then FullTile.
+/// @brief Say what a unicast operand reaches (multicast descriptors go through
+/// decode_multicast_descriptor instead). Windows can overlap, so the order of
+/// the checks matters: Self first (selector 0 of the local window is the core
+/// itself), then DRAM (its selectors also appear in the full-tile table), then
+/// Worker, then FullTile.
 constexpr OperandTarget classify_operand(const MapData& map, NocAddress address) {
     using Kind = OperandTarget::Kind;
-    const auto in_window = [address](const Window& window) {
-        return !is_no_window(window) && window.matches(address);
-    };
+    const auto in_window = [address](const Window& window) { return !is_no_window(window) && window.matches(address); };
     const Window& local = map_window(map, map.local_window_class);
     if (in_window(local) && local.selector(address) == 0) {
         return {Kind::Self, map.local_window_class, 0, local.local_address(address), false, 0, DRAM_BANK_UNKNOWN};
     }
     const Window& scratch = map_window(map, WindowClass::LoopbackScratch);
     if (in_window(scratch)) {
-        // Selector-free and pass-through: the operand itself is the absolute L1 address.
+        // The scratch aperture has no selector: the operand is the L1 address itself.
         const std::uint64_t seen = scratch.translate_address ? scratch.local_address(address) : address;
         return {Kind::Self, WindowClass::LoopbackScratch, 0, seen, false, 0, DRAM_BANK_UNKNOWN};
     }
@@ -600,8 +593,8 @@ constexpr OperandTarget classify_operand(const MapData& map, NocAddress address)
                 break;
             }
         }
-        // The DRAM tile's word: its own table (0 = row not programmed), or the
-        // full-tile table when the map's DRAM tiles live there behind a shared window.
+        // Find the DRAM tile's endpoint word: in the DRAM table (0 = not programmed), or
+        // in the full-tile table on maps where DRAM shares that window.
         bool known = selector < map.dram_endpoint_words.size() && map.dram_endpoint_words[selector] != 0;
         std::uint32_t word = known ? map.dram_endpoint_words[selector] : 0;
         if (!known && bank != DRAM_BANK_UNKNOWN && !is_no_window(tile) && same_window(dram, tile) &&
