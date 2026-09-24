@@ -437,6 +437,18 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
+def _pipeline(event: str) -> str:
+    """Which pipeline produced this run: ``pr``, ``nightly`` or ``baseline``.
+
+    Read from PIPELINE when the workflow says so; otherwise inferred from the
+    GitHub event, which can only tell a PR from everything else.
+    """
+    explicit = os.environ.get("PIPELINE", "").strip()
+    if explicit:
+        return explicit
+    return "pr" if event == "pull_request" else "nightly"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -447,7 +459,14 @@ def _ci_provenance() -> dict:
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-        "pipeline": "pr" if event == "pull_request" else "nightly",
+        #
+        # An explicit PIPELINE wins over the guess, because the guess cannot see
+        # the difference that matters: the post-merge baseline run is a `push`
+        # event, exactly like any other non-PR run, and would otherwise label
+        # itself "nightly" and land in the nightly history. publish_run.py
+        # already requires PIPELINE outright, so this also makes the two writers
+        # agree instead of deriving the same field two different ways.
+        "pipeline": _pipeline(event),
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
@@ -747,6 +766,15 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
         prev = row
 
 
+def _selected_run_types(run_types):
+    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
+    wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
+    if not wanted:
+        return list(run_types)
+    names = {n.strip() for n in wanted.split(",") if n.strip()}
+    return [rt for rt in run_types if rt.name in names]
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -782,7 +810,7 @@ class PerfConfig(TestConfig):
                 runtimes.copy(),
                 run_type,
             )
-            for run_type in run_types
+            for run_type in _selected_run_types(run_types)
         ]
 
         super().__init__(
@@ -929,6 +957,9 @@ class PerfConfig(TestConfig):
             )
 
     def run(self, perf_report: PerfReport, run_count=1):
+        if not self.run_configs:
+            pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+
         results = []
         counter_results_list = []
         code_sizes = {}

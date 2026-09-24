@@ -1,0 +1,124 @@
+name: "LLK perf gate"
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  branch-point:
+    name: "Find the branch point"
+    if: >-
+      github.event_name == 'pull_request' && (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
+      )
+    runs-on: ubuntu-slim
+    outputs:
+      sha: ${{ steps.find.outputs.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+      - name: Find the branch point
+        id: find
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          SHA=$(git merge-base "origin/${BASE_REF}" "$HEAD_SHA")
+          echo "Comparing ${HEAD_SHA} against its branch point ${SHA}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+  measure-branch-point:
+    name: "Measure the branch point on ${{ matrix.arch }}"
+    needs: branch-point
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [blackhole, wormhole]
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      ref: ${{ needs.branch-point.outputs.sha }}
+      artifact-suffix: "-base"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      upload-to-warehouse: false
+      pipeline: pr
+    secrets: inherit
+
+  measure:
+    name: "Measure the PR head on ${{ matrix.arch }}"
+    if: >-
+      github.event_name == 'pull_request' &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [blackhole, wormhole]
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      artifact-suffix: "-head"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      upload-to-warehouse: false
+      pipeline: pr
+    secrets: inherit
+
+  llk-perf-gate:
+    name: "LLK perf regression gate (${{ matrix.arch }})"
+    needs: [branch-point, measure, measure-branch-point]
+    if: >-
+      always() &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: blackhole
+            threshold: "0.02"
+          - arch: wormhole
+            threshold: "0.08"
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      run_types: L1_TO_L1
+      threshold: ${{ matrix.threshold }}
+      min_cycles: "30"
+      fail_on_regression: false
+      current_artifact_pattern: >-
+        ${{ github.event_name == 'pull_request'
+            && format('perf-data-{0}-*-head', matrix.arch) || '' }}
+      baseline_artifact_pattern: >-
+        ${{ github.event_name == 'pull_request'
+            && format('perf-data-{0}-*-base', matrix.arch) || '' }}
+      baseline_commit: ${{ needs.branch-point.outputs.sha }}
+    secrets: inherit
