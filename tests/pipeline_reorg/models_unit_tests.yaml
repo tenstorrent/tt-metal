@@ -252,7 +252,9 @@
 
 - name: Command-R 35B unit tests
   cmd: |
-    export TT_METAL_WATCHER=30
+    # Watcher off: the job env defaults to TT_METAL_WATCHER=2, and polling every 2 s
+    # is pure overhead for a 40-layer chained PCC sweep on a 35B model.
+    unset TT_METAL_WATCHER TT_METAL_WATCHER_APPEND TT_METAL_WATCHER_NOINLINE TT_METAL_WATCHER_DISABLE_ETH
     export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
     export HF_MODEL=CohereLabs/c4ai-command-r-v01 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r-v01 MESH_DEVICE=P150x4
     export COHERE_REF_DIR=/mnt/MLPerf/tt_dnn-models/CohereLabs/c4ai-command-r-v01-reference
