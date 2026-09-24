@@ -26,6 +26,10 @@ set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(function2 GIT_REPOSITORY https://github.com/Naios/function2 GIT_TAG 4.2.5)
 
 # zoo publishes no tags at all, so it can only be pinned by commit.
+#
+# This pin is the commit the published results were measured against, not necessarily the one
+# tt-metal ships -- see third_party/CMakeLists.txt. Moving it invalidates the numbers in README.md
+# and in the issue, so re-run ./reproduce.py and update both if you do.
 FetchContent_Declare(
     zoo
     GIT_REPOSITORY https://github.com/thecppzoo/zoo
