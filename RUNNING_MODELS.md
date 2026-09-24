@@ -37,11 +37,17 @@ both back to back in one pipeline instance and prints PSNR/PCC of DBCache
 against the baseline video. With a single run in the list those columns are
 `nan` — there is nothing to compare against.
 
-### Reference numbers (720p, 40 steps)
+### Reference numbers (720p, 40 steps, one video)
 
-| run     | denoise (s) | step (s) | cached steps | PSNR vs base | PCC vs base |
-|---------|-------------|----------|--------------|--------------|-------------|
-| dbcache | 82.7        | 2.04     | 30           | nan          | nan         |
+Measured 2026-09-24 on a 32-chip BH Galaxy, firmware 19.11.0.0, warm caches.
+
+| TDP   | denoise (s) | step (s) | cached steps |
+|-------|-------------|----------|--------------|
+| 190 W | 65.1        | 1.60     | 30           |
+| 130 W | 82.8        | 2.04     | 30           |
+
+`TT_METAL_TDP_LIMIT_WATTS=190` is worth 21% here, so do not omit it. PSNR/PCC
+are `nan` with a single run in `WAN_DBCACHE_RUNS` -- add `baseline` to get them.
 
 ### Prompt
 
@@ -94,6 +100,16 @@ python models/tt_dit/tests/models/sd35/run_sd35_submesh.py
 > substitute that path if the dedicated checkout is not present on the machine.
 > Note `TT_DIT_CACHE_DIR` must be **unset** — unlike Wan 2.2, SD 3.5 uses its
 > own default cache location.
+
+### Reference numbers (1024x1024, 20 steps, one image on a 4-chip mesh)
+
+Measured 2026-09-24, layout `1x4tp`, ring, traced, CFG on. Iteration 1 is the
+steady-state figure; iteration 0 carries warm-up.
+
+| TDP   | encoder (s) | vae (s) | denoising (s) | step (s) | total (s) |
+|-------|-------------|---------|---------------|----------|-----------|
+| 190 W | 0.04        | 0.20    | 3.89          | 0.194    | **4.13**  |
+| 130 W | 0.04        | 0.18    | 4.09          | 0.204    | **4.32**  |
 
 ### Prompt
 
@@ -153,6 +169,18 @@ pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
 TT_VISIBLE_DEVICES=0 pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
   -k "device_vae and device_encoders and with_trace and no_cfg_parallel and 1024x1024 and steps20"
 ```
+
+### Reference numbers (1024x1024, 20 steps, 32 prompts across 32 chips)
+
+Measured 2026-09-24. Note the unit: SDXL runs one full pipeline per chip, so
+this is 32 images in the quoted wall time, not one. Divide by 32 for a
+per-image figure (~0.13 s at 190 W). Not comparable to the Wan 2.2 or SD 3.5
+rows above, and measured with `TT_MM_THROTTLE_PERF` unset.
+
+| TDP   | denoising loop, 32 prompts (s) | image gen, 32 prompts (s) |
+|-------|--------------------------------|---------------------------|
+| 190 W | 3.27                           | **4.22**                  |
+| 130 W | 3.31                           | **4.27**                  |
 
 ### Prompt
 
