@@ -19,6 +19,7 @@ export PYTHONPATH=$PWD
 export HF_HOME=/mnt/tt-data/hf-home
 export TT_DIT_CACHE_DIR=/mnt/tt-data/nkira/tt_dit_cache_wan
 export WAN_DBCACHE_RUNS=dbcache
+export TT_METAL_TDP_LIMIT_WATTS=190               # higher perf
 unset WAN_DBCACHE_PROMPT TT_METAL_WATCHER HF_HUB_OFFLINE
 
 pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_dbcache.py \
@@ -83,6 +84,7 @@ export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=/mnt/tt-data/hf-home
 export TT_LOGGER_LEVEL=Error
 unset TT_DIT_CACHE_DIR
 export SD35_STEPS=20
+export TT_METAL_TDP_LIMIT_WATTS=190               # higher perf
 python models/tt_dit/tests/models/sd35/run_sd35_submesh.py
 ```
 
@@ -92,6 +94,15 @@ python models/tt_dit/tests/models/sd35/run_sd35_submesh.py
 > substitute that path if the dedicated checkout is not present on the machine.
 > Note `TT_DIT_CACHE_DIR` must be **unset** — unlike Wan 2.2, SD 3.5 uses its
 > own default cache location.
+
+### Prompt
+
+Defaults to:
+
+> An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk,
+> nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate
+> falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic
+> depth and warmth.
 
 ### Outputs
 
@@ -129,11 +140,27 @@ export PYTHONPATH=$PWD
 export HF_HOME=/mnt/tt-data/nkira/hf              # SDXL weights live under $HF_HOME/hub
 export TT_METAL_CACHE=/home/ttuser/ttm_cache_42   # keep JIT kernels off the NFS tree
 unset TT_MM_THROTTLE_PERF                         # bare metal: no throttle
+export TT_METAL_TDP_LIMIT_WATTS=190               # higher perf
 export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=10,9
 
+pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
+  -k "device_vae and device_encoders and with_trace and no_cfg_parallel and 1024x1024 and steps20"
+```
+
+**Single-device run** — same environment, prefix with `TT_VISIBLE_DEVICES`:
+
+```bash
 TT_VISIBLE_DEVICES=0 pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
   -k "device_vae and device_encoders and with_trace and no_cfg_parallel and 1024x1024 and steps20"
 ```
+
+### Prompt
+
+Defaults to:
+
+> An astronaut riding a green horse
+
+with negative prompt `disturbing`.
 
 ### Outputs
 
