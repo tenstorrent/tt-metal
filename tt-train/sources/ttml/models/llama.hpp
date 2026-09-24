@@ -40,6 +40,8 @@ struct LlamaConfig {
     uint32_t original_context_length = 0U;
 };
 
+[[nodiscard]] uint32_t compute_rope_cache_sequence_length(uint32_t max_sequence_length);
+
 class Llama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;

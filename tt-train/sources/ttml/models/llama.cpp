@@ -4,6 +4,9 @@
 
 #include "llama.hpp"
 
+#include <limits>
+#include <stdexcept>
+
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/safetensors.hpp"
 
@@ -94,6 +97,17 @@ static std::vector<float> unpermute_proj_rows(
 
 namespace ttml::models::llama {
 
+uint32_t compute_rope_cache_sequence_length(const uint32_t max_sequence_length) {
+    constexpr uint32_t max_decode_padding = ttnn::TILE_SIZE - 1U;
+    if (max_sequence_length > std::numeric_limits<uint32_t>::max() - max_decode_padding) {
+        throw std::overflow_error(fmt::format(
+            "Max sequence length {} is too large to reserve {} padded decode positions",
+            max_sequence_length,
+            max_decode_padding));
+    }
+    return max_sequence_length + max_decode_padding;
+}
+
 Llama::Llama(const LlamaConfig& config) : m_config(config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
@@ -156,7 +170,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     }
 
     m_rope_params = ops::build_rope_params(
-        /*sequence_length=*/max_sequence_length,
+        /*sequence_length=*/compute_rope_cache_sequence_length(max_sequence_length),
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
