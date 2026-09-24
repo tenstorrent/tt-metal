@@ -172,13 +172,14 @@ class TestRingGeometry:
         mesh, subdevice, semaphores, ccl_column = ring_mesh
         # Three Q chunks per chip (the last one tile tall) on two workers: one worker checkpoints two Q blocks
         # through DRAM between ring steps, the other keeps its single state resident. K shards are whole K
-        # chunks of at least 1024 rows. A sharded joint needs Q and K shards of one length (no is_cross), at
-        # least 512 rows, with joint shards of at least 256 rows.
+        # chunks of at least 1024 rows and at least the Q shard. A sharded joint needs Q and K shards of one
+        # length (no is_cross), at least 512 rows, with joint shards of at least 256 rows.
         if joint:
             k_local = q_local = k_chunk * math.ceil(512 / k_chunk)
         else:
             q_local = 2 * q_chunk + 32
-            k_local = k_chunk * math.ceil(1024 / k_chunk)
+            # Q shards may not exceed K shards (longer Q is undefined for the op).
+            k_local = k_chunk * math.ceil(max(1024, q_local) / k_chunk)
         joint_local = k_chunk * math.ceil(256 / k_chunk) if joint else 0
         # Sub-tile tails in the second primary shard (no joint) or in the second joint shard.
         valid_n = 2 * k_local if joint else 2 * k_local - 33
