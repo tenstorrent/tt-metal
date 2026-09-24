@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
@@ -40,6 +41,22 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(init<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::Diagonal>(diagonal),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums)));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_dst_format[output_id], face_r_dim, num_faces);
@@ -90,10 +107,40 @@ inline void llk_pack_untilize(
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(execute<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::Diagonal>(diagonal),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums),
+        StateDiscard<std::uint32_t>(block_rt_dim),
+        StateDiscard<std::uint32_t>(block_c_index),
+        StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
+
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
+}
+
+/**
+ * Uninitialize the packer untilize configuration.
+ *
+ * @param output Output circular buffer / operand index.
+ */
+inline void llk_pack_untilize_uninit([[maybe_unused]] std::uint32_t output) {
+    SAN_HOOK(uninit<OperationPackUntilize>());
+
+    _llk_pack_untilize_uninit_();
 }

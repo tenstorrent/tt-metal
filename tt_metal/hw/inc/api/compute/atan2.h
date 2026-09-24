@@ -29,12 +29,13 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan2_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_atan2,
-        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst0,
         idst1,
         odst,
@@ -44,8 +45,9 @@ ALWI void atan2_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan2_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::calculate_sfpu_atan2_init, (APPROX, DST_ACCUM_MODE))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::calculate_sfpu_atan2_init, (APPROX, is_fp32_dest_acc_en))));
 }
 
 }  // namespace ckernel

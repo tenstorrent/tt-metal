@@ -70,7 +70,7 @@ specific to this two-rank deployment.
 ## LlamaCompleterRemoteRollout
 
 ```python
-from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
+from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 ```
 
 Llama-specific implementation of `GRPOCompleter`. Loads the ttml
@@ -127,8 +127,8 @@ optimizer steps.
 ```python
 import os
 from datasets import load_dataset
-from utils.mpi_rollout import MPIRolloutClient
-from utils.llama_grpo_completer import (
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient
+from grpo_remote_rollout.utils.llama_grpo_completer import (
     LlamaCompletionCtx, LlamaCompleterRemoteRollout, WeightSyncCallback,
 )
 from ttml.trainers import GRPOTrainer, get_grpo_config
@@ -181,10 +181,10 @@ finally:
 
 ```python
 import ttnn
-from utils.mpi_rollout import MPIRolloutServer
-from utils.ttt_generation_worker import TttGenerationWorker
-from utils.weight_bridge import HostWeightBridge
-from utils.llama_ttt_presets import (
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutServer
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
+from grpo_remote_rollout.utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
 )
 

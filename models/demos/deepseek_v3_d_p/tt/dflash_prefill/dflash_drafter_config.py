@@ -44,6 +44,7 @@ class DFlashDrafterConfig:
     rope_orig_max_pos: int = 4096
     rope_mscale: float = 1.0
     rope_mscale_all_dim: float = 1.0
+    rope_convention: str = "interleaved"
 
     @property
     def kv_dim(self) -> int:

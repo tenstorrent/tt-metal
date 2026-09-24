@@ -412,6 +412,105 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring)],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@pytest.mark.parametrize(
+    "mm_window_blocks, pass_counter_buffers, counter_row_slots, l1_via, expected_error_message",
+    [
+        # An L1 MM output without a window is rejected at validation: unwindowed, the resident
+        # shard's L1-floor erosion breaks LATER programs' circular buffers (issue #52863), so the
+        # op requires the caller to bound it.
+        pytest.param(None, True, None, "explicit", "requires mm_window_blocks", id="l1_nowindow_rejected"),
+        # The same rejection when the L1 MM output is INHERITED: an omitted memory_config_mm
+        # resolves to the input's memory config inside the matmul, so an L1 input with no explicit
+        # request is the same unwindowed footgun and must not slip past the predicate.
+        pytest.param(None, True, None, "inherited", "requires mm_window_blocks", id="l1_inherited_nowindow_rejected"),
+        # A zero window is rejected: it would build a zero-height MM-output shard.
+        pytest.param(0, True, None, "explicit", "must be >= 1", id="l1_window0_rejected"),
+        # The windowed handoff without the caller-owned counter arrays is likewise rejected: the
+        # per-program fallback allocation permanently lowers the L1 floor.
+        pytest.param(
+            2, False, None, "explicit", "caller-owned mm_progress_counters", id="l1_window2_no_counters_rejected"
+        ),
+        # The credit-array requirement checked on its own (with both omitted, validation always
+        # fails on the progress array first and this requirement would be unreachable).
+        pytest.param(
+            2,
+            "progress_only",
+            None,
+            "explicit",
+            "caller-owned mm_credit_counters",
+            id="l1_window2_no_credit_rejected",
+        ),
+        # Counter arrays with too-narrow rows (1 slot, when progress rows need one per compute-grid
+        # core) are rejected by the size validation.
+        pytest.param(2, True, 1, "explicit", "uint32 slots per row", id="l1_window2_undersized_counters_rejected"),
+        # The same call with a window and both counter arrays is the supported L1 handoff.
+        pytest.param(2, True, None, "explicit", None, id="l1_window2"),
+    ],
+)
+def test_minimal_matmul_strided_reduce_scatter_l1_handoff(
+    mesh_device,
+    num_links,
+    topology,
+    mm_window_blocks,
+    pass_counter_buffers,
+    counter_row_slots,
+    l1_via,
+    expected_error_message,
+    expect_error,
+):
+    """Explicit coverage for the opt-in L1 MM-output handoff (mem_config_mm = L1)."""
+    mem_config_dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    # "explicit": DRAM input, L1 memory_config_mm. "inherited": L1 input, memory_config_mm omitted —
+    # the matmul then inherits the input's L1 config as its output config.
+    mem_config_input = mem_config_l1 if l1_via == "inherited" else mem_config_dram
+    mem_config_mm = None if l1_via == "inherited" else mem_config_l1
+
+    def run():
+        run_minimal_matmul_strided_reduce_scatter_impl(
+            mesh_device,
+            512,  # M
+            512,  # K
+            2048,  # N
+            3,  # dim
+            num_links,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mem_config_input,
+            mem_config_mm,
+            mem_config_dram,
+            topology=topology,
+            enable_trace=False,
+            num_iters=1,
+            mm_block_m=128,
+            mm_block_k=128,
+            mm_block_n=128,
+            subblock_h=1,
+            subblock_w=1,
+            mm_core_grid=ttnn.CoreCoord(8, 2),
+            chunk_width_in_mm_blocks=2,
+            rs_mode="fused",
+            cluster_axis=1,
+            mm_window_blocks=mm_window_blocks,
+            pass_counter_buffers=pass_counter_buffers,
+            counter_row_slots=counter_row_slots,
+        )
+
+    if expected_error_message is not None:
+        with expect_error(RuntimeError, expected_error_message):
+            run()
+    else:
+        run()
+
+
 @pytest.mark.skip(reason="Sweep test - skipped from nightly")
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize(
@@ -753,4 +852,267 @@ def test_minimal_matmul_strided_reduce_scatter_fused_concat_non_aligned(mesh_dev
         cluster_axis=cluster_axis,
         fused_concat=True,
         fused_concat_ka=11,  # Ka=11: non-tile-aligned prefix (padded to 32)
+    )
+
+
+# Production blockings the models adopted from the 2026-08-24 windowed-handoff sweep (see
+# fused_mmrs_configs). Kept OUT of test_minimal_matmul_strided_reduce_scatter_async's test_config
+# list on purpose: that test crosses every config with 2 cluster axes x 2 iteration settings x
+# 3 rs_modes x 2 router configs (24 runs each, 264 total for these 11), and the separate modes do
+# not exercise the window at all. The dedicated test below runs each blocking exactly once,
+# fused, on the TP ring axis the sweeps used.
+ADOPTED_BLOCKING_CONFIGS = [
+    # Flux2 @1024px MMRS shapes (single-stream proj_out and double-stream ff2), at the blockings
+    # the 2026-08-24 sweep picked under the windowed L1 handoff (see fused_mmrs_configs).
+    # M_block is small on purpose: these shapes have only 4-5 M tile-rows per core, so the
+    # window can only rotate with M_block <= ceil(Mt_per_core / 2).
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=1152,
+            K=3072,
+            N=6144,
+            dim=3,
+            mm_block_m=96,  # 3 tiles
+            mm_block_k=192,  # 6 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=1,
+            subblock_w=4,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="flux2_projout_1152_3072_6144_x12y8_b368_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=1024,
+            K=2304,
+            N=6144,
+            dim=3,
+            mm_block_m=64,  # 2 tiles
+            mm_block_k=128,  # 4 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="flux2_ff2_1024_2304_6144_x12y8_b248_window2",
+    ),
+    # LTX stage_1 ff2 and Wan2.2 720p quad-galaxy ff2 (M = 9472/4), at the blockings the 2026-08-24 windowed-handoff
+    # sweep picked (see fused_mmrs_configs).
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=1216,
+            K=4096,
+            N=4096,
+            dim=3,
+            mm_block_m=128,  # 4 tiles
+            mm_block_k=256,  # 8 tiles
+            mm_block_n=192,  # 6 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="ltx_stage1_ff2_1216_4096_4096_x12y8_b486_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=4864,
+            K=4096,
+            N=4096,
+            dim=3,
+            mm_block_m=256,  # 8 tiles
+            mm_block_k=128,  # 4 tiles
+            mm_block_n=192,  # 6 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="ltx_stage2_ff2_4864_4096_4096_x12y8_b846_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=2368,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=192,  # 6 tiles
+            mm_block_k=96,  # 3 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="wan720p_quad_ff2_2368_3456_5120_x12y8_b638_window2",
+    ),
+    # Aang ff2 shapes (a2v and SR), at the 2026-08-24 windowed-handoff sweep winners
+    # (see fused_mmrs_configs; windowed beats the DRAM-swept best on both).
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=2656,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=192,  # 6 tiles
+            mm_block_k=96,  # 3 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="aang_a2v_ff2_2656_3456_5120_x12y8_b638_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=11520,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=192,  # 6 tiles
+            mm_block_k=128,  # 4 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="aang_sr_ff2_11520_3456_5120_x12y8_b648_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=1664,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=128,  # 4 tiles
+            mm_block_k=192,  # 6 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="aang_a2v1080_ff2_1664_3456_5120_x12y8_b468_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=7200,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=192,  # 6 tiles
+            mm_block_k=128,  # 4 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="aang_sr1080_ff2_7200_3456_5120_x12y8_b648_window2",
+    ),
+    # Wan2.2 720p ff2 single-galaxy and MiniMax-H3 ff2, 2026-08-24 windowed-sweep winners.
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=9472,
+            K=3456,
+            N=5120,
+            dim=3,
+            mm_block_m=256,  # 8 tiles
+            mm_block_k=96,  # 3 tiles
+            mm_block_n=256,  # 8 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=2,
+            subblock_w=2,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="wan720p_ff2_9472_3456_5120_x12y8_b838_window2",
+    ),
+    pytest.param(
+        MinimalMatmulStridedReduceScatterTestConfig(
+            M=4768,
+            K=3584,
+            N=5376,
+            dim=3,
+            mm_block_m=256,  # 8 tiles
+            mm_block_k=224,  # 7 tiles
+            mm_block_n=224,  # 7 tiles
+            mm_core_grid=ttnn.CoreCoord(12, 8),
+            chunk_width_in_mm_blocks=1,
+            subblock_h=4,
+            subblock_w=1,
+            num_workers_per_link=5,
+            mm_window_blocks=2,
+        ),
+        id="minimax_ff2_4768_3584_5376_x12y8_b877_window2",
+    ),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring)],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@pytest.mark.parametrize("test_config", ADOPTED_BLOCKING_CONFIGS)
+def test_minimal_matmul_strided_reduce_scatter_adopted_blockings(mesh_device, num_links, topology, test_config):
+    """One fused PCC run per adopted production blocking, at the sweep's exact geometry."""
+    cfg = test_config
+
+    if is_wormhole_b0() and (cfg.mm_core_grid.x > 8 or cfg.mm_core_grid.y > 8):
+        pytest.skip("core grid exceeds wormhole_b0 compute grid (8x8), blackhole-only config (BH grid is 12x10)")
+
+    mem_config_dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        cfg.M,
+        cfg.K,
+        cfg.N,
+        cfg.dim,
+        num_links,
+        cfg.input_dtype,
+        cfg.layout,
+        mem_config_dram,
+        mem_config_dram,
+        mem_config_dram,
+        topology=topology,
+        enable_trace=False,
+        num_iters=1,
+        num_workers_per_link=cfg.num_workers_per_link,
+        mm_block_m=cfg.mm_block_m,
+        mm_block_k=cfg.mm_block_k,
+        mm_block_n=cfg.mm_block_n,
+        subblock_h=cfg.subblock_h,
+        subblock_w=cfg.subblock_w,
+        mm_core_grid=cfg.mm_core_grid,
+        chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
+        rs_mode="fused",
+        cluster_axis=0,
+        mm_window_blocks=cfg.mm_window_blocks,
     )

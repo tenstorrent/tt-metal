@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -102,7 +103,11 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
 FabricMuxV2Config::FabricMuxV2Config(
-    uint8_t num_channels, uint8_t num_buffers_per_channel, size_t channel_buffer_size_bytes, size_t base_l1_address) :
+    uint8_t num_channels,
+    uint8_t num_buffers_per_channel,
+    size_t channel_buffer_size_bytes,
+    size_t base_l1_address,
+    size_t usable_l1_end_address) :
     num_channels_(num_channels),
     num_buffers_per_channel_(num_buffers_per_channel),
     channel_buffer_size_bytes_(channel_buffer_size_bytes),
@@ -175,14 +180,21 @@ FabricMuxV2Config::FabricMuxV2Config(
 
     memory_map_end_address_ = current_address;
 
-    const size_t l1_end_address =
+    const size_t physical_l1_end_address =
         hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE) +
         hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
+
+    // A caller-supplied ceiling only ever tightens the bound; it can never license the map to run past the
+    // physical end of L1.
+    const size_t l1_end_address = usable_l1_end_address == 0
+                                      ? physical_l1_end_address
+                                      : std::min(usable_l1_end_address, physical_l1_end_address);
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "FabricMuxV2 memory map end address {} exceeds worker L1 end address {}",
+        "FabricMuxV2 memory map end address {} exceeds usable worker L1 end address {} (physical L1 end: {})",
         memory_map_end_address_,
-        l1_end_address);
+        l1_end_address,
+        physical_l1_end_address);
 }
 
 void FabricMuxV2Config::append_client_connection_rt_args(

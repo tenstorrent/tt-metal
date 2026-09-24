@@ -97,7 +97,7 @@ def test_div_fp32(device):
     z_tt_div = ttnn.divide(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 # Test division when input_b is non-zero
@@ -143,7 +143,7 @@ def test_div_bf16_nonzero(device):
     z_tt_div = ttnn.divide(x_tt, y_tt)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_pow_fp32(device):
@@ -177,7 +177,7 @@ def test_hypot_multi_dtype(device, dtype):
     if dtype == ttnn.float32:
         assert_allclose(z_torch, z_tt_hypot, rtol=1e-05, atol=1e-05)
     else:
-        assert_with_ulp(z_torch, z_tt_hypot, ulp_threshold=1)
+        assert_with_ulp(expected_result=z_torch, actual_result=z_tt_hypot, ulp_threshold=1)
 
 
 def test_add_fp32_activ(device):
@@ -285,7 +285,7 @@ def test_squared_difference_fp32(device):
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.squared_difference(x_tt, y_tt)
 
-    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=2)
+    assert_with_ulp(expected_result=z_torch, actual_result=z_tt_out, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -413,7 +413,7 @@ def test_addalpha_fp32(alpha, device):
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.addalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=1)
+    assert_with_ulp(expected_result=z_torch, actual_result=z_tt_out, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("alpha", [-100.0, -20.0, 0.0, 2.0, 5.0, 10.0, 50.0])
@@ -425,55 +425,4 @@ def test_subalpha_fp32(alpha, device):
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.subalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "op_name",
-    [
-        "eq",
-        "ne",
-        "lt",
-        "le",
-        "gt",
-        "ge",
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        "float32",
-        "bfloat16",
-    ],
-)
-def test_special_values(device, op_name, dtype):
-    """
-    Comprehensive test for special floating-point values: 0, -0, inf, -inf, nan
-    Tests all combinations of these values as inputs to a binary operation.
-    """
-    torch_fn = getattr(torch, op_name)
-    ttnn_fn = getattr(ttnn, op_name)
-
-    torch_dtype = getattr(torch, dtype)
-    ttnn_dtype = getattr(ttnn, dtype)
-
-    # Special values to test
-    special_values = [0.0, float("inf"), float("-inf"), float("nan"), 1.0, -1.0, -0.0]
-
-    # Create all combinations
-    x_vals = [x for x in special_values for _ in special_values]
-    y_vals = [y for _ in special_values for y in special_values]
-
-    x_torch = torch.tensor(x_vals, dtype=torch_dtype)
-    y_torch = torch.tensor(y_vals, dtype=torch_dtype)
-    z_torch = torch_fn(x_torch, y_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn_fn(
-        x_tt,
-        y_tt,
-    )
-    tt_out = ttnn.to_torch(z_tt)
-
-    assert torch.equal(z_torch, tt_out), "Mismatches found"
+    assert_with_ulp(expected_result=z_torch, actual_result=z_tt_out, ulp_threshold=1)

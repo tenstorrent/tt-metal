@@ -6,41 +6,39 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    ArgFetcher arg_fetcher;
-    const uint32_t src_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t num_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t mask_h = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t mask_w = arg_fetcher.get_next_arg_val<uint32_t>();
-    const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
-    const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
-
-    constexpr auto src_args = TensorAccessorArgs<0>();
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_scaler = 1;
-    constexpr uint32_t cb_id_mask_h_w = 2;
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t mask_h = get_arg(args::mask_h);
+    const uint32_t mask_w = get_arg(args::mask_w);
+    const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
+    const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
 
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_scaler(dfb::scaler);
     fill_cb_with_value(dfb_scaler, scaler.u);
 
+    // The mask buffer is only allocated when a mask applies, so the host binds it — and defines
+    // DO_MASK_H_W — on exactly that condition. Without the binding there is no dfb::mask_h_w token
+    // to name, hence the preprocessor gate around the otherwise-unchanged runtime check.
+#ifdef DO_MASK_H_W
     if (do_mask_h || do_mask_w) {
-        DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);
+        DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
         generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
     }
+#endif
 
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
+    const auto in0_tile_bytes = dfb_in0.get_tile_size();
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

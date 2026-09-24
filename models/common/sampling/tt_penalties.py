@@ -137,6 +137,8 @@ class TTPenalties(LightweightModule):
         self._shard_dims_gathered = shard_dims_gathered
 
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        # Host shadow of the per-slot prompt tokens, so a partial update keeps other rows' masks.
+        self._prompt_tokens_host = None
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
@@ -253,9 +255,35 @@ class TTPenalties(LightweightModule):
             return tokens_2d[: self._total_batch]
         return tokens_2d
 
-    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
+    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor, slots: list[int] | None = None):
+        """Rebuild the prompt mask. With ``slots``, only those rows are taken from
+        ``prompt_tokens``; every other row keeps the prompt it was last given.
+
+        The device buffer covers all rows at once, so a caller that only knows about the requests it
+        is prefilling used to zero everyone else's mask: rows outside the call arrive as the -1
+        padding and hash to an empty mask. repetition_penalty is the only consumer of prompt_mask, so
+        a live request silently stopped penalising its own prompt until something refreshed it.
+        Under vLLM the next decode's reset_batch does refresh it, which is why this stayed hidden;
+        the demo path never sets reset_batch and keeps the wiped mask for the whole generation.
+        """
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
+
+        if slots is None:
+            self._prompt_tokens_host = prompt_tokens_2d.clone()
+        else:
+            shadow = getattr(self, "_prompt_tokens_host", None)
+            width = max(prompt_tokens_2d.shape[-1], shadow.shape[-1] if shadow is not None else 0)
+            merged = torch.full((self._total_batch, width), -1, dtype=prompt_tokens_2d.dtype)
+            if shadow is not None:
+                merged[:, : shadow.shape[-1]] = shadow
+            for slot in slots:
+                slot = int(slot)
+                if 0 <= slot < self._total_batch:
+                    merged[slot, :] = -1
+                    merged[slot, : prompt_tokens_2d.shape[-1]] = prompt_tokens_2d[slot]
+            self._prompt_tokens_host = merged
+            prompt_tokens_2d = merged
 
         # Build reset masks on host to avoid device scatter_add races on
         # duplicate prompt token ids (common in penalty tests/prompts).

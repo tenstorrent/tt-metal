@@ -111,6 +111,32 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     return positions
 
 
+def llama4_scale_host(
+    kv_actual_isl: int,
+    sp: int,
+    chunk_local: int,
+    heads_local: int,
+    width: int,
+    beta: float,
+    orig_max: int,
+) -> torch.Tensor:
+    """Mistral's per-position query temperature for one chunk: [1, heads_local, sp*chunk_local, width].
+
+    ``1 + beta*ln(1 + floor(pos/orig_max))``, where the row -> position map is
+    ``rotated_chip_positions``, NOT ``kv_actual_isl + row``: a rotated chunk's rows are scattered
+    across chips, and the two coincide only when kv_actual_isl is slab-aligned. Chip-major flatten, to
+    match an SP shard over dim 2. fp32 -- the term sits just above 1.0 and adjacent windows are ~0.01
+    apart by 50k. Callers cast.
+    """
+    positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+    flat = torch.tensor(
+        [positions[c][r] for c in range(sp) for r in range(chunk_local)],
+        dtype=torch.float32,
+    )
+    scale = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+    return scale.view(1, 1, sp * chunk_local, 1).expand(1, heads_local, -1, width)
+
+
 def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int) -> list[int]:
     """Per-chip count of REAL (non-pad) rows carried by a rotated chunk, keyed off
     rotated_chip_positions so it cannot drift from the writer kernel.

@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end `t2va` perf + quality gate, swept over the published working points.
+"""End-to-end `t2va` quality gate, swept over the published working points.
 
 Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
 `resolve_canvas_size` -- short edge 768 from 16:9 through 9:16, ~1 MPix for wider -- and the frame
 count from `align_num_frames`, so neither is tabulated here. Each case writes its own artifact stem,
 so a sweep does not overwrite itself.
+
+Pipeline wall-clock lives in `test_performance_minimax_h3.py`. Sanity, seam, CLIP, and reminder logs
+are silent unless `H3_LOG_QUALITY=1`.
 """
 
 from __future__ import annotations
@@ -20,7 +23,11 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    MiniMaxH3Pipeline,
+    _requested_audio_t_factor,
+    _resolve_audio_t_shard,
+)
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -32,8 +39,11 @@ from .common_av import (
     check_written_file,
     gate_clip,
     gate_vbench,
+    is_host,
+    log_quality,
+    log_quality_warning,
     log_spectral_flatness,
-    log_timing_table,
+    quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -49,12 +59,6 @@ SEED = 0
 # 21:9 lands on 672x1536, which is the documented example.
 ASPECT_RATIOS = [(21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16)]
 DURATIONS_S = [5, 10, 15]
-
-# Loose did-something-collapse bar, per second of video rather than absolute: the 400 s figure was
-# set for one 5.17 s clip, and 10 s / 15 s at 1 MPix cost proportionally more. 77 s of compute per
-# video second is the same allowance (400 / 5.167), i.e. still ~5x looser than the 13.4x realtime
-# factor measured at 16:9 / 5 s.
-EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
 
 # calibrated 2026-08-04, fox prompt, seed 0 (single sample; margins are generous)
@@ -77,6 +81,41 @@ SWEEP = [
 ]
 
 
+# Pure (no-device) coverage for the audio T-shard resolver: axis selection, tie-break, 8->4->1 fallback.
+@pytest.mark.parametrize(
+    ("requested", "mesh_shape", "tp_axis", "sp_axis", "expected"),
+    [
+        (8, (4, 8), 0, 1, (8, 1)),  # factor 8 -> size-8 SP axis
+        (8, (8, 4), 1, 0, (8, 0)),  # reversed 8x4 -> size-8 axis 0
+        (4, (4, 8), 0, 1, (4, 0)),  # factor 4 -> size-4 TP axis
+        (8, (4, 32), 0, 1, (4, 0)),  # no size-8 axis -> fall back to 4
+        (8, (1, 1), 0, 1, (1, None)),  # single device -> unsharded
+        (4, (4, 4), 0, 1, (4, 0)),  # equal axes -> prefer TP
+        (1, (4, 8), 0, 1, (1, None)),  # explicit unsharded
+        (2, (4, 8), 0, 1, (1, None)),  # below the 4/8 chain -> unsharded
+        (32, (4, 32), 0, 1, (32, 1)),  # opt-in 32 on a quad -> the 32-wide inter-host axis
+        (32, (4, 8), 0, 1, (8, 1)),  # requesting 32 on a single galaxy -> falls to 8
+    ],
+)
+def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
+    assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
+
+
+def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
+    # explicit kwarg wins over the env var
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "32")
+    assert _requested_audio_t_factor(4) == (4, False)
+    # env var fills the default when the kwarg is None
+    assert _requested_audio_t_factor(None) == (32, True)
+    # no kwarg, no env -> default 8
+    monkeypatch.delenv("MINIMAX_H3_AUDIO_T_FACTOR", raising=False)
+    assert _requested_audio_t_factor(None) == (8, False)
+    # a non-integer env value is a clear error, not a silent fallback
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
+    with expect_error(ValueError, "MINIMAX_H3_AUDIO_T_FACTOR"):
+        _requested_audio_t_factor(None)
+
+
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
@@ -89,18 +128,25 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
     # One artifact per working point, so a sweep does not overwrite itself.
     stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
-    logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames, {stem}")
+    if is_host():
+        logger.info(
+            f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames, {stem}"
+        )
 
     # A missing dependency must report SKIPPED before the long generation, never silently pass as green.
     pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
 
-    if not os.environ.get("TT_DIT_CACHE_DIR"):
+    if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning(
-            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
-            "from the total either way, but the run will take far longer than the reported compute."
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors and the run will take far longer."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        dit_fsdp=False,
+        vae_output_type="float",
+    )
 
     output = run_warm_generation(
         pipeline,
@@ -113,29 +159,20 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    logger.info(
+    log_quality(
         f"generated {output.num_frames} frames ({output.video_seconds:.3f} s) and "
         f"{output.audio_seconds:.3f} s of audio at {output.sampling_rate} Hz"
     )
 
-    num_forwards = NUM_INFERENCE_STEPS - 1
-    video_seconds = expected_frames / MINIMAX_H3_FPS
-    log_timing_table(
-        pipeline,
-        "t2va",
-        num_forwards=num_forwards,
-        video_seconds=video_seconds,
-        expected_total_s=EXPECTED_S_PER_VIDEO_SECOND * video_seconds,
-        extra=(
-            f" | {aspect_ratio[0]}:{aspect_ratio[1]} {WIDTH}x{HEIGHT}, {expected_frames} frames "
-            f"@ {MINIMAX_H3_FPS} fps ({video_seconds:.2f} s), {num_forwards} forwards, "
-            f"padded_len {pipeline.last_padded_len}"
-        ),
-    )
-
     frames = to_uint8_frames(output)
 
-    check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
+    check_output_sanity(
+        frames,
+        num_frames=expected_frames,
+        height=HEIGHT,
+        width=WIDTH,
+        log=quality_logs_enabled() and is_host(),
+    )
     check_audio_sanity(
         output.audio,
         sampling_rate=output.sampling_rate,
@@ -160,7 +197,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     # is named alongside `Exception` because `Skipped` does not derive from it.
     outcome: BaseException | None = None
     is_distributed = ttnn.using_distributed_env()
-    if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+    if is_host():
         try:
             paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
             check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
@@ -172,19 +209,19 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             gate_clip(frames, prompt, CLIP_THRESHOLD, stem)
             # RUN_VBENCH=0 drops the VBench gate. It needs its own interpreter (~/vbench_env, pinned to
             # numpy<2 / transformers 4.33), and without one `run_vbench` skips -- which marks the whole
-            # test SKIPPED *after* the full generation, hiding the perf and A/V results behind a
-            # non-result. Off means "not measured": everything above still gates.
+            # test SKIPPED *after* the full generation, hiding the A/V results behind a non-result.
+            # Off means "not measured": everything above still gates.
             if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
                 gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
             else:
-                logger.warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
+                log_quality_warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
 
-            logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
+            log_quality(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
         except (Exception, pytest.skip.Exception) as exc:
             outcome = exc
     if is_distributed:
         ttnn.distributed_context_barrier()
-    logger.info(
+    log_quality(
         "REMINDER: read the artifact rubric against these frames -- the seam and flicker scores above "
         "are statistics, and only looking at the output catches what they average away"
     )

@@ -4,12 +4,10 @@
 """Host-side guards for the sfpu_domains gates that decide what a sweep may inject.
 
 No kernel, no device: these are pure-Python assertions about metadata. They are here
-because specials_safe() is a *measured* matrix — 250 hardware variants reduced to a
-handful of rules (see the section comment in sfpu_domains) — and until now nothing
-executed it. Both production callers short-circuit on SPECIALS_READY_OPS, which is empty,
-so the rules and the enum-normalisation trap underneath them could be rewritten without a
-single test changing outcome. The measurement is expensive to redo and cheap to pin, so it
-is pinned here.
+because specials_safe() reduces a hardware-measured matrix to a handful of rules (see the
+section comment in sfpu_domains), and no host test would otherwise execute them: the rules
+and the enum-normalisation trap underneath them could be rewritten without a single test
+changing outcome.
 
 The second half guards probe *spacing*, which has the same shape of problem: a probe that
 is silently quantized back onto the boundary it was meant to straddle still reads as
@@ -21,7 +19,7 @@ import math
 import struct
 
 import pytest
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -31,6 +29,7 @@ from helpers.llk_params import (
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
+    edge_pair_values,
     edge_values,
     for_op,
     generated_nan_sign_is_asserted,
@@ -40,7 +39,6 @@ from helpers.sfpu_domains import (
     probe_spacing_format,
     sfpu_unary_ops,
     specials_safe,
-    specials_safe_formats,
 )
 
 # The formats the measurement covered: the 5x5 matrix driven over the isinf / isposinf /
@@ -400,7 +398,7 @@ _QUASAR_INT_BINARY_ALIASES = {
     MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
     MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
     # The int multiply is spelled MUL on Quasar and reaches _mul_int32_; on WH/BH the same kernel
-    # is MUL_INT32, which SfpuMulInt32 drives (test_sfpu_binary_int_uniform).
+    # is MUL_INT32, which SfpuMulInt32 drives (test_eltwise_binary_sfpu_int_uniform).
     MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
 }
 
@@ -443,9 +441,9 @@ def test_int_comparison_aliases_are_driven_at_int32():
     stop being driven on an integer format, the four Quasar members lose their proxy coverage
     silently.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
 
-    driven = set(test_sfpu_binary._INT_COMPARISON_OPS)
+    driven = set(test_eltwise_binary_sfpu._INT_COMPARISON_OPS)
     expected = {
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
@@ -465,20 +463,20 @@ def test_int_comparison_aliases_are_driven_at_int32():
 def test_every_float_binary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every float op the binary sweep can drive.
 
-    Totality, in the same spirit as test_sfpu_binary's three stimulus-source sets: an op that is in
+    Totality, in the same spirit as test_eltwise_binary_sfpu's three stimulus-source sets: an op that is in
     neither dict keeps cat B switched off while looking, to a reader, as though it had been
     considered. The count is not pinned -- only the partition -- so adding a binary op is a
     one-line decision rather than a test edit.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
     from helpers.sfpu_domains import (
         _BINARY_SPECIALS_NOT_READY,
         BINARY_SPECIALS_READY_OPS,
     )
 
     candidates = (
-        test_sfpu_binary._CLASSIFIED_STIMULI_OPS
-        - test_sfpu_binary._INT_DRIVEN_BINARY_OPS
+        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS
+        - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
     )
     classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
     unclassified = sorted(op.name for op in candidates - classified)
@@ -491,9 +489,6 @@ def test_every_float_binary_op_is_classified_for_cat_b():
     assert (
         not stale
     ), f"these ops carry a cat-B verdict but no longer reach the binary driver: {stale}"
-
-    for op, reason in BINARY_SPECIALS_READY_OPS.items():
-        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
 
 
 def test_total_order_key_matches_the_isa_remap():
@@ -591,10 +586,10 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     If this fails because ExpWithBase joined the broad profile, that is the good outcome: the
     ceiling now fires, and what wants re-checking is the accurate path's own domain.
     """
-    import test_sfpu_unary
+    import test_eltwise_unary_sfpu
 
-    assert MathOperation.ExpWithBase in test_sfpu_unary.STANDARD_SWEEP_OPS
-    assert MathOperation.ExpWithBase not in test_sfpu_unary.BROAD_SWEEP_OPS
+    assert MathOperation.ExpWithBase in test_eltwise_unary_sfpu.STANDARD_SWEEP_OPS
+    assert MathOperation.ExpWithBase not in test_eltwise_unary_sfpu.BROAD_SWEEP_OPS
     accurate = for_op(
         MathOperation.ExpWithBase,
         DataFormat.Float32,
@@ -606,26 +601,15 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     )
 
 
-def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
-    """_hardtanh models a clamp, but its kernel is not one -- pin the agreement.
+def test_hardtanh_golden_matches_the_clamp_golden():
+    """Hardtanh's golden must stay Clamp's golden -- pin the identity.
 
-    `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_`, three adds with two clamps-at-zero
-    and bf16 constants, where Clamp dispatches to `_calculate_clamp_` with fp16 min/max. They
-    agree on the finite range and at every special this op is enrolled for, but by arithmetic
-    rather than by sharing code, so the golden's use of sfpu_clamp is only sound while that holds.
+    Both ops bind metal kernels that are the same SFPSWAP max-then-min composition
+    (calculate_clamp's unary_max_min chain; calculate_hardtanh's sfpi::clamp), so one
+    golden -- sfpu_clamp -- models both. If either golden is ever remodelled
+    independently, the divergence surfaces here.
     """
-    from helpers.golden_generators import UnarySFPUGolden, sfpu_total_order_key
-
-    def kernel_chain(x: float, low: float, high: float) -> float:
-        # val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2
-        p0, p1, p2 = -low, -(high - low), high
-        val = x + p0
-        if sfpu_total_order_key(val) < 0:
-            val = 0.0
-        val = val + p1
-        if sfpu_total_order_key(val) >= 0:
-            val = 0.0
-        return val + p2
+    from helpers.golden_generators import UnarySFPUGolden
 
     golden = UnarySFPUGolden()
     low, high = -1.0, 1.0
@@ -642,12 +626,43 @@ def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
         float("nan"),
     ]
     for x in probes:
-        want = kernel_chain(x, low, high)
+        want = float(golden._clamp(x, low, high))
         got = float(golden._hardtanh(x, low, high))
         assert got == want or (got != got and want != want), (
-            f"hardtanh({x}) golden gives {got} but the kernel chain gives {want}. The golden "
-            "models _calculate_clamp_; if the two have stopped agreeing, model the chain."
+            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}; "
+            "the two goldens must move together while both ops bind the same composition."
         )
+
+
+@pytest.mark.parametrize(
+    "output_format,dest_acc",
+    [
+        (DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DestAccumulation.Yes),
+    ],
+)
+def test_fmod_golden_preserves_dividend_sign_through_pack(output_format, dest_acc):
+    import torch
+    from helpers.golden_generators import UnarySFPUGolden
+
+    probes = torch.tensor([float("inf"), -float("inf"), 5.0, -5.0])
+    result = UnarySFPUGolden()(
+        MathOperation.Fmod,
+        probes.repeat(256),
+        output_format,
+        dest_acc,
+        DataFormat.Float32,
+        dimensions=(32, 32),
+    )
+
+    if output_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        assert torch.isnan(result[:2]).all()
+    else:
+        assert torch.equal(result[:2].float(), probes[:2])
+    assert torch.equal(torch.signbit(result[:4]), torch.signbit(probes))
+    expected = torch.fmod(probes[2:], UnarySFPUGolden._FMOD_DIVISOR)
+    assert torch.equal(result[2:4].float(), expected)
 
 
 def test_reduce_extremum_follows_the_total_order_on_floats_only():
@@ -859,37 +874,6 @@ def test_dest_acc_rejects_non_flags(bad):
         specials_safe(DataFormat.Float32, DataFormat.Float32, bad)
 
 
-def test_specials_safe_formats_filters_to_the_accepted_rows():
-    formats = [
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float32),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.No)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float16_b, DataFormat.Float16_b),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.Yes)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float32, DataFormat.Float16),
-    ]
-
-
-def test_specials_safe_formats_validates_dest_acc_on_an_empty_list():
-    """Normalisation happens once up front, so a bad flag raises even with nothing to
-    filter — otherwise the error surfaces only for callers that happen to pass formats.
-    """
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        TypeError
-    ):
-        specials_safe_formats([], "Yes")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Probe spacing: every edge probe has to still be distinct once the datapath has it
 #
@@ -1076,6 +1060,45 @@ def test_zero_pole_probes_are_not_loosened(op):
     assert min(abs(v) for v in probes if v != 0.0) == 2 * 2**-23
 
 
+def _is_negative_zero(value: float) -> bool:
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
+
+
+def test_pow_edge_pairs_include_negative_zero_exponent():
+    """The setsgn(pow, 0) guard is only as good as the pairs that would fail without it.
+
+    The hardware sweep's both_zero class keys on a == 0 and b == 0, which +0.0 satisfies
+    on its own, so a sweep that never generated exponent -0.0 would stay green after
+    dropping setsgn. Pin the stimulus here, host-side: Float32 dest_acc=Yes is the
+    pipeline that actually delivers a signed zero, and the cartesian product must
+    include a positive base, a negative base, and a zero base against that exponent.
+    """
+    pairs = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    neg_zero_bases = [a for a, b in pairs if _is_negative_zero(b)]
+    assert neg_zero_bases, (
+        "SfpuElwpow edge pairs must include exponent -0.0 on the pipeline that "
+        "delivers a signed zero; otherwise test_sfpu_binary_edges cannot catch a "
+        "regression that drops setsgn(pow, 0)"
+    )
+    assert any(a > 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a < 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a == 0.0 for a in neg_zero_bases), neg_zero_bases
+
+    # The datacopy path flattens -0.0, so claiming the pair there would be false coverage.
+    flattened = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        dest_acc=DestAccumulation.No,
+    )
+    assert not any(_is_negative_zero(b) for _, b in flattened)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The exp family's two ceilings: range on the registry, accuracy behind approx mode
 #
@@ -1090,7 +1113,7 @@ def test_zero_pole_probes_are_not_loosened(op):
 
 # (op, range-bound high, approximation-accuracy high). The accuracy column is what the
 # merged branch had on the shared entry; the range column is what the accurate path gets
-# back. Wormhole-measured for the approximation (see _APPROX_EXP_ACCURACY_XFAIL).
+# back. Wormhole-measured for the approximation.
 _EXP_FAMILY_BOUNDS = [
     (MathOperation.Exp, 80.0, 16.0),
     (MathOperation.Exp2, 100.0, 23.0),

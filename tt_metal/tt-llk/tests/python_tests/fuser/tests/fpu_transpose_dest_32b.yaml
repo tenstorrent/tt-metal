@@ -15,13 +15,10 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_A"
+        in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_A"
         operation: "TransposeDest"
         unpacker: "TransposeDestUnpacker"
         transpose_within_face: true

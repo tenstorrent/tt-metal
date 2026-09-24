@@ -56,6 +56,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -332,7 +333,7 @@ int main(int argc, char** argv) {
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
 
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device = mesh_device_map.at(pci_express_slot);
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -587,7 +588,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
-        int tt_npu_clock = get_tt_npu_clock(device->get_devices()[0]);
+        int tt_npu_clock = device->get_clock_rate_mhz();
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
         uint64_t num_of_matmul_ops =
@@ -605,8 +606,8 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
-                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                uint64_t t0_to_any_riscfw_end =
+                    get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -631,7 +632,7 @@ int main(int argc, char** argv) {
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
-                        get_t0_to_any_riscfw_end_cycle(device.get(), mesh_workload.get_programs().begin()->second);
+                        get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                     double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                     auto execution_time = t0_to_any_riscfw_end * cycle_time;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -1461,12 +1462,11 @@ void prepare_inputs(
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
-            auto* target_device = device->get_devices()[0];
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
+            pass &= slow_dispatch::WriteToL1(*device, core, in0_addr, in0);
             TT_FATAL(pass, "Failed to write in0 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
+            pass &= slow_dispatch::WriteToL1(*device, core, in1_addr, in1);
             TT_FATAL(pass, "Failed to write in1 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
+            pass &= slow_dispatch::WriteToL1(*device, core, in2_cb_addr, in2);
             TT_FATAL(pass, "Failed to write in2 to device L1");
         }
     }
@@ -1598,9 +1598,7 @@ bool validation(
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            auto* target_device = device->get_devices()[0];
-            tt_metal::detail::ReadFromDeviceL1(
-                target_device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
+            slow_dispatch::ReadFromL1(*device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
             auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 

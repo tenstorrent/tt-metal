@@ -134,8 +134,16 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
+    ComputeHardwareConfig compute_hw_config =
         ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Gen2 copies the fields the Gen1 config sets (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw_config = ComputeGen2Config{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     auto self_loop = [](const DFBSpecName& dfb, const std::string& name) {
         return Group<DFBBinding>{
@@ -161,6 +169,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeShardedSource,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = compute_bindings,
         .compile_time_args = {{"Wt", head_dim_t}, {"Ht", n_heads_t}},
         .hw_config = compute_hw_config};

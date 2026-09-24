@@ -506,8 +506,16 @@ void run_sdpa_test(const SDPATestConfig& config) {
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
     xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
 
-    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
-    xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads.
+    // For None the kernel computes unmasked attention, so the reference mask must keep
+    // every position (all-ones) instead of the causal pattern.
+    xt::xarray<float> attn_mask_tensor;
+    if (config.mask_type == ttml::metal::AttentionMaskType::None) {
+        const auto seq = static_cast<std::size_t>(config.sequence_length);
+        attn_mask_tensor = xt::ones<float>({1UL, 1UL, seq, seq});
+    } else {
+        attn_mask_tensor = generate_mask(query_tensor);
+    }
 
     // Convert to device tensors
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
@@ -986,6 +994,36 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_TwoTileRows) {
         .num_key_heads = 1U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "CausalMask_TwoTileRows"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_Small) {
+    // mask_type=None: compute skips mask application entirely, so the reader must not
+    // push mask tiles into a CB nothing consumes. Always-on guard for the no-mask path.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .test_name = "NoMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_TwoTileRows) {
+    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the no-mask compute path: chunked inner loop
+    // with no mask CB traffic.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .test_name = "NoMask_TwoTileRows"};
     run_sdpa_test(config);
 }
 

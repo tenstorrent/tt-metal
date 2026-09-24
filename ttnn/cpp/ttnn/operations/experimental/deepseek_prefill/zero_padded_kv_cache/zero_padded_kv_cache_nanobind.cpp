@@ -47,8 +47,9 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
 
             Args:
                 cache (ttnn.Tensor): 4D, DRAM-backed KV cache tensor with head dim 1. Supports
-                    TILE layout, or ROW_MAJOR layout with BF16 or FP8_E4M3 dtype. The per-element-tensor
-                    (metadata) form of slot_idx/valid_global below is TILE-only; ROW_MAJOR uses scalars.
+                    TILE layout with the standard 32x32 tile, or ROW_MAJOR layout with BF16 or FP8_E4M3
+                    dtype. The per-element-tensor (metadata) form of slot_idx/valid_global below is
+                    TILE-only; ROW_MAJOR uses scalars.
                 slot_idx (int, scalar form / ttnn.Tensor, tensor form): user slot in the batched prefill
                     cache. As a tensor: a 1-element uint32 DRAM tensor (replicated across the mesh, the
                     runner's h2d_socket_sync payload element 0 [slot_id]); read on-device from element 0.

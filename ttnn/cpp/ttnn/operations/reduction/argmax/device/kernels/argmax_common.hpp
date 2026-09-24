@@ -112,7 +112,7 @@ inline uint32_t calculate_argmax_index(
     const uint32_t i,
     const uint32_t inner_dim_units,
     const uint32_t red_dim_units) {
-    return reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+    return reduce_all ? ((k * inner_dim_units * red_dim_units) + (j * red_dim_units) + i) : i;
 }
 
 /**
@@ -137,16 +137,17 @@ inline void update_max_if_greater(
 }
 
 /**
- * @brief Compares values from a circular buffer and updates the maximum value and its index for argmax operation.
+ * @brief Compares values from a source L1 buffer and updates the maximum value and its index for argmax operation.
  *
- * This template function reads a value from the specified circular buffer address and compares it with the current
+ * This template function reads a value from the specified source L1 buffer address and compares it with the current
  * maximum value. If the new value is greater, it updates both the maximum value and its corresponding index.
  * The comparison logic is specialized for different data formats using compile-time branching.
  *
  * @tparam data_format The data format type (Float16_b, Float32, UInt16, Int32, UInt32) that determines
  *                     the value type and comparison method to use
  *
- * @param src_cb_addr Address of the source circular buffer containing the input values
+ * @param src_l1_addr L1 address of the source buffer holding the input values. Callers pass either a
+ *                    DataflowBuffer or a legacy CircularBuffer pointer, so this stays buffer-neutral.
  * @param max_val Reference to the current maximum value that may be updated if a larger value is found
  * @param max_idx Reference to the index of the current maximum value that may be updated
  * @param i Index within the reduction dimension (inner-most index)
@@ -163,7 +164,7 @@ inline void update_max_if_greater(
  */
 template <DataFormat data_format>
 void compare_values(
-    const uint32_t src_cb_addr,
+    const uint32_t src_l1_addr,
     decltype(get_default_value<data_format>())& max_val,
     uint32_t& max_idx,
     const uint32_t i,
@@ -172,7 +173,7 @@ void compare_values(
     const uint32_t red_dim_units,
     bool reduce_all,
     uint32_t inner_dim_units) {
-    auto in_vals = get_tt_l1_ptr_based_on_data_format<data_format>(src_cb_addr);
+    auto in_vals = get_tt_l1_ptr_based_on_data_format<data_format>(src_l1_addr);
     auto val = in_vals[i];
     const uint32_t index = calculate_argmax_index(reduce_all, k, j, i, inner_dim_units, red_dim_units);
 
@@ -213,8 +214,8 @@ void compare_values(
 template <DataFormat data_format, typename ValueType, typename CompareFunc>
 inline void process_core_data(
     const uint32_t inner_idx,
-    volatile tt_l1_ptr ValueType* i_red_vals,
-    volatile tt_l1_ptr uint32_t* i_red_idxs,
+    const volatile tt_l1_ptr ValueType* i_red_vals,
+    const volatile tt_l1_ptr uint32_t* i_red_idxs,
     decltype(get_default_value<data_format>())& max_val,
     uint32_t& max_idx,
     CompareFunc compare_func) {
@@ -261,11 +262,11 @@ inline void process_value_comparison(
     const uint32_t red_dim_units,
     CompareFunc compare_func) {
     if (compare_func(val, max_val)) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? full_idx : i;
         max_val = val;
     } else if (val == max_val) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
     }
 }
