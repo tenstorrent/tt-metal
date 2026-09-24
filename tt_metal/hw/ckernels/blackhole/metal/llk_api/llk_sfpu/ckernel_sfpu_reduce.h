@@ -16,6 +16,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -2105,6 +2106,20 @@ inline void calculate_reduce(
             "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
     }
 }
+
+// Op class for the SFPU reduce; the kernel walks Dest itself. reduce_dim comes last so init(), which
+// does not depend on it, can leave it out.
+template <PoolType pool_type, DataFormat format, bool is_fp32_dest_acc_en, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
+struct Reduce : SfpuUnaryOp<Reduce<pool_type, format, is_fp32_dest_acc_en, reduce_dim>> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
+        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(block_ct_dim, block_rt_dim);
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t block_ct_dim) {
+        init_reduce<pool_type, format, is_fp32_dest_acc_en>(block_ct_dim);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

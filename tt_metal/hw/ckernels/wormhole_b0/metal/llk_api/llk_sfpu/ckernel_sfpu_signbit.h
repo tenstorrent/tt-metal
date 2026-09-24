@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 using namespace sfpi;
 
 namespace ckernel::sfpu {
@@ -138,5 +139,23 @@ inline void signbit_int32_init() {
     TTI_SFPCONFIG(0x110, 8, 1);
 #endif
 }
+
+// Op class for signbit(x) on float tiles. signbit_init programs ADDR_MOD_6.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Signbit : SfpuUnaryOp<Signbit<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { signbit_init(); }
+};
+
+// Op class for signbit(x) on int32 tiles. signbit_int32_init programs ADDR_MOD_6.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct SignbitInt32 : SfpuUnaryOp<SignbitInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_signbit_int32<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { signbit_int32_init(); }
+};
 
 }  // namespace ckernel::sfpu

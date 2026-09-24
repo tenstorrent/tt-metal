@@ -7,6 +7,7 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -36,5 +37,12 @@ inline void silu_init() {
     // use non-approx sigmoid_init regardless of APPROXIMATION_MODE.
     sigmoid_init<false>();
 }
+
+// Op class for silu(x) = x * sigmoid(x). Only run() needs is_fp32_dest_acc_en.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Silu : SfpuUnaryOp<Silu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_silu<is_fp32_dest_acc_en, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { silu_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

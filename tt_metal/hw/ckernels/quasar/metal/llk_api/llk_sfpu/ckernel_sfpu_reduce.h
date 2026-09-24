@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -495,6 +496,30 @@ inline void calculate_reduce(
         reduce_row_block<POOL_TYPE, FORMAT>(block_ct_dim, block_rt_dim);
     }
 }
+
+// Op class for the SFPU reduce; the kernel walks Dest itself. Same name and leading template parameters
+// as on Wormhole/Blackhole.
+template <
+    PoolType pool_type,
+    DataFormat format,
+    bool is_fp32_dest_acc_en,
+    ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Reduce : SfpuUnaryOp<Reduce<pool_type, format, is_fp32_dest_acc_en, reduce_dim, SLOT>, SLOT> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
+        // The row reduce bounds its block by the Dest capacity of the kernel's sync mode.
+#ifdef DST_SYNC_MODE
+        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en, DST_SYNC_MODE>(block_ct_dim, block_rt_dim);
+#else
+        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(block_ct_dim, block_rt_dim);
+#endif
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t block_ct_dim) {
+        init_reduce<pool_type, format, is_fp32_dest_acc_en>(block_ct_dim);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

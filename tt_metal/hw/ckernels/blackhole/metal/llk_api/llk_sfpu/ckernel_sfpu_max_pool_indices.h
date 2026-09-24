@@ -9,6 +9,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -383,7 +384,7 @@ template <
     DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void calculate_max_pool_with_indices(
-    uint values_tile_idx, uint indices_tile_idx, uint unused_tile_idx, uint chunk) {
+    std::uint32_t values_tile_idx, std::uint32_t indices_tile_idx, std::uint32_t unused_tile_idx, std::uint32_t chunk) {
     if constexpr (num_rows <= 9) {
         _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout, accumulate>(
             values_tile_idx, indices_tile_idx, chunk);
@@ -395,6 +396,36 @@ inline void calculate_max_pool_with_indices(
             values_tile_idx, indices_tile_idx, chunk);
     }
 }
+
+// Op class for a max pool that also tracks the index of the max. layout comes second so init(), which
+// needs only it, can leave the rest out.
+template <
+    bool APPROXIMATION_MODE,
+    DataLayout layout = DataLayout::TILE,
+    bool is_fp32_dest_acc_en = false,
+    int num_rows = 9,
+    int ITERATIONS = 8,
+    bool accumulate = false>
+struct MaxPoolWithIndices
+    : SfpuBinaryOp<
+          MaxPoolWithIndices<APPROXIMATION_MODE, layout, is_fp32_dest_acc_en, num_rows, ITERATIONS, accumulate>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t values_tile_idx,
+        const std::uint32_t indices_tile_idx,
+        const std::uint32_t unused_tile_idx,
+        const std::uint32_t chunk) {
+        calculate_max_pool_with_indices<
+            APPROXIMATION_MODE,
+            is_fp32_dest_acc_en,
+            num_rows,
+            ITERATIONS,
+            layout,
+            accumulate>(values_tile_idx, indices_tile_idx, unused_tile_idx, chunk);
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        init_max_pool_with_indices<APPROXIMATION_MODE, layout>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

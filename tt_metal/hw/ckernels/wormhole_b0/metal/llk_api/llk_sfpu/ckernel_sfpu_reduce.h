@@ -16,6 +16,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -1521,7 +1522,8 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16>
-inline void calculate_reduce_max_min([[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce_max_min(
+    [[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
             ((pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_ROW),
@@ -1830,6 +1832,20 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
     }
 }
+
+// Op class for the SFPU reduce; the kernel walks Dest itself. reduce_dim comes last so init(), which
+// does not depend on it, can leave it out.
+template <PoolType pool_type, DataFormat format, bool is_fp32_dest_acc_en, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
+struct Reduce : SfpuUnaryOp<Reduce<pool_type, format, is_fp32_dest_acc_en, reduce_dim>> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
+        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(block_ct_dim, block_rt_dim);
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t block_ct_dim) {
+        init_reduce<pool_type, format, is_fp32_dest_acc_en>(block_ct_dim);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

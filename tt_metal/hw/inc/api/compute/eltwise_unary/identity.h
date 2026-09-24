@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 #include "ckernel_sfpu_identity.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
+
+// Quasar has no identity kernel.
+#ifndef ARCH_QUASAR
 
 // clang-format off
 /**
@@ -23,15 +26,12 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void identity_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void identity_tile(std::uint32_t idst) { MATH((sfpu::Identity<APPROX>::run(idst))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void identity_tile_init() { MATH((sfpu::Identity<APPROX>::init())); }
 
 // clang-format off
 /**
@@ -45,9 +45,8 @@ ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void identity_tile_uint32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void identity_tile_uint32(std::uint32_t idst) { MATH((sfpu::IdentityUint<APPROX>::run(idst))); }
+
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel
