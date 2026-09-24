@@ -1068,13 +1068,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_square,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
-            dst_index,
-            vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -2260,7 +2254,7 @@ void call_ternary_sfpu_operation_init()
 {
     if constexpr (OPERATION == SfpuType::where)
     {
-        SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX_MODE));
+        SFPU_TERNARY_INIT_FN(where, sfpu::where_init, (APPROX_MODE));
     }
     else if constexpr (OPERATION == SfpuType::addcmul)
     {
@@ -2315,7 +2309,7 @@ void call_ternary_sfpu_operation(
         SFPU_TERNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_where_,
+            calculate_where,
             (APPROX_MODE, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,

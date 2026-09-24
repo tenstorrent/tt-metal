@@ -356,3 +356,85 @@ inline std::uint32_t _sfpu_sfpmem_type_(std::uint32_t data_format_raw)
 {
     return _sfpu_sfpmem_type_(static_cast<DataFormat>(data_format_raw));
 }
+
+/**
+ * @brief Assert that a Dest tile index fits in Dest for the kernel's sync mode.
+ *
+ * Reads the kernel-global DST_SYNC_MODE; the accumulation mode is read at runtime by
+ * get_dest_max_tiles_rt. A build that has not defined DST_SYNC_MODE before including this header
+ * (standalone tt-llk tests that call the LLK directly) skips the check.
+ *
+ * @tparam SLOT: Destination tile shape the index counts in
+ * @param dst_index: Dest tile index to check
+ */
+template <ckernel::trisc::DstTileShape SLOT = ckernel::trisc::DstTileShape::Tile32x32>
+inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_check_dst_index_([[maybe_unused]] const std::uint32_t dst_index)
+{
+#ifdef DST_SYNC_MODE
+    LLK_ASSERT((dst_index < ckernel::trisc::get_dest_max_tiles_rt<DST_SYNC_MODE, SLOT>()), "dst_index exceeds max dest tiles");
+#endif
+}
+
+/**
+ * @brief The TensorShape that fills a Dest slot: 32x32 for a 32x32 slot, 32x16 for a 32x16 slot.
+ *
+ * @tparam SLOT: Destination tile shape
+ */
+template <ckernel::trisc::DstTileShape SLOT>
+constexpr TensorShape _llk_math_eltwise_sfpu_slot_tensor_shape_()
+{
+    return make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, static_cast<std::uint8_t>(_llk_math_eltwise_sfpu_slot_faces_c_<SLOT>()));
+}
+
+/**
+ * @brief Whether a TensorShape fills the Dest slot.
+ *
+ * @tparam SLOT: Destination tile shape
+ * @param tensor_shape: Shape to test
+ */
+template <ckernel::trisc::DstTileShape SLOT = ckernel::trisc::DstTileShape::Tile32x32>
+constexpr bool _llk_math_eltwise_sfpu_is_full_tile_(const TensorShape tensor_shape)
+{
+    constexpr TensorShape FULL = _llk_math_eltwise_sfpu_slot_tensor_shape_<SLOT>();
+    return tensor_shape.face_r_dim == FULL.face_r_dim && tensor_shape.face_c_dim == FULL.face_c_dim && tensor_shape.num_faces_r_dim == FULL.num_faces_r_dim &&
+           tensor_shape.num_faces_c_dim == FULL.num_faces_c_dim;
+}
+
+namespace ckernel::sfpu
+{
+
+/**
+ * @brief CRTP base shared by every SFPU op class.
+ *
+ * An op class derives from one of the arity bases (SfpuUnaryOp, SfpuBinaryOp, SfpuTernaryOp) and
+ * supplies a static calculate() that delegates to its ckernel. It overrides init_op() when it needs
+ * per-op state (e.g. ADDR_MOD_6 or programmable constants), and sets walks_faces = false when
+ * calculate() walks the whole tile itself instead of processing one face per call.
+ *
+ * @tparam Op: The derived op class
+ */
+template <typename Op>
+struct SfpuOpBase
+{
+    /// calculate() processes one face per call. Set to false in ops whose calculate() walks Dest itself.
+    static constexpr bool walks_faces = true;
+
+    /**
+     * @brief Initialize the SFPU for Op: the op-agnostic SFPU init, then Op::init_op(args...).
+     *
+     * @param args: Arguments forwarded to Op::init_op
+     */
+    template <typename... Args>
+    static inline __attribute__((always_inline)) void init(Args&&... args)
+    {
+        _llk_math_eltwise_sfpu_init_();
+        Op::init_op(std::forward<Args>(args)...);
+    }
+
+    /// Default per-op init: no state beyond the op-agnostic SFPU init.
+    static inline __attribute__((always_inline)) void init_op()
+    {
+    }
+};
+
+} // namespace ckernel::sfpu
