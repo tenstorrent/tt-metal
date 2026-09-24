@@ -2,62 +2,44 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Self-contained perf compare for the perf-regression-check skill.
+"""Canonical perf regression comparison — used by both PR gate and local regression-check skill.
 
-Compares two perf runs of the same test — ``current`` against ``baseline``. The
-two sides are usually two commits (a branch HEAD vs the commit it was branched
-from, or any two commit hashes). Both sides may have several iterations; we take
-the **median per point** on each side, flag points where current is more than
-``threshold`` slower than baseline (regressions) and, symmetrically, points that
-are more than ``threshold`` faster (improvements).
+Compares two perf runs (current vs baseline), flags regressions using a two-clause rule,
+and produces a report. Both sides may have multiple iterations; we take the median per point.
 
-Deliberately dependency-light so it runs on any branch, merged or not: reads the
-raw ``perf_data`` CSVs directly (no Parquet, no perf schema). A "point" is
-``(marker, sweep-config)`` where the config is every column that is not a timing
-or code-size column — so it needs nothing but the CSVs the sweep already writes.
+Rule: A point is a regression when it is **more than threshold% slower AND more than
+min_cycles slower**. Both clauses must hold. This prevents false positives:
+- Percentage clause alone fires on small markers (INIT/UNINIT) with tiny jitter
+- Cycles clause alone fires on large values (TILE_LOOP) with big absolute noise
 
-    python perf_regression_compare.py \
-        --current  'runs/current_*.csv' \
-        --baseline 'runs/baseline_*.csv' \
-        --threshold 0.05 --report regression_report.md
+Thresholds: Derived from five-run noise baselines on Blackhole and Wormhole.
+See tt_metal/tt-llk/docs/perf_evaluation/results/*/README.md.
+
+Deliberately dependency-light: reads raw perf_data CSVs directly (no Parquet).
+A "point" is (marker, sweep-config) — every column that isn't a metric or code-size.
+
+Both callers — the PR gate workflow and the perf-regression-check skill — run it by
+filesystem path, because ``tt_metal/tt-llk`` holds a hyphen and is not an importable
+package name.
+
+    python3 tt_metal/tt-llk/perf/regression_compare.py \
+        --current  'current_perf/**/*.csv' \
+        --baseline 'baseline_perf/**/*.csv' \
+        --report perf_gate_report.md
+
+To use it as a library, add its directory to ``sys.path`` first:
+
+    sys.path.insert(0, "tt_metal/tt-llk/perf")
+    from regression_compare import compare_runs, render_report
 """
 
 import argparse
+import csv
 import glob
-from statistics import median
+import json
+import os
 
 import pandas as pd
-
-
-def _is_metric(col):
-    return col.startswith("mean(") or col.startswith("std(")
-
-
-def _is_ignored(col):
-    # Not part of a point's identity: timing stats and per-stage code size.
-    return _is_metric(col) or col.startswith("TEXT_SIZE(")
-
-
-def _point_key(row, config_cols):
-    """A point's identity within one test: marker + the sweep configuration."""
-    config = tuple(sorted((c, row[c]) for c in config_cols if pd.notna(row[c])))
-    return (row.get("marker"), config)
-
-
-def _medians(frames):
-    """{(point_key, mean_col): median value} across a list of run DataFrames."""
-    samples = {}
-    for df in frames:
-        config_cols = [c for c in df.columns if not _is_ignored(c) and c != "marker"]
-        mean_cols = [c for c in df.columns if c.startswith("mean(")]
-        for _, row in df.iterrows():
-            key = _point_key(row, config_cols)
-            for col in mean_cols:
-                val = row.get(col)
-                if pd.notna(val):
-                    samples.setdefault((key, col), []).append(float(val))
-    return {k: median(v) for k, v in samples.items()}
-
 
 # Defaults are measured, not guessed: five runs of one commit on one card, over
 # 108,377 points (L1_TO_L1) and 311,352 (isolates). The numbers below come from
@@ -79,12 +61,120 @@ DEFAULT_THRESHOLD = 0.02
 DEFAULT_MIN_CYCLES = 30.0
 
 
+def _is_metric(col):
+    return col.startswith("mean(") or col.startswith("std(")
+
+
+MODULE_COL = "test_module"
+
+
+def _is_ignored(col):
+    # Not part of a point's identity: timing stats, code size, source module.
+    return _is_metric(col) or col.startswith("TEXT_SIZE(") or col == MODULE_COL
+
+
+def _run_type_of(mean_col):
+    """``mean(L1_TO_L1)`` -> ``L1_TO_L1``."""
+    return mean_col[len("mean(") : -1]
+
+
+def _filter_run_types(medians, allowed):
+    """Keep only the metrics whose run type was asked for."""
+    return {k: v for k, v in medians.items() if _run_type_of(k[1]) in allowed}
+
+
+def _mean_cols(columns):
+    return [c for c in columns if c.startswith("mean(")]
+
+
+def _config_cols(columns):
+    return [c for c in columns if c != "marker" and not _is_ignored(c)]
+
+
+_PAIR_POOL = {}
+
+
+def _pair(pair):
+    """One shared object per distinct (column, value); there are only thousands."""
+    return _PAIR_POOL.setdefault(pair, pair)
+
+
+def _point_key(marker, config_pairs):
+    """A point's identity within one test: marker + the non-null sweep config."""
+    return (
+        marker,
+        tuple(sorted(_pair((c, v)) for c, v in config_pairs if pd.notna(v))),
+    )
+
+
+def _medians(frames):
+    """{(point_key, mean_col): median value} across a list of run DataFrames.
+
+    One groupby over the concatenated frames, rather than a Python loop over
+    every row of every iteration. A full sweep is tens of thousands of rows and
+    the gate reads both sides of it.
+    """
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return {}
+    df = pd.concat(frames, ignore_index=True)
+    if "marker" not in df.columns:
+        df = df.copy()
+        df["marker"] = pd.NA
+    mean_cols = _mean_cols(df.columns)
+    if not mean_cols:
+        return {}
+    # Drop all-null config columns so they stay out of the key, exactly as the
+    # per-row null skip did, and so groupby is not handed an empty axis.
+    config_cols = [c for c in _config_cols(df.columns) if df[c].notna().any()]
+    grouped = df.groupby(["marker", *config_cols], dropna=False, sort=False)[
+        mean_cols
+    ].median()
+
+    out = {}
+    id_frame = grouped.reset_index()
+    n_id = 1 + len(config_cols)
+    for rec in id_frame.itertuples(index=False, name=None):
+        key = _point_key(rec[0], zip(config_cols, rec[1:n_id]))
+        for col, val in zip(mean_cols, rec[n_id:]):
+            if pd.notna(val):
+                out[(key, col)] = float(val)
+    return out
+
+
+def _read_current(paths):
+    """Current-side frames, each stamped with the test module it came from."""
+    frames = []
+    for path in paths:
+        frame = pd.read_csv(path)
+        frame[MODULE_COL] = os.path.basename(os.path.dirname(path))
+        frames.append(frame)
+    return frames
+
+
+def _modules_by_point(frames):
+    """{point key: module(s)}. Two modules can sweep the same configuration."""
+    out = {}
+    for frame in frames:
+        if MODULE_COL not in frame.columns:
+            continue
+        config_cols = [c for c in _config_cols(frame.columns) if frame[c].notna().any()]
+        marker = frame["marker"] if "marker" in frame.columns else pd.NA
+        for rec in frame.assign(marker=marker)[
+            ["marker", MODULE_COL, *config_cols]
+        ].itertuples(index=False, name=None):
+            key = _point_key(rec[0], zip(config_cols, rec[2:]))
+            out.setdefault(key, set()).add(rec[1])
+    return {k: "+".join(sorted(v)) for k, v in out.items()}
+
+
 def compare_runs(
     current_csvs,
     baseline_csvs,
     *,
     threshold=DEFAULT_THRESHOLD,
     min_cycles=DEFAULT_MIN_CYCLES,
+    run_types=None,
 ):
     """Median-vs-median comparison.
 
@@ -96,20 +186,31 @@ def compare_runs(
 
     ``noise_filtered`` counts points that cleared the percentage but not the cycle
     floor — exactly the points a relative-only rule would have failed on.
+
+    If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
+    only compare metrics for those run types.
     """
-    cur = _medians([pd.read_csv(p) for p in current_csvs])
+    current_frames = _read_current(current_csvs)
+    cur = _medians(current_frames)
     base = _medians([pd.read_csv(p) for p in baseline_csvs])
+    modules = _modules_by_point(current_frames)
+
+    if run_types:
+        allowed = {t.strip() for t in run_types.split(",")}
+        cur = _filter_run_types(cur, allowed)
+        base = _filter_run_types(base, allowed)
 
     records, regressions, improvements, new_points = [], [], [], []
     noise_filtered = 0
     for (key, mean_col), cval in cur.items():
         marker, config = key
-        run_type = mean_col[len("mean(") : -1]
+        run_type = _run_type_of(mean_col)
         point = {
             "marker": marker,
             "run_type": run_type,
-            "config": dict(config),
+            "config": config,
             "current": cval,
+            MODULE_COL: modules.get(key, ""),
         }
         bval = base.get((key, mean_col))
         if bval is None:
@@ -152,23 +253,32 @@ def _side_line(role, sha, label, iters):
     return f"- {named}: `{sha}`{tail}"
 
 
+def _varying_keys(rows):
+    """Config keys that differ across the rows shown; those tell them apart."""
+    keys = {k for r in rows for k, _ in r["config"]}
+    return {k for k in keys if len({dict(r["config"]).get(k) for r in rows}) > 1}
+
+
 def _delta_table(rows, *, caption):
-    """One Markdown table of points, worst delta first, config truncated to fit."""
+    """A scannable table, then each row's configuration in full underneath."""
+    varying = _varying_keys(rows)
     lines = [
         f"## {caption}",
         "",
-        "| marker | run type | current | baseline | Δ | Δ cycles | config |",
-        "|---|---|--:|--:|--:|--:|---|",
+        "| # | test | marker | run type | current | baseline | Δ | Δ cycles |",
+        "|--:|---|---|---|--:|--:|--:|--:|",
     ]
-    for r in rows:
-        cfg = ", ".join(f"{k}={v}" for k, v in sorted(r["config"].items()))
-        if len(cfg) > 90:
-            cfg = cfg[:87] + "…"
+    for n, r in enumerate(rows, 1):
         lines.append(
-            f"| {r['marker']} | {r['run_type']} | {r['current']:.1f} | "
-            f"{r['baseline']:.1f} | {r['delta'] * 100:+.1f}% | "
-            f"{r.get('abs_delta', 0.0):+.0f} | {cfg} |"
+            f"| {n} | {r.get(MODULE_COL) or '?'} | {r['marker']} | {r['run_type']} | "
+            f"{r['current']:.1f} | {r['baseline']:.1f} | {r['delta'] * 100:+.1f}% | "
+            f"{r.get('abs_delta', 0.0):+.0f} |"
         )
+    lines += ["", "### Configuration of each row above", ""]
+    for n, r in enumerate(rows, 1):
+        config = dict(r["config"])
+        ordered = sorted(config, key=lambda k: (k not in varying, k))
+        lines.append(f"{n}. " + ", ".join(f"`{k}={config[k]}`" for k in ordered))
     return lines
 
 
@@ -254,21 +364,36 @@ def render_report(
     return "\n".join(lines)
 
 
-def _points_csv(records):
-    """Records as flat CSV rows (full config, nothing truncated), worst delta first."""
-    rows = []
-    for r in sorted(records, key=lambda x: -x["delta"]):
-        row = {
-            "marker": r["marker"],
-            "run_type": r["run_type"],
-            "current": r["current"],
-            "baseline": r["baseline"],
-            "delta_pct": round(r["delta"] * 100, 2),
-            "delta_cycles": round(r.get("abs_delta", 0.0), 1),
-        }
-        row.update(r["config"])
-        rows.append(row)
-    return pd.DataFrame(rows) if rows else None
+def _write_points_csv(records, path):
+    """Stream records to CSV, worst delta first. One row is held at a time."""
+    if not records:
+        return False
+    fixed = [
+        "marker",
+        "run_type",
+        "current",
+        "baseline",
+        "delta_pct",
+        "delta_cycles",
+        MODULE_COL,
+    ]
+    config_cols = sorted({k for r in records for k, _ in r["config"]})
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fixed + config_cols)
+        writer.writeheader()
+        for r in sorted(records, key=lambda x: -x["delta"]):
+            row = {
+                "marker": r["marker"],
+                "run_type": r["run_type"],
+                "current": r["current"],
+                "baseline": r["baseline"],
+                "delta_pct": round(r["delta"] * 100, 2),
+                "delta_cycles": round(r.get("abs_delta", 0.0), 1),
+                MODULE_COL: r.get(MODULE_COL, ""),
+            }
+            row.update(r["config"])
+            writer.writerow(row)
+    return True
 
 
 def main(argv=None):
@@ -291,6 +416,12 @@ def main(argv=None):
         f"(default {DEFAULT_MIN_CYCLES:.0f}). Stops small markers such as INIT "
         "from failing the gate on a few cycles of jitter. 0 disables the clause.",
     )
+    ap.add_argument(
+        "--run-types",
+        default=None,
+        help="comma-separated run types to compare (e.g. L1_TO_L1,MATH_ISOLATE). "
+        "if not specified, all run types are compared.",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--baseline-sha", default="?")
@@ -302,16 +433,34 @@ def main(argv=None):
     ap.add_argument("--current-label", help="what the current side is")
     a = ap.parse_args(argv)
 
-    current = sorted(glob.glob(a.current))
-    baseline = sorted(glob.glob(a.baseline))
+    current = sorted(glob.glob(a.current, recursive=True))
+    baseline = sorted(glob.glob(a.baseline, recursive=True))
+
+    # Exclude .post.csv files (postprocessed versions halve the cycle counts)
+    current = [p for p in current if not p.endswith(".post.csv")]
+    baseline = [p for p in baseline if not p.endswith(".post.csv")]
+
     if not current or not baseline:
         raise SystemExit(
             f"no CSVs matched (current={len(current)}, baseline={len(baseline)})"
         )
 
     result = compare_runs(
-        current, baseline, threshold=a.threshold, min_cycles=a.min_cycles
+        current,
+        baseline,
+        threshold=a.threshold,
+        min_cycles=a.min_cycles,
+        run_types=a.run_types,
     )
+
+    # Fail if zero points were compared (e.g., all-new configs, run-type filter mismatch)
+    if not result["records"]:
+        print(
+            f"❌ No points compared. "
+            f"Check: run-types filter matches CSV content, run-types={a.run_types}"
+        )
+        raise SystemExit(1)
+
     report = render_report(
         result,
         threshold=a.threshold,
@@ -329,17 +478,23 @@ def main(argv=None):
 
     stem = a.report.rsplit(".", 1)[0]
     written = [a.report]
-    points = _points_csv(result["records"])
-    if points is not None:
-        points.to_csv(f"{stem}.points.csv", index=False)
+    if _write_points_csv(result["records"], f"{stem}.points.csv"):
         written.append(f"{stem}.points.csv")
-    regressions = _points_csv(result["regressions"])
-    if regressions is not None:
-        regressions.to_csv(f"{stem}.regressions.csv", index=False)
+    if _write_points_csv(result["regressions"], f"{stem}.regressions.csv"):
         written.append(f"{stem}.regressions.csv")
 
     print(report)
     print("\n(wrote " + " + ".join(written) + ")")
+    # Written last, so its absence means the comparison died rather than ran.
+    with open(f"{stem}.verdict.json", "w") as fh:
+        json.dump(
+            {
+                "status": "regressed" if result["regressions"] else "clean",
+                "regressions": len(result["regressions"]),
+                "points": len(result["records"]),
+            },
+            fh,
+        )
     # exit non-zero if regressions, so the skill/CI can gate on it
     raise SystemExit(1 if result["regressions"] else 0)
 

@@ -14,6 +14,32 @@ on:
         required: false
         default: true
         type: boolean
+      pipeline:
+        description: >-
+          Value for the runs' `pipeline` column: nightly, baseline or pr. Empty
+          keeps the old behaviour, which infers "pr" from a pull_request event
+          and "nightly" from anything else. "baseline" is the post-merge run the
+          PR gate compares against — the same L1_TO_L1 non-speed-of-light
+          selection the gate measures, which must stay separable from the
+          nightly full sweep.
+        required: false
+        default: ""
+        type: string
+      perf-run-types:
+        description: "Comma-separated PerfRunType names to measure (blank = all)"
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Commit to check out and measure (blank = this run's ref)"
+        required: false
+        default: ""
+        type: string
+      artifact-suffix:
+        description: "Appended to artifact names, so two sweeps in one run do not collide"
+        required: false
+        default: ""
+        type: string
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -107,6 +133,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref }}
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -135,6 +163,8 @@ jobs:
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -142,14 +172,14 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
         with:
-          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
         with:
-          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
@@ -158,7 +188,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
