@@ -7,6 +7,7 @@
 // row-major, matching the compute kernel's loop order and indexing. Slices are sized to the
 // subblock-padded C slice dims; tiles past the true slice or past M/N are never read (their stale
 // entries only reach C tiles the writer drops). A's K-padding columns are zeroed.
+// Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
 
@@ -18,32 +19,29 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
-void kernel_main() {
-    // Per-core RTA; the first C slice's origin is read at the top of every batch below.
-    const uint32_t num_C_slices = get_arg(args::num_C_slices);
-
-    constexpr uint32_t batch_size = get_arg(args::batch_size);
-    constexpr uint32_t M_tiles = get_arg(args::M_tiles);
-    constexpr uint32_t K_tiles = get_arg(args::K_tiles);
-    constexpr uint32_t N_tiles = get_arg(args::N_tiles);
-    constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
-    constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
-    constexpr uint32_t C_slice_M_padded_tiles = get_arg(args::C_slice_M_padded_tiles);
-    constexpr uint32_t C_slice_N_padded_tiles = get_arg(args::C_slice_N_padded_tiles);
-    constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
-    constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
-    // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
-    constexpr uint32_t A_last_K_tile_valid_columns = get_arg(args::A_last_K_tile_valid_columns);
+template <
+    uint32_t M_tiles,
+    uint32_t K_tiles,
+    uint32_t N_tiles,
+    uint32_t batch_size,
+    uint32_t B_batch_stride_tiles,  // 0 when B is a single [K x N] that every batch of A multiplies
+    uint32_t C_slice_M_tiles,
+    uint32_t C_slice_N_tiles,
+    uint32_t C_slice_M_padded_tiles,  // C slice dims rounded up to subblock multiples
+    uint32_t C_slice_N_padded_tiles,
+    uint32_t K_chunk_tiles,
+    uint32_t num_K_chunks,
+    uint32_t A_last_K_tile_valid_columns,  // valid element columns in A's last K tile; 0 when K is a tile multiple
+    uint32_t A_borrowed,                   // a borrowed operand is a resident L1 shard bound as the DFB: never read
+    uint32_t B_borrowed>
+TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
+    // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
+    // num_C_slices: how many consecutive ones it produces, per batch.
     constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
-    // Borrowed operands are resident L1 shards bound as the DFBs; nothing is read for them.
-    constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
-    constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
-
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t A_batch_stride_tiles = M_tiles * K_tiles;
-    // 0 when B is a single [K x N] that every batch of A multiplies, else K_tiles * N_tiles.
-    constexpr uint32_t B_batch_stride_tiles = get_arg(args::B_batch_stride_tiles);
+    constexpr uint32_t C_slices_across_N = (N_tiles + C_slice_N_tiles - 1) / C_slice_N_tiles;
 
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
@@ -72,11 +70,10 @@ void kernel_main() {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
         const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
 
-        // Origin of the C slice being produced, in tiles. The host passes the origin of this cluster's first
-        // C slice; the loop steps it across N, then down M, so every batch starts over from the argument.
-        uint32_t C_slice_first_M_tile = get_arg(args::C_slice_first_M_tile);
-        uint32_t C_slice_first_N_tile = get_arg(args::C_slice_first_N_tile);
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
+            // Origin of this C slice, in tiles, from its position in the walk.
+            const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
+            const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
@@ -136,13 +133,6 @@ void kernel_main() {
                 if constexpr (!B_borrowed) {
                     B_slice.push_back(B_slice_tiles);
                 }
-            }
-
-            // Next C slice: across N, then down M.
-            C_slice_first_N_tile += C_slice_N_tiles;
-            if (C_slice_first_N_tile >= N_tiles) {
-                C_slice_first_N_tile = 0;
-                C_slice_first_M_tile += C_slice_M_tiles;
             }
         }
     }

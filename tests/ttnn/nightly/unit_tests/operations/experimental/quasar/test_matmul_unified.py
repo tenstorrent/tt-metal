@@ -114,24 +114,26 @@ def _randn(*shape):
 # Placement sweep: the legacy 1D / 2D strategies and everything in between, one problem, one kernel set
 # ----------------------------------------------------------------------------------------------------
 
+ROW_MAJOR, COL_MAJOR = ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR
+
 PLACEMENTS = [
-    # name,            cores (x0,y0,x1,y1) or list, C_slice_M_tiles, C_slice_N_tiles, row_major
-    ("single_core", (0, 0, 0, 0), 16, 16, True),  # 1 block
-    ("row_1d_mcast_in0_shape", (0, 0, 7, 0), 16, 2, True),  # 8 blocks, one per core, all share in0 rows
-    ("col_1d_transposed", (0, 0, 0, 7), 2, 16, True),  # 8 blocks along M on a column of cores
-    ("grid_2d", (0, 0, 3, 3), 4, 4, True),  # 16 blocks on a 4x4 rectangle
-    ("grid_2d_col_major", (0, 0, 3, 3), 4, 4, False),  # same blocks, y-fastest core order
-    ("more_blocks_than_cores", (0, 0, 1, 1), 4, 4, True),  # 16 blocks over 4 cores, 4 each
-    ("fewer_blocks_than_cores", (0, 0, 7, 7), 8, 8, True),  # 4 blocks, 60 cores idle
-    ("uneven_blocks_per_core", (0, 0, 2, 0), 4, 4, True),  # 16 blocks over 3 cores: 6, 5, 5
-    ("non_rect_cores", [(0, 0, 3, 0), (0, 2, 1, 2)], 4, 4, True),  # two ranges, 6 cores, 16 blocks
+    # name,            cores (x0,y0,x1,y1) or list, C_slice_M_tiles, C_slice_N_tiles, orientation
+    ("single_core", (0, 0, 0, 0), 16, 16, ROW_MAJOR),  # 1 block
+    ("row_1d_mcast_in0_shape", (0, 0, 7, 0), 16, 2, ROW_MAJOR),  # 8 blocks, one per core, all share in0 rows
+    ("col_1d_transposed", (0, 0, 0, 7), 2, 16, ROW_MAJOR),  # 8 blocks along M on a column of cores
+    ("grid_2d", (0, 0, 3, 3), 4, 4, ROW_MAJOR),  # 16 blocks on a 4x4 rectangle
+    ("grid_2d_col_major", (0, 0, 3, 3), 4, 4, COL_MAJOR),  # same blocks, y-fastest core order
+    ("more_blocks_than_cores", (0, 0, 1, 1), 4, 4, ROW_MAJOR),  # 16 blocks over 4 cores, 4 each
+    ("fewer_blocks_than_cores", (0, 0, 7, 7), 8, 8, ROW_MAJOR),  # 4 blocks, 60 cores idle
+    ("uneven_blocks_per_core", (0, 0, 2, 0), 4, 4, ROW_MAJOR),  # 16 blocks over 3 cores: 6, 5, 5
+    ("non_rect_cores", [(0, 0, 3, 0), (0, 2, 1, 2)], 4, 4, ROW_MAJOR),  # two ranges, 6 cores, 16 blocks
 ]
 
 
 @pytest.mark.parametrize(
-    "name,cores,C_slice_M_tiles,C_slice_N_tiles,row_major", PLACEMENTS, ids=[p[0] for p in PLACEMENTS]
+    "name,cores,C_slice_M_tiles,C_slice_N_tiles,orientation", PLACEMENTS, ids=[p[0] for p in PLACEMENTS]
 )
-def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, row_major):
+def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, orientation):
     gx, gy = _grid(device)
     ranges = cores if isinstance(cores, list) else [cores]
     for x0, y0, x1, y1 in ranges:
@@ -144,7 +146,7 @@ def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, row_m
     torch.manual_seed(0)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=crs, C_slice_M_tiles=C_slice_M_tiles, C_slice_N_tiles=C_slice_N_tiles, row_major_cores=row_major
+        cores=crs, C_slice_M_tiles=C_slice_M_tiles, C_slice_N_tiles=C_slice_N_tiles, orientation=orientation
     )
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
@@ -153,8 +155,44 @@ def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, row_m
 def test_repr_and_fields():
     cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=4)
     assert cfg.C_slice_M_tiles == 2 and cfg.C_slice_N_tiles == 3 and cfg.K_chunk_tiles == 4
-    assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.row_major_cores is True
+    assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.orientation == ROW_MAJOR
     assert "MatmulUnifiedProgramConfig(" in repr(cfg)
+
+
+AUTO_C_SLICE_GRIDS = [
+    ("grid_2x2", (0, 0, 1, 1)),  # M/2 x N/2 per core
+    ("row_of_4", (0, 0, 3, 0)),  # M x N/4
+    ("column_of_3", (0, 0, 0, 2)),  # M/3 x N
+]
+
+
+@pytest.mark.parametrize("name,cores", AUTO_C_SLICE_GRIDS, ids=[g[0] for g in AUTO_C_SLICE_GRIDS])
+def test_auto_C_slice_from_core_grid(device, name, cores):
+    """C_slice_M_tiles / C_slice_N_tiles left at 0: M / N split over the bounding box of the cores."""
+    gx, gy = _grid(device)
+    x0, y0, x1, y1 = cores
+    if x1 >= gx or y1 >= gy:
+        pytest.skip(f"needs a {x1 + 1}x{y1 + 1} grid, device has {gx}x{gy}")
+    M, K, N = 6 * TILE, 4 * TILE, 8 * TILE
+    torch.manual_seed(11)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    out = _run(device, a, b, qsr.MatmulUnifiedProgramConfig(cores=_rect(*cores)))
+    _check(out, _golden(a, b))
+
+
+def test_auto_C_slice_from_output_shard(device):
+    """With a sharded output the C slice is the output shard: width-sharded over a 2x2 rectangle gives
+    M x N/4 slices, which the grid split (M/2 x N/2) would not."""
+    gx, gy = _grid(device)
+    if gx < 2 or gy < 2:
+        pytest.skip("needs a 2x2 grid")
+    M, K, N = 4 * TILE, 3 * TILE, 8 * TILE
+    cores = _rect(0, 0, 1, 1)
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(cores, [M, 2 * TILE]))
+    torch.manual_seed(12)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    out = _run(device, a, b, qsr.MatmulUnifiedProgramConfig(cores=cores), out_mem=out_mem)
+    _check(out, _golden(a, b))
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -628,11 +666,6 @@ def test_ragged_batched_spill_all_at_once(device):
             "DST fits",
         ),
         (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=0, C_slice_N_tiles=2),
-            None,
-            "must be > 0",
-        ),
-        (
             lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=40, C_slice_N_tiles=40),
             None,
             "shrink C_slice_M_tiles",
@@ -659,7 +692,6 @@ def test_ragged_batched_spill_all_at_once(device):
         "K_chunk_not_divisor",
         "half_auto_subblock",
         "subblock_too_big",
-        "zero_block",
         "slice_does_not_fit_l1",
         "explicit_K_chunk_does_not_fit",
         "sharded_multi_block",
