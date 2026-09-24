@@ -46,6 +46,11 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    TT_FATAL(
+        num_dims <= ttnn::MAX_NUM_DIMENSIONS,
+        "slice_write supports rank <= {}, got {}",
+        ttnn::MAX_NUM_DIMENSIONS,
+        num_dims);
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
