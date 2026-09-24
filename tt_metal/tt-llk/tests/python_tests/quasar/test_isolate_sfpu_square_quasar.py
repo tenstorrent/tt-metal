@@ -18,6 +18,7 @@ from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -47,7 +48,9 @@ SFPU_SQUARE_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float32,
     ]
-)
+    # The MX pair is on the input side: these operands reach the SFPU through UNP_S
+    # into SrcS, a decode port the unpack test (UnpA/UnpB) does not cover.
+) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 SFPU_SQUARE_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
@@ -79,10 +82,16 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_B=input_dimensions,
     )
 
-    # Both caps invert the squaring op so x² stays representable in the input
-    # format's math precision and in the requested output format.
+    # Both caps invert the squaring op so x² stays representable. For the input
+    # cap this is because the SFPU squares in the input format's math precision
+    # (except for MX, where squaring uses a wider intermediate and |x| itself
+    # is the binding constraint -- mx_elem_max is already small).
     input_elem_max = format_elem_max(formats.input_format)
-    input_magnitude_cap = math.sqrt(input_elem_max) * SQUARE_RANGE_SAFETY_FACTOR
+    input_magnitude_cap = (
+        input_elem_max
+        if formats.input_format.is_mx_format()
+        else math.sqrt(input_elem_max)
+    ) * SQUARE_RANGE_SAFETY_FACTOR
     output_magnitude_cap = (
         math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
     )
@@ -111,6 +120,7 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         dest_acc,
         formats.input_format,
         input_dimensions,
+        unpack_to_srcs=True,
     )
 
     configuration = TestConfig(
@@ -138,6 +148,8 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
+        # Input MX formats require disable_format_inference
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

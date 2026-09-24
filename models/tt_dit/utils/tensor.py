@@ -565,6 +565,7 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    use_persistent_buffer: bool = True,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -634,7 +635,7 @@ def fast_device_to_host(
                 dim=inter_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
-                use_persistent_buffer=True,
+                use_persistent_buffer=use_persistent_buffer,
             )
 
             n_hosts = int(ttnn.distributed_context_get_size())
@@ -822,7 +823,15 @@ def arange(
         memory_config=memory_config,
     )
 
-    return ttnn.cumsum(x, 0) + (start - step)
+    result = ttnn.cumsum(x, 0)
+    offset = start - step
+    if offset == 0:
+        return result
+    if offset < 0:
+        # A negative scalar cannot be encoded against an unsigned tensor (the binary op rejects it),
+        # and the running sum is at least one step, so subtract the magnitude instead.
+        return ttnn.subtract(result, -offset)
+    return result + offset
 
 
 _tril_cache: dict[tuple, ttnn.Tensor] = {}

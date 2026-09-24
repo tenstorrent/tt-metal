@@ -32,9 +32,9 @@ All metrics are bounded 0-100% unless noted otherwise.
 - unpack1_write_efficiency: SRCB_WRITE / UNPACK1_BUSY_THREAD0
     Fraction of unpacker1 busy cycles actually writing to srcB.
 - unpack_write_efficiency: average of unpack0 + unpack1.
-- unpack_to_math_flow0: SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
+- unpack_to_math_flow0: SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
     srcA buffer availability during unpack — high = no backpressure from math.
-- unpack_to_math_flow1: SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
+- unpack_to_math_flow1: SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
     srcB buffer availability during unpack.
 - unpack_to_math_flow: average of flow0 + flow1.
 
@@ -52,7 +52,6 @@ All metrics are bounded 0-100% unless noted otherwise.
 """
 
 import pandas as pd
-from loguru import logger
 
 from .perf.schema import (
     MARKER,
@@ -141,8 +140,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     pack_sem_wait = _safe_div(sem_wait_2, instrn_cycles)
 
     # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
-    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
+    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
+    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     unpack0_eff = _safe_div(srca_write, unpack0_busy)
@@ -150,8 +149,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     unpack_eff = _avg_pair(unpack0_eff, unpack1_eff)
 
     # ── Unpacker-to-Math Data Flow (TDMA_UNPACK bank) ──
-    srca_avail = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_AVAILABLE")
-    srcb_avail = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_AVAILABLE")
+    srca_avail = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_REQ")
+    srcb_avail = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_REQ")
     flow0 = _safe_div(srca_avail, unpack0_busy)
     flow1 = _safe_div(srcb_avail, unpack1_busy)
     flow_avg = _avg_pair(flow0, flow1)
@@ -159,7 +158,7 @@ def _compute_single(df: pd.DataFrame) -> dict:
     # Packer Metrics — aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
     packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
     pack_utilization = _safe_div(packer_busy, pack_cycles)
-    dest_read = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
+    dest_read = _avg_count(df, "TDMA_PACK", "PACKER0_DEST_READ_REQ")
     pack_dest_eff = _safe_div(dest_read, packer_busy)
 
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
@@ -386,121 +385,3 @@ def export_counters(
         rows.append(row)
 
     return pd.DataFrame(rows)
-
-
-# ── Print ────────────────────────────────────────────────────────────
-
-
-def _print_detail(metrics: dict) -> None:
-    """Log detailed efficiency metrics for a single (zone, run) result."""
-
-    def fmt(value, decimals=2):
-        if value is None:
-            return "N/A"
-        return f"{value:.{decimals}f}%"
-
-    m = metrics
-    sep = "─" * 70
-
-    lines = [
-        f"\n{sep}",
-        "  COMPUTE UTILIZATION",
-        sep,
-        f"  {'FPU Utilization:':<40} {fmt(m.get('fpu_utilization_pct')):>12}",
-        f"  {'Compute (FPU+SFPU) Utilization:':<40} {fmt(m.get('compute_utilization_pct')):>12}",
-        f"\n{sep}",
-        "  THREAD STALL RATES",
-        sep,
-        f"  {'Unpack Thread (T0) Stall:':<40} {fmt(m.get('unpack_thread_stall_pct')):>12}",
-        f"  {'Math Thread (T1) Stall:':<40} {fmt(m.get('math_thread_stall_pct')):>12}",
-        f"  {'Pack Thread (T2) Stall:':<40} {fmt(m.get('pack_thread_stall_pct')):>12}",
-        f"\n{sep}",
-        "  SEMAPHORE WAIT RATES",
-        sep,
-        f"  {'Math Semaphore Wait:':<40} {fmt(m.get('math_sem_wait_pct')):>12}",
-        f"  {'Pack Semaphore Wait:':<40} {fmt(m.get('pack_sem_wait_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER WRITE EFFICIENCY",
-        sep,
-        f"  {'Unpacker0 (srcA):':<40} {fmt(m.get('unpack0_write_eff_pct')):>12}",
-        f"  {'Unpacker1 (srcB):':<40} {fmt(m.get('unpack1_write_eff_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_write_eff_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER-TO-MATH DATA FLOW",
-        sep,
-        f"  {'srcA Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow0_pct')):>12}",
-        f"  {'srcB Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow1_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_to_math_flow_pct')):>12}",
-        f"\n{sep}",
-        "  PACKER METRICS",
-        sep,
-        f"  {'Pack Utilization:':<40} {fmt(m.get('pack_utilization_pct')):>12}",
-        f"  {'Pack Dest Data Efficiency:':<40} {fmt(m.get('pack_dest_eff_pct')):>12}",
-        f"\n{sep}",
-        "  MATH PIPELINE STALLS",
-        sep,
-        f"  {'Fidelity Phase Stall:':<40} {fmt(m.get('fidelity_stall_pct')):>12}",
-        f"  {'Math Src Data Stall:':<40} {fmt(m.get('math_src_stall_pct')):>12}",
-    ]
-    logger.info("\n".join(lines))
-
-
-def _print_stability(zone_metrics: list[dict]) -> None:
-    """Log mean/std summary for multiple runs of the same zone."""
-    if len(zone_metrics) < 2:
-        return
-
-    metrics_df = pd.DataFrame(zone_metrics)
-
-    pct_cols = [c for c in metrics_df.columns if c.endswith("_pct")]
-
-    lines = [
-        f"\n  STABILITY ACROSS {len(zone_metrics)} RUNS (mean +/- std)",
-        f"  {'─' * 66}",
-        f"  {'Metric':<40} {'Mean':>12} {'Std':>12}",
-        f"  {'─' * 40} {'─' * 12} {'─' * 12}",
-    ]
-
-    for col in pct_cols:
-        values = metrics_df[col].dropna()
-        if len(values) >= 2:
-            mean_val = float(values.mean())
-            std_val = float(values.std())
-            label = col.replace("_pct", "").replace("_", " ")
-            lines.append(f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%")
-
-    logger.info("\n".join(lines))
-
-
-def print_metrics(df_or_computed) -> None:
-    """
-    Log performance metrics, grouped by zone.
-    If multiple runs, also logs mean/std stability summary per zone.
-
-    Accepts either:
-    - A raw counter DataFrame (computes metrics automatically)
-    - A list of dicts from compute_metrics()
-    """
-    if isinstance(df_or_computed, pd.DataFrame):
-        computed = compute_metrics(df_or_computed)
-    else:
-        computed = df_or_computed
-
-    if not computed:
-        logger.info("No metrics to display.")
-        return
-
-    logger.info("\n{}\nPERFORMANCE METRICS\n{}", "=" * 70, "=" * 70)
-
-    zones = sorted(set(m["zone"] for m in computed))
-
-    for zone in zones:
-        zone_metrics = [m for m in computed if m["zone"] == zone]
-
-        logger.info("\n{}\nZONE: {}\n{}", "═" * 70, zone, "═" * 70)
-
-        # Print detailed metrics for the last run (most representative, after warmup)
-        _print_detail(zone_metrics[-1])
-
-        # Print stability summary if multiple runs
-        _print_stability(zone_metrics)

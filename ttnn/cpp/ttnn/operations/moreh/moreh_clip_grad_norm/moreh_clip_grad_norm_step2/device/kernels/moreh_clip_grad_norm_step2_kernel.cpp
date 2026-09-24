@@ -50,7 +50,7 @@ void kernel_main() {
             dfb_input_obj.wait_front(onetile);  // comes from the reader
             dfb_x_obj.reserve_back(onetile);
 
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, 0, dst0);
             dfb_input_obj.pop_front(onetile);
             tile_regs_commit();

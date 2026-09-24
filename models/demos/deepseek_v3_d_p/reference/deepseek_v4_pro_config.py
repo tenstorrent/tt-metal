@@ -17,6 +17,15 @@ class DeepSeekV4ProConfig:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 7168x3072 routed-expert
+    # shape the composite already wins from 256 and gives the band back only at 576, where its
+    # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
+    # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
+    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
     HEAD_DIM = 512
 
     # MoE configuration
@@ -29,8 +38,14 @@ class DeepSeekV4ProConfig:
     # V4 replaces V3/Kimi's sigmoid router affinity with sqrt(softplus(.)).
     SCORE_FUNC = "sqrtsoftplus"
 
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 384 experts, top-6, sqrtsoftplus floors at
+    # 0.9927 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.982
+
     # Model architecture
     NUM_LAYERS = 61
+    NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
@@ -57,5 +72,9 @@ class DeepSeekV4ProConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
+    # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576

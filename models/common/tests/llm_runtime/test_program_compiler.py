@@ -164,6 +164,18 @@ def test_compile_receives_exact_context_deduplicates_and_checks_output_contract(
         )
 
 
+def test_compiled_program_snapshot_is_immutable_and_registry_authoritative(monkeypatch):
+    _patch_sync(monkeypatch)
+    compiler = _compiler()
+
+    first = compiler.compile(_Signature("prefill", 1), lambda _: torch.zeros(1))
+    snapshot = compiler.compiled_programs
+    second = compiler.compile(_Signature("decode", 32), lambda _: torch.zeros(1))
+
+    assert snapshot == (first,)
+    assert compiler.compiled_programs == (first, second)
+
+
 def test_compile_uses_explicit_result_value_and_owned_release_selector(monkeypatch):
     _patch_sync(monkeypatch)
 
@@ -235,11 +247,13 @@ def test_compile_gate_distinguishes_capture_from_activation(monkeypatch, expect_
     compiler.set_trace_capture_in_progress(True)
     with expect_error(RuntimeError, "capture is in progress"):
         compiler.compile(_Signature("decode", 32), lambda context: torch.zeros(1))
+    assert compiler.post_activation_compile_rejections == 0
 
     compiler.set_trace_capture_in_progress(False)
     compiler.set_trace_active(True)
     with expect_error(RuntimeError, "after trace activation"):
         compiler.compile(_Signature("decode", 32), lambda context: torch.zeros(1))
+    assert compiler.post_activation_compile_rejections == 1
 
 
 def test_cleanup_terminalizes_only_program_metadata(monkeypatch, expect_error):

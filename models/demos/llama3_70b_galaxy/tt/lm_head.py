@@ -43,10 +43,15 @@ class LMHead(LightweightModule):
         self.output_weights_decode = []
         self.output_weights_prefill = []
         num_splits = 1
+        # Blackhole stores the decode ring weight DRAM-interleaved (see memory_config_decode
+        # below); encode the layout in the cache name so the tensor never collides with a
+        # previously cached width-sharded one.
+        _is_blackhole = getattr(args, "is_blackhole", False)
+        _decode_suffix = "_dram_interleaved" if _is_blackhole else "_dram_width_sharded"
         cache_file_name_decode = (
             None
             if args.dummy_weights
-            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_width_sharded_decode"
+            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0{_decode_suffix}_decode"
         )
         cache_file_name_prefill = (
             None
@@ -61,8 +66,18 @@ class LMHead(LightweightModule):
         padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
 
         if args.is_70b:
-            memory_config_decode = args.create_dram_sharded_mem_config_lm_head(
-                k=args.dim // 4, n=self.padded_vocab_size // 8
+            # The ring matmul's DRAM-width-sharded in1 reader assigns each ring core a DRAM bank by
+            # physical y-proximity plus a ring_idx%N offset — a mapping hand-co-designed with the WH
+            # bank layout and the LM_HEAD_OUTPUT_GRID core order. On Blackhole (8 banks, 24-ring,
+            # 16-core-derived shard widths) that co-design does not hold and every core reads the
+            # wrong weight slice, garbling all logits. Store the weight DRAM-interleaved instead:
+            # the interleaved reader addresses tiles globally from the ring index
+            # (correct-by-construction), and requires LM_HEAD_OUT_RING_MEMCFG to use the input-grid
+            # core order (see qwen_model_config).
+            memory_config_decode = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if _is_blackhole
+                else args.create_dram_sharded_mem_config_lm_head(k=args.dim // 4, n=self.padded_vocab_size // 8)
             )
             memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
         else:
@@ -203,15 +218,29 @@ class LMHead(LightweightModule):
                 x.deallocate(True)
                 outputs.append(output)
 
+        # Blackhole galaxy has only 2 fabric links (vs Wormhole's 4), which roughly doubles the
+        # all_reduce_async reduction scratch CB. For the wide lm_head logits that CB no longer fits
+        # beside the full-worker-grid resident decode buffers on any worker column, so the async
+        # all-reduce fails to allocate. Route Blackhole through the stable all_gather + local reduce
+        # (the same pattern prefill uses): it avoids the oversized reduction CB entirely.
+        lm_head_bh_gather_reduce = mode == "decode" and getattr(self.args, "is_blackhole", False)
         outputs_reduced = []
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=num_links,
-                memory_config=output.memory_config(),
-                lm_head=True,
-                buffer_key="LM_HEAD",
-            )  # self.output_memory_config
+            if lm_head_bh_gather_reduce:
+                output_reduced = self.tt_ccl.line_all_reduce_gather_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                )
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )  # self.output_memory_config
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

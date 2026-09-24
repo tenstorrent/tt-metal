@@ -22,6 +22,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from models.common.utility_functions import skip_for_blackhole
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
@@ -60,6 +63,51 @@ def torch_layer_norm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5
         beta_grad = beta.grad.view(normalized_shape)
 
     return input.grad, gamma_grad, beta_grad
+
+
+def test_moreh_layer_norm_golden_optional_outputs_and_parameter_gradients():
+    input_tensor = torch.randn(2, 3, 4)
+    gamma = torch.randn(4)
+    beta = torch.randn(4)
+    output_grad = torch.randn_like(input_tensor)
+    mean_buffer = torch.empty(2, 3)
+    rstd_buffer = torch.empty(2, 3)
+
+    forward_golden = ttnn.get_golden_function(ttnn.moreh_layer_norm)
+    actual_output, actual_mean, actual_rstd = forward_golden(
+        input_tensor,
+        1,
+        1e-5,
+        gamma,
+        beta,
+        mean=mean_buffer,
+        rstd=rstd_buffer,
+    )
+    expected_output, expected_mean, expected_rstd = torch_layer_norm(
+        input_tensor, normalized_dims=1, eps=1e-5, gamma=gamma, beta=beta
+    )
+
+    torch.testing.assert_close(actual_output, expected_output)
+    torch.testing.assert_close(actual_mean, expected_mean)
+    torch.testing.assert_close(actual_rstd, expected_rstd)
+
+    backward_golden = ttnn.get_golden_function(ttnn.moreh_layer_norm_backward)
+    actual_grads = backward_golden(
+        output_grad,
+        input_tensor,
+        actual_mean,
+        actual_rstd,
+        1,
+        gamma=gamma,
+        input_grad=torch.empty_like(input_tensor),
+        gamma_grad=torch.empty_like(gamma),
+        beta_grad=torch.empty_like(beta),
+    )
+    expected_grads = torch_layer_norm_backward(
+        input_tensor.clone(), output_grad, normalized_dims=1, eps=1e-5, gamma=gamma.clone(), beta=beta.clone()
+    )
+    for actual, expected in zip(actual_grads, expected_grads):
+        torch.testing.assert_close(actual, expected)
 
 
 def tt_layer_norm(
@@ -643,6 +691,8 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -681,6 +731,8 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)

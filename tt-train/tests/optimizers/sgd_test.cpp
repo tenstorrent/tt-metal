@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
 #include "test_utils/random_data.hpp"
@@ -335,3 +336,112 @@ static const ParityCase kNesterovWDNightlyCases[] = {
 
 INSTANTIATE_TEST_SUITE_P(
     NIGHTLY_SGDNesterovWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kNesterovWDNightlyCases), CaseName);
+
+// ====================================================================
+// Late momentum-buffer initialization
+// A buffer's first update must seed it with the raw gradient (buf = g,
+// PyTorch semantics) even when other parameters have already advanced
+// the global step count.
+// ====================================================================
+
+class SGDLateMomentumTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+// Runs two parameters where only "early" receives gradients for the first two steps and
+// "late" receives its first gradient on the third, then verifies the late buffer holds the
+// raw gradient despite nonzero dampening.
+template <typename Optimizer, typename Config>
+static void run_late_momentum_case(const char* buffers_key) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    const float dampening = 0.5f;
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    xt::xarray<float> w_early = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    xt::xarray<float> g_early = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    xt::xarray<float> w_late = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    // Bounded away from zero so the raw gradient and its dampened value differ everywhere.
+    xt::xarray<float> g_late = test_utils::make_uniform_xarray<float>(shape, 0.25F, 1.0F, gen());
+
+    auto theta_early = autograd::create_tensor(to_tt(w_early), true);
+    auto theta_late = autograd::create_tensor(to_tt(w_late), true);
+    ttml::serialization::NamedParameters params{{"early", theta_early}, {"late", theta_late}};
+
+    Config cfg;
+    cfg.lr = 1e-2f;
+    cfg.momentum = 0.9f;
+    cfg.dampening = dampening;
+    Optimizer opt(params, cfg);
+
+    // Advance the global step with only the early parameter receiving gradients.
+    theta_early->set_grad(to_tt(g_early));
+    opt.step();
+    opt.step();
+
+    // The late parameter's first gradient arrives at a nonzero global step.
+    theta_late->set_grad(to_tt(g_late));
+    opt.step();
+
+    auto state = opt.get_state_dict();
+    const auto& buffers = std::get<ttml::serialization::NamedParameters>(state.at(buffers_key));
+    auto buf_late = ttml::core::to_xtensor(buffers.at("late")->get_value());
+
+    auto g_late_bf16 = ttml::core::to_xtensor(theta_late->get_grad());
+    size_t num_mismatches = compare_tensors(g_late_bf16, buf_late, w_late, g_late);
+    EXPECT_EQ(num_mismatches, 0) << "a buffer's first update must seed it with the raw gradient";
+
+    // Guard against a vacuous pass: the dampened seed must be distinguishable from the raw
+    // gradient for every element.
+    for (size_t i = 0; i < g_late_bf16.size(); ++i) {
+        ASSERT_NE(g_late_bf16.flat(i), (1.0f - dampening) * g_late_bf16.flat(i));
+    }
+}
+
+TEST_F(SGDLateMomentumTest, FusedFirstLateUpdateSeedsRawGradient) {
+    run_late_momentum_case<ttml::optimizers::SGD, ttml::optimizers::SGDConfig>("momentum");
+}
+
+TEST_F(SGDLateMomentumTest, CompositeFirstLateUpdateSeedsRawGradient) {
+    run_late_momentum_case<ttml::optimizers::SGDComposite, ttml::optimizers::SGDCompositeConfig>("theta");
+}
+
+// ====================================================================
+// Validation tests
+// ====================================================================
+
+using SGDValidationTest = SGDLateMomentumTest;
+
+TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
+    using namespace ttml;
+
+    // Logical 31x32 and 32x32 both round up to one 32x32 tile, so only logical-shape
+    // validation can tell them apart.
+    const std::array<std::size_t, 4> param_shape = {1, 1, 32, 32};
+    const std::array<std::size_t, 4> grad_shape = {1, 1, 31, 32};
+    auto param = to_tt(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
+    auto grad = to_tt(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
+
+    EXPECT_ANY_THROW(ttml::metal::sgd(
+        param,
+        grad,
+        /* lr */ 1e-2f,
+        /* momentum */ 0.0f,
+        /* dampening */ 0.0f,
+        /* weight_decay */ 0.0f,
+        /* nesterov */ false,
+        /* momentum_buffer */ std::nullopt));
+}

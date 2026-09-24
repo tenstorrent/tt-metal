@@ -51,6 +51,31 @@ struct MeshCoordinate {
     coordinates @0 :List(Int32);
 }
 
+struct MeshSocketCore {
+    fabricChipId @0 :UInt32;
+    coreX @1 :UInt32;
+    coreY @2 :UInt32;
+}
+
+struct MeshSocketLocalCore {
+    core @0 :MeshSocketCore;
+    chipId @1 :UInt32;            # metal device id, resolvable only for cores this rank owns
+    peers @2 :List(MeshSocketCore);  # more than one when a sender core feeds several downstreams
+}
+
+struct MeshSocketRecord {
+    isSender @0 :Bool;
+    configBufferAddress @1 :UInt64;
+    dataBufferAddress @2 :UInt64;
+    localCores @3 :List(MeshSocketLocalCore);  # only the cores this rank owns
+    fifoSize @4 :UInt64;
+    bytesAckedOffsetBytes @5 :UInt32;  # config_addr + this = bytes_acked_array[0]
+    bytesAckedStrideBytes @6 :UInt32;
+    # One mesh id per side, so these are per socket, not per core.
+    localMeshId @7 :UInt32;       # cross-rank stitch key for this side
+    peerMeshId @8 :UInt32;        # matches the peer rank's localMeshId
+}
+
 struct MeshWorkloadProgramData {
     programId @0 :UInt64;
     coordinates @1 :List(MeshCoordinate);
@@ -236,4 +261,7 @@ interface Inspector {
 
     # Get the host's SystemMesh shape (global + local).
     getSystemMesh @11 () -> (systemMesh :SystemMeshData);
+
+    # Get MeshSockets created during this run (config buffer address + graph edges).
+    getSockets @12 () -> (sockets :List(MeshSocketRecord));
 }

@@ -41,8 +41,17 @@ constexpr uint32_t NUM_CORES = 2;
 // Fixture: DevicePrintFixture with checkpoint enabled
 class DevicePrintCheckpointTest : public DevicePrintFixture {
 protected:
-    void ExtraSetUp() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(true); }
-    void ExtraTearDown() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(false); }
+    void ExtraSetUp() override {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        checkpoint_previous_ = rtoptions.get_checkpoint_enabled();
+        rtoptions.set_checkpoint_enabled(true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(checkpoint_previous_);
+    }
+
+private:
+    bool checkpoint_previous_{};
 };
 
 // Helper: create standard DRAM buffers, CBs, and run program on single core
@@ -191,13 +200,12 @@ TEST_F(DevicePrintCheckpointTest, CheckpointLoopAndDumpDest) {
 static void run_global_checkpoint(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
-    auto* device = mesh_device->get_devices()[0];
     size_t tile_size = tt::tile_size(FMT);
     size_t buf_sz = NUM_TILES * tile_size;
 
     CoreCoord core0 = {0, 0}, core1 = {0, 1};
     CoreRange cores(core0, core1);
-    CoreCoord barrier_coord = device->worker_core_from_logical_core(core0);
+    CoreCoord barrier_coord = mesh_device->worker_core_from_logical_core(core0);
 
     distributed::MeshWorkload workload;
     auto zero = distributed::MeshCoordinate(0, 0);

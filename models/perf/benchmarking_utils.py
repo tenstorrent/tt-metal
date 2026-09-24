@@ -205,8 +205,9 @@ class BenchmarkData:
 
             filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.pkl")
             parent_dir = os.path.dirname(filename)
-            if parent_dir != "" and not os.path.exists(parent_dir):
-                os.makedirs(parent_dir)
+            if parent_dir != "":
+                # exist_ok=True avoids a race when parallel MPI ranks create the directory concurrently
+                os.makedirs(parent_dir, exist_ok=True)
             with open(filename, "wb") as f:
                 f.write(pkl_data)
             logger.info(f"Run and measurement data saved to {filename}")

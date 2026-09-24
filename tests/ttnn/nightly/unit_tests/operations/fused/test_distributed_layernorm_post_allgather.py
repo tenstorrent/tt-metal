@@ -17,6 +17,9 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if is_rmsnorm:
@@ -236,6 +239,9 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
+    # Module-scoped device: clear first (not disable_and_clear, which turns caching off) or `== 1` is vacuous.
+    device.clear_program_cache()
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -251,9 +257,9 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
             inp_shape, n_devices, is_rmsnorm, dtype, dtype, device, gamma_beta_dtype=dtype, fp32_enabled=fp32_enabled
         )
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
-    )
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Program cache should have exactly one entry, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize("input_w", [17, 34, 63])

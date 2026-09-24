@@ -340,12 +340,18 @@ def move_to_device(object, device):
 
 
 def git_hash():
-    try:
-        import subprocess
+    """Return the short git hash of HEAD, or None if git is unavailable (e.g. unpacked release).
 
+    Used as the default cache-version key for preprocess_model_parameters()/preprocess_model().
+    Mirrors the graceful-degradation behavior of ttnn.graph_report.get_tt_metal_git_report_metadata().
+    """
+    import subprocess
+
+    try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
-    except Exception as e:
-        raise RuntimeError("Couldn't get git hash!") from e
+    except (OSError, subprocess.CalledProcessError) as e:
+        logger.warning(f"Unable to determine git hash; disabling version-based cache invalidation. Reason: {e}")
+        return None
 
 
 class ModuleArgs(dict):

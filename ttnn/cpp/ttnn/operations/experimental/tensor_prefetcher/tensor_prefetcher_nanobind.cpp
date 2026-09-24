@@ -46,14 +46,38 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             request), so a single prefetcher can serve GCBs with different num_receivers
             values.
 
+            On Blackhole, the GDDR Memory Controller Multi-Port Front End (MPFE) uses
+            weighted round-robin arbitration. Weights are in [0, 7], and higher relative
+            values receive more service. The hardware slots P1/P2/P3 correspond to DRAM
+            tiles D0/D1/D2; the arguments below name traffic roles, which Metal maps to
+            each bank's D tiles using its worker_endpoint assignment.
+
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                free_sender_mpfe_weight (Optional[int]): active free-sender MPFE weight.
+                    None uses the Metal default.
+                noc1_sender_mpfe_weight (Optional[int]): active NOC1-sender MPFE weight.
+                    None uses the Metal default.
+                ordinary_mpfe_weight (Optional[int]): ordinary-operation MPFE weight.
+                    None uses the Metal default.
+                dynamic_mpfe_weighting (Optional[bool]): when True, idle both prefetch senders
+                    at the ordinary weight and lower each private sender slot only while it
+                    handles a request. None uses the Metal default.
+
+            The benchmark tuning script enables TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE
+            and supplies per-field environment overrides. Those benchmark-only values take
+            precedence over these keyword arguments while the enable variable is set.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("free_sender_mpfe_weight") = std::nullopt,
+        nb::arg("noc1_sender_mpfe_weight") = std::nullopt,
+        nb::arg("ordinary_mpfe_weight") = std::nullopt,
+        nb::arg("dynamic_mpfe_weighting") = std::nullopt);
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -209,14 +233,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
+            Compute and validate the block_count to pair with a DRAM weight in
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
             global_cb. Gather returns the receiver/ring count. Mcast returns
             weight_K_tiles / in0_block_w and uses natural FIFO order.
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                weight: The DRAM weight tensor, in either layout.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
             Returns:

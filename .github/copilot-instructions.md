@@ -17,6 +17,32 @@
 | `tools/` | Profiler, debugger, scaleout tooling |
 | `.github/` | CI/CD workflows and infra |
 
+## External Repository Context
+
+When a correctness question depends on behavior outside tt-metal that local code
+and documentation do not resolve, use the DeepWiki MCP tools for the relevant
+repository:
+
+- `tenstorrent/tt-umd`: device discovery, coordinate translation, memory access,
+  and communication contracts.
+- `tenstorrent/tt-kmd`: Linux driver interfaces, including IOCTLs, mmap, DMA
+  buffers, page pinning, device resource lifetime, and reset/recovery. Consult
+  when the question crosses the UMD/kernel-driver boundary.
+- `tenstorrent/tt-isa-documentation`: instruction semantics, NoC ordering,
+  synchronization, alignment, and architecture-specific hardware behavior.
+
+Use `ask_question` for focused questions naming the relevant symbols and hardware
+architecture. Follow the answer's source references and verify their applicability
+before reporting a defect. Check UMD behavior against the submodule revision used
+by the PR, KMD behavior against supported driver versions and UMD compatibility
+requirements (including the Linux kernel version where relevant), and ISA behavior
+against the target hardware architecture. DeepWiki's indexed revision may differ.
+
+Cite supporting source code or documentation in findings. If DeepWiki is
+unavailable or a claim cannot be verified, state any material uncertainty and
+avoid asserting an unverified defect. Use DeepWiki only to resolve concrete review
+questions.
+
 ## Review Language
 
 Respond in **English**. Be terse. Use code blocks for every actionable diff.
@@ -146,6 +172,10 @@ Additionally, where they apply, raise these at 🟢 SUGGESTION — never block o
 
 Do not attempt to write the Summary for the author; state what is missing and why a
 reviewer needs it.
+
+If a PR description claims a performance improvement but includes no performance
+measurement, raise a 🟡 IMPORTANT finding asking for benchmark evidence in the
+description (for example, before/after numbers and the measurement setup).
 
 ## Testing Expectations
 

@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+// device.hpp is needed for IDevice::arch() in matches_quasar_native_slice. Do NOT rely on it arriving
+// transitively: this target is a unity build, so a missing include here compiles clean in build_Release
+// and only breaks with TT_UNITY_BUILDS=OFF.
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/constants.hpp>
+#include <algorithm>
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -73,40 +80,19 @@ bool is_quant_op(const BinaryOpType val) {
     return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
 }
 
-ShardSpec generate_shard_spec_all_cores(
-    const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
-    // Generate shard spec using all worker cores
-    auto* device = input_tensor_a.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    // Calculate squeezed tensor height (all dims except last) and width (last dim)
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
-    }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        // BLOCK_SHARDED
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
-    }
-    log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+ShardSpec generate_shard_spec_specless(
+    const Tensor& input_tensor_a,
+    const Shape& padded_out_shape,
+    const TensorMemoryLayout& memory_layout,
+    Layout output_layout) {
+    // Zero-volume specless-sharded is absorbed by the synthesizer's layout-aware degenerate-spec return.
+    return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+        input_tensor_a.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = (output_layout == Layout::TILE),
+         .orientation_hint = ShardOrientation::ROW_MAJOR,
+         .caller_tag = "QuasarBinaryNg"});
 }
 }  // namespace utils
 
@@ -431,7 +417,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 shard_spec_opt = ttnn::operations::experimental::quasar::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
-                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
+                shard_spec_opt = utils::generate_shard_spec_specless(
+                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout);
             }
         }
 
@@ -589,10 +576,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
         return false;
     }
 
-    // lhs and rhs must share a data format. The compute kernel switches the unpacker between the two
-    // operands without a per-operand data-format reconfig (on Quasar copy_tile_to_dst_init_short_with_dt
-    // is a no-op, so the WH/BH format reconfig it performs is absent), so a differing rhs format would be
-    // unpacked using the lhs format. Mixed-dtype lhs/rhs therefore falls to the descriptor path.
+    // Not an unpacker limitation: the compute kernel switches between the two operands with
+    // reconfig_data_format_srca + copy_init on every arch (Quasar included).
     if (a.dtype() != b.dtype()) {
         return false;
     }
@@ -643,8 +628,102 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     return true;
 }
 
+bool BinaryNgDeviceOperation::matches_quasar_native_slice(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Strict subset of matches_metal_v2_slice. kernels_qsr/ holds only the four no-broadcast FPU
+    // sources, so every rejection below is also a precondition of create_no_bcast_artifacts.
+    const NativeTuning& tuning = native_tuning();
+    // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
+    if (!tuning.enabled) {
+        return false;
+    }
+    const auto& a = tensor_args.input_tensor_a;
+    // device()->arch(), not the host arch-name helper: that returns "invalid" under the simulator.
+    if (a.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    // MUST precede every input_tensor_b dereference below.
+    if (!tensor_args.input_tensor_b.has_value()) {
+        return false;
+    }
+    const auto& b = *tensor_args.input_tensor_b;
+
+    // where-op / quantization carry their own kernels, none of which were copied.
+    if (attributes.is_where_op || attributes.is_quant_op) {
+        return false;
+    }
+    // Implied by bf16 ADD, but asserted: the gate is the sole guarantor of the factory's precondition.
+    if (attributes.is_sfpu) {
+        return false;
+    }
+    if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
+        return false;
+    }
+    if (attributes.binary_op_type != BinaryOpType::ADD) {
+        return false;
+    }
+    // Each activation adds a self-loop DFB whose multi-thread behaviour is unproven.
+    if (!attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
+        !attributes.post_activations.empty()) {
+        return false;
+    }
+    // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
+    if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
+        attributes.output_layout != Layout::TILE) {
+        return false;
+    }
+    if (a.dtype() != DataType::BFLOAT16 || b.dtype() != DataType::BFLOAT16) {
+        return false;
+    }
+    const auto& a_tile = a.tensor_spec().tile();
+    const auto& b_tile = b.tensor_spec().tile();
+    if (a_tile.get_height() != tt::constants::TILE_HEIGHT || a_tile.get_width() != tt::constants::TILE_WIDTH ||
+        b_tile.get_height() != tt::constants::TILE_HEIGHT || b_tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+
+    // The factory splits work off the OUTPUT, so the output spec is the authority for every check below.
+    const spec_return_value_t out_spec = compute_output_specs(attributes, tensor_args);
+
+    // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
+    // is_sfpu false. data_type(), not dtype(), on TensorSpec.
+    if (out_spec.data_type() != DataType::BFLOAT16) {
+        return false;
+    }
+
+    // NONE covers H/W only, so a leading-dim broadcast also reads as NONE. Require full-rank equality.
+    if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
+        return false;
+    }
+    // Load-bearing: a borrowed shard raises num_tiles_per_cycle above 1, which the strided multi-thread
+    // ring cannot express and the compute kernel's chunk loop assumes never happens.
+    if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
+        return false;
+    }
+    if (tensor_args.output_tensor.has_value() && tensor_args.output_tensor->memory_config().is_sharded()) {
+        return false;
+    }
+
+    // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
+    // Beyond that there is NO divisibility requirement: every kernel derives its own share from
+    // thread_id and num_threads, so a remainder just gives the low thread ids one extra tile, and
+    // split_work_to_cores already hands each core its own count. Threads that draw zero tiles are fine.
+    if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
+        return false;
+    }
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
+    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
+           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+}
+
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Order matters for the hot path: this runs on EVERY dispatch, cache hits included, and the native
+    // gate's first check is a cached bool that is false unless TTNN_QSR_NATIVE is set.
+    if (matches_quasar_native_slice(attributes, tensor_args)) {
+        return ProgramFactoryQuasarNative{};
+    }
     // DFB / Metal 2.0 is the default for the matching slice (arch-portable: CB-backed on WH/BH,
     // overlay-backed on Quasar). Everything else uses the descriptor path.
     if (matches_metal_v2_slice(attributes, tensor_args)) {
@@ -767,8 +846,8 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
                 mem_config_actual = MemoryConfig(
                     memory_layout,
                     mem_config_actual.buffer_type(),
-                    operations::experimental::quasar::binary_ng::utils::generate_shard_spec_all_cores(
-                        input_tensor_a, padded_out_shape, memory_layout));
+                    operations::experimental::quasar::binary_ng::utils::generate_shard_spec_specless(
+                        input_tensor_a, padded_out_shape, memory_layout, output_layout));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");

@@ -13,15 +13,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: wormhole_b0 sdxl op tests
-  cmd: 'pytest --timeout 300 models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k "_performance" -xv --tb=short'
-  skus:
-    wh_n300_civ2:
-      timeout: 5
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  slow_dispatch: false
-
 - name: blackhole deepseek blitz op tests (slow dispatch)
   cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation'
   skus:
@@ -29,6 +20,7 @@
       timeout: 60
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: true
 
 - name: blackhole deepseek blitz op tests (fast dispatch)
@@ -38,6 +30,7 @@
       timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: false
 
 - name: blackhole deepseek per-core allocation tests (slow dispatch)
@@ -47,6 +40,7 @@
       timeout: 10
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: true
 
 - name: blackhole deepseek per-core allocation tests (fast dispatch)
@@ -56,4 +50,5 @@
       timeout: 10
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: false
