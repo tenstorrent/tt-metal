@@ -37,10 +37,12 @@ constexpr auto kStall = std::chrono::seconds(30);
 // what keeps them running the same cases in the same order -- see the note in main().
 const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
 const std::vector<int64_t> kWindowFrames = {8, 32};
-const std::vector<int64_t> kIterations = {20000};
-const std::vector<int64_t> kWarmupPct = {10};
+const std::vector<int64_t> kIterations = {2000, 20000, 200000};
+const std::vector<int64_t> kWarmupPct = {0, 10, 25};
 const std::vector<int64_t> kPingPongIters = {2000};
-const std::vector<int64_t> kVerify = {0};
+// Both, as the other legs sweep it. Note frame_is_good() only checks the trailer length
+// here, so this proves delivery and framing rather than payload integrity.
+const std::vector<int64_t> kVerify = {0, 1};
 
 // SkipWithError marks the report but not the exit status, and analyze_hd_sockets.py drops
 // errored rows -- so a failed run would read as no data. main() returns this instead.
