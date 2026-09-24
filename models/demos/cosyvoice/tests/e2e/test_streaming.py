@@ -62,12 +62,15 @@ needs_golden = pytest.mark.skipif(
 # --------------------------------------------------------------------------
 # host tier
 # --------------------------------------------------------------------------
-def test_session_pauses_the_vocoder_weight_check_until_closed():
-    """A stream runs the vocoder with its prepared-weight check off, and close restores it.
+def test_session_pauses_the_vocoder_weight_check_only_when_asked():
+    """A session keeps the vocoder's prepared-weight check on unless it is asked to pause it,
+    and both `resume_weight_check` and `close` restore it, idempotently.
 
-    The check can switch a geometry to the op's own weight preparation, which allocates on
-    every call, and an interleaved stream calls the vocoder with the LLM's decode trace
-    live. No device: only the flags on the generator's convolutions are exercised.
+    The pause is for the interleaved stream alone, which calls the vocoder with the LLM's
+    decode trace live, where the check's allocations are the hazard. Any other session left
+    unchecked runs a geometry's prepared weight on trust, and on Wormhole some are wrong
+    (`docs/VALIDATION.md`, Streaming content on Wormhole). No device: only the flags on the
+    generator's convolutions are exercised.
     """
     from models.demos.cosyvoice.tt.hifigan.conv import TtConv1d
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
@@ -80,7 +83,17 @@ def test_session_pauses_the_vocoder_weight_check_until_closed():
     hift.stages = [convs[0], (convs[1], [convs[2]])]  # nested, as the real ones are
     synth = SimpleNamespace(cfg=StreamConfig(), hift=hift)
 
-    with StreamSession(synth, None, None) as session:
+    with StreamSession(synth, None, None):
+        assert all(c._verify for c in convs), "a session that was not asked to pause paused the check"
+
+    with StreamSession(synth, None, None, pause_weight_check=True) as session:
+        assert not any(c._verify for c in convs)
+        session.resume_weight_check()
+        assert all(c._verify for c in convs)
+        session.resume_weight_check()  # a second resume must not flip anything
+    assert all(c._verify for c in convs)
+
+    with StreamSession(synth, None, None, pause_weight_check=True) as session:
         assert not any(c._verify for c in convs)
         session.close()  # a second close must not flip anything
     assert all(c._verify for c in convs)
@@ -110,7 +123,7 @@ def test_incremental_session_cuts_the_same_chunks_as_the_batch_loop():
             self.cfg = cfg
             self.spans = []
 
-        def _one(self, chunk_tokens, ctx, state, rng, finalize):
+        def _one(self, chunk_tokens, ctx, state, rng, finalize, release_flow_trace=False):
             self.spans.append((tuple(chunk_tokens), finalize))
             return None, 0
 
@@ -231,7 +244,7 @@ def _mel_of(wav: torch.Tensor, n_fft=1024, hop=256, n_mels=80) -> torch.Tensor:
 @needs_weights
 @needs_golden
 @needs_l1_small
-def test_device_streamed_matches_non_streamed(device):
+def test_device_streamed_matches_non_streamed(device, unchecked_prepared_weights):
     """The same tokens and the same seed, chunked and whole, compared as audio.
 
     Both runs go through the identical flow decoder and vocoder on device; the only
@@ -312,7 +325,10 @@ def test_device_streamed_matches_non_streamed(device):
     for t in (mel, whole, src):
         ttnn.deallocate(t)
 
-    # ---- streamed
+    # ---- streamed. No LLM trace is live anywhere in this test, so the stream checks each
+    # chunk geometry's prepared vocoder weights as it meets them; a weight that ran unchecked
+    # is how Wormhole's wrong ones at some `ttnn.conv1d` lengths get into the audio.
+    unchecked = unchecked_prepared_weights(hift)
     synth = TtStreamingSynthesizer(device, flow, hift)
     chunks = synth.synthesize(generated, ctx, rng)
     pieces = [ttnn.to_torch(c).float().reshape(1, -1) for c in chunks]
@@ -350,6 +366,7 @@ def test_device_streamed_matches_non_streamed(device):
     print("    PyTorch reference, same comparison: sample -0.0260, mel 0.6689, envelope 0.6562")
 
     assert len(pieces) >= 2, "the run produced a single chunk; nothing was streamed"
+    assert not unchecked, f"prepared weights ran unchecked: {sorted(set(unchecked))}"
     assert streamed.shape[1] == offline.shape[1], (streamed.shape, offline.shape)
     assert mel_corr >= 0.85, mel_corr
     assert env_corr >= 0.85, env_corr
