@@ -105,7 +105,9 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~90 s. 117 tests.
+cd $TT_METAL_HOME
+
+# host tier: no device, no silicon, under a minute. 117 tests.
 pytest models/experimental/cosyvoice/tests/ -k "not device"
 
 # device tier: needs /dev/tenstorrent. 54 device tests here, 15 more in perf below;
@@ -119,9 +121,11 @@ pytest models/experimental/cosyvoice/tests/pcc/ models/experimental/cosyvoice/te
 # CI host down, see docs/VALIDATION.md.
 pytest models/experimental/cosyvoice/tests/perf/ -v -s
 
-# two of those device tests want prompt .npz files from prepare_inputs.py and
-# skip without them; point COSYVOICE_INPUTS at the directory it wrote.
-COSYVOICE_INPUTS=/path/to/inputs pytest models/experimental/cosyvoice/tests/e2e/ -v
+# five device tests want the prompt .npz files scripts/prepare_inputs.py writes
+# and skip without them: four in e2e/, and in perf/ the per-utterance RTF test
+# that RTF < 0.5 is judged on. Point COSYVOICE_INPUTS at the directory it wrote.
+COSYVOICE_INPUTS=/path/to/inputs pytest models/experimental/cosyvoice/tests/e2e/ \
+    models/experimental/cosyvoice/tests/perf/ -v -s
 ```
 
 Without the goldens and the weight exports in `tests/golden` (Quick start, step 3), the
@@ -132,6 +136,7 @@ a run that prints it has not tested the port.
 ### Demo
 
 ```bash
+cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 python models/experimental/cosyvoice/demo/demo.py --out out.wav
 ```
@@ -151,6 +156,7 @@ export above -- `llm.pt` differs across all three checkpoints and `flow.pt` diff
 `hift.pt` is identical across all three, so one export covers every mode):
 
 ```bash
+cd $TT_METAL_HOME/models/experimental/cosyvoice
 export PYTHONPATH=$COSYVOICE_PYTHONPATH
 mkdir -p tests/golden/per_mode
 $COSYVOICE_PY scripts/export_weights.py --checkpoint CosyVoice-300M-SFT --module llm --fp16 \
@@ -162,12 +168,13 @@ $COSYVOICE_PY scripts/export_weights.py --checkpoint CosyVoice-300M-SFT --module
 ```
 
 ```bash
+cd $TT_METAL_HOME/models/experimental/cosyvoice
+
 # in the reference venv, once:
-$COSYVOICE_PY scripts/prepare_inputs.py --out-dir /tmp/sweep --langs en
+PYTHONPATH=$COSYVOICE_PYTHONPATH $COSYVOICE_PY scripts/prepare_inputs.py --out-dir /tmp/sweep --langs en
 
 # in tt-metal's python_env, on device:
-export PYTHONPATH=$TT_METAL_HOME
-python models/experimental/cosyvoice/demo/demo.py --inputs /tmp/sweep --out /tmp/cosy_demo
+PYTHONPATH=$TT_METAL_HOME python demo/demo.py --inputs /tmp/sweep --out /tmp/cosy_demo
 ```
 
 Writes `sft_en.wav`, `zero_shot_en.wav`, `cross_lingual_en.wav` and `instruct_en.wav` into
@@ -175,15 +182,23 @@ Writes `sft_en.wav`, `zero_shot_en.wav`, `cross_lingual_en.wav` and `instruct_en
 excitation per mode through `tt.pipeline.CosyVoiceTTNN.synthesize` — real synthesis, not
 reproduction, so there is nothing to score it against and no two runs sound identical.
 `--modes sft,instruct` restricts the loop; `--lang` picks which of
-`prepare_inputs.py --langs`'s outputs to use (default `en`). The full mode × language
-sweep, scored, is `run_reference.py` and `eval_wer_sim.py` below.
+`prepare_inputs.py --langs`'s outputs to use (default `en`). The mode × language sweeps, in the
+reference and on device, and their scoring are below.
 
 ### Reference baseline and scoring
 
 ```bash
+cd $TT_METAL_HOME/models/experimental/cosyvoice
+
+# the reference, in its venv
 export PYTHONPATH=$COSYVOICE_PYTHONPATH
 $COSYVOICE_PY scripts/run_reference.py --out /tmp/ref
 $COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/ref
+
+# on device, scored by the same code: zero-shot and cross-lingual by default, the modes
+# the base weights serve, over prepare_inputs.py's output (without --langs for all five)
+PYTHONPATH=$TT_METAL_HOME python demo/sweep.py --inputs /tmp/sweep --out-dir /tmp/dev
+$COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/dev
 ```
 
 > Never run scoring and synthesis at the same time. Whisper large-v3 is ~9 GB
@@ -246,11 +261,11 @@ PCC ≈ 0.3.
 
 ## Why the vocoder is the interesting part
 
-TTNN has no FFT of any kind. A case-insensitive search for `fft|rfft|irfft|stft|istft`
-across `ttnn/` and `tt_metal/` returns nothing. HiFTNet ends in an inverse STFT, so the
-vocoder looks unportable — and is usually left on the host.
+HiFTNet ends in an inverse STFT, and TTNN has no STFT; its only transform is the
+general-purpose `ttnn.experimental.fft` / `ifft`. So the vocoder looks like the part to
+leave on the host, as it usually is.
 
-It does not actually block anything, because CosyVoice uses `n_fft = 16`. At that
+It needs no FFT at all, because CosyVoice uses `n_fft = 16`. At that
 size the inverse DFT of 9 one-sided bins is a fixed 16×9 real matrix pair, smaller than a
 single 32×32 tile. So it is a matmul — and a matmul maps onto the FPU, the widest unit
 on a Tensix core. Windowing and overlap-add then fuse into a single
@@ -285,9 +300,10 @@ See `tt/hifigan/istft.py` for the derivation and `tests/pcc/test_istft.py` for t
 | Perf targets | **Asserted, not printed**, through [`tests/perf/gates.py`](tests/perf/gates.py) — mechanism in [`docs/VALIDATION.md`](docs/VALIDATION.md#how-the-numeric-thresholds-are-enforced). |
 
 Measured performance and accuracy figures are in [`PERF.md`](PERF.md): the end-to-end
-RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are met on
-which part, and the per-module PCCs under [§ Accuracy](PERF.md#7-accuracy). The few PCCs
-quoted in this file support an argument; PERF.md is the record.
+RTF, per utterance as `synthesize` runs it (which `RTF < 0.5` is judged on) and in the
+steady state, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are
+met on which part, and the per-module PCCs under [§ Accuracy](PERF.md#7-accuracy). The few
+PCCs quoted in this file support an argument; PERF.md is the record.
 
 [`docs/VALIDATION.md`](docs/VALIDATION.md) maps every requirement in the bring-up scope
 to the test that decides it, and is the one place for unmet requirements, open defects
@@ -309,7 +325,11 @@ of a cycle over an utterance — finer than Tensix arithmetic delivers. So wavef
 ```
 models/experimental/cosyvoice/
 ├── README.md                    this file
+├── PERF.md                      every measured figure
 ├── requirements-reference.txt   reference-environment pins (CPU)
+├── demo/
+│   ├── demo.py                  one utterance, or every mode from prepare_inputs.py's output
+│   └── sweep.py                 the mode x language sweep on device, laid out for scoring
 ├── docs/
 │   ├── VALIDATION.md            every requirement -> the test that decides it
 │   ├── security.md              dependency review, and the open-advisory disposition
@@ -317,20 +337,27 @@ models/experimental/cosyvoice/
 ├── scripts/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
 │   ├── gen_golden.py            capture per-module goldens from the reference
+│   ├── export_weights.py        flatten each submodule's weights for the device
+│   ├── prepare_inputs.py        run the host front-end once, write per-case .npz
 │   ├── run_reference.py         4 modes x 5 languages, with tok/s + RTF
-│   └── eval_wer_sim.py          WER/CER + speaker similarity
+│   ├── eval_wer_sim.py          WER/CER + speaker similarity
+│   └── probe_*.py               one-off measurements that PERF.md and VALIDATION.md cite
 ├── tt/
 │   ├── model_config.py          every dtype, memcfg and shape constant
 │   ├── common.py                golden loading, PCC, weight_norm folding
+│   ├── weights.py               loading the flat weight exports
+│   ├── pipeline.py              CosyVoiceTTNN: synthesize, synthesize_streaming
+│   ├── streaming.py             chunked flow and vocoder with carried caches
 │   ├── llm/                     text encoder, AR decoder, rel-pos attention, RAS
 │   ├── flow/                    conformer encoder, length regulator, CFM, estimator
 │   └── hifigan/                 upstream's path name; the model is HiFTNet
 │       └── istft.py             the iSTFT identity  <- the enabling result
 └── tests/
+    ├── conftest.py              says when goldens or weight exports are absent
     ├── golden/                  captured .npz + manifest.json
     ├── pcc/                     per-module PCC >= 0.99
-    ├── e2e/                     4 modes x 5 languages, exact-token, WER, SIM
-    └── perf/                    tok/s and RTF thresholds
+    ├── e2e/                     pipeline API, streaming, token agreement, the scorer
+    └── perf/                    tok/s and RTF thresholds, batching, trace, streaming latency
 ```
 
 ---
