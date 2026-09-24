@@ -3421,7 +3421,7 @@ void for_each_program_command(
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
-    WriteData&& write_data_to_cq) {
+    const WriteData& write_data_to_cq) {
     // Write the preamble
     write_data_to_cq(
         program_command_sequence.preamble_command_sequence.data(),
