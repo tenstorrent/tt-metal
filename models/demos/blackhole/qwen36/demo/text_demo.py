@@ -534,12 +534,15 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
         _rep = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
         _nr = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-        if model.mtp is not None and _temp == 0 and _rep == 1.0 and _nr == 0:
+        # Permuted RoPE (9B/N300 only) shards decode cos/sin on rope_k_shard_cfg -- one user per
+        # core -- which the spec reseed's multi-row window overflows. Only the 27B is prepared.
+        _permuted_rope = getattr(model.args, "rope_permuted_enabled", False)
+        if model.mtp is not None and not _permuted_rope and _temp == 0 and _rep == 1.0 and _nr == 0:
             logger.info("[TP] MTP speculative decode (default path; QWEN36_SPEC=0 opts out)")
             return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         logger.info(
-            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, temp={_temp}, rep={_rep}, "
-            f"no_repeat={_nr}); it needs an MTP head + pure greedy. Using plain decode."
+            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, permuted_rope={_permuted_rope}, "
+            f"temp={_temp}, rep={_rep}, no_repeat={_nr}); it needs an MTP head + pure greedy. Using plain decode."
         )
     else:
         logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
