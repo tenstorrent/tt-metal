@@ -35,8 +35,8 @@ public:
         uint32_t height = 0;
     };
 
-    // The one instance. Public because provision() and reserved_base() are members now:
-    // a caller needs the region before it can ask the region for anything.
+    // The one instance, bound by the first provision() to that mesh and no other -- see
+    // owner_. Public because a caller needs the region before it can ask it for anything.
     static HostRegion& storage();
 
     // storage() hands out a reference and the private default ctor does NOT make the copy
@@ -121,6 +121,9 @@ private:
     uint64_t region_bytes_ = 0;
     uint32_t reserved_cores_ = 0;
     bool provisioned_ = false;
+    // The one mesh this process-wide region belongs to. Kept across release(): the aliases
+    // are declared before provision(), so a later mesh would inherit the first one's.
+    const tt::tt_metal::distributed::MeshDevice* owner_ = nullptr;
 
     // What each overlay left this region free to write: fill_ is where a socket's own
     // metadata starts, mapped_ where the overlay ends. The gap between them is not ours.

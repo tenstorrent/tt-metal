@@ -259,6 +259,11 @@ void HostRegion::provision(
     if (provisioned_) {
         throw std::runtime_error("HostRegion::provision called twice; release() first to provision again");
     }
+    // One object for the process, holding one mesh's pin, device address and alias geometry.
+    // Outlives release(), because the aliases a later mesh inherits were declared before it.
+    if (owner_ != nullptr && owner_ != mesh_device.get()) {
+        throw std::runtime_error("HostRegion::provision: this region already belongs to another mesh");
+    }
     // The overlays MAP_FIXED onto the mapping, so it has to exist before they are built,
     // which puts reserved_base() ahead of this call rather than inside it.
     if (region_ == nullptr) {
@@ -339,6 +344,8 @@ void HostRegion::provision(
     reset_arenas();
     publish_header(header(), cores_in_use, topology, grid, chip, want, device_);
     provisioned_ = true;
+    // Only now: a throw above leaves the region unbound rather than owned by a failed mesh.
+    owner_ = mesh_device.get();
 }
 
 void HostRegion::reset_arenas(uint8_t fill) {
