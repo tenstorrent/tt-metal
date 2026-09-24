@@ -38,9 +38,9 @@ components:
     name: KV cache write at chunk offset
     block: attention
     ref: cache[:, start:end] = k, v
-    ttnn: ttnn.fill_cache(update_idx=start)  (contract layout in P2.15)
+    ttnn: paged_fill_cache (bf16 attention cache) + deepseek_prefill.update_padded_kv_cache (bf8 contract cache)
     tag: NATIVE
-    task: P2.6
+    task: P2.15
   - id: sdpa
     name: Chunked causal GQA attention
     block: attention
@@ -111,6 +111,13 @@ components:
     ttnn: ttnn.linear (vocab-sharded), gather on host
     tag: NATIVE
     task: P2.11
+  - id: engine
+    name: Prefill-server adapter + runtime (ernie45_d_p)
+    block: model
+    ref: common/prefill PrefillModelAdapter contract
+    ttnn: KV chunk address table (disaggregation) + producer read-back
+    tag: NATIVE
+    task: P2.16
   - id: mtp
     name: Multi-token-prediction block (mtp_block.0)
     block: model
@@ -118,3 +125,35 @@ components:
     ttnn: out of scope
     tag: CPU
     task: null
+
+# Things a reader of the dashboard should know: missing/limited TTNN ops (tagged), harness pitfalls.
+findings:
+  - tag: TTNN-GAP
+    title: No fused MoE op for this routing scheme
+    text: >-
+      Routed experts are COMPOSED (router from linear/softmax/topk/gather/scatter; experts as dense-EP matmuls).
+      Correct (PCC >= 0.9999), but it spends 16/6 more expert FLOPs than needed. Next step: ttnn.sparse_matmul.
+  - tag: TTNN-GAP
+    title: ttnn.scatter has no fp32 TILE path
+    text: The dense routing matrix is scattered in bf16. Selection and renormalization stay fp32 (99.9% expert agreement).
+  - tag: TTNN-GAP
+    title: slice / mesh_partition need 32-aligned widths
+    text: >-
+      A 16-expert column split of the [S, 64] routing matrix is not tile-aligned. Workaround: routing @ M_j selector
+      matmul, which yields the per-expert weight already broadcast to [S, 2560].
+  - tag: HARNESS
+    title: Precompile stub of comp_pcc leaks into the real pass
+    text: >-
+      tests/plugins/up_front_collect.py rebinds comp_pcc -> (True, 0.999999) for the collect pass. Lazily-imported
+      call sites (e.g. the prefill producer's KV check) still see the stub in the real pass, so every KV PCC reads
+      0.999999. P2.16 runs with --no-precompile and cross-checks against an independent PCC.
+  - tag: HARNESS
+    title: Ambient PYTHONPATH pointed at another checkout
+    text: >-
+      PYTHONPATH=/localdev/dnijemcevic/tt-metal made plain pytest import models.demos.common from the other tree.
+      gate.py now pins PYTHONPATH to this repo for every gate command.
+  - tag: CONTRACT
+    title: ERNIE K is natively in Meta (interleaved) RoPE order
+    text: >-
+      The producer's GQA reader normally permutes golden K from HF to Meta order. The ERNIE adapter declares
+      golden_k_rope_layout = interleaved, and the producer skips the permutation (2-line change in prefill_producer.py).

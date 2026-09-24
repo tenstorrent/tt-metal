@@ -254,3 +254,20 @@ tasks:
       metrics:
         pcc_kv_contract_min: ">= 0.97"
         contract_checks_failed: "== 0"
+
+  - id: P2.16
+    title: Prefill-server engine contract - adapter + runtime + producer KV read-back
+    phase: P2
+    paths: [models/demos/ernie45_d_p/tt, models/demos/ernie45_d_p/tests, models/demos/ernie45_d_p/config.py, models/demos/common/prefill/adapter.py, models/demos/common/prefill/runners/prefill_producer.py]
+    deps: [P2.15]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/ernie45_d_p/tests/test_adapter.py
+      metrics:
+        pcc_producer_kv_k: ">= 0.97"
+        pcc_producer_kv_v: ">= 0.97"
+        pcc_kv_independent_min: ">= 0.97"
+        producer_vs_independent_pcc_gap: "<= 0.0001"
+        engine_checks_failed: "== 0"
+    notes: >-
+      Registered as "ernie45_d_p" in common/prefill ADAPTER_PATHS; producer GQA reader skips the HF->Meta K
+      permutation (golden_k_rope_layout = interleaved). Driven only through the engine interface, slot 1 of 2.
