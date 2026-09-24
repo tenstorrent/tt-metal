@@ -804,10 +804,13 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
-    if (static_allocator->get_num_sender_channels(2) > 0) {
-        size_t vc2_flat = static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
-        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
-            sender_channels_buffer_index_semaphore_id[vc2_flat];
+    if (sender_counts[2] > 0) {
+        // The kernel uses this router's channel counts. The worker uses the shared allocation's cursor address.
+        const size_t vc2_channel = sender_counts[0] + sender_counts[1];
+        const size_t vc2_allocation =
+            static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
+        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_channel] =
+            sender_channels_buffer_index_semaphore_id[vc2_allocation];
     }
 
     // Add this log right at the beginning of the constructor body

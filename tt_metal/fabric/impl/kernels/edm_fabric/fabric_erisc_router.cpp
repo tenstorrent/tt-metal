@@ -3225,13 +3225,17 @@ void kernel_main() {
         (([&]<size_t I>() {
              if constexpr (is_sender_channel_serviced[I]) {
                  *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0;
-                 // Zero the whole SenderChannelProducerCursor block, not just its first word: the
-                 // producer reads the block back in one NOC read at connection open, so every field
-                 // must be initialized here. This is the only time the router touches it.
-                 auto* const producer_cursor =
-                     reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]);
-                 for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
-                     producer_cursor[w] = 0;
+                 // Only worker channels use a saved producer cursor. Forwarded channels have no cursor address.
+                 if constexpr (I == 0 || (MAX_NUM_SENDER_CHANNELS_VC2 > 0 && I == VC2_SENDER_CHANNEL_START)) {
+                     const auto cursor_addr = local_sender_channel_connection_buffer_index_ids[I];
+                     ASSERT(cursor_addr != 0);
+                     ASSERT(cursor_addr % 16 == 0);
+                     // A worker reads the whole block at connection open. Initialize every field.
+                     auto* const producer_cursor = reinterpret_cast<volatile uint32_t*>(cursor_addr);
+                     for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t);
+                          ++w) {
+                         producer_cursor[w] = 0;
+                     }
                  }
              }
          }.template operator()<Is>()),
