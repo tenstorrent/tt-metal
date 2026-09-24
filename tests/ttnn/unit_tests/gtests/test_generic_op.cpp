@@ -41,6 +41,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
@@ -1635,8 +1636,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     receiver_device->quiesce_devices();
 
     std::vector<uint32_t> sender_status;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1646,8 +1647,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
 
     std::vector<uint32_t> receiver_status;
 
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
