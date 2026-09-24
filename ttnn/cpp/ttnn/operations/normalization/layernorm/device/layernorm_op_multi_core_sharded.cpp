@@ -403,7 +403,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // the kernel specs declare it, so the run args come first.
     auto [run_args, writer_num_varargs] =
         build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
-    add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
+    add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs, device->arch());
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

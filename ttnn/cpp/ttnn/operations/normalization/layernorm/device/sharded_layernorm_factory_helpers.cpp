@@ -1233,15 +1233,38 @@ void add_kernel_and_work_unit_specs(
     const WorkerDistribution& workers,
     const GridParams& grid,
     const SpecConfig& c,
-    uint32_t writer_num_varargs) {
+    uint32_t writer_num_varargs,
+    tt::ARCH arch) {
     const bool has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
-    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    // Quasar (Gen2) rejects a DataMovementGen1Config on a KernelSpec; its explicit processor/noc/noc_mode
+    // placement has no Gen2 equivalent (the framework places the kernel and picks the NOC). Emit a Gen2
+    // config there; WH/BH keep the explicit Gen1 placement with the mcast-specific reader/writer NOCs.
+    // Mirrors the non-sharded LN factory (layernorm_op_multi_core.cpp), which uses
+    // create_reader/writer_datamovement_config(arch), and the untilize/i2s Gen1->Gen2 ports.
+    //
+    // Bare Gen2 config (implicit sync ON): the reader_sender mcasts the reduction stats to the receiver
+    // cores, whose input DFB is posted by that remote mcast write via implicit-sync txn tracking (a
+    // receiver cannot explicitly push data it did not produce). NOTE: the sharded LN's all-to-all mcast
+    // reduction does NOT correctly post the receiver DFB counter on Quasar (qsr_tile_counter_check_error:
+    // posted=0 acked=2) -- a deeper Quasar mcast-DFB-credit bug, independent of this config. See
+    // [[project_llama_e2e_pcc_log_quasar]] / the sharded-LN Quasar workaround (route decode norm
+    // interleaved).
+    const bool is_quasar = arch == tt::ARCH::QUASAR;
+    const m2::DataMovementHardwareConfig reader_hw = is_quasar
+                                                         ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{}}
+                                                         : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                                                               .processor = DataMovementProcessor::RISCV_0,
+                                                               .noc = c.reader_noc,
+                                                               .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+    const m2::DataMovementHardwareConfig writer_hw = is_quasar
+                                                         ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{}}
+                                                         : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                                                               .processor = DataMovementProcessor::RISCV_1,
+                                                               .noc = c.writer_noc,
+                                                               .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
 
     // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
     // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the
