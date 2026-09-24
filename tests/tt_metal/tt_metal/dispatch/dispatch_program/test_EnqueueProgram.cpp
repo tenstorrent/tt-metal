@@ -2349,10 +2349,14 @@ Program make_gen2_random_program(
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
-    uint32_t NUM_WORKLOADS = 100;
-    uint32_t MAX_LOOP = 100;
+    const bool is_quasar = this->arch_ == tt::ARCH::QUASAR;
+    // Half of what the single-CQ variant uses: the dispatch loop below repeats per command queue, so
+    // the emulator pays for every workload twice.
+    uint32_t NUM_WORKLOADS = is_quasar ? 25 : 100;
+    uint32_t MAX_LOOP = is_quasar ? 16 : 100;
     // Smaller page size for architectures with more DFB slots so all test CBs still fit in L1
     constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    const uint32_t max_buffers = is_quasar ? std::min(max_dfbs_, k_gen2_max_num_dfbs) : max_dfbs_;
     uint32_t page_size = l1_cb_test_budget / max_dfbs_;
 
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
@@ -2375,6 +2379,23 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
+
+        if (is_quasar) {
+            // The first program takes the maximum of everything, to be sure that case compiles and runs.
+            const bool use_max = i == 0;
+            workload.add_program(
+                this->device_range_,
+                make_gen2_random_program(
+                    *device_,
+                    cr_set,
+                    MAX_LOOP,
+                    page_size,
+                    use_max ? max_buffers : rand() % max_buffers + 1,
+                    use_max ? NUM_SEMAPHORES : rand() % NUM_SEMAPHORES + 1,
+                    /*use_max_rt_args=*/use_max,
+                    /*use_max_loop=*/use_max));
+            continue;
+        }
 
         Program program;
         workload.add_program(this->device_range_, std::move(program));
@@ -2583,8 +2604,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         }
 
         // This loops assumes already cached
-        uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
-                                        // iterations, need to come back to that
+        uint32_t NUM_ITERATIONS = is_quasar ? 2 : 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very
+                                                        // large number of iterations, need to come back to that
+        const uint32_t log_interval = std::max<uint32_t>(NUM_ITERATIONS / 10, 1);
 
         log_info(
             tt::LogTest,
@@ -2595,7 +2617,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
             auto rng = std::default_random_engine{};
             std::shuffle(std::begin(workloads), std::end(workloads), rng);
-            if (i % 10 == 0) {
+            if (i % log_interval == 0) {
                 log_debug(
                     tt::LogTest,
                     "Enqueuing {} programs on cq {} for iter: {}/{} now.",
