@@ -99,11 +99,14 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
 
 
 # (share of a token's picks landing in its own dispatch group, weight on the hot half of that group's
-# chips). 0.25 is the uniform share: production spreads picks over every group's experts, so about
-# 1/num_dispatch_groups of them land in group and the rest resolve to -1. The hot-half weight is the
-# only knob concentrating the survivors onto a few destination chips; it is not calibrated against a
-# captured layer, so treat it as a skew that exercises the path rather than a production figure.
-PRODUCTION_ROUTING = (0.25, 3.0)
+# chips). Calibrated against captured MoE layers: the ones the perf harness ranks first sit at a 37%
+# in-group share (see the capture table in perf/test_dispatch_combine_perf.py), against 25% for an
+# evenly spread layer. The hot-half weight is what concentrates the survivors onto a few destination
+# chips, which is where the link load the transport is measured on comes from.
+#
+# The two knobs move together and must stay a calibrated pair: an in-group share from one layer with
+# the skew from another describes no real routing, and the device time it produces matches nothing.
+PRODUCTION_ROUTING = (0.372, 2.0)
 
 
 def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weight):
