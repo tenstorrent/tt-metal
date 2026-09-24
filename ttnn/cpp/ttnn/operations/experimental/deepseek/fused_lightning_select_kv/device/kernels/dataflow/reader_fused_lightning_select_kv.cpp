@@ -70,16 +70,16 @@ void kernel_main() {
 
     // Entry 0 tells compute how many blocks to score. Entry 1 stays reserved and never pushed: it is
     // this kernel's scratch for page-table chunks.
-    DPRINT(
-        "cur_pos: {}, core_index:{} total_num_blocks: {}, work_per_core: {}, start_block: {}, end_block: {}, "
-        "num_blocks_to_process: {}\n",
-        cur_pos_value,
-        core_index,
-        total_num_blocks,
-        work_per_core,
-        start_block,
-        end_block,
-        end_block - start_block);
+    // DPRINT(
+    //     "cur_pos: {}, core_index:{} total_num_blocks: {}, work_per_core: {}, start_block: {}, end_block: {}, "
+    //     "num_blocks_to_process: {}\n",
+    //     cur_pos_value,
+    //     core_index,
+    //     total_num_blocks,
+    //     work_per_core,
+    //     start_block,
+    //     end_block,
+    //     end_block - start_block);
     ctrl_dfb.reserve_back(2);
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_dfb.get_write_ptr())[0] = end_block - start_block;
     ctrl_dfb.push_back(1);
