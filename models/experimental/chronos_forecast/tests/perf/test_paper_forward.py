@@ -14,6 +14,7 @@ published 120M geometry (d_model=768, 12 layers, 12 heads, d_kv=64).
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -101,9 +102,10 @@ def _load_reference():
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_paper_forward_perf(mesh_device):
     """Time one steady-state forward at the Chronos-2 paper shape."""
-    pytest.importorskip("ttnn")
+    ttnn = pytest.importorskip("ttnn")
 
     from models.experimental.chronos_forecast.tt.model import TtChronos, tt_chronos_config_from_torch_model
+    from tracy import Profiler, signpost
 
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
@@ -128,12 +130,31 @@ def test_paper_forward_perf(mesh_device):
 
     cold_start = time.perf_counter()
     cold = tt.forward(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
+    ttnn.synchronize_device(mesh_device)
     cold_s = time.perf_counter() - cold_start
     assert cold.shape == expected_shape
 
-    steady_start = time.perf_counter()
-    got = tt.forward(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
-    steady_s = time.perf_counter() - steady_start
+    # Keep compile/warmup records outside the measured Tracy region. Device
+    # profiler buffers are finite, so drain the cold pass before profiling the
+    # single steady-state forward.
+    device_profiler_enabled = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if device_profiler_enabled:
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    profiler = Profiler()
+    signpost("chronos_forward_start")
+    profiler.enable()
+    try:
+        steady_start = time.perf_counter()
+        got = tt.forward(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
+        ttnn.synchronize_device(mesh_device)
+        steady_s = time.perf_counter() - steady_start
+    finally:
+        profiler.disable()
+        signpost("chronos_forward_stop")
+        if device_profiler_enabled:
+            ttnn.ReadDeviceProfiler(mesh_device)
+
     assert got.shape == expected_shape
 
     series_per_s = BATCH / steady_s
