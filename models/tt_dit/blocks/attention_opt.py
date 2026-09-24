@@ -692,20 +692,32 @@ class Attention(Module):
             )
         else:
             assert (
-                sequence_1_length == spatial.shape[1]
+                sequence_1_length == sequence_1.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
-            spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                add_q,
-                add_k,
-                add_v,
-                joint_strategy="rear",
-                program_config=self.sdpa_program_config,
-                **self._sdpa_kwargs(),
-            )
+            if self.sdpa_precision is not None and add_q.shape[2] == 0:
+                # Recipe joint segments need positive lengths: an empty joint is plain SDPA.
+                spatial = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    is_causal=False,
+                    program_config=self.sdpa_program_config,
+                    **self._sdpa_kwargs(),
+                )
+                sequence_2 = None
+            else:
+                spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    add_q,
+                    add_k,
+                    add_v,
+                    joint_strategy="rear",
+                    program_config=self.sdpa_program_config,
+                    **self._sdpa_kwargs(),
+                )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if self.to_out is not None:
