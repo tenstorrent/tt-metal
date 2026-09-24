@@ -213,9 +213,17 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        score_func: str = "sigmoid",
+        hash_table: Optional[torch.Tensor] = None,
+        activation=None,
     ):
         """
         Initialize TtMoe module.
+
+        DeepSeek-V4 additions (defaults keep every other model byte-identical): ``score_func`` is the gate's scoring
+        function ("sigmoid" | "sqrtsoftplus"); ``hash_table`` is the tid2eid table for the hash-routed layers
+        (``gate_fallback_mode`` HASH_HOST / HASH_DEVICE; ``forward(input_ids=...)`` then supplies the token ids);
+        ``activation`` overrides the routed experts' fused activation (default ``RoutedExpertActivation.Silu``).
 
         Args:
             mesh_device: TTNN mesh device
@@ -338,6 +346,7 @@ class TtMoe(LightweightModule):
             n_limited_groups=n_limited_groups,
             route_scale=route_scale,
             max_sp_dim=max_gate_seq_len_per_chip,
+            score_func=score_func,
         )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
         # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
@@ -361,6 +370,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
             is_balanced=is_balanced,
+            hash_table=hash_table,
         )
 
         self.routing_setup = TtMoERoutingSetup(
@@ -482,7 +492,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=ttnn.RoutedExpertActivation.Silu if activation is None else activation,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -559,9 +569,13 @@ class TtMoe(LightweightModule):
         padding_side: str = "right",
         actual_start: Optional[int] = None,
         metadata: Optional[tuple] = None,
+        input_ids: Optional[torch.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
+
+        ``input_ids`` (host tensor, total tokens in SP order) is required by the DeepSeek-V4 hash-routed gate modes
+        and ignored otherwise.
 
         Args:
             x: Input tensor - ROW_MAJOR, sharded:
@@ -635,7 +649,10 @@ class TtMoe(LightweightModule):
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        if actual_isl is not None and self.gate.fallback_mode in (
+            GateComputeMode.DEVICE_FP32,
+            GateComputeMode.HASH_DEVICE,
+        ):
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
@@ -653,6 +670,7 @@ class TtMoe(LightweightModule):
             padding_side=padding_side,
             padding_config=padding_config,
             actual_start=actual_start or 0,
+            input_ids=input_ids,
         )
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
