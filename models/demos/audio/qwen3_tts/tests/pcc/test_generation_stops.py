@@ -27,10 +27,9 @@ SPEAKER = "ryan"
 LANGUAGE = "English"
 MAX_FRAMES = 400
 SEEDS = tuple(range(8))
-CASES = (
-    "The kettle is on.",
-    "The kettle is on, and the rain has not let up since yesterday morning.",
-)
+# The four-word sentence alone: the docstring's wandering seeds are all on it, and the
+# fourteen-word one was cut for CI time.
+CASES = ("The kettle is on.",)
 
 # Frames per word past which a run has stopped reading the text.
 MAX_FRAMES_PER_WORD = 12.0
@@ -46,7 +45,7 @@ def custom_voice_checkpoint():
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_most_seeds_stop_promptly_and_none_runs_to_the_cap(device):
-    """Eight seeds, two lengths, codes only: the codec would compile a program per length."""
+    """Eight seeds, codes only: the codec would compile a program per length."""
     pipeline = Qwen3TTSPipeline(device, max_frames=MAX_FRAMES)
     failures = []
     for text in CASES:

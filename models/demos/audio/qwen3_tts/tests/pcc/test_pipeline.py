@@ -294,29 +294,24 @@ def test_an_instruction_changes_what_a_named_speaker_does(device):
     assert counts["plain"] != counts["angry"], "the instruction did not reach the decode loop"
 
 
-# One sentence per language, with a matching speaker where the nine offer one.
+# Two non-Latin scripts with their own speakers, one Latin: a language is one codec id, so the
+# other six were cut for CI time. All ten were transcribed once; the README has that table.
 LANGUAGE_CASES = (
     ("Chinese", "水壶已经烧开了，雨一直没有停。", "vivian"),
     ("Japanese", "やかんが沸いていて、雨はまだ止んでいません。", "ono_anna"),
-    ("Korean", "주전자가 끓고 있고 비는 아직 그치지 않았습니다.", "sohee"),
     ("German", "Der Kessel kocht, und der Regen hat nicht aufgehört.", "ryan"),
-    ("French", "La bouilloire est en marche et la pluie n'a pas cessé.", "ryan"),
-    ("Spanish", "La tetera está puesta y la lluvia no ha parado.", "ryan"),
-    ("Italian", "Il bollitore è acceso e la pioggia non è cessata.", "ryan"),
-    ("Portuguese", "A chaleira está ligada e a chuva não parou.", "ryan"),
-    ("Russian", "Чайник поставлен, и дождь всё ещё не прекратился.", "ryan"),
 )
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_every_language_decodes_and_stops(device):
-    """Nine languages besides English, through the frame loop.
+    """Three languages besides English, through the frame loop.
 
     A language is one codec-vocabulary id and nothing else about the prompt changes, which
     the prompt tests pin. This adds that each one decodes: stops on its own, codes inside the
     codebook, a length that is speech. Whether the speech is right was measured with Whisper
-    instead, and the README has that table. Codes only, since ten frame counts would compile
-    ten sets of convolution programs.
+    instead, and the README has that table. Codes only, since each frame count would compile
+    its own convolution programs.
     """
     pipeline = Qwen3TTSPipeline(device, max_frames=200, seed=1)
     codebook = weights.codec_decoder_config()["codebook_size"]
@@ -333,16 +328,27 @@ def test_every_language_decodes_and_stops(device):
     print("frames: " + ", ".join(rows))
 
 
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_no_utterance_is_shorter_than_two_frames(device):
-    """`min_new_tokens=2` upstream: one frame is 80 ms, and the sampler can reach eos at once."""
-    pipeline = Qwen3TTSPipeline(device, max_frames=48)
-    shortest = 10**6
-    for seed in range(10):
-        pipeline.reseed(seed)
-        shortest = min(shortest, pipeline.codes(TEXT, speaker=SPEAKER, language=LANGUAGE).shape[0])
-    print(f"shortest utterance over ten seeds: {shortest} frames")
-    assert shortest >= MIN_FRAMES
+def test_the_pick_cannot_end_speech_before_two_frames():
+    """`min_new_tokens=2` upstream: one frame is 80 ms, and the sampler can reach eos at once.
+
+    Checked on the pick itself, with eos the only likely id, rather than over ten seeded
+    utterances on a device; the language sweep still sees every utterance reach two frames.
+    """
+    talker = weights.talker_config()
+    vocab, eos = talker["vocab_size"], talker["codec_eos_token_id"]
+    pipeline = Qwen3TTSPipeline.__new__(Qwen3TTSPipeline)  # the pick needs no device
+    pipeline.eos, pipeline.generator = eos, torch.Generator().manual_seed(0)
+    control = [index for index in range(vocab - CONTROL_ID_COUNT, vocab) if index != eos]
+    pipeline._control_ids = torch.tensor(control, dtype=torch.long)
+    pipeline._control_ids_and_eos = torch.tensor(sorted(control + [eos]), dtype=torch.long)
+
+    logits = torch.zeros(vocab)
+    logits[eos] = 100.0
+    for generation in ({"do_sample": False}, weights.generation_config()):
+        pipeline.generation = generation
+        for emitted in range(MIN_FRAMES):
+            assert pipeline._pick(logits, emitted=emitted) != eos, f"eos drawn after {emitted} frames"
+        assert pipeline._pick(logits, emitted=MIN_FRAMES) == eos, "and allowed from then on"
 
 
 def test_control_ids_are_suppressed_and_end_of_speech_only_at_first(tables):

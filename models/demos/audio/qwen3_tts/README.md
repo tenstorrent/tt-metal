@@ -288,9 +288,10 @@ the input text:
 | Chinese | 0.385 | transcribed in Traditional characters against a Simplified input, same words and same sounds |
 
 So neither nonzero score is this model mispronouncing anything. `test_every_language_decodes_and_stops`
-holds the nine non-English cases to what a test can judge without a second model in the
-leg: each stops on its own, every code lands inside the codebook, and the length is speech
-rather than a spent budget. The transcription is a measurement, not a gate, because putting
+holds three of the non-English languages (Chinese, Japanese, German; the other six were cut
+for CI time) to what a test can judge without a second model in the leg: each stops on its
+own, every code lands inside the codebook, and the length is speech rather than a spent
+budget. The transcription is a measurement, not a gate, because putting
 Whisper in CI would cost a 970 MB download and add its own failure modes.
 
 ## Two sizes
@@ -508,10 +509,10 @@ and name their keys, so speaker-encoder work never materialises the talker.
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
 it needs only the checkpoints and, for the device tests, a card. 148 tests, the same ones at
-either size. On one N150, warm: **1.7B 147 passed and 1 skipped** in 10.6 min, **0.6B 136
-passed and 12 skipped** in 7.0 min. The 1.7B skip is the test that 0.6B refuses an
-instruction; the 0.6B skips are the ten VoiceDesign tests (there is no such release) and the
-two that need an instruction to work.
+either size: **1.7B 147 passed and 1 skipped**, **0.6B 136 passed and 12 skipped**. The
+whole suite at 1.7B takes 9.4 min on one N150, warm, with the watcher on. The 1.7B skip is
+the test that 0.6B refuses an instruction; the 0.6B skips are the ten VoiceDesign tests
+(there is no such release) and the two that need an instruction to work.
 
 ```bash
 HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base pytest models/demos/audio/qwen3_tts/tests/   # at 0.6B
@@ -717,10 +718,16 @@ Dispatch a single run from
 [`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
 with tier 3, type unit, and that identifier.
 
-A second leg, `qwen3-tts-0.6b-base`, runs the same files on
-`Qwen/Qwen3-TTS-12Hz-0.6B-Base` on the same two SKUs. Timeouts are from one N150: the 1.7B
-leg took 10.6 min warm and 14.8 with a cold kernel cache (its N150 timeout is 20, where the
-original 10 was sized on Blackhole), the 0.6B leg 7.0 warm and 8 cold (timeout 12).
+A second leg, `qwen3-tts-0.6b-base`, runs on `Qwen/Qwen3-TTS-12Hz-0.6B-Base` on the same two
+SKUs, but only the eight files whose coverage differs at 0.6B. The tokenizer, the sampler,
+both codec halves and the streaming logic are identical at both sizes and run in the 1.7B leg,
+and there is no 0.6B VoiceDesign.
+
+Timeouts assume each CI job starts with an empty kernel cache, and are the cold time plus 25%:
+27 min for the 1.7B leg and 14 for the 0.6B leg, on both SKUs. Measured by replaying each
+leg's CI command with the watcher on, on one N150: 21.1 min cold and 9.4 warm for 1.7B, 10.7
+cold and 4.4 warm for 0.6B. Blackhole is assumed similar. A first run that downloads the
+checkpoints into the shared cache takes longer.
 
 The end-to-end leg is deliberately absent. It lands with the first change that produces a
 waveform, together with its own `e2e_tier3` budget; registering one before then would either
