@@ -276,13 +276,16 @@ class TtHiFTGenerator:
     def pause_weight_verification(self):
         """Stop checking prepared conv weights until the returned callable is called.
 
-        For the length of a stream. An interleaved stream runs the vocoder between replays
-        of the LLM's decode trace, and a geometry that fails the check switches to the op's
-        own weight preparation, which allocates on every call. Allocations made while a
-        trace is live are the hazard `TtStreamingSynthesizer._carry_store` describes, and a
-        stream checked this way comes out corrupted (a peak of 72.5 in
-        `test_device_streaming_generates_the_same_tokens_as_batch`). Paused, every geometry
-        runs its prepared weights.
+        For the part of an interleaved stream that runs while the LLM's decode trace is
+        live (`StreamSession`, `pause_weight_check`). The vocoder runs between replays of
+        that trace, the check allocates, and allocations made while a trace is live are the
+        hazard `TtStreamingSynthesizer._carry_store` describes: a stream checked this way
+        came out corrupted (a peak of 72.5 in
+        `test_device_streaming_generates_the_same_tokens_as_batch`). Paused, a geometry runs
+        whatever the check decided before the pause, or its prepared weight unchecked if it
+        was never checked. A stream that checks releases the flow's trace before each chunk's
+        vocoder instead (`TtStreamingSynthesizer._one`), because checking beside a kept CFM
+        trace stalled the board too; beside the decode trace there is no release.
 
         Returns `resume`, which restores the flags as they were and does nothing when
         called again. Geometries already switched to the op's preparation stay switched.

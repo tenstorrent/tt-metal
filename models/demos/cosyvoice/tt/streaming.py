@@ -262,12 +262,13 @@ class TtStreamingSynthesizer:
         return emit, n_samples - cfg.source_cache_len
 
     # ----------------------------------------------------------------------
-    def session(self, ctx, rng_for_chunk) -> "StreamSession":
+    def session(self, ctx, rng_for_chunk, *, pause_weight_check: bool = False) -> "StreamSession":
         """An incremental driver: push tokens in, take waveform chunks out.
 
-        This is the form the pipelined path needs -- see `StreamSession`.
+        This is the form the pipelined path needs -- see `StreamSession`, and its
+        `pause_weight_check` for the one caller that sets it.
         """
-        return StreamSession(self, ctx, rng_for_chunk)
+        return StreamSession(self, ctx, rng_for_chunk, pause_weight_check=pause_weight_check)
 
     def synthesize(self, tokens, ctx, rng_for_chunk, on_chunk=None):
         """Full streaming run over an already-generated token list.
@@ -299,9 +300,19 @@ class TtStreamingSynthesizer:
                 on_chunk(wav, n)
         return out
 
-    def _one(self, chunk_tokens, ctx, state, rng, finalize):
-        """Flow-decode one token chunk, then vocode it with the carried caches."""
+    def _one(self, chunk_tokens, ctx, state, rng, finalize, release_flow_trace: bool = False):
+        """Flow-decode one token chunk, then vocode it with the carried caches.
+
+        `release_flow_trace` drops the flow's CFM trace between the two, so the vocoder runs
+        with no trace live, as it does in `synthesize`. A stream that checks the vocoder's
+        prepared weights needs that: the check, and its fallback to the op's own weight
+        preparation for a geometry whose prepared weight is wrong, allocate as they run, and
+        with the CFM trace kept a 355-token stream stalled the board, or came out as garbage
+        with the fallback forced (`docs/VALIDATION.md`). The cost is a CFM capture per chunk.
+        """
         mel, mel_frames = ctx.flow_chunk(chunk_tokens)
+        if release_flow_trace:
+            self.flow.release_trace()
         return self.token2wav(mel, mel_frames, state, rng, finalize)
 
 
@@ -332,7 +343,7 @@ class StreamSession:
     `stream_scale_factor`, same overlap, same finalize.
     """
 
-    def __init__(self, synth: TtStreamingSynthesizer, ctx, rng_for_chunk):
+    def __init__(self, synth: TtStreamingSynthesizer, ctx, rng_for_chunk, *, pause_weight_check: bool = False):
         self.synth, self.ctx, self.rng = synth, ctx, rng_for_chunk
         self.state = StreamState()
         self.tokens: list[int] = []
@@ -340,11 +351,19 @@ class StreamSession:
         self.hop = synth.cfg.token_hop_len
         self.n_chunks = 0
         self._done = False
-        # The vocoder's prepared-weight check stays off until `close`: a geometry that
-        # fails it would allocate on every call, with the decode trace live
+        # A session checks the vocoder's prepared weights as it goes, and runs each chunk's
+        # vocoder with the flow's trace released, so that neither the check nor its fallback,
+        # the op's own weight preparation, allocates beside a live trace
+        # (`TtStreamingSynthesizer._one`).
+        # Without the check, a geometry whose prepared weight is wrong (Wormhole `ttnn.conv1d`
+        # at some lengths, `docs/VALIDATION.md`) runs unchecked and its chunk comes out wrong.
+        # `pause_weight_check` is for the interleaved stream, which runs the vocoder beside the
+        # LLM's live decode trace, where no release is possible: it keeps the flow's trace and
+        # runs every geometry's prepared weight as the check last left it
         # (`TtHiFTGenerator.pause_weight_verification`).
         pause = getattr(getattr(synth, "hift", None), "pause_weight_verification", None)
-        self._resume_verification = pause() if pause else None
+        self._resume_verification = pause() if pause and pause_weight_check else None
+        self._release_flow_trace = not pause_weight_check
 
     # ------------------------------------------------------------------
     def push(self, token: int):
@@ -375,7 +394,9 @@ class StreamSession:
         cfg = self.synth.cfg
         while self.i + self.hop + cfg.token_overlap_len <= len(self.tokens):
             chunk = self.tokens[self.i : self.i + self.hop + cfg.token_overlap_len]
-            wav, n = self.synth._one(chunk, self.ctx, self.state, self.rng, finalize=False)
+            wav, n = self.synth._one(
+                chunk, self.ctx, self.state, self.rng, finalize=False, release_flow_trace=self._release_flow_trace
+            )
             self.i += self.hop
             self.hop = min(cfg.token_max_hop_len, int(self.hop * cfg.stream_scale_factor))
             self.n_chunks += 1
@@ -387,16 +408,31 @@ class StreamSession:
         if self._done:
             raise RuntimeError("StreamSession.finish() called twice")
         self._done = True
-        wav, n = self.synth._one(self.tokens[self.i :], self.ctx, self.state, self.rng, finalize=True)
+        wav, n = self.synth._one(
+            self.tokens[self.i :],
+            self.ctx,
+            self.state,
+            self.rng,
+            finalize=True,
+            release_flow_trace=self._release_flow_trace,
+        )
         self.n_chunks += 1
         return wav, n
+
+    def resume_weight_check(self):
+        """Restore the vocoder's prepared-weight check if this session paused it, and with
+        it the flow-trace release that makes the check safe. Idempotent; for a caller whose
+        decode trace is released before its last chunk."""
+        if self._resume_verification is not None:
+            self._resume_verification()
+            self._resume_verification = None
+        self._release_flow_trace = True
 
     def close(self):
         """Free whatever the carried caches still hold, and restore the vocoder's
         prepared-weight check. Idempotent."""
         self.state.free()
-        if self._resume_verification is not None:
-            self._resume_verification()
+        self.resume_weight_check()
 
     def __enter__(self):
         return self

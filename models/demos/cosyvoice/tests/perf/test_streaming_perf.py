@@ -218,7 +218,8 @@ def test_device_streaming_first_audio_latency(device):
         reset_decoder()
         first_s, chunks, n_samples = None, [], 0
         t0 = time.perf_counter()
-        with synth.session(ctx, rng) as session:
+        # Interleaved with the decode trace live, as `synthesize_streaming`'s stream is.
+        with synth.session(ctx, rng, pause_weight_check=True) as session:
 
             def push(token):
                 nonlocal first_s
@@ -257,7 +258,7 @@ def test_device_streaming_first_audio_latency(device):
     # `run_streaming` reuses this synthesizer, so its carry buffers are allocated here,
     # with no trace live.
     synth = TtStreamingSynthesizer(device, flow, hift, cfg)
-    with synth.session(ctx, rng) as warm_session:
+    with synth.session(ctx, rng, pause_weight_check=True) as warm_session:
         for token in tokens:
             for wav, _n in warm_session.push(token):
                 ttnn.deallocate(wav)

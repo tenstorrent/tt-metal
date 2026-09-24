@@ -219,20 +219,33 @@ for the non-streamed run of the same tokens and seed
 (https://github.com/tenstorrent/tt-metal/actions/runs/35976068834). At `a7c8416d3` the same
 test passed on n300 with RMS `0.052`, and its log shows `_verify_prepared` rejecting the
 prepared weight of `Conv1d(128->128, k=11)` at length 8321, inside the Wormhole `ttnn.conv1d`
-defect range. `TtStreamingSynthesizer` now pauses that check for the length of a stream
-(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry runs its
-prepared weight unchecked and the chunk comes out wrong; `0.21` is the figure §3.2 of PERF.md
-records for exactly that case. Blackhole is unaffected at this utterance length. Not fixed:
-the geometries a stream will use need their verification before the decode trace goes
-live (the warm-up chunk is the place), or Wormhole streams need the op's own preparation
-for the vocoder convs.
+defect range. At `e0de3009` every stream paused that check
+(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry ran its
+prepared weight unchecked and the chunk came out wrong; `0.21` is the figure §3.2 of PERF.md
+records for exactly that case. Blackhole is unaffected at this utterance length.
+
+A stream now checks the vocoder's prepared weights as it goes and runs each chunk's vocoder
+with the flow's CFM trace released (`TtStreamingSynthesizer._one`), as `synthesize` does; the
+cost is a CFM capture per chunk. With the trace kept instead, a 355-token plain stream on
+`p150a` that checked its weights stalled the board, and one with the check's fallback, the op's
+own weight preparation, forced on every geometry came out as garbage (chunk peaks 12 and 14),
+which fits the next chunk's CFM replay overwriting what the vocoder allocated beside the kept
+trace. With it released, both complete, with the same chunk peaks whether one geometry falls back or all of
+them do. This test asserts that no prepared vocoder weight runs unchecked. Not re-run on n300
+yet.
+
+Still open: the interleaved stream, `synthesize_streaming`, keeps the pause and the kept trace.
+Its vocoder runs beside the LLM's live decode trace, which cannot be released mid-generation,
+so a geometry whose prepared weight is wrong still comes out wrong there: on Wormhole at 8321,
+and on `p150a` at 3457 in some allocation states.
 
 ### A longer streamed utterance wedges the board
 
 `test_device_streaming_first_audio_latency` measures one utterance length. Run at a
 longer one — a wider trace region, and more and larger buffers live beside it — it
 wedged `p150a` for 45 minutes at 100 % CPU with the JIT cache flat, twice, on two
-boards, before the carry buffers existed; it has not been re-run since. So how first
+boards, before the carry buffers existed. With them, a 355-token zero-shot stream (RAS) still
+stalled `p150a` on 2026-09-24, the prepared-weight check paused, and needed a reset. So how first
 audio scales with utterance length is not measured. A shared cause with the L1_SMALL
 growth below is possible and unverified.
 
