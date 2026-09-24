@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -175,6 +176,8 @@ template <bool finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
 {
+    // An odd kt_dim does not fault: MATH and PACK never drain and the kernel hangs silently.
+    LLK_ASSERT(kt_dim >= 2 && kt_dim <= 256 && (kt_dim % 2) == 0, "custom_mm kt_dim must be even, in [2, 256]");
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
