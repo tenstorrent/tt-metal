@@ -157,7 +157,8 @@ inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
 
 /**
  * @brief Integer divide-by-32 for column AVG, rounding toward zero
- * @tparam is_signed True for signed Int32, which is loaded with INT32_2S_COMP so LREG0 holds a
+ * @tparam INSTRUCTION_MODE The load/store mode the column path runs under.
+ * @tparam is_signed_int True for signed Int32, which is loaded with INT32_2S_COMP so LREG0 holds a
  *         two's-complement sum; false for the unsigned formats (UInt32, UInt16), whose sum is an
  *         unsigned 32-bit value.
  *
@@ -166,9 +167,15 @@ inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
  * signedness, not the load mode: UInt32 also loads with INT32, and treating an unsigned column sum
  * with bit 31 set as negative returns a wrong, negated average (tt-metal#57509).
  */
-template <bool is_signed>
+template <InstrModLoadStore INSTRUCTION_MODE, bool is_signed_int>
 inline void perform_int_average() {
-    if constexpr (is_signed) {
+    // Signed integer AVG is loaded with INT32_2S_COMP, and nothing else is: the signed arm needs a
+    // two's-complement sum, and the unsigned arm would misread one as a huge magnitude.
+    static_assert(
+        is_signed_int == (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP),
+        "Integer AVG: the data is signed exactly when it is loaded with INT32_2S_COMP");
+
+    if constexpr (is_signed_int) {
         // Two's-complement signed divide-by-32 (round toward zero): take the magnitude via a conditional
         // negate (0 - x), logical-shift, then restore the sign with a second conditional negate.
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);      // Save original (2's-complement) value for sign check
@@ -242,11 +249,8 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16,
-    bool signed_int_avg>
+    bool is_signed_int>
 inline void perform_reduce_col_sum_avg() {
-    static_assert(
-        !signed_int_avg || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP,
-        "Signed integer AVG needs INT32_2S_COMP so the divide-by-32 sees a two's-complement sum");
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
@@ -294,7 +298,7 @@ inline void perform_reduce_col_sum_avg() {
         // Perform averaging if requested (different for int vs float)
         if constexpr (pool_type == PoolType::AVG) {
             if constexpr (is_integer_mode) {
-                perform_int_average<signed_int_avg>();
+                perform_int_average<INSTRUCTION_MODE, is_signed_int>();
             } else {
                 perform_float_average();
             }
@@ -1602,13 +1606,15 @@ inline void calculate_reduce_max_min(
  *        column operations and minimize load/store operations. Each iteration handles 8 columns using
  *        transpose operations and replay buffers for tree reduction.
  *
- *        For AVG mode: Integer formats use arithmetic shift with condition codes to handle negative numbers;
- *        float formats multiply by 1/32 constant.
+ *        For AVG mode: signed Int32 divides by 32 with a magnitude, logical shift and sign restore; the
+ *        unsigned formats (UInt32, UInt16) use a plain logical shift; float formats multiply by 1/32.
  *
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG)
  * @tparam reduce_dim REDUCE_COL (all formats) or REDUCE_ROW (SUM all formats; AVG float formats only)
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
+ * @tparam is_signed_int True when the reduce format is signed (Int32). Passed separately from INSTRUCTION_MODE
+ * because UInt32 shares the INT32 mode; see perform_int_average().
  */
 template <
     PoolType pool_type,
@@ -1616,7 +1622,7 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16,
-    bool signed_int_avg>
+    bool is_signed_int>
 inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
     static_assert(
         pool_type == PoolType::SUM || pool_type == PoolType::AVG,
@@ -1646,7 +1652,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
         "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT, FP32, FP16B");
 
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-        perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, signed_int_avg>();
+        perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>();
     } else {
         perform_reduce_row_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
             block_ct_dim, block_rt_dim);
@@ -1785,6 +1791,10 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
                                                        ? InstrModLoadStore::DEFAULT
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
+    // Signedness of the data, which INSTRUCTION_MODE does not carry: UInt32 (and UInt16 in a 32-bit dest)
+    // loads with INT32 just like signed Int32. Only the integer column AVG divide consumes it.
+    constexpr bool is_signed_int = (format == DataFormat::Int32);
+
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word
     // (driven by INPUT format).
     constexpr bool clear_high_bits = (is_fp32_dest_accum_en && format == DataFormat::UInt16);
@@ -1815,7 +1825,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
                 block_ct_dim, block_rt_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
-        calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, int32_avg>(
+        calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>(
             block_ct_dim, block_rt_dim);
     } else {
         static_assert(
