@@ -3,9 +3,10 @@
 
 // Named dense recipes share the same reader, writer and outer-loop contract.
 // Numerical choices are fixed by the host policy, not user-visible defines.
-#if defined(WATCHER_ENABLED)
-// Watcher instrumentation otherwise exceeds the instruction buffer for the
-// compensated loop. Keep the qualified release scheduling unchanged.
+#if defined(WATCHER_ENABLED) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
+// Watcher instrumentation (or the paired recipes' extra single-row tail group on
+// odd Q chunks) otherwise exceeds the kernel config buffer. Even-chunk release
+// builds keep the qualified scheduling.
 #pragma GCC push_options
 #pragma GCC optimize("Os")
 #elif defined(SDPA_RECIPE_ACCURATE)
@@ -90,6 +91,6 @@ void kernel_main() {
     }
 }
 
-#if defined(SDPA_RECIPE_ACCURATE) || defined(WATCHER_ENABLED)
+#if defined(SDPA_RECIPE_ACCURATE) || defined(WATCHER_ENABLED) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
 #pragma GCC pop_options
 #endif

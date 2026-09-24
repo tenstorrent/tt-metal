@@ -134,6 +134,10 @@ ProgramDescriptor recipe_compute_program(
     if (policy.selection.recipe == Recipe::A) {
         compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
     }
+    if (!fp32 && policy.selection.recipe != Recipe::A && q_tiles % 2 != 0) {
+        // The single-row tail group of an odd chunk does not fit the kernel config buffer at -O2.
+        compute.defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
+    }
     program.kernels.push_back(std::move(compute));
     return program;
 }
