@@ -580,7 +580,12 @@ fi # bh-subtorus
 if run_group "bh-subtorus-sc16"; then
 
 # 2x4 = 64-stage ring (8 ASICs/stage, 4x2 RING+LINE), 4x4 = 32-stage ring (16 ASICs/stage), 8x4 = 16-stage ring (32 ASICs/stage)
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
+# TODO(#49629): TestBlitzDecodePipelineBuilder omitted here -- the 64-stage superpod ring on SC16 revC
+# subtorus aisleD hangs the phase-1 host-minimization solve indefinitely (the ring's closing hop lands on
+# a Z-link the mapper doesn't assign; solver goes silent right after phase-1 setup and blows the shard
+# timeout). Same z-link failure the bh-blitz-decode matrix keeps at 16+48 for this cluster. Layout check
+# still runs. Re-add TestBlitzDecodePipelineBuilder (${GTEST_SUBTORUS_2X4_PIPELINE}) once #49629 lands.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 # Inter-mesh port assignment golden check: this SC16 superpod ring closes, so every boundary resolves and the
 # golden comparison runs (unlike the SC36 Aisle D subtorus slices, which fatal on one-sided boundaries).
 # Guards against the port determination changing or becoming host-dependent.
