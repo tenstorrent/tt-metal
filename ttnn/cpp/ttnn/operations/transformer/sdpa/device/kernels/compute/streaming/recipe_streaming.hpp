@@ -80,12 +80,16 @@ struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
 
-// Q chunks up to 320 rows (10 tiles) form at most five BF16 row pairs.
-constexpr uint32_t kRecipeMaxQTiles = 10;
+// Q chunks up to 1024 rows (32 tiles); row pairs bound the per-state validity flags.
+constexpr uint32_t kRecipeMaxQTiles = 32;
 constexpr uint32_t kRecipeMaxRowGroups = kRecipeMaxQTiles / 2;
-// K256/K384/K512: whole 4-wide QK/PV subblocks, at least two per chunk for the early max reduce.
+// Any tile-aligned K chunk: the QK subblock width (SDPA_RECIPE_QK_W, host-chosen to divide
+// it) sets the reduction pieces; the early max-reduce overlap needs at least two subblocks.
 template <uint32_t Sk_chunk_t>
-constexpr bool kRecipeValidKTiles = Sk_chunk_t == 8 || Sk_chunk_t == 12 || Sk_chunk_t == 16;
+constexpr bool kRecipeValidKTiles = Sk_chunk_t >= 1;
+#ifndef SDPA_RECIPE_QK_W
+#define SDPA_RECIPE_QK_W 4
+#endif
 
 struct RecipeAccumulatorState {
     AccumulatorHalf prev, cur;
@@ -448,8 +452,9 @@ void sub_exp_block_bcast_cols(
 
 #ifdef SDPA_RECIPE_FP32
 #ifdef SDPA_RECIPE_ACCURATE
-    constexpr uint32_t score_batch = 4;
-    // Validated 1x4 QK subblocks and unpadded 512/1024 K chunks have even widths.
+    // One batch per QK subblock column group (the subblock width divides the K chunk).
+    constexpr uint32_t score_batch = SDPA_RECIPE_QK_W;
+    static_assert(score_batch == 1 || score_batch == 2 || score_batch == 4);
     CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
     if (global_col_base == 0) {
         sdpa_subtract_max_l1(inout_cb, max_cb, max_row_base, cols_in_row);
@@ -861,8 +866,20 @@ void salad_correct_fused(
                 ob_row_base + i,
                 true);
         } else {
-            for (uint32_t j = 0; j < tiles_per_column; j += 2) {
+            for (uint32_t j = 0; j + 1 < tiles_per_column; j += 2) {
                 sdpa::streaming::rescale_and_accumulate<2>(
+                    out_in_cb,
+                    out_out_cb,
+                    bcast_cb,
+                    (ob_row_base + i) * tiles_per_column + j,
+                    (write_row_base + i) * tiles_per_column + j,
+                    ob_row_base + i,
+                    identity_correction);
+            }
+            if (tiles_per_column % 2 != 0) {
+                // Odd head-dim width: the last numerator column on its own.
+                const uint32_t j = tiles_per_column - 1;
+                sdpa::streaming::rescale_and_accumulate<1>(
                     out_in_cb,
                     out_out_cb,
                     bcast_cb,
@@ -888,7 +905,7 @@ void salad_correct_fused(
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row * sdpa_sum_stride);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
-    static_assert((sbh_t == 1 || sbh_t == 2) && (sbw_t == 2 || sbw_t == 4 || sbw_t == 8) && dst_size == 8);
+    static_assert((sbh_t == 1 || sbh_t == 2) && sbw_t >= 1 && dst_size == 8);
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -1068,7 +1085,7 @@ static void sdpa_inner_loop_step(
 #else
     // Row groups pair two query tile rows; an odd Q chunk ends with a single-row group.
     static_assert(
-        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && (vDHt == 2 || vDHt == 4 || vDHt == 8) &&
+        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt >= 1 &&
         qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
@@ -1326,8 +1343,7 @@ static void sdpa_inner_loop_step(
 #endif
         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
         // QK and PV row groups coincide; an odd BF16 chunk ends with one single-row group.
-        static_assert(qktv_h == qkt_subblock_h && qktv_remainder_h <= 1 && Sq_chunk_t / qktv_h > 1);
-        static_assert(Sq_chunk_t >= qktv_h, "Sq_chunk_t must be at least qktv_h");
+        static_assert(qktv_h == qkt_subblock_h && qktv_remainder_h <= 1 && Sq_chunk_t >= 1);
 
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
@@ -1349,8 +1365,8 @@ static void sdpa_inner_loop_step(
 
 #ifdef SDPA_RECIPE_FP32
         static_assert(
-            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> &&
-            (vDHt == 2 || vDHt == 4 || vDHt == 8) && qktv_h == 1);
+            Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt >= 1 &&
+            qktv_h == 1);
         // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
@@ -1433,6 +1449,13 @@ static void sdpa_inner_loop_step(
                         kt_sub * matmul_inner,
                         qk_rows(q_num_subblocks - 1),
                         matmul_inner);
+                    if constexpr (q_num_subblocks == 1) {
+                        // Phase 1 published no earlier row, so make the in-place exponential
+                        // visible to the PV unpack explicitly.
+                        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    }
 
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
@@ -1835,7 +1858,35 @@ static void sdpa_inner_loop_step(
         // Pipeline drain: SALAD for the last group
         {
             constexpr uint32_t drain_h = last_h;
-            {
+            if constexpr (total_v_row_groups == 1) {
+                // Single row group: the main loop never ran, so the drain performs the
+                // full correction (as the legacy streaming kernel does).
+                if (!is_first_iter) {
+                    CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
+#ifdef SDPA_RECIPE_FP32
+                    identity_corrections[0] =
+                        inplace_numerator || sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                                                 prev.max, cur.max, cb_exp_max_diff, pv_index(0), drain_h);
+#else
+                    identity_corrections[0] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, pv_index(0), drain_h, sdpa_identity_flags[0]);
+#endif
+                    CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                    salad_correct_row(0, 0, drain_h);
+                }
+                if (is_last_iter) {
+                    normalize_row(pushed_rows, drain_h);
+                } else {
+#ifndef SDPA_RECIPE_FP32
+                    if (is_first_iter) {
+                        group2_bootstrap_row(prev.out, out_cb, 0, 0, drain_h, vDHt);
+                    }
+#endif
+                    CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
+                    CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
+                    pushed_rows++;
+                }
+            } else {
                 // Drain was hoisted into the last main-loop iteration above.
                 // For is_first_iter (no SALAD), the drain row still needs push/normalize.
                 if (is_first_iter) {
@@ -1885,8 +1936,8 @@ template <
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
-        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        (DHt == 2 || DHt == 4 || DHt == 8));
+        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
+        DHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;

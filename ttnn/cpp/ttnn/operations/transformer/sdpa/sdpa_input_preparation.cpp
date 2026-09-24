@@ -23,9 +23,8 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     TT_FATAL(input.memory_config() == DRAM_MEMORY_CONFIG, "SDPA preparation requires interleaved DRAM inputs");
     TT_FATAL(
         input.logical_shape().rank() == 4 &&
-            (input.logical_shape()[3] == 64 || input.logical_shape()[3] == 128 || input.logical_shape()[3] == 256) &&
-            input.logical_volume() > 0,
-        "SDPA preparation currently requires nonempty rank-four D64, D128 or D256 inputs");
+            input.logical_shape()[3] % 32 == 0 && input.logical_volume() > 0,
+        "SDPA preparation requires nonempty rank-four inputs with a tile-aligned head dim");
     const auto& shape = input.logical_shape();
     const auto& padded = input.padded_shape();
     TT_FATAL(
@@ -39,10 +38,9 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     TT_FATAL(
         padded.volume() / 1024 <= std::numeric_limits<uint32_t>::max(), "SDPA preparation tile count overflows uint32");
     const uint32_t tiles = padded.volume() / 1024;
-    // Preparation is per tile; batching only groups tiles per CB transaction. D128 always
-    // has a multiple of four tiles; D64 may need pairs.
-    const uint32_t batch = tiles % 4 == 0 ? 4 : 2;
-    TT_FATAL(tiles > 0 && tiles % batch == 0, "SDPA preparation requires an even number of full tiles");
+    // Preparation is per tile; batching only groups tiles per CB transaction.
+    const uint32_t batch = tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1;
+    TT_FATAL(tiles > 0, "SDPA preparation requires at least one tile");
     const auto hardware = input.device()->compute_with_storage_grid_size();
     const uint32_t cores = std::min<uint32_t>(tiles / batch, hardware.x * hardware.y);
     std::vector<CoreCoord> coordinates;

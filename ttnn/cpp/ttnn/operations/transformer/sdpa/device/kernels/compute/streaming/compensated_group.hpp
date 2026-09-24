@@ -24,6 +24,18 @@ inline void group2_initialize_root(uint32_t root_cb, uint32_t tiles) {
     CircularBuffer(root_cb).push_back(tiles);
 }
 
+// Paired-column SFPU programs consume two adjacent column tiles. An odd head-dim width
+// ends with a single column: duplicate it into both slots (lanes are independent) and
+// pack only the first.
+inline void group2_copy_pair(uint32_t cb, uint32_t tile, uint32_t dst, bool single) {
+    if (single) {
+        copy_block(cb, tile, dst, 1);
+        copy_block(cb, tile, dst + 1, 1);
+    } else {
+        copy_block(cb, tile, dst, 2);
+    }
+}
+
 // Row layouts: root and scratch rows hold two dh-tile planes (root: high/low; scratch:
 // PV/local), so a row spans 2 * dh tiles. dh is the head dim in tiles.
 inline void group2_bootstrap_row(
@@ -32,15 +44,20 @@ inline void group2_bootstrap_row(
     // K0 has no correction-CB publication, so explicitly publish preceding PV.
     group2_pack_visibility_fence();
     PACK((llk_pack_reconfig_l1_acc(0)));
-    configure_pack_width(root_cb, dh);
+    // Copy in pieces that fit the BF16 half-sync dest (8 tiles).
+    constexpr uint32_t piece = 8;
     for (uint32_t i = 0; i < rows; ++i) {
-        tile_regs_acquire();
-        copy_init(scratch_cb);
-        copy_block(scratch_cb, row_stride * (read_row + i), 0, dh);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile<true>(0, root_cb, row_stride * (global_row + i));
-        tile_regs_release();
+        for (uint32_t c = 0; c < dh; c += piece) {
+            const uint32_t n = dh - c < piece ? dh - c : piece;
+            configure_pack_width(root_cb, n);
+            tile_regs_acquire();
+            copy_init(scratch_cb);
+            copy_block(scratch_cb, row_stride * (read_row + i) + c, 0, n);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, root_cb, row_stride * (global_row + i) + c);
+            tile_regs_release();
+        }
     }
 }
 
@@ -75,11 +92,15 @@ inline void group2_numerator_row(
         configure_pack_width(root_cb, 2);
         for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t j = 0; j < dh; j += 2) {
+                const bool single = j + 1 == dh;
+                if (single) {
+                    configure_pack_width(root_cb, 1);
+                }
                 tile_regs_acquire();
                 copy_init(root_cb);
-                copy_block(root_cb, row_stride * (root_read_row + i) + j, 0, 2);
-                copy_block(root_cb, row_stride * (root_read_row + i) + dh + j, 2, 2);
-                copy_block(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 4, 2);
+                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single);
+                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single);
+                group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 4, single);
                 if (!identity) {
                     unary_bcast_init<BroadcastType::COL>(correction_cb);
                     unary_bcast<BroadcastType::COL>(correction_cb, i, 6);
@@ -99,6 +120,9 @@ inline void group2_numerator_row(
                 pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
                 pack_tile<true>(2, root_cb, row_stride * (root_write_row + i) + dh + j);
                 tile_regs_release();
+                if (single) {
+                    configure_pack_width(root_cb, 2);
+                }
             }
         }
         return;
@@ -110,14 +134,18 @@ inline void group2_numerator_row(
         configure_pack_width(root_cb, 2);
         for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t j = 0; j < dh; j += 2) {
+                const bool single = j + 1 == dh;
+                if (single) {
+                    configure_pack_width(root_cb, 1);
+                }
                 tile_regs_acquire();
                 copy_init(root_cb);
-                copy_block(root_cb, row_stride * (root_read_row + i) + j, 0, 2);
-                copy_block(root_cb, row_stride * (root_read_row + i) + dh + j, 2, 2);
+                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single);
+                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single);
                 if (!odd) {
-                    copy_block(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 4, 2);
+                    group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 4, single);
                 }
-                copy_block(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 6, 2);
+                group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 6, single);
                 tile_regs_commit();
                 tile_regs_wait();
                 if (odd) {
@@ -134,6 +162,9 @@ inline void group2_numerator_row(
                     pack_tile<true>(4, scratch_cb, row_stride * (scratch_write_row + i) + dh + j);
                 }
                 tile_regs_release();
+                if (single) {
+                    configure_pack_width(root_cb, 2);
+                }
             }
         }
         return;

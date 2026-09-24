@@ -55,6 +55,43 @@ uint32_t recipe_k_tiles(const std::optional<SDPAProgramConfig>& program_config) 
     return k_chunk / 32;
 }
 
+uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
+    const uint32_t q_chunk = program_config ? program_config->q_chunk_size : 256;
+    // Any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows); L1 fit is checked separately.
+    TT_FATAL(
+        q_chunk % 32 == 0 && q_chunk >= 32 && q_chunk <= 32 * 32,
+        "Named SDPA recipes support tile-aligned Q chunks from 32 to 1024 rows, got {}",
+        q_chunk);
+    return q_chunk / 32;
+}
+
+uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config) {
+    const uint32_t k_chunk = program_config ? program_config->k_chunk_size : 512;
+    TT_FATAL(
+        k_chunk % 32 == 0 && k_chunk >= 32, "Named SDPA recipes support tile-aligned K chunks, got {}", k_chunk);
+    return k_chunk / 32;
+}
+
+namespace {
+// Largest of 4, 2 and 1 dividing the tile count: the recipe's QK/PV subblock width.
+uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
+
+// Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
+uint32_t recipe_granularity(uint32_t tiles, uint32_t limit) {
+    uint32_t g = std::min(tiles, limit);
+    while (g > 1 && tiles % g != 0) {
+        --g;
+    }
+    return g;
+}
+
+// Geometries qualified before generic geometry landed keep their original build flags.
+bool recipe_legacy_geometry(uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+    return q_tiles >= 4 && q_tiles <= 10 && (k_tiles == 8 || k_tiles == 12 || k_tiles == 16) &&
+           (d_tiles == 2 || d_tiles == 4 || d_tiles == 8);
+}
+}  // namespace
+
 ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,
@@ -62,7 +99,7 @@ ProgramDescriptor recipe_compute_program(
     uint32_t q_tiles,
     uint32_t k_tiles,
     uint32_t d_tiles) {
-    TT_FATAL(d_tiles == 2 || d_tiles == 4 || d_tiles == 8, "SDPA recipes support head dims 64, 128 and 256");
+    TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     const bool fp32 = policy.fp32_destination;
     const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
     const uint32_t stride = compensated ? 2 : 1;
@@ -126,12 +163,15 @@ ProgramDescriptor recipe_compute_program(
              k_tiles,
              d_tiles},
         .defines =
+            // Legacy granularity rules; they equal the former fixed values at the qualified geometries.
             {{"EXP_APPROX_MODE", "1"},
-             {"STATS_GRANULARITY", fp32 ? "4" : "8"},
-             {"SUB_EXP_GRANULARITY", fp32 ? "4" : "8"},
-             {"MUL_BCAST_GRANULARITY", fp32 ? "4" : "8"},
-             {"DHT_GRANULARITY", std::to_string(d_tiles)},
-             {"REDUCE_GRANULARITY", fp32 ? "2" : "4"}},
+             {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
+             {"SUB_EXP_GRANULARITY", std::to_string(recipe_granularity(k_tiles, fp32 ? 4 : 8))},
+             {"MUL_BCAST_GRANULARITY", std::to_string(recipe_granularity(q_tiles * k_tiles, fp32 ? 4 : 8))},
+             {"DHT_GRANULARITY", std::to_string(recipe_granularity(d_tiles, 8))},
+             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))},
+             {"SDPA_RECIPE_QK_W", std::to_string(recipe_subblock_width(k_tiles))},
+             {"SDPA_RECIPE_PV_W", std::to_string(recipe_subblock_width(d_tiles))}},
         .config = compute_config};
     if (fp32) {
         compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
@@ -145,8 +185,10 @@ ProgramDescriptor recipe_compute_program(
     if (policy.selection.recipe == Recipe::A) {
         compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
     }
-    if (!fp32 && policy.selection.recipe != Recipe::A && q_tiles % 2 != 0) {
-        // The single-row tail group of an odd chunk does not fit the kernel config buffer at -O2.
+    if (!fp32 && policy.selection.recipe != Recipe::A &&
+        (q_tiles % 2 != 0 || !recipe_legacy_geometry(q_tiles, k_tiles, d_tiles))) {
+        // The single-row tail group of an odd chunk (and the unrolled loops of new geometries)
+        // does not fit the kernel config buffer at -O2; only the pack thread is size-optimized.
         compute.defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
     }
     program.kernels.push_back(std::move(compute));
@@ -250,12 +292,11 @@ static std::vector<Tensor> run_recipe_segments(
     TT_FATAL(
         grid_size.x > 0 && grid_size.y > 0 && grid_size.x <= hardware.x && grid_size.y <= hardware.y,
         "SDPA recipe compute grid must fit the device");
-    const uint32_t q_tiles = recipe_q_tiles(program_config);
+    const uint32_t q_tiles = recipe_dense_q_tiles(program_config);
     const uint32_t q_chunk = q_tiles * 32;
-    const uint32_t k_tiles = recipe_k_tiles(program_config);
+    const uint32_t k_tiles = recipe_dense_k_tiles(program_config);
     const uint32_t k_chunk = k_tiles * 32;
-    TT_FATAL(
-        qs[3] == 64 || qs[3] == 128 || qs[3] == 256, "SDPA recipes support head dims 64, 128 and 256, got {}", qs[3]);
+    TT_FATAL(qs[3] % 32 == 0 && qs[3] > 0, "SDPA recipes support tile-aligned head dims, got {}", qs[3]);
     const uint32_t d_tiles = qs[3] / 32;
     if (program_config) {
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");

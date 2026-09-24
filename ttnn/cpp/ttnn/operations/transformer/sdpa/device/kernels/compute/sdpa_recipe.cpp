@@ -35,12 +35,20 @@ void kernel_main() {
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t d_tiles = get_compile_time_arg_val(4);
-    static_assert(d_tiles == 2 || d_tiles == 4 || d_tiles == 8, "Named recipes support D64/D128/D256");
-    // PV subblocks are at most four tiles wide and must divide the head dim.
-    constexpr uint32_t pv_subblock_w = d_tiles < 4 ? d_tiles : 4;
-    static_assert(k_tiles == 8 || k_tiles == 12 || k_tiles == 16, "Named recipes support K256/K384/K512");
+    // Any tile-aligned geometry. The host picks QK/PV subblock widths that divide the K chunk
+    // and head dim (4 at the qualified Q256/K512/D128 geometry); L1 fit is checked on the host.
+#ifndef SDPA_RECIPE_QK_W
+#define SDPA_RECIPE_QK_W 4
+#endif
+#ifndef SDPA_RECIPE_PV_W
+#define SDPA_RECIPE_PV_W 4
+#endif
+    constexpr uint32_t qk_subblock_w = SDPA_RECIPE_QK_W;
+    constexpr uint32_t pv_subblock_w = SDPA_RECIPE_PV_W;
+    static_assert(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1);
+    static_assert(k_tiles % qk_subblock_w == 0 && d_tiles % pv_subblock_w == 0);
+    static_assert(qk_subblock_w <= 4 && pv_subblock_w <= 4);
     const uint32_t jobs = get_arg_val<uint32_t>(0);
-    static_assert(q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320");
 #ifdef SDPA_RECIPE_BASELINE
     // FAST uses single-row QK/PV subblocks for odd Q chunks; subblock height only
     // changes which rows share a dest pass, not any element's accumulation.
@@ -67,12 +75,12 @@ void kernel_main() {
             scale,
 #ifdef SDPA_RECIPE_FP32
             1,
-            4,
+            qk_subblock_w,
             1,
             pv_subblock_w,
 #else
             bf16_subblock_h,
-            4,
+            qk_subblock_w,
             bf16_subblock_h,
             pv_subblock_w,
 #endif
