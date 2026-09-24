@@ -293,14 +293,24 @@ def test_serving_metrics_are_derived_from_values_not_names(tmp_path):
     sources disagree (perf_mcp_stage_ms says 12.0, the 1cq baseline's own stages say 14.0), and the
     1cq bar wins per stage -- it shares a file with the fullpipe headline this same view already
     treats as ground truth, so it cannot silently disagree with it the way the per-run doc can.
-    e2e_latency is the sum of the (now bar-preferring) per-stage values: 30.0 + 14.0."""
+    e2e_latency is the sum of the (now bar-preferring) per-stage values: 30.0 + 14.0.
+
+    throughput is per-user and comes from the LEDGER, whose fullpipe_e2e rows the fixture sets to
+    before=30.0 / after=25.0 ms: 40.0 tok/s current against a 33.3 tok/s baseline. The stage
+    table's own per-token value (30.0 ms) is deliberately the older reading, so a per_s of 33.3
+    would mean the stage value had been preferred over the committed one."""
     repo, run_dir, state, slug = _make_run(tmp_path)
     s = collect_state(run_dir, [state], slug)
     sv = s["serving"]
     assert sv["per_token"]["stage"] == "lm_head" and sv["per_token"]["ms"] == 30.0
     assert sv["first_token"]["stage"] == "audio_encode" and sv["first_token"]["ms"] == 14.0
     assert sv["e2e_latency"]["ms"] == 44.0
-    assert abs(sv["throughput"]["per_s"] - (1000.0 / 30.0)) < 1e-6
+    # Per-user throughput (= 1/TPOT) comes from the ledger's committed fullpipe_e2e after-row
+    # (25.0 ms -> 40.0 tok/s), NOT from the per-token stage value (30.0 ms -> 33.3). Same principle
+    # as audio_encode above: where two sources disagree, the durable one wins. Deriving it from the
+    # stage instead would also pin current == baseline here, reporting a real gain as 0.0%.
+    assert abs(sv["throughput"]["per_s"] - (1000.0 / 25.0)) < 1e-6
+    assert abs(sv["throughput"]["baseline"] - (1000.0 / 30.0)) < 1e-6
     # headroom: ledger modeled_floor (none in this fixture) -> absent, never fabricated
     assert s["headroom"] is None
 
