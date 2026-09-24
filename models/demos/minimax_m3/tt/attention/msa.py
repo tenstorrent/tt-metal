@@ -117,11 +117,6 @@ def index_branch_forward(
     return iq, ik
 
 
-# indexer_score_msa key band (k_chunk_size). The cross-chunk read keeps kv_len on whole bands (see
-# msa_cache_read_extent).
-INDEXER_K_CHUNK = 1024
-
-
 def msa_indexer_sparse(
     index_q,
     index_k,
@@ -170,9 +165,7 @@ def msa_indexer_sparse(
             scale=scale,
             num_groups=num_groups,
             block_size=block_size,
-            program_config=ttnn.IndexerScoreProgramConfig(
-                q_chunk_size=64, k_chunk_size=INDEXER_K_CHUNK, head_group_size=0
-            ),
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
             seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
             block_cyclic_sp_axis=block_cyclic_sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
@@ -282,31 +275,27 @@ def msa_sp_attention_nocache(
     )
 
 
-def msa_cache_read_extent(cached_len, chunk_local, sp, block_size, seq_local=None):
+def msa_cache_read_extent(cached_len, chunk_local, sp, block_size):
     """(kv_len, n_rows) for the cross-chunk MSA read after the chunk at ``cached_len`` has been written.
 
     The KV writer places global position g on SP rank (g // chunk_local) % sp, so a chunk that starts
     mid-slab (``cached_len`` not a whole number of ``chunk_local * sp`` chunks, e.g. a multi-turn resume at a
-    32-token boundary) leaves the ranks unevenly filled. ``kv_len`` is the written natural prefix
-    ``cached_len + chunk_global`` rounded up to a whole indexer k-band (``INDEXER_K_CHUNK`` keys, itself whole
-    ``block_size`` blocks) and capped at the cache capacity ``seq_local * sp``: indexer_score_msa mis-places the
-    pooled block scores of a partial last k-band holding more than one block, and top-k works in blocks. The
-    extra positions are future to every query of the chunk, so causality masks them. ``n_rows`` is the
-    FULLEST rank's local row count covering [0, kv_len) -- rank 0, which owns the first block of every slab --
-    since ``high_bw_all_gather`` gathers the same local prefix from every rank. Rows past a rank's written
-    prefix hold zeros or stale KV at positions >= the chunk end, which the indexer (kv_len bound + causal) and
-    sparse_sdpa_msa (only selected, non-future blocks; diagonal-block mask) never attend.
+    32-token boundary) leaves the ranks unevenly filled. ``n_rows`` is the FULLEST rank's local row count
+    covering the written prefix [0, cached_len + chunk_global) -- rank 0, which owns the first block of every
+    slab -- since ``high_bw_all_gather`` gathers the same local prefix from every rank. ``kv_len`` is that prefix
+    rounded up to whole ``block_size`` blocks (the indexer pools and top-k selects in blocks). Positions past a
+    rank's written prefix -- including [end, kv_len) -- hold zeros or stale finite KV in the persistent gather
+    buffer (zeroed at allocation, see CCLManager.get_high_bw_gather_buffer), all future to every query of the
+    chunk, so the indexer's causal mask and sparse_sdpa_msa's diagonal-block mask never attend them.
     """
-    assert cached_len % 32 == 0, f"cached_len={cached_len} must be a multiple of 32 (the KV writer's tile grid)"
+    assert (
+        cached_len % ttnn.TILE_SIZE == 0
+    ), f"cached_len={cached_len} must be a multiple of {ttnn.TILE_SIZE} (the KV writer's tile grid)"
     assert chunk_local % block_size == 0, f"chunk_local={chunk_local} must be a whole number of {block_size} blocks"
-    assert INDEXER_K_CHUNK % block_size == 0, f"indexer k-band {INDEXER_K_CHUNK} must be whole {block_size} blocks"
     chunk_global = chunk_local * sp
     end = cached_len + chunk_global  # the chunk (incl. its pad tail) is written up to here
-    kv_len = (end + INDEXER_K_CHUNK - 1) // INDEXER_K_CHUNK * INDEXER_K_CHUNK
-    if seq_local is not None:
-        kv_len = min(kv_len, seq_local * sp)
-    assert kv_len % block_size == 0 and kv_len >= end, f"kv_len={kv_len} must cover the chunk end {end} in blocks"
-    full_slabs, rem = divmod(kv_len, chunk_global)
+    kv_len = (end + block_size - 1) // block_size * block_size
+    full_slabs, rem = divmod(end, chunk_global)
     n_rows = full_slabs * chunk_local + min(rem, chunk_local)
     return kv_len, n_rows
 
@@ -343,8 +332,10 @@ def msa_sp_attention_cache_read(
     # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
     assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
     seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
-    kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size, seq_local)
-    assert n_rows <= seq_local, f"cache read past capacity: {n_rows} rows > {seq_local}"
+    kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size)
+    assert (
+        n_rows <= seq_local and kv_len <= seq_local * sp
+    ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
 
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)

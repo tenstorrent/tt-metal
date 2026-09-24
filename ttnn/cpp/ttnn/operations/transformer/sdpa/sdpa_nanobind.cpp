@@ -451,9 +451,10 @@ void bind_sdpa(nb::module_& mod) {
 		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
             cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start under
                 sequence parallelism. Host-side only. Without a block-cyclic cache: chunk_start_idx + rank*S.
-                With one (block_cyclic_chunk_local == S): the KV writer's rotated per-device position, exact for
-                a mid-slab (non-chunk-aligned) chunk_start_idx -- which must then be a multiple of 32 -- and the
-                same geometry indexer_score_msa uses.
+                With one: the KV writer's rotated per-device position, exact for a mid-slab (non-chunk-aligned)
+                chunk_start_idx -- which must then be a multiple of 32 -- and the same geometry indexer_score_msa
+                uses; a q also seq-sharded over the other mesh axis (block_cyclic_chunk_local == tp*S) takes its
+                TP rank's S-row slice. Must equal block_cyclic_sp_axis.
             block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), the K/V cache is
                 striped block-cyclic across SP on this mesh axis; the gather remaps each logical block id to its
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.

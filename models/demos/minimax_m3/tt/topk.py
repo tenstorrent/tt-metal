@@ -32,6 +32,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utils import rotated_chunk_real_counts
 from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
 
@@ -144,26 +145,28 @@ class TopKRouter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Padding-config memo, keyed by real-token count (see build_padding_config). Deliberately
-        # never evicted: only a ragged final chunk populates it, so it saturates at chunk-size-many
-        # tiny [sp, 2] tensors rather than growing with context length.
+        # Padding-config memo, keyed by (real-token count, start offset within the SP slab) (see
+        # build_padding_config). Deliberately never evicted: only a ragged chunk populates it, so it is
+        # bounded by chunk-size-many counts x the 32-aligned slab offsets rather than growing with context
+        # length.
         self.mesh_device = mesh_device
         self._padding_config_cache = {}
 
         # Custom compute configs can degrade routing quality; keep the default.
         self.compute_config = None
 
-    def build_padding_config(self, actual_isl):
-        """Per-device ``[num_real_tokens, pad_side]`` for a chunk with ``actual_isl`` real tokens, or
-        None when the chunk is full (nothing to mark).
+    def build_padding_config(self, actual_isl, actual_start=0):
+        """Per-device ``[num_real_tokens, pad_side]`` for a chunk with ``actual_isl`` real tokens starting at
+        global position ``actual_start``, or None when the chunk is full (nothing to mark).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see
         route_tokens_to_experts_fused. Owned here and memoized per real-token count, so a chunked
         prefill builds each distinct config once instead of per chunk.
 
-        M3's SP sharding within a chunk is CONTIGUOUS and right-padded (tt/attention/msa.py), so SP
-        chip c holds chunk tokens [c*tokens_per_chip, (c+1)*tokens_per_chip) and its real count is the
-        clamped remainder.
+        SP chip c holds the chunk rows at rotated_chunk_positions(actual_start)[c] (the KV writer's
+        placement; the contiguous slice [c*tokens_per_chip, (c+1)*tokens_per_chip) for a chunk-aligned
+        start, rotated for a mid-slab multi-turn resume). Positions increase with the local row, so every
+        chip is right-padded and its real count is how many of its positions fall before the chunk's end.
 
         NOTE this ends in a ttnn.from_torch, i.e. a host->device write. Fine untraced — it is memoized,
         so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
@@ -174,12 +177,16 @@ class TopKRouter:
         sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
         if actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
             return None  # full chunk: every row is real
-        if actual_isl not in self._padding_config_cache:
+        # The per-chip split depends on the start only through its offset within the SP slab, which keeps the
+        # memo bounded while two chunks with the same actual_isl but different rotations get distinct configs.
+        key = (actual_isl, actual_start % (sp_factor * tokens_per_chip))
+        if key not in self._padding_config_cache:
             rows = torch.zeros((sp_factor, 2), dtype=torch.int32)
+            counts = rotated_chunk_real_counts(key[1], actual_isl, sp_factor, tokens_per_chip)
             for c in range(sp_factor):
-                rows[c, 0] = max(0, min(tokens_per_chip, actual_isl - c * tokens_per_chip))
+                rows[c, 0] = counts[c]
                 rows[c, 1] = 0  # right padding
-            self._padding_config_cache[actual_isl] = ttnn.from_torch(
+            self._padding_config_cache[key] = ttnn.from_torch(
                 rows,
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
@@ -192,11 +199,11 @@ class TopKRouter:
                 ),
             )
             logger.info(
-                f"[TopKRouter] padding config built for actual_isl={actual_isl} "
+                f"[TopKRouter] padding config built for actual_isl={actual_isl} slab offset={key[1]} "
                 f"({sp_factor} x {tokens_per_chip} tokens): per-chip real counts "
                 f"{[int(rows[c, 0]) for c in range(sp_factor)]}"
             )
-        return self._padding_config_cache[actual_isl]
+        return self._padding_config_cache[key]
 
     def __call__(self, hidden_states, padding_config=None):
         # Actual token count from volume (shape[0] after reshape is tile-padded).
