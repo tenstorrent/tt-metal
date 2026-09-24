@@ -737,7 +737,7 @@
   "status": "PASS"
  },
  "P2.16": {
-  "duration_s": 95.7,
+  "duration_s": 56.4,
   "history": [
    {
     "status": "PASS",
@@ -758,9 +758,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T20:13:45"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:46:14"
    }
   ],
-  "last_run": "2026-09-24T20:13:45",
+  "last_run": "2026-09-24T20:46:14",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.16.log",
   "metrics": {
    "engine_checks_failed": 0,
@@ -770,7 +774,7 @@
    "producer_vs_independent_pcc_gap": 5.733575836330829e-10
   },
   "rc": 0,
-  "started": "2026-09-24T20:12:09",
+  "started": "2026-09-24T20:45:17",
   "status": "PASS"
  },
  "P2.2": {
