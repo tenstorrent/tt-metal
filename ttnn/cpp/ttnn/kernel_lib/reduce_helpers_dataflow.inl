@@ -132,6 +132,36 @@ FORCE_INLINE void fill_each_face_row0_partial(
 }
 
 // =============================================================================
+// Format-aware fill_each_face_col0_partial — fills column 0 of each left face for the first valid rows
+// =============================================================================
+
+template <DataFormat data_format, uint32_t face_rows, uint32_t faces_per_row>
+FORCE_INLINE void fill_each_face_col0_partial(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler, uint32_t valid_rows) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_each_face_col0_partial only supports Float16_b (bfloat16) and Float32 formats");
+
+    constexpr uint32_t face_size_u32 =
+        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 =
+        (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t rows_per_face = tt::constants::FACE_HEIGHT;
+
+    for (uint32_t face_row = 0; face_row < face_rows; ++face_row) {
+        const uint32_t face_row_start = face_row * rows_per_face;
+        uint32_t rows_in_face = 0;
+        if (valid_rows > face_row_start) {
+            const uint32_t remaining = valid_rows - face_row_start;
+            rows_in_face = remaining < rows_per_face ? remaining : rows_per_face;
+        }
+        volatile tt_l1_ptr uint32_t* face_ptr = ptr + (face_row * faces_per_row) * face_size_u32;
+        for (uint32_t r = 0; r < rows_in_face; ++r) {
+            fill_face_row0_cols<data_format>(face_ptr + r * row_size_u32, scaler, 1);
+        }
+    }
+}
+
+// =============================================================================
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
@@ -239,6 +269,74 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     // 2. Fill the DFB with the computed scaler
     // -------------------------------------------------------------------------
     prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_reduce_dim_elements_in_tile);
+}
+
+// =============================================================================
+// Single reduction auxiliary tile of a physical pattern
+// =============================================================================
+
+template <uint32_t dfb_id, ttnn::kernel_lib::ReduceAuxiliaryTileType tile_type, uint32_t valid_elements, uint32_t value_bits>
+FORCE_INLINE void prepare_reduce_auxiliary_tile() {
+    using ttnn::kernel_lib::ReduceAuxiliaryTileType;
+    constexpr DataFormat data_format = get_dataformat(dfb_id);
+    constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
+    constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
+    static_assert(tile_r_dim % tt::constants::FACE_HEIGHT == 0, "tile height must be a multiple of FACE_HEIGHT");
+    static_assert(tile_c_dim % tt::constants::FACE_WIDTH == 0, "tile width must be a multiple of FACE_WIDTH");
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "reduction auxiliary tiles only support Float16_b and Float32 formats");
+    constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
+    constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
+    constexpr uint32_t num_faces = face_rows * faces_per_row;
+
+    if constexpr (tile_type == ReduceAuxiliaryTileType::FirstRow) {
+        static_assert(valid_elements <= tile_c_dim, "FirstRow auxiliary tile valid-element count exceeds the tile width");
+    } else if constexpr (
+        tile_type == ReduceAuxiliaryTileType::FirstColumn || tile_type == ReduceAuxiliaryTileType::FirstRowPerFaceRow) {
+        static_assert(
+            valid_elements <= tile_r_dim, "Column-oriented auxiliary tile valid-element count exceeds the tile height");
+    } else {
+        static_assert(tile_type == ReduceAuxiliaryTileType::Zero, "Unknown reduction auxiliary tile type");
+    }
+
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(1);
+    const uint32_t write_addr = dfb.get_write_ptr();
+
+    // Native reduction reads only row 0 of each face of a full scaler, and every one of those rows is written
+    // below. All other patterns need zeroes in their inactive lanes.
+    constexpr bool full_scaler = tile_type == ReduceAuxiliaryTileType::FirstRow && valid_elements == tile_c_dim;
+    if constexpr (!full_scaler) {
+        Noc noc;
+        noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+        noc.write_zeros_l1_barrier();
+    }
+
+    if constexpr (tile_type != ReduceAuxiliaryTileType::Zero) {
+        const uint32_t packed_value =
+            float_to_scaler_bits<data_format>(__builtin_bit_cast(float, static_cast<uint32_t>(value_bits)));
+        if (full_scaler || packed_value != 0) {
+            if constexpr (full_scaler) {
+                fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), packed_value);
+            } else if constexpr (tile_type == ReduceAuxiliaryTileType::FirstRow) {
+                fill_each_face_row0_partial<data_format, ReduceDim::REDUCE_ROW, face_rows, faces_per_row>(
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
+            } else if constexpr (tile_type == ReduceAuxiliaryTileType::FirstColumn) {
+                fill_each_face_col0_partial<data_format, face_rows, faces_per_row>(
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
+            } else {
+                fill_each_face_row0_partial<data_format, ReduceDim::REDUCE_COL, face_rows, faces_per_row>(
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
+            }
+        }
+    }
+
+    // See prepare_reduce_scaler: Quasar DM stores must reach Tensix L1 before the tile is published.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(write_addr, get_tile_size(dfb_id));
+#endif
+    dfb.push_back(1);
 }
 
 }  // namespace dataflow_kernel_lib
