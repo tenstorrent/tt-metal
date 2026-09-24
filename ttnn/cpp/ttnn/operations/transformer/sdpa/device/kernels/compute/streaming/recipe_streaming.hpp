@@ -1063,6 +1063,45 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #endif
 }
 
+#ifdef SDPA_RECIPE_MASK
+// Dense additive attn_mask (legacy SDPA contract): L1-accumulate one QK row group's mask tiles onto
+// the packed scores in cb_qkt_im, before the row max. The reader streams one Q chunk x K chunk of
+// mask per K chunk into CB 15, one Q tile row at a time. The add runs in the packer's L1
+// accumulator (the same adder legacy SDPA uses); no recipe SFPU/FPU arithmetic changes, and
+// unmasked builds compile this out.
+constexpr uint32_t kRecipeMaskCb = 15;
+// The reader always pushes whole group_rows groups (an odd chunk's single-row tail group carries a
+// zero padding row), so waits/pops stay group-aligned in a one- or two-group CB.
+template <uint32_t cb_qkt_im, uint32_t k_tiles, uint32_t group_rows>
+static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row_start, uint32_t rows) {
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    const uint32_t tiles = rows * k_tiles;
+    CircularBuffer(kRecipeMaskCb).wait_front(group_rows * k_tiles);
+    configure_single_tile_pack(cb_qkt_im);
+    sdpa_stream_reconfig_srca(kRecipeMaskCb);
+    copy_init(kRecipeMaskCb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    const uint32_t out_base = row_start * k_tiles;
+    for (uint32_t i = 0; i < tiles; i += batch) {
+        const uint32_t n = tiles - i < batch ? tiles - i : batch;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < n; ++j) {
+            copy_tile(kRecipeMaskCb, i + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < n; ++j) {
+            pack_tile<true>(j, cb_qkt_im, out_base + i + j);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    CircularBuffer(kRecipeMaskCb).pop_front(group_rows * k_tiles);
+    // Callers expect srcA configured for the score CB (max reduce / next row group).
+    sdpa_stream_reconfig_srca(cb_qkt_im);
+}
+#endif
+
 /**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
@@ -1228,7 +1267,12 @@ static void sdpa_inner_loop_step(
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
 
+#ifdef SDPA_RECIPE_MASK
+        // The first-half max reduce must not read scores before the mask lands on them.
+        constexpr bool overlap_first_half = false;
+#else
         const bool overlap_first_half = reduce_trigger;
+#endif
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -1309,6 +1353,10 @@ static void sdpa_inner_loop_step(
         // The FP32 max-reduce helper configures its own input views.
 #ifndef SDPA_RECIPE_FP32
         sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+#endif
+
+#ifdef SDPA_RECIPE_MASK
+        recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
 #endif
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Device smoke tests: opt-in SDPA recipes on the LTX-2 D64 audio attentions.
 
-Covers audio self-attn (padded: legacy key-column mask vs recipe K/V slice to the real length; and unpadded),
+Covers audio self-attn (padded: legacy key-column mask vs recipe K/V slice to the real length or the recipe
+attn_mask itself; and unpadded),
 audio<->text cross-attn, A2V (video Q, audio K/V) and V2A (audio Q, SP-sharded video K/V; ring is_cross on 1x2).
 Random weights; per case a fresh tt module per variant (legacy, FAST, ACCURATE, LOW_PRECISION bfp8) from the SAME
 torch state dict and inputs, gated vs the torch reference and the legacy tt output like
@@ -72,9 +73,15 @@ def _audio_model(mesh_device, ccl_manager, parallel_config, precision, kv_dtype,
 
 @pytest.mark.parametrize(MESH_ARGS, MESHES, indirect=MESH_INDIRECT)
 @pytest.mark.parametrize("audio_n_real", [200, 224, 256], ids=["real200", "real224", "unpadded256"])
-def test_ltx_audio_self_attention_recipes(mesh_device, sp_axis, tp_axis, audio_n_real, record_property) -> None:
-    """Padded audio self-attn: legacy passes the key-column mask, a recipe slices K/V to audio_n_real
-    (1x1 dense; 1x2 gathered K/V). Unpadded 256 on 1x2 is the D64 ring joint path."""
+@pytest.mark.parametrize("recipe_mask", ["slice", "mask"])
+def test_ltx_audio_self_attention_recipes(
+    mesh_device, sp_axis, tp_axis, audio_n_real, recipe_mask, record_property
+) -> None:
+    """Padded audio self-attn: legacy passes the key-column mask; a recipe slices K/V to audio_n_real
+    ("slice", attn_kv_len given) or receives the mask itself ("mask", no attn_kv_len) (1x1 dense;
+    1x2 gathered K/V). Unpadded 256 on 1x2 is the D64 ring joint path."""
+    if recipe_mask == "mask" and audio_n_real == 256:
+        pytest.skip("unpadded: no mask")
     from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
 
     audio_n, grid = 256, (1, 16, 16)
@@ -108,23 +115,13 @@ def test_ltx_audio_self_attention_recipes(mesh_device, sp_axis, tp_axis, audio_n
             rope_sin=tt_sin,
             trans_mat=tt_trans_mat,
             attn_mask=tt_mask,
-            attn_kv_len=audio_n_real,
+            attn_kv_len=audio_n_real if recipe_mask == "slice" else None,
         )
         out = _gather(mesh_device, out, sp_axis, tp_axis).squeeze(0)
         return {"audio": out[:, :audio_n_real]}
 
-    label = f"ltx_audio_self.{tuple(mesh_device.shape)}.N{audio_n}real{audio_n_real}"
+    label = f"ltx_audio_self.{tuple(mesh_device.shape)}.N{audio_n}real{audio_n_real}.{recipe_mask}"
     run_variants(record_property, label, {"audio": torch_out}, run_tt)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
-def test_ltx_audio_recipe_rejects_mask_without_key_length(mesh_device) -> None:
-    ccl_manager, parallel_config, _ = _parallel(mesh_device, 0, 1)
-    tt_model = _audio_model(mesh_device, ccl_manager, parallel_config, ttnn.SDPAPrecision.FAST, None, is_self=True)
-    tt_mask, _, _ = build_audio_masks(256, 200, mesh_device=mesh_device, sp_axis=0)
-    with pytest.raises(ValueError, match="unmasked"):
-        tt_model(spatial_1BND=None, N=256, attn_mask=tt_mask)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)

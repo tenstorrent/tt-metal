@@ -99,6 +99,15 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_BASELINE
             ,
             15
+#ifdef SDPA_RECIPE_MASK
+            // FAST keeps the legacy streaming provided-mask path (L1-accumulate before the max).
+            ,
+            0,
+            false,
+            false,
+            INVALID_CB,
+            true
+#endif
 #endif
             >(jobs, k_chunks, 8, 9, 10, 11, 12, 13);
     }

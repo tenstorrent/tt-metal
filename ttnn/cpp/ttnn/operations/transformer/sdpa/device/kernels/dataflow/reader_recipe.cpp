@@ -78,6 +78,48 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
     }
 }
 
+#ifdef SDPA_RECIPE_MASK
+// Additive attn_mask [1|B, 1|H, Sq, Sk]: stream one Q chunk x K chunk of tiles, one Q tile row
+// (SDPA_K_CHUNK_TILES tiles) at a time, so compute can apply each QK row group as it lands.
+// The mask CB holds one or two compute row groups (SDPA_RECIPE_MASK_GROUP_ROWS rows each).
+// Tiles outside the mask (Q rows past Sq, K columns past Sk) are zero: the recipe's pack-thread
+// tail hook already stamps -inf on padded K columns, and padded Q rows are never written.
+template <uint32_t q_tiles, typename Accessor>
+FORCE_INLINE void read_mask_chunk(
+    const Noc& noc, const Accessor& mask, CircularBuffer& cb, uint32_t head, uint32_t q_tile0, uint32_t k_tile0) {
+    constexpr uint32_t bytes = get_tile_size(SDPA_RECIPE_MASK_CB);
+    constexpr uint32_t mask_heads = SDPA_RECIPE_MASK_BCAST_HEADS ? 1 : SDPA_RECIPE_MASK_HEADS;
+    const uint32_t batch = SDPA_RECIPE_MASK_BCAST_BATCH ? 0 : head / SDPA_RECIPE_MASK_HEADS;
+    const uint32_t mask_head = SDPA_RECIPE_MASK_BCAST_HEADS ? 0 : head % SDPA_RECIPE_MASK_HEADS;
+    const uint32_t base = (batch * mask_heads + mask_head) * SDPA_RECIPE_MASK_Q_TILES * SDPA_RECIPE_MASK_K_TILES;
+    // Whole compute row groups: an odd chunk's last group gets a zero padding row.
+    constexpr uint32_t rows = (q_tiles + SDPA_RECIPE_MASK_GROUP_ROWS - 1) / SDPA_RECIPE_MASK_GROUP_ROWS *
+                              SDPA_RECIPE_MASK_GROUP_ROWS;
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t q_tile = row < q_tiles ? q_tile0 + row : SDPA_RECIPE_MASK_Q_TILES;
+        cb.reserve_back(SDPA_K_CHUNK_TILES);
+        const uint32_t ptr = cb.get_write_ptr();
+        bool zeroed = false;
+        for (uint32_t col = 0; col < SDPA_K_CHUNK_TILES; ++col) {
+            const uint32_t k_tile = k_tile0 + col;
+            const CoreLocalMem<uint32_t> destination(ptr + col * bytes);
+            if (q_tile < SDPA_RECIPE_MASK_Q_TILES && k_tile < SDPA_RECIPE_MASK_K_TILES) {
+                noc.async_read(
+                    mask, destination, bytes, {.page_id = base + q_tile * SDPA_RECIPE_MASK_K_TILES + k_tile}, {});
+            } else {
+                noc.async_write_zeros(destination, bytes);
+                zeroed = true;
+            }
+        }
+        if (zeroed) {
+            noc.write_zeros_l1_barrier();
+        }
+        noc.async_read_barrier();
+        cb.push_back(SDPA_K_CHUNK_TILES);
+    }
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t q_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t k_chunks = get_compile_time_arg_val(1);
@@ -107,6 +149,14 @@ void kernel_main() {
         sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
     const auto v =
         sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(va, get_arg_val<uint32_t>(2)));
+#endif
+#ifdef SDPA_RECIPE_MASK
+#ifdef SDPA_JOINT
+#error "SDPA recipe masks are dense-only"
+#endif
+    constexpr auto ma = TensorAccessorArgs<va.next_compile_time_args_offset()>();
+    const auto mask = TensorAccessor(ma, get_arg_val<uint32_t>(12));
+    CircularBuffer mcb(SDPA_RECIPE_MASK_CB);
 #endif
     const uint32_t first_job = get_arg_val<uint32_t>(3);
     const uint32_t jobs = get_arg_val<uint32_t>(4);
@@ -209,6 +259,11 @@ void kernel_main() {
             // Crucially, K is published BEFORE reserving V, retaining K lookahead
             // when the previous iteration still occupies the one-slot V buffer.
             kcb.push_back(kv_tiles);
+#ifdef SDPA_RECIPE_MASK
+            // Mask after K, before V: QK (phase one) consumes it; PV (phase two) needs only V.
+            read_mask_chunk<q_tiles>(
+                noc, mask, mcb, head, ((first_job + qi) % queries_per_head) * q_tiles, ki * SDPA_K_CHUNK_TILES);
+#endif
 
             vcb.reserve_back(kv_tiles);
             const uint32_t vptr = vcb.get_write_ptr();
