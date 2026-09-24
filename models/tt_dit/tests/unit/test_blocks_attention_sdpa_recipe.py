@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: opt-in SDPA recipe wiring of the shared joint Attention block (FLUX.1, Qwen-Image, Motif).
+"""Host-only: SDPA recipe wiring of the shared joint Attention block (FLUX.1, Qwen-Image, Motif).
 
 The block's helpers are exercised on instances built with object.__new__, which bypasses __init__
-(it needs a mesh device). Constructor validation runs before any device access.
+(it needs a mesh device). Constructor validation runs before any device access. The default recipe
+itself is covered by test_sdpa_dit_recipe_defaults.py.
 """
 
 import pytest
 
 import ttnn
+from models.tt_dit.blocks import attention as attention_module
 from models.tt_dit.blocks.attention import Attention
 from models.tt_dit.models.transformers.transformer_flux1 import Flux1Transformer
 from models.tt_dit.models.transformers.transformer_motif import MOTIF_6B_CONFIG, MotifTransformer
@@ -33,13 +35,8 @@ def _chunks(program_config):
     return program_config.q_chunk_size, program_config.k_chunk_size
 
 
-def test_legacy_program_config_is_the_tuned_object():
-    attention = _bare_attention(None, q_chunk=64, k_chunk=1024)
-    assert attention._sdpa_program_config(ring=False) is attention.sdpa_program_config
-    assert attention._sdpa_program_config(ring=True) is attention.sdpa_program_config
-
-
 def test_legacy_sdpa_kwargs_follow_reassigned_compute_config():
+    # Legacy (non-Blackhole) path.
     attention = _bare_attention(None)
     assert attention._sdpa_kwargs() == {"compute_kernel_config": "legacy"}
     attention.sdpa_compute_kernel_config = "reassigned"
@@ -59,26 +56,15 @@ def test_recipe_sdpa_kwargs_replace_compute_config(precision, prepared):
     assert attention._sdpa_kwargs() == {"precision": precision, "inputs_prepared": prepared}
 
 
-@pytest.mark.parametrize("q_chunk, k_chunk", [(128, 256), (64, 1024), (224, 384)])
-@pytest.mark.parametrize("ring", [False, True])
-def test_recipe_leaves_chunks_to_the_op(q_chunk, k_chunk, ring):
-    # Tuned or not, the recipe config keeps the grid and lets SDPA choose the chunks (0 = op-selected).
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)
-    recipe = attention._sdpa_program_config(ring=ring)
-    assert recipe is not attention.sdpa_program_config
-    assert _chunks(recipe) == (0, 0)
-    assert (recipe.compute_with_storage_grid_size.x, recipe.compute_with_storage_grid_size.y) == GRID
-    assert recipe.exp_approx_mode is None
+def test_flux_tuned_chunks_are_legacy_only():
+    # On Blackhole every call runs a recipe with op-selected chunks; the table serves other archs only.
+    assert Flux1Transformer.sdpa_chunk_size_map
+    assert all(not blackhole for blackhole, _sp, _tp in Flux1Transformer.sdpa_chunk_size_map)
 
 
-@pytest.mark.parametrize("key", sorted(Flux1Transformer.sdpa_chunk_size_map))
-def test_flux_tuned_chunks_are_legacy_only(key):
-    q_chunk, k_chunk = Flux1Transformer.sdpa_chunk_size_map[key]
-    assert _chunks(_bare_attention(None, q_chunk=q_chunk, k_chunk=k_chunk)._sdpa_program_config(ring=True)) == (
-        q_chunk,
-        k_chunk,
-    )
-    assert _chunks(_bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)._sdpa_program_config(ring=True)) == (0, 0)
+@pytest.fixture
+def blackhole(monkeypatch):
+    monkeypatch.setattr(attention_module, "is_blackhole", lambda: True)
 
 
 def _construct_attention(head_dim, precision, kv_dtype=None):
@@ -99,19 +85,22 @@ def _construct_attention(head_dim, precision, kv_dtype=None):
     )
 
 
-def test_attention_rejects_recipe_for_unsupported_head_dim():
+@pytest.mark.parametrize("precision", [None, ttnn.SDPAPrecision.ACCURATE])
+def test_attention_rejects_recipe_for_unsupported_head_dim(blackhole, precision):
+    # None selects the default recipe, so D96 is rejected either way on Blackhole.
     with pytest.raises(ValueError, match="head_dim"):
-        _construct_attention(96, ttnn.SDPAPrecision.ACCURATE)
+        _construct_attention(96, precision)
 
 
 @pytest.mark.parametrize("head_dim", [64, 128, 256])
-def test_attention_accepts_recipe_head_dims(head_dim):
+@pytest.mark.parametrize("precision", [None, ttnn.SDPAPrecision.ACCURATE])
+def test_attention_accepts_recipe_head_dims(blackhole, head_dim, precision):
     # Validation passes; construction then reaches the (absent) mesh device.
     with pytest.raises(AttributeError):
-        _construct_attention(head_dim, ttnn.SDPAPrecision.ACCURATE)
+        _construct_attention(head_dim, precision)
 
 
-def test_attention_rejects_low_precision_kv_without_low_precision_recipe():
+def test_attention_rejects_low_precision_kv_without_low_precision_recipe(blackhole):
     with pytest.raises(ValueError):
         _construct_attention(128, None, ttnn.bfloat8_b)
     with pytest.raises(ValueError):
@@ -125,17 +114,8 @@ def test_attention_rejects_low_precision_kv_without_low_precision_recipe():
 def test_motif_accepts_d64_recipes(precision, kv_dtype):
     assert MOTIF_6B_CONFIG.head_dim == 64
     MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, precision, kv_dtype)
-    MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, None)  # legacy path is untouched
+    MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, None)  # the default recipe
     with pytest.raises(ValueError, match="LOW_PRECISION"):
         MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, ttnn.SDPAPrecision.ACCURATE, ttnn.bfloat8_b)
     with pytest.raises(ValueError, match="LOW_PRECISION"):
         MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, ttnn.bfloat8_b)
-
-
-@pytest.mark.parametrize(("sp_factor", "ring"), [(1, False), (2, True), (4, True)])
-def test_motif_recipe_chunks_are_op_selected(sp_factor, ring):
-    k_chunk = MotifTransformer.get_k_chunk_size(sp_factor)
-    attention = _bare_attention(
-        ttnn.SDPAPrecision.ACCURATE, q_chunk=MotifTransformer.Q_CHUNK_SIZE, k_chunk=k_chunk
-    )
-    assert _chunks(attention._sdpa_program_config(ring=ring)) == (0, 0)

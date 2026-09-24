@@ -342,9 +342,9 @@ class SD35Transformer2DModel(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt every joint attention (joint SDPA, or ring joint SDPA
-        with sequence parallelism) into a named SDPA recipe (D64 is supported); ``None`` keeps the
-        existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every joint attention
+        (joint SDPA, or ring joint SDPA with sequence parallelism; D64); ``None`` selects
+        ``SD35JointAttention.sdpa_precision_default`` (legacy SDPA off Blackhole)."""
         self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=attention_head_dim)
         super().__init__()
 

@@ -3,7 +3,9 @@
 """Device smoke tests: opt-in SDPA recipes in the FLUX.1 shared joint Attention (blocks/attention.py)
 and the FLUX.2 Attention (blocks/attention_opt.py).
 
-Random weights, small shapes (4 heads, D128). Each case runs legacy (sdpa_precision=None), FAST,
+Random weights, small shapes (4 heads, D128). Each case runs legacy (the
+module's legacy SDPA config, via tests/unit/sdpa_legacy.py), the default recipe (sdpa_precision=None),
+FAST,
 ACCURATE and LOW_PRECISION (bfp8 KV) on the same torch weights and inputs, and compares each output
 against the torch reference of the module (and against the legacy tt output).
 
@@ -28,18 +30,20 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
+from .sdpa_legacy import LEGACY, sdpa_variant
 
 HEADS = 4
 HEAD_DIM = 128
 DIM = HEADS * HEAD_DIM
 
 VARIANTS = {
-    "legacy": (None, None),
+    "legacy": (LEGACY, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
+    "default": (None, None),  # the module's default recipe (sdpa_precision_default)
     "FAST": (ttnn.SDPAPrecision.FAST, None),
     "ACCURATE": (ttnn.SDPAPrecision.ACCURATE, None),
     "LOW_PRECISION": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
 }
-ABS_BOUND = {"FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.0}
+ABS_BOUND = {"default": 1.0, "FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.0}
 MARGIN = 1.0  # allowed excess over the legacy tt L2 vs torch (percentage points)
 
 # 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router handshake on a 2-chip host).
@@ -105,7 +109,9 @@ def _gate(results: dict, record_property, prefix: str) -> None:
                     f"{variant}/{name}: l2 vs torch {vs_torch:.3f}% (legacy {base:.3f}%), "
                     f"vs legacy {vs_legacy:.3f}%, bound {bound}%"
                 )
-            print(f"{prefix} {variant:14s} {name:8s} vs_torch={vs_torch:.4f}% legacy={base:.4f}% vs_legacy={vs_legacy:.4f}%")
+            print(
+                f"{prefix} {variant:14s} {name:8s} vs_torch={vs_torch:.4f}% legacy={base:.4f}% vs_legacy={vs_legacy:.4f}%"
+            )
     assert not failures, "; ".join(failures)
 
 
@@ -160,61 +166,64 @@ def test_flux1_attention_sdpa_recipes(
 
     results = {}
     for variant, (precision, kv_dtype) in VARIANTS.items():
-        ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-        tt_model = Attention(
-            query_dim=DIM,
-            head_dim=HEAD_DIM,
-            heads=HEADS,
-            out_dim=DIM,
-            added_kv_proj_dim=DIM if joint else 0,
-            context_pre_only=not joint,
-            pre_only=not joint,
-            eps=1e-6,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            padding_config=None,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_model.load_torch_state_dict(dict(state))
-
-        tt_spatial = bf16_tensor(pad(spatial), device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-        tt_prompt = bf16_tensor(prompt, device=mesh_device) if joint else None
-        spatial_rope = tuple(
-            bf16_tensor(pad(t[prompt_seq_len:]), device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-            for t in (rope_cos, rope_sin)
-        )
-        prompt_rope = (
-            tuple(bf16_tensor(t[:prompt_seq_len], device=mesh_device) for t in (rope_cos, rope_sin)) if joint else None
-        )
-
-        tt_spatial_out, tt_prompt_out = tt_model.forward(
-            spatial=tt_spatial,
-            prompt=tt_prompt,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_seq_len,
-        )
-        outputs = [
-            (
-                "spatial",
-                tensor.to_torch(tt_spatial_out, mesh_axes=[..., sp_axis, tp_axis])
-                .reshape(-1, DIM)[:spatial_seq_len]
-                .float(),
-                torch_spatial.reshape(-1, DIM),
+        with sdpa_variant(precision) as precision:
+            ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+            tt_model = Attention(
+                query_dim=DIM,
+                head_dim=HEAD_DIM,
+                heads=HEADS,
+                out_dim=DIM,
+                added_kv_proj_dim=DIM if joint else 0,
+                context_pre_only=not joint,
+                pre_only=not joint,
+                eps=1e-6,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                padding_config=None,
+                sdpa_precision=precision,
+                sdpa_kv_dtype=kv_dtype,
             )
-        ]
-        if joint:
-            outputs.append(
+            tt_model.load_torch_state_dict(dict(state))
+
+            tt_spatial = bf16_tensor(pad(spatial), device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+            tt_prompt = bf16_tensor(prompt, device=mesh_device) if joint else None
+            spatial_rope = tuple(
+                bf16_tensor(pad(t[prompt_seq_len:]), device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+                for t in (rope_cos, rope_sin)
+            )
+            prompt_rope = (
+                tuple(bf16_tensor(t[:prompt_seq_len], device=mesh_device) for t in (rope_cos, rope_sin))
+                if joint
+                else None
+            )
+
+            tt_spatial_out, tt_prompt_out = tt_model.forward(
+                spatial=tt_spatial,
+                prompt=tt_prompt,
+                spatial_rope=spatial_rope,
+                prompt_rope=prompt_rope,
+                spatial_sequence_length=spatial_seq_len,
+            )
+            outputs = [
                 (
-                    "prompt",
-                    tensor.to_torch(tt_prompt_out, mesh_axes=[..., None, tp_axis]).reshape(-1, DIM).float(),
-                    torch_prompt.reshape(-1, DIM),
+                    "spatial",
+                    tensor.to_torch(tt_spatial_out, mesh_axes=[..., sp_axis, tp_axis])
+                    .reshape(-1, DIM)[:spatial_seq_len]
+                    .float(),
+                    torch_spatial.reshape(-1, DIM),
                 )
-            )
-        results[variant] = outputs
-        del tt_model, ccl_manager
+            ]
+            if joint:
+                outputs.append(
+                    (
+                        "prompt",
+                        tensor.to_torch(tt_prompt_out, mesh_axes=[..., None, tp_axis]).reshape(-1, DIM).float(),
+                        torch_prompt.reshape(-1, DIM),
+                    )
+                )
+            results[variant] = outputs
+            del tt_model, ccl_manager
 
     _gate(results, record_property, f"flux1.{tuple(mesh_device.shape)}.s{spatial_seq_len}.p{prompt_seq_len}")
 
@@ -308,60 +317,66 @@ def test_flux2_attention_sdpa_recipes(mesh_device, sp_axis, tp_axis, seq1_len, s
 
     results = {}
     for variant, (precision, kv_dtype) in VARIANTS.items():
-        ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-        if joint:
-            # As in transformer_block_opt.TransformerBlock.
-            kwargs = dict(added_kv_proj_dim=DIM, context_pre_only=False)
-        else:
-            # As in transformer_flux2.Flux2SingleTransformerBlock.
-            kwargs = dict(added_kv_proj_dim=0, pre_only=True, use_spatial_weights_for_prompt=True)
-        tt_model = flux2_attention.Attention(
-            query_dim=DIM,
-            head_dim=HEAD_DIM,
-            heads=HEADS,
-            out_dim=DIM,
-            proj_bias=False,
-            eps=1e-6,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            padding_config=None,
-            per_head_norm=True,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-            **kwargs,
-        )
-        tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
-
-        tt_seq1 = tensor.from_torch(seq1, device=mesh_device, mesh_axes=[None, sp_axis, None])
-        tt_rope1 = tuple(
-            tensor.from_torch(t[None, None], device=mesh_device, mesh_axes=[None, None, sp_axis, None]) for t in rope1
-        )
-        tt_seq2 = tt_rope2 = None
-        if joint:
-            tt_seq2 = tensor.from_torch(seq2, device=mesh_device)
-            tt_rope2 = tuple(tensor.from_torch(t[None, None], device=mesh_device) for t in rope2)
-
-        out1, out2 = tt_model.forward(
-            sequence_1=tt_seq1,
-            sequence_1_length=seq1_len,
-            sequence_2=tt_seq2,
-            sequence_2_length=seq2_len,
-            sequence_1_rope=tt_rope1,
-            sequence_2_rope=tt_rope2,
-        )
-        outputs = [
-            (
-                "seq1",
-                tensor.to_torch(out1, mesh_axes=[..., sp_axis, None]).reshape(-1, DIM)[:seq1_len].float(),
-                torch_out1.reshape(-1, DIM),
+        with sdpa_variant(precision) as precision:
+            ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+            if joint:
+                # As in transformer_block_opt.TransformerBlock.
+                kwargs = dict(added_kv_proj_dim=DIM, context_pre_only=False)
+            else:
+                # As in transformer_flux2.Flux2SingleTransformerBlock.
+                kwargs = dict(added_kv_proj_dim=0, pre_only=True, use_spatial_weights_for_prompt=True)
+            tt_model = flux2_attention.Attention(
+                query_dim=DIM,
+                head_dim=HEAD_DIM,
+                heads=HEADS,
+                out_dim=DIM,
+                proj_bias=False,
+                eps=1e-6,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                padding_config=None,
+                per_head_norm=True,
+                sdpa_precision=precision,
+                sdpa_kv_dtype=kv_dtype,
+                **kwargs,
             )
-        ]
-        if joint:
-            outputs.append(
-                ("seq2", tensor.to_torch(out2, mesh_axes=[..., None, None]).reshape(-1, DIM).float(), torch_out2.reshape(-1, DIM))
+            tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+
+            tt_seq1 = tensor.from_torch(seq1, device=mesh_device, mesh_axes=[None, sp_axis, None])
+            tt_rope1 = tuple(
+                tensor.from_torch(t[None, None], device=mesh_device, mesh_axes=[None, None, sp_axis, None])
+                for t in rope1
             )
-        results[variant] = outputs
-        del tt_model, ccl_manager
+            tt_seq2 = tt_rope2 = None
+            if joint:
+                tt_seq2 = tensor.from_torch(seq2, device=mesh_device)
+                tt_rope2 = tuple(tensor.from_torch(t[None, None], device=mesh_device) for t in rope2)
+
+            out1, out2 = tt_model.forward(
+                sequence_1=tt_seq1,
+                sequence_1_length=seq1_len,
+                sequence_2=tt_seq2,
+                sequence_2_length=seq2_len,
+                sequence_1_rope=tt_rope1,
+                sequence_2_rope=tt_rope2,
+            )
+            outputs = [
+                (
+                    "seq1",
+                    tensor.to_torch(out1, mesh_axes=[..., sp_axis, None]).reshape(-1, DIM)[:seq1_len].float(),
+                    torch_out1.reshape(-1, DIM),
+                )
+            ]
+            if joint:
+                outputs.append(
+                    (
+                        "seq2",
+                        tensor.to_torch(out2, mesh_axes=[..., None, None]).reshape(-1, DIM).float(),
+                        torch_out2.reshape(-1, DIM),
+                    )
+                )
+            results[variant] = outputs
+            del tt_model, ccl_manager
 
     _gate(results, record_property, f"flux2.{tuple(mesh_device.shape)}.s{seq1_len}.p{seq2_len}")

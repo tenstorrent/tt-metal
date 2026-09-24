@@ -584,10 +584,10 @@ class LTXTransformerModel(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt every attention (D128 video self/text, D64 audio
-        self/text, A2V, V2A) into a named SDPA recipe. With padded audio a recipe needs
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every attention (D128
+        video self/text, D64 audio self/text, A2V, V2A). With padded audio a recipe needs
         ``audio_attn_kv_len`` (= audio_N_real) alongside ``audio_attn_mask`` at forward time.
-        ``None`` keeps the existing attention configuration."""
+        ``None`` selects ``LTXAttention.sdpa_precision_default`` (legacy SDPA off Blackhole)."""
         super().__init__()
 
         self.inner_dim = num_attention_heads * attention_head_dim

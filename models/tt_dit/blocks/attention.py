@@ -15,7 +15,13 @@ from ..layers.linear import ColParallelLinear
 from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
-from ..utils.sdpa_recipe import prepare_recipe_inputs, recipe_program_config, sdpa_kwargs, validate_recipe_args
+from ..utils import sdpa_recipe
+from ..utils.sdpa_recipe import (
+    prepare_recipe_inputs,
+    recipe_config,
+    sdpa_kwargs,
+    validate_recipe_args,
+)
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -27,6 +33,12 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
+    # Named SDPA recipe of every joint / ring joint / dense SDPA call on Blackhole (FLUX.1, Qwen-Image,
+    # Motif). The legacy setup was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED
+    # (HiFi4 QK, FP32 state) is more accurate than it at every measured shape. See
+    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
     def __init__(
         self,
         *,
@@ -53,15 +65,14 @@ class Attention(Module):
         super().__init__()
 
         self.head_dim = head_dim
-        # Opt-in named SDPA recipe; None keeps the legacy program/compute configs below untouched.
-        self.sdpa_kv_dtype = validate_recipe_args(
-            sdpa_precision,
-            sdpa_kv_dtype,
-            head_dim=head_dim,
-            model="Attention",
-            is_blackhole=is_blackhole() if sdpa_precision is not None else True,
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Attention"
         )
-        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = validate_recipe_args(
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="Attention", is_blackhole=blackhole
+        )
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -85,17 +96,23 @@ class Attention(Module):
             self.mesh_device.compute_with_storage_grid_size().y - 1,
         )
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for the grid.
+            self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole): the q/k chunk sizes apply only here.
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
@@ -318,7 +335,7 @@ class Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self._sdpa_program_config(ring=True),
+                program_config=self.sdpa_program_config,
                 **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -343,7 +360,7 @@ class Attention(Module):
                     k,
                     v,
                     is_causal=False,
-                    program_config=self._sdpa_program_config(ring=False),
+                    program_config=self.sdpa_program_config,
                     **self._sdpa_kwargs(),
                 )
                 prompt = None
@@ -356,7 +373,7 @@ class Attention(Module):
                     add_k,
                     add_v,
                     joint_strategy="rear",
-                    program_config=self._sdpa_program_config(ring=False),
+                    program_config=self.sdpa_program_config,
                     **self._sdpa_kwargs(),
                 )
 
@@ -378,14 +395,8 @@ class Attention(Module):
 
         return spatial, prompt
 
-    def _sdpa_program_config(self, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """The legacy program config, or the recipe one (same grid, op-selected chunks)."""
-        if self.sdpa_precision is None:
-            return self.sdpa_program_config
-        return recipe_program_config(self.sdpa_program_config, ring=ring)
-
     def _sdpa_kwargs(self) -> dict:
-        """Recipe kwargs, or the legacy compute config read at call time (it may be reassigned)."""
+        """Recipe kwargs, or (non-Blackhole) the legacy compute config read at call time."""
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     @classmethod

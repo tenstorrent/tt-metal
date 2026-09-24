@@ -29,13 +29,15 @@ from ...parallel.manager import CCLManager
 from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ...utils.padding import pad_vision_seq_parallel
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
+from .sdpa_legacy import LEGACY, sdpa_variant
 
 P = ttnn.SDPAPrecision
 LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 # name -> (sdpa_precision, sdpa_kv_dtype, absolute L2 bound %, margin over legacy L2 vs torch in % points)
 VARIANTS = {
-    "legacy": (None, None, None, None),
+    "legacy": (LEGACY, None, None, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
+    "default": (None, None, 1.0, 0.25),  # the module's default recipe (sdpa_precision_default)
     "FAST": (P.FAST, None, 3.0, 0.5),
     "ACCURATE": (P.ACCURATE, None, 1.0, 0.5),
     # bfp8 K/V storage adds its own quantization error on top of the recipe; allow 1 point over legacy.
@@ -99,7 +101,8 @@ def run_variants(record_property, label: str, torch_outs: dict, run_tt) -> None:
     """run_tt(precision, kv_dtype) -> dict name->torch tensor (same keys as torch_outs)."""
     tt_outs = {}
     for variant, (precision, kv_dtype, _, _) in VARIANTS.items():
-        tt_outs[variant] = run_tt(precision, kv_dtype)
+        with sdpa_variant(precision) as precision:
+            tt_outs[variant] = run_tt(precision, kv_dtype)
 
     failures = []
     for key, ref in torch_outs.items():

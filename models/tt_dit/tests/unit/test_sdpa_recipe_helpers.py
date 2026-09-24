@@ -55,12 +55,25 @@ def test_kwargs():
     assert recipe.recipe_sdpa_kwargs(LOW) == {"precision": LOW, "inputs_prepared": True}
 
 
-def test_prepare_passthrough_and_mask():
+def test_resolve_precision():
+    # None selects the call's default recipe on Blackhole; an explicit recipe overrides it.
+    assert recipe.resolve_precision(None, FAST, blackhole=True, model="m") == FAST
+    assert recipe.resolve_precision(LOW, FAST, blackhole=True, model="m") == LOW
+    # Off Blackhole the call keeps its legacy configuration; an explicit recipe is rejected.
+    assert recipe.resolve_precision(None, FAST, blackhole=False, model="m") is None
+    with pytest.raises(ValueError):
+        recipe.resolve_precision(COMPENSATED, FAST, blackhole=False, model="m")
+
+
+def test_recipe_config_is_grid_only():
+    for grid in ((11, 9), ttnn.CoreCoord(10, 10)):
+        config = recipe.recipe_config(grid)
+        assert (config.q_chunk_size, config.k_chunk_size) == (0, 0) and config.exp_approx_mode is None
+    assert recipe.recipe_config((8, 4), max_cores_per_head_batch=8).max_cores_per_head_batch == 8
+
+
+def test_prepare_passthrough():
     sentinel = object(), object(), object()
     assert recipe.prepare_recipe_inputs(None, ttnn.bfloat16, *sentinel) == sentinel
     assert recipe.prepare_recipe_inputs(COMPENSATED, ttnn.bfloat16, *sentinel) == sentinel
     assert recipe.prepare_recipe_inputs(LOW, ttnn.bfloat16, None, None, None) == (None, None, None)
-    recipe.reject_mask(None, "mask", model="m")
-    recipe.reject_mask(FAST, None, model="m")
-    with pytest.raises(ValueError):
-        recipe.reject_mask(FAST, "mask", model="m")

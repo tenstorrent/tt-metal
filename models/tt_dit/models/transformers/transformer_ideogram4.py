@@ -18,9 +18,10 @@ from ...parallel.manager import CCLManager
 from ...reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.padding import pad_weight_tensor
+from ...utils import sdpa_recipe
 from ...utils.sdpa_recipe import (
     prepare_recipe_inputs,
-    recipe_program_config,
+    recipe_config,
     sdpa_kwargs,
     validate_recipe_args,
 )
@@ -100,6 +101,12 @@ class Ideogram4TransformerBlock(Module):
         K/V across the SP axis. cos/sin are sharded on sequence to match.
     """
 
+    # Named SDPA recipe of every SDPA call on Blackhole (ring joint unmasked under SP, dense with the
+    # optional segment mask). The legacy setup was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False,
+    # D256 Q128/K256); BALANCED (HiFi4 QK, FP32 state) is more accurate than it at every measured shape.
+    # See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
     def __init__(
         self,
         *,
@@ -119,15 +126,19 @@ class Ideogram4TransformerBlock(Module):
         super().__init__()
 
         assert hidden_size % num_heads == 0
-        # Opt-in named SDPA recipe (None keeps the tuned legacy attention). A segment mask runs the
-        # dense recipe with attn_mask (K/V all-gathered under SP), like the legacy masked path.
-        self.sdpa_precision = sdpa_precision
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        # A segment mask runs the dense recipe with attn_mask (K/V all-gathered under SP), like the
+        # legacy masked path.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Ideogram4"
+        )
         self.sdpa_kv_dtype = validate_recipe_args(
-            sdpa_precision,
+            self.sdpa_precision,
             sdpa_kv_dtype,
             head_dim=hidden_size // num_heads,
             model="Ideogram4",
-            is_blackhole=is_blackhole(),
+            is_blackhole=blackhole,
         )
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
@@ -261,22 +272,28 @@ class Ideogram4TransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        # SDPA config (fidelity recipe §4 — HiFi2, fp32 acc off; flip on if attn PCC suffers).
-        # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
-        # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
-        # so the buffers fit. Flash attention is exact regardless of chunk size.
-        self.sdpa_q_chunk_size = 128
-        self.sdpa_k_chunk_size = 256
         device_grid = mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(device_grid.x, device_grid.y),
-            q_chunk_size=self.sdpa_q_chunk_size,
-            k_chunk_size=self.sdpa_k_chunk_size,
-            exp_approx_mode=False,
-        )
         # Ring SDPA (sequence parallel) reserves the last worker row for the CCL all-gather.
         self.sdpa_worker_grid = (device_grid.x, device_grid.y - 1)
-        self._ring_sdpa_pc_cache = {}
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA sizes the D256 chunks to fit L1 itself.
+            self.sdpa_program_config = recipe_config(device_grid)
+            self.ring_sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+        else:
+            # Legacy SDPA (non-Blackhole). head_dim=256 (2x the usual 128) doubles SDPA's per-core
+            # K/V/score CBs; k_chunk_size=512 overflows L1, so Q128/K256.
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(device_grid.x, device_grid.y),
+                q_chunk_size=128,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=128,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
         # ------------------------------------------------------------------
         # MIXED math fidelity (mirrors Wan2.2): HiFi2 for the heavy per-token
         # compute (the four big block matmuls + SDPA), HiFi4 for the
@@ -297,16 +314,20 @@ class Ideogram4TransformerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # HiFi2 for SDPA. head_dim=256 is precision-heavy, but the fp32_dest_acc
+        # Legacy (non-Blackhole) SDPA: HiFi2. head_dim=256 is precision-heavy, but the fp32_dest_acc
         # sweep showed fp32_dest_acc={True,False} give the SAME block PCC
         # (img1024 99.976% / img4096 99.980% either way) and the SAME device
-        # time at 2048px, so we land fp32_dest_acc=False to match Wan. Flip to
-        # True if a future config regresses SDPA correctness.
-        self.sdpa_hifi2_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY_HIFI2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
+        # time at 2048px, so we land fp32_dest_acc=False to match Wan. On Blackhole the recipe
+        # (sdpa_precision_default) owns the SDPA numerics.
+        self.sdpa_hifi2_config = (
+            None
+            if self.sdpa_precision is not None
+            else ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=MATH_FIDELITY_HIFI2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
         )
         # HiFi4 + fp32 accumulate for the precision-sensitive matmul-class ops
         # (currently the AdaLN modulation projection). RMSNorm / QK-RMSNorm run
@@ -333,39 +354,8 @@ class Ideogram4TransformerBlock(Module):
         # once here (not per-forward) so trace capture never hits ttnn.zeros' host-write path.
         self.dummy_joint = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
-    def _get_ring_sdpa_program_config(self, local_seq_len):
-        """Ring-SDPA program config (fixed q_chunk=128).
-
-        NOTE: a standalone *plain*-SDPA micro-sweep suggested q_chunk=256 was ~1.3x
-        faster at long local seq (4352 @ 2048px). That does NOT hold for the production
-        ring_joint SDPA: its extra joint/CCL circular buffers push q_chunk=256 past L1
-        ("CBs grow to 1712656 B > 1572864 B max L1") and it fails at true 2048px. So we
-        keep the proven q_chunk=128 at every resolution (k_chunk=256, head_dim cap).
-        """
-        qc = self.sdpa_q_chunk_size
-        pc = self._ring_sdpa_pc_cache.get(qc)
-        if pc is None:
-            pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=qc,
-                k_chunk_size=self.sdpa_k_chunk_size,
-                exp_approx_mode=False,
-            )
-            self._ring_sdpa_pc_cache[qc] = pc
-        return pc
-
-    def _recipe_sdpa_program_config(self, program_config: ttnn.SDPAProgramConfig, *, ring: bool):
-        """Legacy config unchanged when no recipe is set; else the same grid with op-selected chunks.
-
-        The tuned D256 Q128/K256 (L1-limited) stays legacy-only: under a recipe SDPA sizes the chunks
-        to fit L1 itself; exp_approx_mode is left to the recipe.
-        """
-        if self.sdpa_precision is None:
-            return program_config
-        return recipe_program_config(program_config, ring=ring)
-
     def _sdpa_kwargs(self) -> dict:
-        # Legacy compute config read at call time; a recipe replaces it with precision/inputs_prepared.
+        # Recipe kwargs; off Blackhole the legacy compute config, read at call time.
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
@@ -622,9 +612,7 @@ class Ideogram4TransformerBlock(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self._recipe_sdpa_program_config(
-                    self._get_ring_sdpa_program_config(q.shape[2]), ring=True
-                ),
+                program_config=self.ring_sdpa_program_config,
                 **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
@@ -651,7 +639,7 @@ class Ideogram4TransformerBlock(Module):
                 v,
                 attn_mask=attn_mask,
                 is_causal=False,
-                program_config=self._recipe_sdpa_program_config(self.sdpa_program_config, ring=False),
+                program_config=self.sdpa_program_config,
                 **self._sdpa_kwargs(),
             )  # [B, n_local_heads, L, head_dim]
         elif self.sp_factor > 1 and attn_mask is None:
@@ -669,7 +657,7 @@ class Ideogram4TransformerBlock(Module):
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self._get_ring_sdpa_program_config(q.shape[2]),
+                program_config=self.ring_sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
@@ -793,9 +781,9 @@ class Ideogram4Transformer(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named SDPA recipe (Blackhole D256 dense/ring
-        self-attention; a segment mask uses the dense recipe with ``attn_mask``). ``None`` keeps the
-        existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe (Blackhole D256 dense/ring
+        self-attention; a segment mask uses the dense recipe with ``attn_mask``). ``None`` selects
+        ``Ideogram4TransformerBlock.sdpa_precision_default`` (legacy SDPA off Blackhole)."""
         self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=emb_dim // num_heads)
         super().__init__()
         self.emb_dim = emb_dim

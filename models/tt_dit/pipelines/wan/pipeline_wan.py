@@ -349,8 +349,8 @@ class WanPipeline(PipelineAPIMixin):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for every
-        denoiser attention call; omit them to keep the model's existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
+        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
         super().__init__()
 
         self.checkpoint_name = config.checkpoint_name

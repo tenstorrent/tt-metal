@@ -232,11 +232,11 @@ def _re_fuse_proj_out_weight(
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
 class Flux1Transformer(Module):
+    # Legacy SDPA chunks, (is_blackhole, sp, tp) -> (q, k): non-Blackhole only. On Blackhole every
+    # attention call runs a named recipe (Attention.sdpa_precision_default) with op-selected chunks.
     sdpa_chunk_size_map = {
         (False, 2, 4): (128, 512),
         (False, 8, 4): (128, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (64, 512),
     }
     default_sdpa_chunk_size = (128, 512)
 

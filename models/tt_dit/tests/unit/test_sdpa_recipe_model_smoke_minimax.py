@@ -6,7 +6,9 @@ Random weights, no checkpoint. Each test builds one torch reference (fp32, writt
 pinned diffusers MiniMax-H3 reference is not installed everywhere; it mirrors the reference ops the
 bringup tests compare against: bias-free to_q/k/v/to_out, per-head RMSNorm with one shared head_dim
 affine, half-split partial RoPE on the leading rotary_dim channels, unmasked SDPA) and runs the tt
-module once per variant -- legacy (sdpa_precision=None), FAST, ACCURATE, LOW_PRECISION(bfp8 KV) --
+module once per variant -- legacy (the
+module's legacy SDPA config, via tests/unit/sdpa_legacy.py), the default recipe (sdpa_precision=None),
+FAST, ACCURATE, LOW_PRECISION(bfp8 KV) --
 with the SAME state dict and inputs.
 
 Gates, per recipe variant:
@@ -46,20 +48,22 @@ from ...models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
+from .sdpa_legacy import LEGACY, sdpa_variant
 
 HEAD_DIM = 128
 ROTARY_DIM = 96  # MiniMax-H3: 3 axes x 2 x 16 freqs; channels [96, 128) pass through
 EPS = 1e-5
 
 VARIANTS = [
-    pytest.param(None, None, id="legacy"),
+    pytest.param(LEGACY, None, id="legacy"),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
+    pytest.param(None, None, id="default"),  # the module's default recipe (sdpa_precision_default)
     pytest.param(ttnn.SDPAPrecision.FAST, None, id="fast"),
     pytest.param(ttnn.SDPAPrecision.ACCURATE, None, id="accurate"),
     pytest.param(ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b, id="low_bfp8"),
 ]
 VARIANT_LIST = [(p.id, *p.values) for p in VARIANTS]
-ABS_BOUND = {"fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
-MARGIN = {"fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
+ABS_BOUND = {"default": 1.0, "fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
+MARGIN = {"default": 0.25, "fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
 
 LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
@@ -133,7 +137,9 @@ class _SdpaCapture:
         concat = [None, None]
         concat[tp_axis] = 1  # heads
         concat[sp_axis] = 2 if seq_dim_axis is not None else 0  # fractured sequence, or SP replicas
-        self._composer = lambda: ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
+        self._composer = lambda: ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape)
+        )
         self._replicated = seq_dim_axis is None
         for name in ("ring_joint_scaled_dot_product_attention", "scaled_dot_product_attention"):
             orig = getattr(ttnn.transformer, name)
@@ -275,7 +281,9 @@ def test_minimax_h3_attention_ring_sp2_recipes(mesh_device, N, hidden, num_heads
     )
 
     def upload_table(t):
-        return from_torch(t.reshape(1, 1, *t.shape), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+        return from_torch(
+            t.reshape(1, 1, *t.shape), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
+        )
 
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
@@ -283,38 +291,41 @@ def test_minimax_h3_attention_ring_sp2_recipes(mesh_device, N, hidden, num_heads
 
     results, cores = {}, {}
     for vid, precision, kv_dtype in VARIANT_LIST:
-        capture = _SdpaCapture(monkeypatch, mesh_device, seq_dim_axis=2, sp_axis=sp_axis, tp_axis=tp_axis)
-        tt_model = MiniMaxH3Attention(
-            hidden_size=hidden,
-            num_heads=num_heads,
-            head_dim=HEAD_DIM,
-            rotary_dim=ROTARY_DIM,
-            qk_norm_eps=EPS,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            is_sequence_parallel=True,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_model.load_torch_state_dict({k: v.clone() for k, v in sd.items()})
-        path = _attn_path(tt_model, seq_local)
-        pc = tt_model._attn_program_config(seq_local, ring=True)
-        record_property(f"{vid}_path", f"{path} q{pc.q_chunk_size} k{pc.k_chunk_size}")
-        logger.info(f"{vid}: seq_local={seq_local} path={path} q={pc.q_chunk_size} k={pc.k_chunk_size}")
-        assert path == "ring_joint", f"expected ring joint SDPA on 1x2, got {path}"
+        with sdpa_variant(precision) as sdpa_precision:
+            capture = _SdpaCapture(monkeypatch, mesh_device, seq_dim_axis=2, sp_axis=sp_axis, tp_axis=tp_axis)
+            tt_model = MiniMaxH3Attention(
+                hidden_size=hidden,
+                num_heads=num_heads,
+                head_dim=HEAD_DIM,
+                rotary_dim=ROTARY_DIM,
+                qk_norm_eps=EPS,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_sequence_parallel=True,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=kv_dtype,
+            )
+            tt_model.load_torch_state_dict({k: v.clone() for k, v in sd.items()})
+            path = _attn_path(tt_model, seq_local)
+            pc = tt_model._attn_program_config(seq_local, ring=True)
+            record_property(f"{vid}_path", f"{path} q{pc.q_chunk_size} k{pc.k_chunk_size}")
+            logger.info(f"{vid}: seq_local={seq_local} path={path} q={pc.q_chunk_size} k={pc.k_chunk_size}")
+            assert path == "ring_joint", f"expected ring joint SDPA on 1x2, got {path}"
 
-        tt_x = bf16_tensor_2dshard(x_pad.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-        tt_out = tt_model(tt_x, N=N, rope_cos=upload_table(tcos), rope_sin=upload_table(tsin))
-        out = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
-        )
-        results[vid] = out[0, :, :N, :].float()
-        assert len(capture.calls) == 1 and capture.calls[0]["logical_n"] == N
-        cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
-        monkeypatch.undo()
-        del tt_model
+            tt_x = bf16_tensor_2dshard(x_pad.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+            tt_out = tt_model(tt_x, N=N, rope_cos=upload_table(tcos), rope_sin=upload_table(tsin))
+            out = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            results[vid] = out[0, :, :N, :].float()
+            assert len(capture.calls) == 1 and capture.calls[0]["logical_n"] == N
+            cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
+            monkeypatch.undo()
+            del tt_model
 
     failures = _gate(results, cores, torch_out, record_property, f"ring_N{N}", e2e_abs=False)
     assert not failures, "\n".join(failures)
@@ -385,42 +396,45 @@ def test_minimax_h3_token_refiner_dense_recipes(mesh_device, prompt_len, record_
 
     results, cores = {}, {}
     for vid, precision, kv_dtype in VARIANT_LIST:
-        capture = _SdpaCapture(monkeypatch, mesh_device, seq_dim_axis=None, sp_axis=sp_axis, tp_axis=tp_axis)
-        tt_model = MiniMaxH3TokenRefiner(
-            hidden_size=hidden,
-            num_heads=num_heads,
-            head_dim=HEAD_DIM,
-            ffn_dim=ffn_dim,
-            num_layers=num_layers,
-            norm_eps=EPS,
-            qk_norm_eps=EPS,
-            final_norm_eps=EPS,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_model.load_torch_state_dict({k: v.clone() for k, v in sd.items()})
-        attn = tt_model.refiner_blocks[0].attn
-        path = _attn_path(attn, prompt_len)
-        pc = attn._attn_program_config(prompt_len, ring=False)
-        record_property(f"{vid}_path", f"{path} q{pc.q_chunk_size} k{pc.k_chunk_size}")
-        assert path == "dense", f"token refiner must use dense SDPA, got {path}"
+        with sdpa_variant(precision) as sdpa_precision:
+            capture = _SdpaCapture(monkeypatch, mesh_device, seq_dim_axis=None, sp_axis=sp_axis, tp_axis=tp_axis)
+            tt_model = MiniMaxH3TokenRefiner(
+                hidden_size=hidden,
+                num_heads=num_heads,
+                head_dim=HEAD_DIM,
+                ffn_dim=ffn_dim,
+                num_layers=num_layers,
+                norm_eps=EPS,
+                qk_norm_eps=EPS,
+                final_norm_eps=EPS,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=kv_dtype,
+            )
+            tt_model.load_torch_state_dict({k: v.clone() for k, v in sd.items()})
+            attn = tt_model.refiner_blocks[0].attn
+            path = _attn_path(attn, prompt_len)
+            pc = attn._attn_program_config(prompt_len, ring=False)
+            record_property(f"{vid}_path", f"{path} q{pc.q_chunk_size} k{pc.k_chunk_size}")
+            assert path == "dense", f"token refiner must use dense SDPA, got {path}"
 
-        tt_x = bf16_tensor(x.unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
-        out = ttnn.to_torch(
-            tt_model(tt_x),
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
-        )
-        assert out.shape[0] == sp_factor
-        for d in range(1, sp_factor):
-            torch.testing.assert_close(out[0], out[d], rtol=0, atol=0, msg=f"{vid}: SP replica {d} diverged")
-        results[vid] = out[0].float()
-        assert len(capture.calls) == num_layers
-        cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
-        monkeypatch.undo()
-        del tt_model
+            tt_x = bf16_tensor(x.unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
+            out = ttnn.to_torch(
+                tt_model(tt_x),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            assert out.shape[0] == sp_factor
+            for d in range(1, sp_factor):
+                torch.testing.assert_close(out[0], out[d], rtol=0, atol=0, msg=f"{vid}: SP replica {d} diverged")
+            results[vid] = out[0].float()
+            assert len(capture.calls) == num_layers
+            cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
+            monkeypatch.undo()
+            del tt_model
 
     failures = _gate(results, cores, torch_out[0], record_property, f"refiner_L{prompt_len}", e2e_abs=True)
     assert not failures, "\n".join(failures)

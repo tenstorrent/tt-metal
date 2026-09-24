@@ -1,15 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Shared opt-in SDPA precision recipe wiring for tt_dit denoisers.
+"""Named SDPA precision recipes for tt_dit SDPA calls.
 
-Mirrors the Wan integration (models/transformers/wan2_2/attention_wan.py): a model constructor takes
-``sdpa_precision: ttnn.SDPAPrecision | None`` and ``sdpa_kv_dtype: ttnn.DataType | None``. ``None``
-keeps the model's existing attention configuration exactly; nothing in this module is consulted then.
+Every SDPA-variant call in ``models/tt_dit`` selects a recipe explicitly (docs/sdpa_precision.md,
+docs/sdpa_recipe_consolidation.md task 7). Each attention module names the recipe of each of its
+calls as a class-level default (e.g. ``WanAttention.sdpa_precision_default``) and takes
+``sdpa_precision: ttnn.SDPAPrecision | None`` / ``sdpa_kv_dtype: ttnn.DataType | None`` overrides:
+``None`` selects the module's default recipe, anything else replaces it for every call of the module
+(``LOW_PRECISION`` with ``sdpa_kv_dtype`` for low-precision KV). ``resolve_precision`` does this.
 
-Recipe blocking is op-selected (docs/sdpa_precision.md, "Blocking"): a recipe config keeps the
-caller's grid and leaves ``q_chunk_size``/``k_chunk_size`` at 0, and SDPA chooses the chunks (and, for
-exp ring, the grid width) from the shape, recipe, op, grid and L1. The legacy path keeps its tuned
-configs unchanged. Exp ring joint SDPA recipes are D128 only.
+Recipes are qualified on Blackhole only, so on other architectures ``resolve_precision`` returns
+``None`` and the module keeps its legacy SDPA program/compute configuration (explicit chunks,
+``compute_kernel_config``); nothing else in this module is consulted then.
+
+Recipe blocking is op-selected (docs/sdpa_precision.md, "Op-selected blocking"): a recipe config
+carries only the caller's grid and leaves ``q_chunk_size``/``k_chunk_size`` at 0, and SDPA chooses the
+chunks (and, for exp ring, the grid width) from the shape, recipe, op, grid and L1. Exp ring joint SDPA
+recipes are D128 only.
 """
 
 from __future__ import annotations
@@ -21,6 +28,35 @@ EXP_RING_HEAD_DIMS = (128,)
 RECIPE_KV_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
+def resolve_precision(
+    precision: ttnn.SDPAPrecision | None,
+    default: ttnn.SDPAPrecision,
+    *,
+    blackhole: bool,
+    model: str,
+) -> ttnn.SDPAPrecision | None:
+    """The recipe an SDPA call runs: the caller's ``precision`` override, else the call's ``default``.
+
+    Returns ``None`` (the module's legacy configuration) off Blackhole, where recipes are not
+    qualified; an explicit override there is an error.
+    """
+    if not blackhole:
+        if precision is not None:
+            raise ValueError(f"{model}: named SDPA recipes require Blackhole")
+        return None
+    return default if precision is None else precision
+
+
+def recipe_config(grid, max_cores_per_head_batch: int | None = None) -> ttnn.SDPAProgramConfig:
+    """A recipe program config: the grid only; SDPA chooses the chunks (exp_approx_mode is the recipe's)."""
+    grid = grid if isinstance(grid, ttnn.CoreCoord) else ttnn.CoreCoord(*grid)
+    if max_cores_per_head_batch is None:
+        return ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid)
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid, max_cores_per_head_batch=max_cores_per_head_batch
+    )
+
+
 def validate_recipe_args(
     precision: ttnn.SDPAPrecision | None,
     kv_dtype: ttnn.DataType | None,
@@ -29,7 +65,7 @@ def validate_recipe_args(
     model: str,
     is_blackhole: bool = True,
 ) -> ttnn.DataType:
-    """Validate the opt-in and return the KV storage dtype (BF16 unless LOW_PRECISION asks otherwise)."""
+    """Validate the resolved recipe and return the KV storage dtype (BF16 unless LOW_PRECISION asks otherwise)."""
     kv_dtype = kv_dtype or ttnn.bfloat16
     if precision is None:
         if kv_dtype != ttnn.bfloat16:
@@ -92,9 +128,3 @@ def prepare_recipe_inputs(precision: ttnn.SDPAPrecision | None, kv_dtype: ttnn.D
         None if k is None else prepare(k, is_query=False, dtype=kv_dtype),
         None if v is None else prepare(v, is_query=False, dtype=kv_dtype),
     )
-
-
-def reject_mask(precision: ttnn.SDPAPrecision | None, mask, *, model: str) -> None:
-    """Named recipes support unmasked attention only."""
-    if precision is not None and mask is not None:
-        raise ValueError(f"{model}: named SDPA recipes support unmasked attention only")

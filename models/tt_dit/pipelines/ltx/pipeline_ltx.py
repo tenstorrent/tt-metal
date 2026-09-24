@@ -242,9 +242,9 @@ class LTXPipeline:
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for the D128
-        video denoiser attentions (audio paths stay legacy); omit them to keep the model's existing
-        attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every denoiser
+        attention (video and audio); omit them for each attention's default recipe (legacy SDPA off
+        Blackhole)."""
         # Host affinity, explicit (not an import side effect): in a process re-execed by
         # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
         # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.

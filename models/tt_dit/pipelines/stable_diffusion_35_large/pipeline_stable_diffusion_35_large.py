@@ -149,8 +149,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for every
-        denoiser attention call; omit them to keep the model's existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
+        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
         # Fail before any device/weight work (SD3.5 attention_head_dim is 64); the transformer re-checks.
         SD35Transformer2DModel.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=64)
         self._mesh_device = device

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: Mochi (attention_mochi.py) opt-in SDPA recipe wiring (no device)."""
+"""Host-only: Mochi (attention_mochi.py) SDPA recipe wiring (no device).
+
+The default recipe itself is covered by test_sdpa_dit_recipe_defaults.py."""
 
 import pytest
 import torch
@@ -19,23 +21,9 @@ def _bare_attention(precision=None):
     return attention
 
 
-def _config(q, k):
-    return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(12, 9), q_chunk_size=q, k_chunk_size=k, exp_approx_mode=False
-    )
-
-
-def _chunks(config):
-    return config.q_chunk_size, config.k_chunk_size
-
-
-@pytest.mark.parametrize("q, k", sorted({*MochiAttention.sdpa_chunk_size_map.values(), (256, 256), (64, 128)}))
-@pytest.mark.parametrize("ring", [False, True])
-def test_recipe_chunks_are_op_selected(q, k, ring):
-    config = MochiAttention._recipe_program_config(_config(q, k), ring=ring)
-    assert _chunks(config) == (0, 0)
-    assert config.exp_approx_mode is None
-    assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
+def test_tuned_chunks_are_legacy_only():
+    # On Blackhole every call runs a recipe with op-selected chunks; the table serves other archs only.
+    assert all(not key[0] for key in MochiAttention.sdpa_chunk_size_map)
 
 
 def test_legacy_kwargs_read_compute_config_at_call_time():

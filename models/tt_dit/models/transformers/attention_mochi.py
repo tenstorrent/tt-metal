@@ -12,17 +12,21 @@ from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_program_config, sdpa_kwargs, validate_recipe_args
+from ...utils import sdpa_recipe
+from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, sdpa_kwargs, validate_recipe_args
 from ...utils.substate import pop_substate, rename_substate
 
 
 class MochiAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    # Named SDPA recipe of the joint / ring joint SDPA call on Blackhole. The legacy setup was HiFi2 /
+    # BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state) is more accurate
+    # than it at every measured shape. See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
+    # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
         (False, 2, 4): (128, 512),
         (False, 8, 4): (128, 512),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -58,10 +62,13 @@ class MochiAttention(Module):
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.added_kv_proj_dim = added_kv_proj_dim
-        # Opt-in named SDPA recipe; None keeps the legacy attention configuration exactly.
-        self.sdpa_precision = sdpa_precision
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Mochi"
+        )
         self.sdpa_kv_dtype = self._validate_sdpa_recipe(
-            sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, blackhole=is_blackhole()
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, blackhole=blackhole
         )
 
         self.mesh_device = mesh_device
@@ -131,37 +138,39 @@ class MochiAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=512,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        if sdpa_precision is not None:
-            self.sdpa_program_config = self._recipe_program_config(self.sdpa_program_config, ring=False)
-            self.ring_sdpa_program_config = self._recipe_program_config(self.ring_sdpa_program_config, ring=True)
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for each grid.
+            self.sdpa_program_config = recipe_config(full_grid)
+            self.ring_sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole).
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=full_grid,
+                q_chunk_size=256,
+                k_chunk_size=512,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+                (
+                    blackhole,
+                    self.parallel_config.sequence_parallel.factor,
+                    self.parallel_config.tensor_parallel.factor,
+                ),
+                self.default_sdpa_chunk_size,
+            )
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=ring_sdpa_chunk_size[0],
+                k_chunk_size=ring_sdpa_chunk_size[1],
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -196,13 +205,8 @@ class MochiAttention(Module):
     ) -> ttnn.DataType:
         return validate_recipe_args(precision, kv_dtype, head_dim=head_dim, model="Mochi", is_blackhole=blackhole)
 
-    @staticmethod
-    def _recipe_program_config(program_config: ttnn.SDPAProgramConfig, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """Same grid, op-selected chunks (SDPA chooses them for the recipe)."""
-        return recipe_program_config(program_config, ring=ring)
-
     def _sdpa_kwargs(self) -> dict:
-        # Read the compute config at call time so later reassignment is honored on the legacy path.
+        # Recipe kwargs; off Blackhole the legacy compute config, read at call time.
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _check_recipe_logical_lengths(self, *lengths) -> None:

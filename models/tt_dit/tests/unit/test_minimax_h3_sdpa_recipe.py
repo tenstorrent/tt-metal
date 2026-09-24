@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: MiniMax-H3 opt-in SDPA recipe wiring (program configs, kwargs, validation; no device)."""
+"""Host-only: MiniMax-H3 SDPA recipe wiring (program configs, kwargs, validation; no device).
+
+The default recipe itself is covered by test_sdpa_dit_recipe_defaults.py."""
 
 import inspect
 
@@ -26,10 +28,8 @@ def _bare_attention(precision=None, *, n_local_heads=14, grid=(12, 10), use_exp=
     attn.full_grid = ttnn.CoreCoord(*grid)
     attn.sdpa_worker_grid = (grid[0] - 1, grid[1])
     attn._sdpa_program_configs = {}
-    attn._recipe_sdpa_program_configs = {}
     attn._exp_sdpa_program_configs = {}
     attn.exp_ring_max_passes = 3
-    attn.exp_ring_max_k_chunk = 512
     attn.use_exp_ring_sdpa = use_exp
     return attn
 
@@ -38,20 +38,23 @@ def _chunks(pc):
     return pc.q_chunk_size, pc.k_chunk_size
 
 
-def test_legacy_program_configs_unchanged():
+def test_legacy_program_configs_off_blackhole():
     attn = _bare_attention(None)
     for seq in (4768, 9216, 1000):
         for ring in (True, False):
-            assert attn._attn_program_config(seq, ring=ring) is attn._sdpa_program_config(seq, ring=ring)
+            pc = attn._attn_program_config(seq, ring=ring)
+            assert pc is attn._sdpa_program_config(seq, ring=ring)
+            assert _chunks(pc) == (256, 512) and pc.exp_approx_mode is False
+    assert not hasattr(MiniMaxH3Attention, "measured_sdpa_chunk_sizes")  # BH legacy table removed
+    assert not hasattr(MiniMaxH3Attention, "_build_exp_sdpa_program_config")  # legacy exp search removed
 
 
 @pytest.mark.parametrize("seq", [4768, 9216, 5000, 6000, 7000, 96])
 @pytest.mark.parametrize("ring", [True, False])
 def test_recipe_chunks_are_op_selected(seq, ring):
     attn = _bare_attention(COMPENSATED, use_exp=False)
-    attn.measured_sdpa_chunk_sizes = {**attn.measured_sdpa_chunk_sizes, 5000: (288, 384), 6000: (224, 1024)}
     pc = attn._attn_program_config(seq, ring=ring)
-    assert _chunks(pc) == (0, 0)  # SDPA chooses; the measured table is legacy-only
+    assert _chunks(pc) == (0, 0)  # SDPA chooses
     expected_grid = (11, 10) if ring else (12, 10)
     assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == expected_grid
 

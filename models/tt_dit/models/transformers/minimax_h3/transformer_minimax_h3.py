@@ -265,8 +265,9 @@ class MiniMaxH3Transformer3DModel(Module):
         # traced path needs it -- `ttnn.zeros` writes to device and a capture rejects writes -- so it
         # is off by default and the untraced path keeps its per-call allocation.
         cache_padding: bool = False,
-        # Opt-in named SDPA recipe for every attention call (blocks and token refiner); None keeps
-        # the existing attention configuration. See models/tt_dit/utils/sdpa_recipe.py.
+        # Named SDPA recipe override for every attention call (blocks and token refiner); None selects
+        # MiniMaxH3Attention.sdpa_precision_default (legacy SDPA off Blackhole). See
+        # models/tt_dit/utils/sdpa_recipe.py.
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:

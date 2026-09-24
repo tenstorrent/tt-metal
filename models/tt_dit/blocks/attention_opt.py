@@ -18,7 +18,13 @@ from ..layers.normalization import DistributedRMSNorm
 from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
-from ..utils.sdpa_recipe import prepare_recipe_inputs, recipe_program_config, sdpa_kwargs, validate_recipe_args
+from ..utils import sdpa_recipe
+from ..utils.sdpa_recipe import (
+    prepare_recipe_inputs,
+    recipe_config,
+    sdpa_kwargs,
+    validate_recipe_args,
+)
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -44,8 +50,15 @@ _FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # SDPA chunk sizes keyed by (is_blackhole, sp_factor, tp_factor). Resolution priority for
-    # non-ring: caller overrides > class map > constructor args > class default.
+    # Named SDPA recipe of every joint / ring joint / dense SDPA call on Blackhole (FLUX.2). The legacy
+    # setup was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state)
+    # is more accurate than it at every measured shape. See
+    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
+    # Legacy SDPA chunk sizes (non-Blackhole only; recipes choose their own), keyed by
+    # (is_blackhole, sp_factor, tp_factor). Resolution priority for non-ring: caller overrides >
+    # class map > constructor args > class default.
     sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
     default_sdpa_chunk_size: tuple[int, int] = (128, 512)
 
@@ -53,21 +66,6 @@ class Attention(Module):
         # -1 is the default resolution.
         (False, 2, 4): {-1: (256, 256)},
         (False, 8, 4): {-1: (256, 256)},
-        (True, 2, 2): {-1: (128, 512)},
-        (True, 4, 8): {
-            -1: (256, 512),  # default
-            4096: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4608: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            (4096 + 128) * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 16: (192, 512),  # 4096×4096  — 67.4% util (ring_sdpa_sweep_4096.md)
-        },
-        (True, 8, 4): {
-            -1: (256, 512),  # default
-            16384: (320, 384),  # 2048×2048  — 43.3% util (ring_sdpa_sweep_8x4_2048.md)
-            65536: (256, 512),  # 4096×4096  — 65.7% util (ring_sdpa_sweep_8x4_4096.md)
-        },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
 
@@ -101,10 +99,13 @@ class Attention(Module):
         super().__init__()
 
         self.head_dim = head_dim
-        # Opt-in named SDPA recipe; None keeps the legacy attention configuration exactly.
-        self.sdpa_precision = sdpa_precision
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="FLUX.2"
+        )
         self.sdpa_kv_dtype = self._validate_sdpa_recipe(
-            sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, blackhole=is_blackhole()
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, blackhole=blackhole
         )
         self.pre_only = pre_only
         self.mesh_device = mesh_device
@@ -133,36 +134,39 @@ class Attention(Module):
         # Reserve last row for CCL.
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
 
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
-            (
-                is_blackhole(),
-                parallel_config.sequence_parallel.factor,
-                parallel_config.tensor_parallel.factor,
-            ),
-            (
-                q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
-                k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
-            ),
-        )
-
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=resolved_q_chunk,
-            k_chunk_size=resolved_k_chunk,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        if sdpa_precision is not None:
-            self.sdpa_program_config = self._recipe_program_config(self.sdpa_program_config, ring=False)
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for the grid.
+            self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole): chunk maps, overrides and q/k chunk args apply only here.
+            chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+            resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
+                (
+                    blackhole,
+                    parallel_config.sequence_parallel.factor,
+                    parallel_config.tensor_parallel.factor,
+                ),
+                (
+                    q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
+                    k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
+                ),
+            )
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=resolved_q_chunk,
+                k_chunk_size=resolved_k_chunk,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         self.ring_sdpa_worker_grid = None  # (full_grid.x, full_grid.y - 5)
         self.ring_sdpa_program_config = {}
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -269,6 +273,9 @@ class Attention(Module):
             return ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
+        if per_device_seq_len not in self.ring_sdpa_program_config and self.sdpa_precision is not None:
+            # Recipe: the ring worker grid only; SDPA chooses the chunks.
+            self.ring_sdpa_program_config[per_device_seq_len] = recipe_config(self.ring_sdpa_worker_grid)
         if per_device_seq_len not in self.ring_sdpa_program_config:
             device_parallel_key = (
                 is_blackhole(),
@@ -290,8 +297,6 @@ class Attention(Module):
                 k_chunk_size=ring_chunk_size[1],
                 exp_approx_mode=False,  # NOTE: False is more correct
             )
-            if self.sdpa_precision is not None:
-                program_config = self._recipe_program_config(program_config, ring=True)
             self.ring_sdpa_program_config[per_device_seq_len] = program_config
         return self.ring_sdpa_program_config[per_device_seq_len]
 
@@ -301,13 +306,8 @@ class Attention(Module):
     ) -> ttnn.DataType:
         return validate_recipe_args(precision, kv_dtype, head_dim=head_dim, model="FLUX.2", is_blackhole=blackhole)
 
-    @staticmethod
-    def _recipe_program_config(program_config: ttnn.SDPAProgramConfig, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """Same grid, op-selected chunks (SDPA chooses them for the recipe)."""
-        return recipe_program_config(program_config, ring=ring)
-
     def _sdpa_kwargs(self) -> dict:
-        # Read the compute config at call time so later reassignment is honored on the legacy path.
+        # Recipe kwargs; off Blackhole the legacy compute config, read at call time.
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _check_recipe_logical_lengths(self, *lengths) -> None:

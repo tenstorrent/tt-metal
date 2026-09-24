@@ -15,19 +15,23 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
-from ....utils.sdpa_recipe import recipe_program_config
+from ....utils import sdpa_recipe
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    # Named SDPA recipe of every SDPA call on Blackhole: self-attention (ring joint, exp ring joint on
+    # the 4x32 mesh, dense without SP) and cross-attention (dense, optional attn_mask). The legacy setup
+    # was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state) is more
+    # accurate than it at every measured shape. See
+    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
+    # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (288, 512),
-        (True, 32, 4): (224, 512),
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -61,11 +65,15 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
-        self.sdpa_precision = sdpa_precision
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Wan"
+        )
         self.sdpa_kv_dtype = sdpa_kv_dtype or ttnn.bfloat16
-        if sdpa_precision is not None and (not is_blackhole() or self.head_dim != 128):
+        if self.sdpa_precision is not None and self.head_dim != 128:
             raise ValueError("Named Wan recipes require Blackhole D128 attention")
-        if self.sdpa_kv_dtype != ttnn.bfloat16 and sdpa_precision != ttnn.SDPAPrecision.LOW_PRECISION:
+        if self.sdpa_kv_dtype != ttnn.bfloat16 and self.sdpa_precision != ttnn.SDPAPrecision.LOW_PRECISION:
             raise ValueError("Low-precision KV requires the LOW_PRECISION recipe")
         if self.sdpa_kv_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
             raise ValueError("Unsupported SDPA KV dtype")
@@ -128,62 +136,53 @@ class WanAttention(Module):
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        ring_sdpa_chunk_size = chunk_lookup.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
         self.use_exp_ring_sdpa = (
             self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
         )
-
-        if self.use_exp_ring_sdpa:
-            self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks (and the exp-ring grid width).
+            self.sdpa_program_config = sdpa_recipe.recipe_config(full_grid)
+            self.ring_sdpa_program_config = sdpa_recipe.recipe_config(self.sdpa_worker_grid)
+            if self.use_exp_ring_sdpa:
+                self.exp_ring_sdpa_program_config = sdpa_recipe.recipe_config(full_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole); sdpa_chunk_size_overrides apply only here.
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=full_grid,
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+            ring_sdpa_chunk_size = chunk_lookup.get(
+                (
+                    blackhole,
+                    self.parallel_config.sequence_parallel.factor,
+                    self.parallel_config.tensor_parallel.factor,
+                ),
+                self.default_sdpa_chunk_size,
+            )
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
                 q_chunk_size=ring_sdpa_chunk_size[0],
                 k_chunk_size=ring_sdpa_chunk_size[1],
-                exp_approx_mode=False,
+                exp_approx_mode=False,  # NOTE: False is more correct
             )
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
-        self.sdpa_recipe_kwargs = None
-        if sdpa_precision is not None:
-            # Recipes choose their own chunks (and exp-ring grid width); only the grids carry over.
             if self.use_exp_ring_sdpa:
-                self.exp_ring_sdpa_program_config = recipe_program_config(
-                    self.exp_ring_sdpa_program_config, exp_ring=True
+                self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=full_grid,
+                    q_chunk_size=ring_sdpa_chunk_size[0],
+                    k_chunk_size=ring_sdpa_chunk_size[1],
+                    exp_approx_mode=False,
                 )
-            self.sdpa_program_config = recipe_program_config(self.sdpa_program_config)
-            self.ring_sdpa_program_config = recipe_program_config(self.ring_sdpa_program_config, ring=True)
-            self.sdpa_recipe_kwargs = {
-                "precision": sdpa_precision,
-                "inputs_prepared": sdpa_precision == ttnn.SDPAPrecision.LOW_PRECISION,
-            }
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -333,10 +332,9 @@ class WanAttention(Module):
         return output
 
     def _self_sdpa_kwargs(self) -> dict:
-        # Read the compute config at call time: apply_quant_config replaces it after construction.
-        if self.sdpa_recipe_kwargs is not None:
-            return self.sdpa_recipe_kwargs
-        return {"compute_kernel_config": self.sdpa_compute_kernel_config}
+        # Read at call time: apply_quant_config may replace the recipe (or, off Blackhole, the legacy
+        # compute config) after construction.
+        return sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def forward(
         self,
@@ -372,8 +370,6 @@ class WanAttention(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
-        if self.sdpa_precision is not None and cross_attn_mask is not None:
-            raise ValueError("Named Wan recipes support unmasked attention only")
         if rope_cos is not None:
             # If ROPE is given, this is self-attention
             assert rope_sin is not None
@@ -527,19 +523,15 @@ class WanAttention(Module):
                     **self._self_sdpa_kwargs(),
                 )
         else:
-            # Cross attention
-            cross_kwargs = (
-                self.sdpa_recipe_kwargs
-                if self.sdpa_recipe_kwargs is not None
-                else {"attn_mask": cross_attn_mask, "compute_kernel_config": self.sdpa_compute_kernel_config}
-            )
+            # Cross attention (dense recipes take the additive mask as attn_mask).
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
+                attn_mask=cross_attn_mask,
                 is_causal=False,
                 program_config=self.sdpa_program_config,
-                **cross_kwargs,
+                **self._self_sdpa_kwargs(),
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)

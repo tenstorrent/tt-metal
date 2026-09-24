@@ -4,7 +4,9 @@
 
 Random weights, no checkpoint. A reduced-width block (4 heads x head_dim 256, hidden 1024) is built
 from the official reference module (modeling_ideogram4.Ideogram4TransformerBlock, run in fp32 as the
-ground truth) and the tt block is run once per variant -- legacy (sdpa_precision=None), FAST, ACCURATE,
+ground truth) and the tt block is run once per variant -- legacy (the
+module's legacy SDPA config, via tests/unit/sdpa_legacy.py), the default recipe (sdpa_precision=None),
+FAST, ACCURATE,
 LOW_PRECISION(bfp8 KV) -- with the SAME state dict and inputs.
 
 Gates, per recipe variant:
@@ -39,6 +41,7 @@ from ...parallel.manager import CCLManager
 from ...reference.ideogram4 import modeling_ideogram4
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
+from .sdpa_legacy import LEGACY, sdpa_variant
 
 HEAD_DIM = 256
 NUM_HEADS = 4
@@ -48,13 +51,14 @@ ADALN_DIM = 512
 NORM_EPS = 1e-5
 
 VARIANTS = [
-    ("legacy", None, None),
+    ("legacy", LEGACY, None),  # the block's legacy SDPA config (tests/unit/sdpa_legacy.py)
+    ("default", None, None),  # the block's default recipe (sdpa_precision_default)
     ("fast", ttnn.SDPAPrecision.FAST, None),
     ("accurate", ttnn.SDPAPrecision.ACCURATE, None),
     ("low_bfp8", ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
 ]
-ABS_BOUND = {"fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
-MARGIN = {"fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
+ABS_BOUND = {"default": 1.0, "fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
+MARGIN = {"default": 0.25, "fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
 
 LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
@@ -188,39 +192,41 @@ def _run_variants(
 
     deltas, cores = {}, {}
     for vid, precision, kv_dtype in VARIANTS:
-        capture = _SdpaCapture(monkeypatch, mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
-        tt_block = Ideogram4TransformerBlock(
-            hidden_size=HIDDEN,
-            intermediate_size=INTERMEDIATE,
-            num_heads=NUM_HEADS,
-            norm_eps=NORM_EPS,
-            adaln_dim=ADALN_DIM,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_block.load_torch_state_dict({k: v.clone() for k, v in state.items()})
-        tt_out = tt_block(
-            tt_x, cos=tt_cos, sin=tt_sin, adaln_input=tt_adaln, attn_mask=tt_mask, spatial_sequence_length=seq_len
-        )
-        out = tensor.to_torch(tt_out, mesh_axes=[None, sp_axis if sp_factor > 1 else None, None])[:, :seq_len]
-        monkeypatch.undo()
+        with sdpa_variant(precision) as sdpa_precision:
+            capture = _SdpaCapture(monkeypatch, mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+            tt_block = Ideogram4TransformerBlock(
+                hidden_size=HIDDEN,
+                intermediate_size=INTERMEDIATE,
+                num_heads=NUM_HEADS,
+                norm_eps=NORM_EPS,
+                adaln_dim=ADALN_DIM,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=kv_dtype,
+            )
+            tt_block.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+            tt_out = tt_block(
+                tt_x, cos=tt_cos, sin=tt_sin, adaln_input=tt_adaln, attn_mask=tt_mask, spatial_sequence_length=seq_len
+            )
+            out = tensor.to_torch(tt_out, mesh_axes=[None, sp_axis if sp_factor > 1 else None, None])[:, :seq_len]
+            monkeypatch.undo()
 
-        assert len(capture.calls) == 1, f"{tag} {vid}: expected one SDPA call, got {len(capture.calls)}"
-        call = capture.calls[0]
-        assert (call["logical_n"] is not None) == (expect_path == "ring")
-        assert (call["mask"] is not None) == (segment_split is not None)
-        if precision is None:
-            assert call["kwargs"] == {}
-        else:
-            prepared = precision == ttnn.SDPAPrecision.LOW_PRECISION
-            assert call["kwargs"] == {"precision": precision, "inputs_prepared": prepared}
-            if prepared:
-                assert call["dtypes"][1:] == (kv_dtype, kv_dtype)
-        deltas[vid] = out.float() - x
-        cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
+            assert len(capture.calls) == 1, f"{tag} {vid}: expected one SDPA call, got {len(capture.calls)}"
+            call = capture.calls[0]
+            assert (call["logical_n"] is not None) == (expect_path == "ring")
+            assert (call["mask"] is not None) == (segment_split is not None)
+            if precision == LEGACY:
+                assert call["kwargs"] == {}
+            else:
+                expected = Ideogram4TransformerBlock.sdpa_precision_default if precision is None else precision
+                prepared = expected == ttnn.SDPAPrecision.LOW_PRECISION
+                assert call["kwargs"] == {"precision": expected, "inputs_prepared": prepared}
+                if prepared:
+                    assert call["dtypes"][1:] == (kv_dtype, kv_dtype)
+            deltas[vid] = out.float() - x
+            cores[vid] = (capture.core_l2(), capture.core_l2(unprepared=True))
 
     legacy_l2 = _l2(deltas["legacy"], torch_delta)
     record_property(f"{tag}_legacy_l2_vs_torch", round(legacy_l2, 4))

@@ -3,7 +3,9 @@
 """Device smoke tests: opt-in SDPA recipes on the D64 joint attentions of SD3.5 (SD35JointAttention)
 and Motif (blocks/attention.py with context head scaling).
 
-Random weights, small shapes (4 heads, D64). Each case runs legacy (sdpa_precision=None), FAST,
+Random weights, small shapes (4 heads, D64). Each case runs legacy (the
+module's legacy SDPA config, via tests/unit/sdpa_legacy.py), the default recipe (sdpa_precision=None),
+FAST,
 ACCURATE and LOW_PRECISION (bfp8 KV) on the same torch weights and inputs, and compares each output
 against the torch reference of the module (and against the legacy tt output).
 
@@ -27,18 +29,20 @@ from ...parallel.manager import CCLManager
 from ...reference.motif.modeling_dit import JointAttn as MotifAttentionReference
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
+from .sdpa_legacy import LEGACY, sdpa_variant
 
 HEADS = 4
 HEAD_DIM = 64
 DIM = HEADS * HEAD_DIM
 
 VARIANTS = {
-    "legacy": (None, None),
+    "legacy": (LEGACY, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
+    "default": (None, None),  # the module's default recipe (sdpa_precision_default)
     "FAST": (ttnn.SDPAPrecision.FAST, None),
     "ACCURATE": (ttnn.SDPAPrecision.ACCURATE, None),
     "LOW_PRECISION": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
 }
-ABS_BOUND = {"FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.0}
+ABS_BOUND = {"default": 1.0, "FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.0}
 MARGIN = 1.0  # allowed excess over the legacy tt L2 vs torch (percentage points)
 
 # 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router handshake on a 2-chip host).
@@ -142,42 +146,43 @@ def test_sd35_attention_sdpa_recipes(
 
     results = {}
     for variant, (precision, kv_dtype) in VARIANTS.items():
-        ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-        tt_model = SD35JointAttention(
-            query_dim=DIM,
-            head_dim=HEAD_DIM,
-            heads=HEADS,
-            out_dim=DIM,
-            bias=True,
-            out_bias=True,
-            context_pre_only=False,
-            eps=1e-6,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            padding_config=None,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+        with sdpa_variant(precision) as precision:
+            ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+            tt_model = SD35JointAttention(
+                query_dim=DIM,
+                head_dim=HEAD_DIM,
+                heads=HEADS,
+                out_dim=DIM,
+                bias=True,
+                out_bias=True,
+                context_pre_only=False,
+                eps=1e-6,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                padding_config=None,
+                sdpa_precision=precision,
+                sdpa_kv_dtype=kv_dtype,
+            )
+            tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
 
-        tt_spatial = bf16_tensor(spatial.unsqueeze(0), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
-        tt_prompt = bf16_tensor(prompt.unsqueeze(0), device=mesh_device)
-        tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, N=spatial_seq_len)
+            tt_spatial = bf16_tensor(spatial.unsqueeze(0), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+            tt_prompt = bf16_tensor(prompt.unsqueeze(0), device=mesh_device)
+            tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, N=spatial_seq_len)
 
-        results[variant] = [
-            (
-                "spatial",
-                tensor.to_torch(tt_spatial_out, mesh_axes=[..., sp_axis, tp_axis]).reshape(-1, DIM).float(),
-                torch_spatial.reshape(-1, DIM),
-            ),
-            (
-                "prompt",
-                tensor.to_torch(tt_prompt_out, mesh_axes=[..., None, tp_axis]).reshape(-1, DIM).float(),
-                torch_prompt.reshape(-1, DIM),
-            ),
-        ]
-        del tt_model, ccl_manager
+            results[variant] = [
+                (
+                    "spatial",
+                    tensor.to_torch(tt_spatial_out, mesh_axes=[..., sp_axis, tp_axis]).reshape(-1, DIM).float(),
+                    torch_spatial.reshape(-1, DIM),
+                ),
+                (
+                    "prompt",
+                    tensor.to_torch(tt_prompt_out, mesh_axes=[..., None, tp_axis]).reshape(-1, DIM).float(),
+                    torch_prompt.reshape(-1, DIM),
+                ),
+            ]
+            del tt_model, ccl_manager
 
     _gate(results, record_property, f"sd35.{tuple(mesh_device.shape)}.s{spatial_seq_len}.p{prompt_seq_len}")
 
@@ -231,49 +236,50 @@ def test_motif_attention_sdpa_recipes(
 
     results = {}
     for variant, (precision, kv_dtype) in VARIANTS.items():
-        ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-        # As in MotifTransformer's TransformerBlock (tuned chunks: Q128, K1024 // sp).
-        tt_model = Attention(
-            query_dim=DIM,
-            head_dim=HEAD_DIM,
-            heads=HEADS,
-            out_dim=DIM,
-            added_kv_proj_dim=DIM,
-            context_pre_only=False,
-            context_head_scaling=True,
-            eps=1e-6,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            padding_config=None,
-            k_chunk_size=k_chunk_size,
-            q_chunk_size=MotifTransformer.Q_CHUNK_SIZE,
-            sdpa_precision=precision,
-            sdpa_kv_dtype=kv_dtype,
-        )
-        tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+        with sdpa_variant(precision) as precision:
+            ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+            # As in MotifTransformer's TransformerBlock (tuned chunks: Q128, K1024 // sp).
+            tt_model = Attention(
+                query_dim=DIM,
+                head_dim=HEAD_DIM,
+                heads=HEADS,
+                out_dim=DIM,
+                added_kv_proj_dim=DIM,
+                context_pre_only=False,
+                context_head_scaling=True,
+                eps=1e-6,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                padding_config=None,
+                k_chunk_size=k_chunk_size,
+                q_chunk_size=MotifTransformer.Q_CHUNK_SIZE,
+                sdpa_precision=precision,
+                sdpa_kv_dtype=kv_dtype,
+            )
+            tt_model.load_torch_state_dict({k: v.clone() for k, v in state.items()})
 
-        spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor, k_chunk_size=k_chunk_size)
-        tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-        tt_prompt = bf16_tensor(prompt, device=mesh_device)
-        tt_spatial_out, tt_prompt_out = tt_model.forward(
-            spatial=tt_spatial, prompt=tt_prompt, spatial_sequence_length=spatial_seq_len
-        )
+            spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor, k_chunk_size=k_chunk_size)
+            tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+            tt_prompt = bf16_tensor(prompt, device=mesh_device)
+            tt_spatial_out, tt_prompt_out = tt_model.forward(
+                spatial=tt_spatial, prompt=tt_prompt, spatial_sequence_length=spatial_seq_len
+            )
 
-        results[variant] = [
-            (
-                "spatial",
-                tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])[:, :spatial_seq_len]
-                .reshape(-1, DIM)
-                .float(),
-                torch_spatial.reshape(-1, DIM),
-            ),
-            (
-                "prompt",
-                tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, tp_axis]).reshape(-1, DIM).float(),
-                torch_prompt.reshape(-1, DIM),
-            ),
-        ]
-        del tt_model, ccl_manager
+            results[variant] = [
+                (
+                    "spatial",
+                    tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])[:, :spatial_seq_len]
+                    .reshape(-1, DIM)
+                    .float(),
+                    torch_spatial.reshape(-1, DIM),
+                ),
+                (
+                    "prompt",
+                    tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, tp_axis]).reshape(-1, DIM).float(),
+                    torch_prompt.reshape(-1, DIM),
+                ),
+            ]
+            del tt_model, ccl_manager
 
     _gate(results, record_property, f"motif.{tuple(mesh_device.shape)}.s{spatial_seq_len}.p{prompt_seq_len}")

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: FLUX.2 (blocks/attention_opt.py) opt-in SDPA recipe wiring (no device)."""
+"""Host-only: FLUX.2 (blocks/attention_opt.py) SDPA recipe wiring (no device).
+
+The default recipe itself is covered by test_sdpa_dit_recipe_defaults.py."""
 
 from types import SimpleNamespace
 
@@ -36,38 +38,22 @@ def blackhole(monkeypatch):
     monkeypatch.setattr(attention_opt, "is_blackhole", lambda: True)
 
 
-def test_legacy_ring_program_config_unchanged(blackhole):
-    attention = _bare_attention(None)
-    config = attention.get_ring_sdpa_program_config(4096 * 16)
-    assert _chunks(config) == (192, 512)
+def test_legacy_ring_program_config_off_blackhole(monkeypatch):
+    # Legacy ring chunks serve non-Blackhole archs only (FLUX.2 Wormhole table).
+    monkeypatch.setattr(attention_opt, "is_blackhole", lambda: False)
+    config = _bare_attention(None, sp=2, tp=4).get_ring_sdpa_program_config(4096)
+    assert _chunks(config) == (256, 256)
     assert config.exp_approx_mode is False
+    assert all(not key[0] for key in Attention.ring_sdpa_chunk_size_map)
+    assert all(not key[0] for key in Attention.sdpa_chunk_size_map)
 
 
-@pytest.mark.parametrize(
-    "sp, tp, seq_len, expected",
-    [
-        (4, 8, 4096, (128, 256)),  # tuned 1024x1024 chunk kept
-        (4, 8, 4096 * 16, (192, 512)),  # 6 Q tiles (even) kept
-        (8, 4, 16384, (320, 384)),  # 10 Q tiles, K384 kept
-        (2, 2, 1234, (128, 512)),  # default entry
-    ],
-)
-def test_recipe_ring_program_config_is_op_selected(blackhole, sp, tp, seq_len, expected):
-    del expected  # the legacy tuned chunks; recipes let SDPA choose instead
+@pytest.mark.parametrize("sp, tp, seq_len", [(4, 8, 4096), (4, 8, 4096 * 16), (8, 4, 16384), (2, 2, 1234)])
+def test_recipe_ring_program_config_is_op_selected(blackhole, sp, tp, seq_len):
     config = _bare_attention(FAST, sp=sp, tp=tp).get_ring_sdpa_program_config(seq_len)
     assert _chunks(config) == (0, 0)
     assert config.exp_approx_mode is None
     assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
-
-
-def test_recipe_dense_program_config():
-    tuned = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(12, 9), q_chunk_size=224, k_chunk_size=512, exp_approx_mode=False
-    )
-    for ring in (False, True):
-        config = Attention._recipe_program_config(tuned, ring=ring)
-        assert _chunks(config) == (0, 0) and config.exp_approx_mode is None
-        assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
 
 
 def test_legacy_kwargs_read_compute_config_at_call_time():

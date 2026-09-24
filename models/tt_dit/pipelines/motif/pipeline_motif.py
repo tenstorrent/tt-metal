@@ -147,8 +147,8 @@ class MotifPipeline(PipelineAPIMixin):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for every
-        denoiser attention call; omit them to keep the model's existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
+        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
         MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, sdpa_precision, sdpa_kv_dtype)
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis

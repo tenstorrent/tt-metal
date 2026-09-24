@@ -17,9 +17,10 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
+from ....utils import sdpa_recipe
 from ....utils.sdpa_recipe import (
     prepare_recipe_inputs,
-    recipe_program_config,
+    recipe_config,
     sdpa_kwargs,
     validate_recipe_args,
 )
@@ -36,41 +37,20 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 
 
 class LTXAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    # Named SDPA recipe of every SDPA call on Blackhole: video/audio self-attention (ring joint, dense,
+    # dense on gathered K/V), text/A2V cross-attention (dense) and V2A ring cross-attention. The legacy
+    # setup was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state)
+    # is more accurate than it at every measured shape. A quant profile may replace it for the
+    # self-attention (LtxQuantProfile.sdpa_self_recipe). See
+    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
+    # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
-    }
-
-    # V2A cross ring-SDPA q_chunk = the per-device audio Q (audio_N / sp_factor), keyed by
-    # (is_blackhole, sp, tp); assumes audio_N=256. A q_chunk wider than the Q shard pads the
-    # query rows and burns ~2x SDPA compute, so it must track sp, not be fixed per model.
-    # k_chunk reuses the self-attn ring value; misses fall back to the self-attn ring q_chunk.
-    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
-    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
-    cross_ring_sdpa_q_chunk_map = {
-        (True, 4, 2): 64,  # BH 2x4
-        (True, 8, 4): 32,  # BH 4x8
     }
     default_sdpa_chunk_size = (256, 256)
-
-    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
-    # sequence length passed to the op. Misses fall back to sdpa_chunk_size_map.
-    ring_sdpa_chunk_by_n = {
-        (True, 8, 4, 9728): (96, 256),
-        (True, 8, 4, 38912): (192, 512),
-    }
-
-    # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
-    # the per-device Q shard and full K. Misses fall back to sdpa_program_config.
-    sdpa_chunk_by_shape = {
-        (True, 1216, 32): (128, 128),  # video text cross-attn, stage 1
-        (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
-        (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
-        (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
-    }
 
     def __init__(
         self,
@@ -93,9 +73,10 @@ class LTXAttention(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt this attention into a named SDPA recipe
-        (Blackhole, D64/D128/D256, noncausal; see models/tt_dit/utils/sdpa_recipe.py). ``None``
-        keeps the legacy SDPA configuration exactly. In LTX-2 the transformer block passes them to every
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every SDPA call
+        (Blackhole, D64/D128/D256, noncausal; see models/tt_dit/utils/sdpa_recipe.py). ``None`` selects
+        ``sdpa_precision_default`` (or, for self-attention, the quant profile's recipe); off Blackhole the
+        legacy SDPA configuration is used. In LTX-2 the transformer block passes them to every
         attention: the D128 video self/text attentions and the D64 audio self/text, A2V and V2A
         attentions. The padded audio self-attn's key-column mask is replaced under a recipe by slicing
         K/V to the logical key length (``forward(attn_kv_len=...)``); any other mask is passed to the recipe
@@ -106,9 +87,15 @@ class LTXAttention(Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.sdpa_precision = sdpa_precision
+        blackhole = is_blackhole()
+        if sdpa_precision is None and is_self and quant_config is not None and blackhole:
+            # The quant profile's self-attention SDPA recipe (None: the default below).
+            sdpa_precision, sdpa_kv_dtype = quant_config.sdpa_self_recipe()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="LTX-2"
+        )
         self.sdpa_kv_dtype = validate_recipe_args(
-            sdpa_precision, sdpa_kv_dtype, head_dim=self.head_dim, model="LTX-2", is_blackhole=is_blackhole()
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=self.head_dim, model="LTX-2", is_blackhole=blackhole
         )
         self.qk_norm = qk_norm
         self.eps = eps
@@ -227,64 +214,41 @@ class LTXAttention(Module):
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
-
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
-        mesh_key = (
-            is_blackhole(),
-            self.parallel_config.sequence_parallel.factor,
-            self.parallel_config.tensor_parallel.factor,
-        )
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
-        )
-        self._ring_pc_by_n = {
-            n: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=chunk[0],
-                k_chunk_size=chunk[1],
-                exp_approx_mode=False,
-            )
-            for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
-            if (b, sp, tp) == mesh_key
-        }
-        self._sdpa_pc_by_shape = {
-            (q, kv): ttnn.SDPAProgramConfig(
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for each grid and shape.
+            self.sdpa_program_config = recipe_config(full_grid)
+            self.ring_sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.cross_ring_sdpa_program_config = self.ring_sdpa_program_config
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole).
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=full_grid,
-                q_chunk_size=chunk[0],
-                k_chunk_size=chunk[1],
+                q_chunk_size=256,
+                k_chunk_size=256,
                 exp_approx_mode=False,
             )
-            for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
-            if b == mesh_key[0]
-        }
-
-        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q; k_chunk reuses the
-        # self-attn ring value.
-        cross_ring_q_chunk = self.cross_ring_sdpa_q_chunk_map.get(mesh_key, ring_sdpa_chunk_size[0])
-        self.cross_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=cross_ring_q_chunk,
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
-        )
-
-        # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+            mesh_key = (
+                blackhole,
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            )
+            ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=ring_sdpa_chunk_size[0],
+                k_chunk_size=ring_sdpa_chunk_size[1],
+                exp_approx_mode=False,
+            )
+            self.cross_ring_sdpa_program_config = self.ring_sdpa_program_config
+            # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -307,13 +271,14 @@ class LTXAttention(Module):
         )
 
         # Under a quant preset, override the attention compute configs to the profile's fidelity.
-        # Self-attn additionally swaps in the ring-SDPA compute and narrows its SDPA inputs; cross-attn
-        # leaves SDPA and _sdpa_input_dtype unset, so forward's getattr(self, "_sdpa_input_dtype", None)
-        # keeps cross SDPA at bf16.
+        # Legacy (non-Blackhole) self-attn additionally swaps in the ring-SDPA compute and narrows its
+        # SDPA inputs (on Blackhole the profile's recipe was selected above); cross-attn leaves SDPA and
+        # _sdpa_input_dtype unset, so forward's getattr(self, "_sdpa_input_dtype", None) keeps cross
+        # SDPA at bf16.
         if quant_config is not None:
             arch = self.mesh_device.arch()
             self.mm_compute_kernel_config = quant_config.mm_compute_config(arch)
-            if self.is_self:
+            if self.is_self and self.sdpa_precision is None:
                 self.sdpa_compute_kernel_config, self._sdpa_input_dtype = quant_config.sdpa_self_config(arch)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -599,44 +564,32 @@ class LTXAttention(Module):
         return ttnn.permute(gate, (1, 3, 2, 0))
 
     def _sdpa_kwargs(self) -> dict:
-        """Recipe kwargs, or the legacy compute config read at call time (quant presets replace it)."""
+        """Recipe kwargs, or (non-Blackhole) the legacy compute config read at call time."""
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     def _ring_program_config(self, N: int) -> ttnn.SDPAProgramConfig:
-        """Self-attn ring SDPA config: the tuned per-N / per-mesh config, op-selected chunks under a recipe."""
-        program_config = self._ring_pc_by_n.get(N, self.ring_sdpa_program_config)
-        if self.sdpa_precision is None:
-            return program_config
-        return recipe_program_config(program_config, ring=True)
+        """Self-attn ring SDPA config (recipe: op-selected chunks for the worker grid)."""
+        del N
+        return self.ring_sdpa_program_config
 
     def _dense_program_config(self) -> ttnn.SDPAProgramConfig:
-        """Unmasked dense self-attn SDPA config (SP=1)."""
-        if self.sdpa_precision is None:
-            return self.sdpa_program_config
-        return recipe_program_config(self.sdpa_program_config)
+        """Dense self-attn SDPA config (SP=1)."""
+        return self.sdpa_program_config
 
     def _cross_program_config(self, q_seq: int, kv_seq: int) -> ttnn.SDPAProgramConfig:
-        """Local cross-attn SDPA config: the per-shape tuned config, op-selected chunks under a recipe."""
-        program_config = self._sdpa_pc_by_shape.get((q_seq, kv_seq), self.sdpa_program_config)
-        if self.sdpa_precision is None:
-            return program_config
-        return recipe_program_config(program_config)
+        """Local cross-attn SDPA config (recipe: the op sizes the chunks for the shape)."""
+        del q_seq, kv_seq
+        return self.sdpa_program_config
 
     def _gathered_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
-        """Padded audio self-attn with gathered K/V (SP>1): legacy config, or the recipe config
-        (the op sizes Q chunks for the short local Q shard)."""
+        """Padded audio self-attn with gathered K/V (SP>1)."""
         del q_len
-        if self.sdpa_precision is None:
-            return self.sdpa_program_config
-        return recipe_program_config(self.sdpa_program_config)
+        return self.sdpa_program_config
 
     def _cross_ring_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
-        """V2A ring cross (is_cross) SDPA config: the tuned per-mesh config, or the ring recipe config
-        (the op sizes Q chunks for the tiny per-device audio Q shard)."""
+        """V2A ring cross (is_cross) SDPA config (recipe: the op sizes Q chunks for the audio Q shard)."""
         del q_len
-        if self.sdpa_precision is None:
-            return self.cross_ring_sdpa_program_config
-        return recipe_program_config(self.cross_ring_sdpa_program_config, ring=True)
+        return self.cross_ring_sdpa_program_config
 
     def _recipe_mask_kv_len(self, attn_mask, attn_kv_len: int | None) -> int | None:
         """Under a recipe, the logical key length that replaces a key-column padding mask.

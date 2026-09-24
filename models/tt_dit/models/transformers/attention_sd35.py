@@ -11,18 +11,22 @@ from ...layers.linear import ColParallelLinear
 from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...utils.padding import pad_weight_tensor
-from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_program_config, sdpa_kwargs, validate_recipe_args
+from ...utils import sdpa_recipe
+from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, sdpa_kwargs, validate_recipe_args
 from ...utils.substate import pop_substate, rename_substate
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class SD35JointAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    # Named SDPA recipe of the joint / ring joint SDPA call on Blackhole. The legacy setup was HiFi2 /
+    # BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state) is more accurate
+    # than it at every measured shape. See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
+    # Legacy SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
         (False, 2, 2): (256, 512),
         (False, 4, 4): (256, 512),
-        (True, 2, 2): (256, 512),
-        (True, 4, 4): (128, 512),
     }
     default_sdpa_chunk_size = (256, 512)
 
@@ -45,15 +49,14 @@ class SD35JointAttention(Module):
     ):
         super().__init__()
 
-        # Opt-in named SDPA recipe; None keeps the legacy program/compute configs below untouched.
-        self.sdpa_kv_dtype = validate_recipe_args(
-            sdpa_precision,
-            sdpa_kv_dtype,
-            head_dim=head_dim,
-            model="SD3.5",
-            is_blackhole=is_blackhole() if sdpa_precision is not None else True,
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="SD3.5"
         )
-        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = validate_recipe_args(
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="SD3.5", is_blackhole=blackhole
+        )
 
         self.query_dim = query_dim
         self.head_dim = head_dim
@@ -125,25 +128,30 @@ class SD35JointAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for the grid.
+            self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+                (
+                    blackhole,
+                    self.parallel_config.sequence_parallel.factor,
+                    self.parallel_config.tensor_parallel.factor,
+                ),
+                self.default_sdpa_chunk_size,
+            )
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=ring_sdpa_chunk_size[0],
+                k_chunk_size=ring_sdpa_chunk_size[1],
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -256,7 +264,7 @@ class SD35JointAttention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=N,
-                program_config=self._sdpa_program_config(ring=True),
+                program_config=self.sdpa_program_config,
                 **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -278,7 +286,7 @@ class SD35JointAttention(Module):
                 add_k_BHLE,
                 add_v_BHLE,
                 joint_strategy="rear",
-                program_config=self._sdpa_program_config(ring=False),
+                program_config=self.sdpa_program_config,
                 **self._sdpa_kwargs(),
             )
 
@@ -327,12 +335,6 @@ class SD35JointAttention(Module):
 
         return spatial_1BND, prompt_out
 
-    def _sdpa_program_config(self, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """The legacy program config, or the recipe one (same grid, op-selected chunks)."""
-        if self.sdpa_precision is None:
-            return self.sdpa_program_config
-        return recipe_program_config(self.sdpa_program_config, ring=ring)
-
     def _sdpa_kwargs(self) -> dict:
-        """Recipe kwargs, or the legacy compute config read at call time (it may be reassigned)."""
+        """Recipe kwargs, or (non-Blackhole) the legacy compute config read at call time."""
         return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)

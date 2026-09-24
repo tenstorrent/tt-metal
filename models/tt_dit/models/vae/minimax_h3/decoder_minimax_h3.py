@@ -38,10 +38,12 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import LayerNorm, RMSNorm
+from ....utils import sdpa_recipe
 from .rope_minimax_h3 import head_lane_permutation, rope_tables
 
 TILE = 32
@@ -59,6 +61,12 @@ class MiniMaxH3ViTAttention(Module):
     The checkpoint stores ``to_q`` / ``to_k`` / ``to_v`` separately; they are fused into a
     single projection at load time, and the q/k halves carry the RoPE lane permute.
     """
+
+    # Named SDPA recipe on Blackhole. The legacy setup was HiFi2 / BF16 dest / exact exp at Q192/K192
+    # with the key-padding mask; BALANCED (FP32 state) on K/V sliced to the valid tokens (identical to
+    # the key-padding mask) is more accurate than it and ~2x faster at [1, 32, 1824, 64]
+    # (test_sdpa_dit_recipe_parity.py::test_vae_recipe_parity, h3_decoder).
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
 
     def __init__(
         self,
@@ -88,18 +96,26 @@ class MiniMaxH3ViTAttention(Module):
         # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
         # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=192,
-            k_chunk_size=192,
-            exp_approx_mode=False,  # False is more correct, matching wan/ltx
+        # Legacy (non-Blackhole) only; on Blackhole the recipe below owns numerics and blocking.
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            None, self.sdpa_precision_default, blackhole=is_blackhole(), model="MiniMaxH3ViTAttention"
         )
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+        if self.sdpa_precision is not None:
+            self.sdpa_program_config = sdpa_recipe.recipe_config(mesh_device.compute_with_storage_grid_size())
+            self.sdpa_compute_kernel_config = None
+        else:
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+                q_chunk_size=192,
+                k_chunk_size=192,
+                exp_approx_mode=False,  # False is more correct, matching wan/ltx
+            )
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
 
         # The elementwise and norm ops all default to HiFi4, which the profile shows costs
         # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,
@@ -156,7 +172,10 @@ class MiniMaxH3ViTAttention(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
+        kv_len: int | None = None,
     ) -> ttnn.Tensor:
+        """``kv_len``: the number of valid (unpadded) keys that ``attention_mask`` keeps. Under a recipe
+        K/V are sliced to it instead of applying the key-padding mask (the same softmax)."""
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
 
@@ -181,6 +200,14 @@ class MiniMaxH3ViTAttention(Module):
         query = ttnn.add(ttnn.mul(query, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(query), rope_sin))
         key = ttnn.add(ttnn.mul(key, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(key), rope_sin))
 
+        if self.sdpa_precision is not None and attention_mask is not None and kv_len is not None:
+            # The mask only bars the tile-pad keys >= kv_len: drop them instead (recipes mask the
+            # physical tile padding of a sub-tile K length themselves).
+            if kv_len < key.shape[2]:
+                b, h, _, d = key.shape
+                key = ttnn.slice(key, [0, 0, 0, 0], [b, h, kv_len, d])
+                value = ttnn.slice(value, [0, 0, 0, 0], [b, h, kv_len, d])
+            attention_mask = None
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -188,7 +215,7 @@ class MiniMaxH3ViTAttention(Module):
             attn_mask=attention_mask,
             is_causal=False,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
+            **sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config),
         )
         attended = ttnn.reshape(
             ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
@@ -263,8 +290,9 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
+        kv_len: int | None = None,
     ) -> ttnn.Tensor:
-        x = ttnn.add(x, self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask))
+        x = ttnn.add(x, self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask, kv_len))
         return ttnn.add(x, self.ff2(self.ff1(self.norm2(x))))
 
 
@@ -390,7 +418,13 @@ class MiniMaxH3ViTDecoder3d(Module):
         # One concat covers the register tokens, the zero cls token and the tile pad.
         hidden = ttnn.concat([hidden, self.suffix.data], dim=1)
         for block in self.transformer_blocks:
-            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
+            hidden = block(
+                hidden,
+                self.rope_cos.data,
+                self.rope_sin.data,
+                self.attention_mask.data,
+                self.num_patches + self.num_suffix_tokens,
+            )
         return self.proj_out(self.norm_out(hidden))
 
 

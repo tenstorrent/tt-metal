@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: Ideogram4 (D256) opt-in SDPA recipe wiring.
+"""Host-only: Ideogram4 (D256) SDPA recipe wiring.
 
 Ideogram4TransformerBlock instances are built with object.__new__ (no mesh device); only the small
-program-config / kwargs helpers and the call-time masked dispatch are exercised.
+kwargs helpers and the call-time masked dispatch are exercised. The default recipe itself is covered by
+test_sdpa_dit_recipe_defaults.py.
 """
 
 import pytest
@@ -26,11 +27,9 @@ def _bare_block(precision=None, kv_dtype=ttnn.bfloat16):
     block = object.__new__(Ideogram4TransformerBlock)
     block.sdpa_precision = precision
     block.sdpa_kv_dtype = kv_dtype
-    block.sdpa_q_chunk_size = 128
-    block.sdpa_k_chunk_size = 256
     block.sdpa_worker_grid = WORKER_GRID
-    block._ring_sdpa_pc_cache = {}
     block.sdpa_program_config = _pc(128, 256)
+    block.ring_sdpa_program_config = _pc(128, 256, WORKER_GRID)
     block.sdpa_compute_kernel_config = object()
     block.matmul_compute_kernel_config = object()
     block.rope_trans_mat = None
@@ -39,30 +38,6 @@ def _bare_block(precision=None, kv_dtype=ttnn.bfloat16):
 
 def _chunks(pc):
     return pc.q_chunk_size, pc.k_chunk_size
-
-
-def test_legacy_program_configs_are_the_tuned_objects():
-    block = _bare_block()
-    assert block._recipe_sdpa_program_config(block.sdpa_program_config, ring=False) is block.sdpa_program_config
-    ring_pc = block._get_ring_sdpa_program_config(512)
-    assert block._recipe_sdpa_program_config(ring_pc, ring=True) is ring_pc
-    assert _chunks(ring_pc) == (128, 256)
-
-
-@pytest.mark.parametrize("precision", [ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.ACCURATE])
-def test_recipe_d256_chunks_are_op_selected(precision):
-    # The tuned D256 Q128/K256 is legacy-only; under a recipe SDPA sizes the chunks to fit L1.
-    block = _bare_block(precision)
-    dense = block._recipe_sdpa_program_config(block.sdpa_program_config, ring=False)
-    ring = block._recipe_sdpa_program_config(block._get_ring_sdpa_program_config(512), ring=True)
-    assert _chunks(dense) == (0, 0)
-    assert _chunks(ring) == (0, 0)
-    grid = lambda pc: (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y)
-    assert grid(dense) == (12, 10)
-    assert grid(ring) == WORKER_GRID  # CCL row stays reserved
-    assert not dense.exp_approx_mode and not ring.exp_approx_mode  # left unset for the recipe
-    for pc, ring_flag in ((_pc(160, 256), True), (_pc(64, 128), False)):
-        assert _chunks(block._recipe_sdpa_program_config(pc, ring=ring_flag)) == (0, 0)
 
 
 def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():
@@ -118,7 +93,7 @@ def test_recipe_segment_mask_uses_dense_recipe_with_mask(monkeypatch):
 
 def test_d256_recipes_accepted_by_model_validation():
     validate = Ideogram4Transformer.validate_sdpa_recipe
-    validate(None, None, head_dim=HEAD_DIM)  # legacy: no-op
+    validate(None, None, head_dim=HEAD_DIM)  # the default recipe
     for precision in (ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.LOW_PRECISION):
         validate(precision, None, head_dim=HEAD_DIM)
     validate(ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b, head_dim=HEAD_DIM)
