@@ -1334,20 +1334,21 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
-    bool unique_shapes) {
+    bool unique_shapes) :
+    quiet_(quiet_mode),
+    unique_shapes_(unique_shapes),
+    snap_target_(target_graph),
+    snap_global_(global_graph),
+    snap_constraints_(constraints),
+    engine_(solver_engine),
+    mode_(connection_validation_mode) {
     using namespace tt::tt_fabric::detail;
-    snap_target_ = target_graph;
-    snap_global_ = global_graph;
-    snap_constraints_ = constraints;
     snap_constraints_.set_quiet_mode(quiet_mode);
-    engine_ = solver_engine;
-    mode_ = connection_validation_mode;
-    unique_shapes_ = unique_shapes;
-    quiet_ = quiet_mode;
     graph_data_.emplace(target_graph, global_graph);
     constraint_data_.emplace(snap_constraints_, *graph_data_);
     use_sat_ = topology_mapping_should_use_sat_engine(
         solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
+    // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer) depends on use_sat_ computed above
     search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
     if (!search_engine_->start(*graph_data_, *constraint_data_, mode_, unique_shapes_, {}, quiet_)) {
         start_error_ = search_engine_->get_state().error_message.empty()

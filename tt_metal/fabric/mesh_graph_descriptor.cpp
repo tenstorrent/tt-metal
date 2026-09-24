@@ -65,8 +65,8 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
 uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
-        case proto::Architecture::BLACKHOLE: return 3;
-        case proto::Architecture::QUASAR: return 3;  // blackhole-like (see SIMULATOR_QUASAR -> p150 descriptor)
+        case proto::Architecture::BLACKHOLE:
+        case proto::Architecture::QUASAR: return 3;  // QUASAR is blackhole-like (SIMULATOR_QUASAR -> p150 descriptor)
         case proto::Architecture::INVALID_ARCHITECTURE:
         default: return 0;
     }
