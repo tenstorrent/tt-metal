@@ -132,3 +132,85 @@ def test_moe_hash_gate(
         exact_recall=True,
         pcc_threshold=0.97,
     )
+
+
+def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, route_scale, vocab_size, score_func):
+    torch.manual_seed(seed)
+    epsilon = 1e-20
+    logits = distinct_logits((1, 1, seq_len, total_experts))
+    input_ids = torch.randint(0, vocab_size, (seq_len,), dtype=torch.int64)
+    tid2eid = torch.stack([torch.randperm(total_experts)[:n_activated_experts] for _ in range(vocab_size)]).to(
+        torch.int64
+    )
+    ref_indices, ref_weights = hash_gate_golden_act(
+        logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, score_func
+    )
+
+    ttnn_logits = ttnn.from_torch(logits, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    height_tiles = (seq_len + TILE_H - 1) // TILE_H
+    ids_padded = torch.zeros(height_tiles * TILE_H, dtype=torch.int64)
+    ids_padded[:seq_len] = input_ids
+    ttnn_input_ids = ttnn.from_torch(
+        ids_padded.reshape(height_tiles, TILE_H).to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tid2eid_padded = torch.zeros(vocab_size, 16, dtype=torch.int16)
+    tid2eid_padded[:, :n_activated_experts] = tid2eid.to(torch.int16)
+    ttnn_tid2eid = ttnn.from_torch(tid2eid_padded, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_hash_gate(
+        ttnn_logits,
+        ttnn_input_ids,
+        ttnn_tid2eid,
+        n_activated_experts=n_activated_experts,
+        route_scale=route_scale,
+        epsilon=epsilon,
+        score_func=score_func,
+    )
+    tt_weights = ttnn.to_torch(ttnn_weights_out)[:1, :1, :seq_len, :n_activated_experts]
+    tt_indices = ttnn.to_torch(ttnn_indices_out)[:1, :1, :seq_len, :n_activated_experts]
+    return (
+        [ttnn_logits, ttnn_input_ids, ttnn_tid2eid, ttnn_weights_out, ttnn_indices_out],
+        tt_indices,
+        tt_weights,
+        ref_indices,
+        ref_weights,
+    )
+
+
+def test_moe_hash_gate_program_cache_hit_patches_addresses(device):
+    """A second call with new logits, ids, and tid2eid must hit the cache and still match its own golden."""
+    device.enable_program_cache()
+    seq_len, total_experts, n_activated_experts, route_scale, vocab_size = 32, 256, 6, 1.5, 2048
+    score_func = "sigmoid"
+    retained = []
+    outputs = []
+    entries_after_miss = None
+
+    for seed in (42, 43):
+        before = device.num_program_cache_entries()
+        buffers, tt_indices, tt_weights, ref_indices, ref_weights = _hash_gate_case(
+            device, seed, seq_len, total_experts, n_activated_experts, route_scale, vocab_size, score_func
+        )
+        if entries_after_miss is None:
+            entries_after_miss = device.num_program_cache_entries()
+            assert entries_after_miss > before
+        else:
+            assert device.num_program_cache_entries() == entries_after_miss
+        retained.extend(buffers)
+        assert_gate_output(
+            tt_indices,
+            tt_weights,
+            ref_indices,
+            ref_weights,
+            n_activated_experts,
+            total_experts,
+            seq_len,
+            False,
+            exact_recall=True,
+            pcc_threshold=0.97,
+        )
+        outputs.append(tt_indices.clone())
+
+    assert not torch.equal(outputs[0], outputs[1])
