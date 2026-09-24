@@ -56,6 +56,12 @@ class MultichipDecoder(OptimizedDecoder):
             output_block=6,
             down_cores=8,
             down_block=17,
+            # Materialize the reader-alignment tail in the logical projection
+            # output.  Older release images require every DRAM reader to own
+            # an output shard; the wrapper crops this zero-padded tail back to
+            # projection_widths below.  The readers already compute these
+            # bank-alignment tiles, so this does not add matmul work.
+            pad_reader_outputs=True,
             residual_cores=40,
             allreduce_cores=40,
             chunk_size=4096,
@@ -130,10 +136,14 @@ class MultichipDecoder(OptimizedDecoder):
 
         self.weights = {}
         self.projection_widths = {}
+        padded_dram_sources = {}
 
         def weight(name, pieces):
             # Each piece is a complete local [N,K] projection before transposition.
             self.projection_widths[name] = pieces[0].shape[0]
+            self.weights[name + ".weight"] = upload(
+                torch.cat([p.T for p in pieces], dim=1), self._weight_dtype(name), dim=1
+            )
             readers = self.policy[self._role(name) + "_readers"]
             if readers > 1 and (
                 self.policy.get("pad_reader_outputs", False)
@@ -141,9 +151,9 @@ class MultichipDecoder(OptimizedDecoder):
             ):
                 alignment = mesh_device.dram_grid_size().x * readers * 32
                 pieces = [torch.nn.functional.pad(p, (0, 0, 0, (-p.shape[0]) % alignment)) for p in pieces]
-            self.weights[name + ".weight"] = upload(
-                torch.cat([p.T for p in pieces], dim=1), self._weight_dtype(name), dim=1
-            )
+                padded_dram_sources[name + ".weight"] = upload(
+                    torch.cat([p.T for p in pieces], dim=1), self._weight_dtype(name), dim=1
+                )
 
         def split(t, dim=0):
             return t.chunk(self.TP, dim=dim)
@@ -248,7 +258,8 @@ class MultichipDecoder(OptimizedDecoder):
         for name, tensor in self.weights.items():
             if len(tensor.shape) != 2:
                 continue
-            k, n = tensor.shape
+            source = padded_dram_sources.pop(name, tensor)
+            k, n = source.shape
             readers = self.policy[self._role(name) + "_readers"]
             width = ((n + 32 * banks * readers - 1) // (32 * banks * readers)) * 32 * readers
             memory = ttnn.MemoryConfig(
@@ -256,7 +267,10 @@ class MultichipDecoder(OptimizedDecoder):
                 ttnn.BufferType.DRAM,
                 ttnn.ShardSpec(bank_grid, [k, width], ttnn.ShardOrientation.ROW_MAJOR),
             )
-            self.dram_weights[name] = ttnn.to_memory_config(tensor, memory)
+            self.dram_weights[name] = ttnn.to_memory_config(source, memory)
+            if source is not tensor:
+                ttnn.deallocate(source)
+        assert not padded_dram_sources
         self.ccl_buffers = {}
         self.fused_buffers = {}
         if self.policy.get("fused_mm_l1", False):

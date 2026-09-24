@@ -324,7 +324,11 @@ class OptimizedDecoder(LightweightModule):
         if self.policy.get("dram", False) and (x.shape[1] == 1 or dram_prefill):
             public_shape = x.shape
             role = self._role(name)
-            k, n = self.weights[name + ".weight"].shape
+            # A model may give the DRAM decode copy an explicit zero-padded
+            # logical tail so every reader has output storage on older TTNN
+            # releases.  Preserve that shape through the DRAM path; callers
+            # that requested the padding crop it at their projection boundary.
+            k, n = self.dram_weights[name + ".weight"].shape
             cores = self.policy.get(role + "_cores", 8 if k == 17408 else 10 if k == 5120 else 12)
             shard_tiles = (k // 32 + cores - 1) // cores
             block = self.policy.get(role + "_block", shard_tiles)
