@@ -43,7 +43,7 @@ inline void _horizontal_stencil_rotate_(std::uint32_t a_reg, std::uint32_t b_reg
     TTI_SFPSHFT2(0, b_reg, b_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG7, 0);
-    TTI_SFPSHFT(28, 0, p_sfpu::LREG7, sfpi::SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPSHFT(28, 0, p_sfpu::LREG7, 1);
     TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TTI_SFPMOV(0, a_reg, b_reg, 0);
     TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
