@@ -25,9 +25,6 @@ The fixture opens a 2x2 line-line mesh (4 devices).
 
 from __future__ import annotations
 
-import os
-from typing import Callable, Optional, Sequence
-
 import numpy as np
 import pytest
 
@@ -44,122 +41,23 @@ AXIS_SIZE = 2
 CLUSTER_AXIS = 1  # axis used as the collective axis in the main suite
 OTHER_AXIS = 0  # axis we will sometimes shard on to verify it stays put
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", MESH_SHAPE_2X2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_2_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    """Return ``"blackhole"`` or ``"wormhole_b0"`` for the host, or ``None``.
-
-    Uses ``ttnn.get_arch_name()`` which reads the cluster yaml at
-    process start and does not require any device to be open.
-    """
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Multi-device mesh fixtures
 # ---------------------------------------------------------------------------
 
 
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Set ``TT_MESH_GRAPH_DESC_PATH`` for ``shape`` and return the previous value.
-
-    Returns the previous env var so a caller can restore it on teardown.
-    Always overwrites the env var when an MGD file is bundled for the
-    host arch + requested shape, so that switching meshes inside a single
-    test session works correctly. Does not overwrite when no bundled MGD
-    matches — that lets a user-supplied ``TT_MESH_GRAPH_DESC_PATH`` win.
-    """
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-def _skip_if_unsupported(shape: tuple[int, ...], skip_if_host_too_small: Callable[[Sequence[int], str], None]) -> None:
-    """Skip the test up-front when the host can't run a ``shape`` mesh.
-
-    Two conditions trip a skip:
-      * Cluster has fewer than ``prod(shape)`` chips — e.g. N300 (2)
-        can't host a 2x2 (4) mesh.
-      * Host arch has no bundled MGD entry for ``shape`` and no
-        ``TT_MESH_GRAPH_DESC_PATH`` was supplied — we'd just open and
-        crash inside the fabric layer otherwise.
-
-    Skipping here, before any device or fabric state has been touched,
-    keeps the rest of the test session clean (no leaked fabric config,
-    no half-open mesh). A host that passes both checks but still fails to
-    open the mesh will fail the test instead.
-    """
-    skip_if_host_too_small(shape, "CCL topology tests")
-
-    arch = _detect_arch()
-    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        return  # user override wins; assume they know what they're doing
-    if arch is None:
-        return  # unknown arch, let the open path try
-    if (arch, shape) not in _MGD_FOR_ARCH_AND_SHAPE:
-        pytest.skip(
-            f"CCL topology tests need a bundled MGD for arch={arch!r} shape={shape}; "
-            f"none available. Either add one under tt-train/configs/mgd/ and update "
-            f"_MGD_FOR_ARCH_AND_SHAPE, or export TT_MESH_GRAPH_DESC_PATH yourself."
-        )
-
-
-def _open_mesh_or_skip(
-    shape: tuple[int, ...],
-    skip_if_host_too_small: Callable[[Sequence[int], str], None],
-    reset_metal_env_quietly: Callable[[], None],
-):
-    """Open a fresh mesh of ``shape``, skipping only if there are not enough devices.
-
-    Returns the previous MGD path so a teardown can restore it.
-    """
-    _skip_if_unsupported(shape, skip_if_host_too_small)
-    previous_mgd = _ensure_mgd_path(shape)
-    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
-    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
-    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
-    # otherwise the fabric control plane is built from the wrong descriptor.
-    ttml.reset_metal_env()
-    try:
-        ttml.open_device_mesh(shape)
-    except Exception:  # noqa: BLE001
-        reset_metal_env_quietly()
-        _restore_mgd_path(previous_mgd)
-        raise
-    return previous_mgd
-
-
 @pytest.fixture(scope="module")
-def ccl_mesh(skip_if_host_too_small, reset_metal_env_quietly):
-    """Open the default 2x2 mesh used by the main test classes."""
-    previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2, skip_if_host_too_small, reset_metal_env_quietly)
-    yield ttml.mesh()
-    reset_metal_env_quietly()
-    _restore_mgd_path(previous_mgd)
+def ccl_mesh(fresh_device_mesh):
+    """Open the default 2x2 mesh used by the main test classes.
+
+    Skips when the host has too few chips, or when there is no bundled MGD for
+    the host arch and ``TT_MESH_GRAPH_DESC_PATH`` isn't set -- the open would just
+    crash inside the fabric layer otherwise. A host that passes both checks but
+    still fails to open the mesh fails the tests instead.
+    """
+    with fresh_device_mesh(MESH_SHAPE_2X2, what="CCL topology tests", require_mgd=True) as mesh:
+        yield mesh
 
 
 # ---------------------------------------------------------------------------
