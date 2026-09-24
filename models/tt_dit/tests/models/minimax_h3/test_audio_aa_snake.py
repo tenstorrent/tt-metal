@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The fused anti-aliased SnakeBeta kernel (`layers/audio_aa_snake.py`) against the `Activation1d` chain it replaces
-at the H3 vocoder's per-device shapes; every kernel STAGE (0 copy, 1 taps, 2 full) must be bit-identical, both timed."""
+at the H3 vocoder's per-device shapes; bit-identical, both timed."""
 
-import os
 import time
 
 import pytest
@@ -16,7 +15,7 @@ import ttnn
 
 from ....layers.audio_aa_snake import FusedActivation1d
 from ....layers.audio_ops import SnakeBeta
-from ....layers.audio_resample import Activation1d, DownSample1d, UpSample1d
+from ....layers.audio_resample import Activation1d
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import resolve_mesh_preset
@@ -44,7 +43,6 @@ SHAPES = [
     pytest.param(8, 4, 15000, id="band6_c8_k4"),
     pytest.param(8, 1, 60000, id="post_c8"),
 ]
-STAGES = [int(s) for s in os.environ.get("AA_STAGES", "0,1,2").split(",") if s.strip()]
 # Per-device rows on the mesh; the last one leaves cores idle (32 tiles for 60 cores per batch item).
 MESH_SHAPES = SHAPES + [pytest.param(256, 1, 128, id="band1_c256_spare_cores")]
 
@@ -67,10 +65,9 @@ def _device(x, mesh_device):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("stage", STAGES)
 @pytest.mark.parametrize(("channels", "pack", "rows"), SHAPES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
+def test_fused_matches_chain(mesh_device, channels, pack, rows):
     torch.manual_seed(0)
     batch = 2
     x = torch.randn(batch, rows * pack, channels) * 0.5
@@ -79,21 +76,11 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
     state = {"act.alpha": log_alpha.clone(), "act.beta": log_beta.clone()}
     common = dict(mesh_device=mesh_device, dtype=ttnn.float32)
 
-    fused = FusedActivation1d(channels=channels, stage=stage, **common)
+    fused = FusedActivation1d(channels=channels, **common)
     fused.load_torch_state_dict(dict(state))
 
-    if stage == 0:
-        reference = lambda xd: xd  # noqa: E731
-    elif stage == 1:
-        up = UpSample1d(ratio=2, window="kaiser", **common)
-        down = DownSample1d(ratio=2, **common)
-        up.load_torch_state_dict({})
-        down.load_torch_state_dict({})
-        reference = lambda xd: down(up(xd))  # noqa: E731
-    else:
-        act = Activation1d(channels=channels, activation=SnakeBeta(channels, alpha_logscale=True, **common), **common)
-        act.load_torch_state_dict(dict(state))
-        reference = act
+    reference = Activation1d(channels=channels, activation=SnakeBeta(channels, alpha_logscale=True, **common), **common)
+    reference.load_torch_state_dict(dict(state))
 
     def run(x_cpu):
         x_ref = _device(x_cpu, mesh_device)
@@ -111,7 +98,7 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
         n_diff = int((got != ref).sum())
         rel = float(diff.norm() / ref.double().norm().clamp_min(1e-30))
         logger.info(
-            f"AA_RESULT stage={stage} c={channels} k={pack} rows={rows} input={tag}: chain {t_ref * 1e3:.3f} ms, "
+            f"AA_RESULT c={channels} k={pack} rows={rows} input={tag}: chain {t_ref * 1e3:.3f} ms, "
             f"fused {t_fused * 1e3:.3f} ms ({t_ref / max(t_fused, 1e-9):.1f}x); differing values {n_diff} / {ref.numel()}, "
             f"max |diff| {float(diff.max()):.3e}, rel-RMSE {rel:.3e}"
         )
@@ -121,7 +108,7 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
                 logger.info(
                     f"  first mismatches: [{b_i},{t_i},{c_i}] got {got[b_i, t_i, c_i].item()!r} ref {ref[b_i, t_i, c_i].item()!r}"
                 )
-        assert torch.equal(got, ref), f"stage {stage}: {n_diff} values differ (max |diff| {float(diff.max()):.3e})"
+        assert torch.equal(got, ref), f"{n_diff} values differ (max |diff| {float(diff.max()):.3e})"
 
 
 @pytest.mark.timeout(1800)

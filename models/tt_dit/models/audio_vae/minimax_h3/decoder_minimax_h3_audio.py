@@ -145,7 +145,6 @@ class MiniMaxH3AudioDecoder(Module):
             act_mode=act_mode,
             polyphase_ups=polyphase_ups,
         )
-        self.decoder.batch_shard_axis = batch_shard_axis
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
         """``(B, 32, T)`` -> ``(B, 2048, T)`` through ``dec_in_proj`` on device.

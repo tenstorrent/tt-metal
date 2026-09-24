@@ -236,7 +236,7 @@ MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
 DECODE_STAGE_LATENT_HW = (48, 84)  # the served 15 s chunk: a 4x7 tile grid on the 4x8 mesh
 
 
-def _stub_decoder_vae(mesh_device, stitch_exchange: str):
+def _stub_decoder_vae(mesh_device):
     """A `MiniMaxH3Vae` whose decoder is a fixed projection of its tokens: the stitch and readback, no weights. The
     projection ties a tile's pixels to the tile, not its device, since the two exchanges place tiles differently."""
     from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
@@ -256,7 +256,7 @@ def _stub_decoder_vae(mesh_device, stitch_exchange: str):
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         device_stitch=True,
-        stitch_exchange=stitch_exchange,
+        stitch_exchange="gather",
         pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
     num_frames, height, width = vae.decoder.latent_shape
@@ -291,7 +291,7 @@ def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
     planar frame must agree byte for byte with the gather form at the served 4x7 geometry."""
     import numpy as np
 
-    vae, chunk = _stub_decoder_vae(mesh_device, "gather")
+    vae, chunk = _stub_decoder_vae(mesh_device)
     outputs = {}
     for mode in ("gather", "strips"):
         vae.stitch_exchange = mode

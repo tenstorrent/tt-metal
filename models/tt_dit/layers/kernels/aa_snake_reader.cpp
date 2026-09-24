@@ -20,12 +20,12 @@ void kernel_main() {
     constexpr int32_t T_LOCAL = get_compile_time_arg_val(11);
     constexpr int32_t HALO = get_compile_time_arg_val(12);
     constexpr uint32_t X_PAGES = get_compile_time_arg_val(13);  // pages per batch item of the halo'd input
-    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(17);
+    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(15);
     constexpr uint32_t STICK = C * 4;
     constexpr uint32_t PAGE = K * STICK;
     constexpr uint32_t TILE = R * STICK;  // 4096
 
-    constexpr auto x_args = TensorAccessorArgs<18>();
+    constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto ab_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto fl_args = TensorAccessorArgs<ab_args.next_compile_time_args_offset()>();
 

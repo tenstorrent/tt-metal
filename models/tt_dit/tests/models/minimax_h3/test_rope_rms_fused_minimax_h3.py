@@ -50,8 +50,6 @@ def test_rope_rms_fused(mesh_device, view):
     x = torch.randn(1, HEADS, SEQ, HEAD_DIM) * 2.0
     cos = torch.randn(1, 1, SEQ, HEAD_DIM).clamp(-1, 1)
     sin = torch.randn(1, 1, SEQ, HEAD_DIM).clamp(-1, 1)
-    trans_t = get_rot_transformation_mat()
-    trans_t = trans_t.reshape(32, 32) if trans_t.numel() == 1024 else trans_t.reshape(-1, 32)[:32]
     dev = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)  # noqa: E731
     x_dev, cos_dev, sin_dev = dev(x), dev(cos), dev(sin)
     trans = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)

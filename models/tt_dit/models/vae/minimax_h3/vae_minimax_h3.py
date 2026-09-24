@@ -513,9 +513,7 @@ class MiniMaxH3Vae:
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
-            "yuv_extract": 0.0,
             "readback_join": 0.0,
-            "stitch_blend": 0.0,
             "readback_each": [],
             "device_each": [],
         }
@@ -1074,7 +1072,6 @@ class MiniMaxH3Vae:
                 canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
                 elapsed = time.perf_counter() - mark
                 profile["device"] += elapsed
-                profile["stitch_blend"] += elapsed
                 profile["device_each"].append(elapsed)
 
                 mark = time.perf_counter()
@@ -1083,7 +1080,7 @@ class MiniMaxH3Vae:
                 if output_type == "yuv420":
                     # The readback's GIL-releasing host half runs on a worker while the next wave's decoder is on the
                     # device. One frame in flight on a FIFO queue, so `canvases` still comes out in chunk order.
-                    finish = self._read_canvas_yuv(canvas, defer=True)
+                    finish = self._read_canvas_yuv(canvas)
                     ttnn.deallocate(canvas)
                     frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
                     read_bytes = frames * canvas_h * canvas_w * 3 // 2
@@ -1230,7 +1227,7 @@ class MiniMaxH3Vae:
 
         def stage(wave):
             n_units, shape, batch = prepare_host(wave)
-            return n_units, shape, batch, upload(batch)
+            return n_units, shape, upload(batch)
 
         canvases = []
         pending: list = []
@@ -1250,7 +1247,6 @@ class MiniMaxH3Vae:
                 ttnn.synchronize_device(self.mesh_device)
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
-            profile["stitch_blend"] += elapsed
             profile["device_each"].append(elapsed)
             return canvas_rows
 
@@ -1259,7 +1255,7 @@ class MiniMaxH3Vae:
             rows_shape = tuple(canvas_rows.shape)
             canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
             if output_type == "yuv420":
-                finish = self._read_canvas_yuv(canvas_rows, defer=True, rows_partitioned=True)
+                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
                 ttnn.deallocate(canvas_rows)
                 read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
                 pending.append(self._yuv_finish_pool.submit(finish))
@@ -1285,33 +1281,19 @@ class MiniMaxH3Vae:
 
         staged = stage(waves[0])
         for wave_index, wave in enumerate(waves):
-            n_units, (num_frames, height, width), batch, tokens = staged
+            n_units, (num_frames, height, width), tokens = staged
             staged = None
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
-            if self.profile:
-                ttnn.synchronize_device(self.mesh_device)
-                elapsed = time.perf_counter() - mark
-                profile["decoder"] += elapsed
-                profile["device"] += elapsed
-                mark = time.perf_counter()
             # Same cast and layout choices as the gather form, for the same reasons (see there).
             decoded = ttnn.typecast(decoded, ttnn.float32)
             pixels = self._unpatchify(decoded, num_frames, height, width)
             # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
             # row r of this device's column.
             column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
-            if self.profile:
-                ttnn.synchronize_device(self.mesh_device)
-                profile["assemble"] += time.perf_counter() - mark
-                mark = time.perf_counter()
             strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
             ttnn.deallocate(column)
-            if self.profile:
-                ttnn.synchronize_device(self.mesh_device)
-                profile["stitch_blend"] += time.perf_counter() - mark
-                mark = time.perf_counter()
             strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
             # Stage 2: the row. Every column's strip (and edge, when there is a W seam) for this
             # device's rows.
@@ -1322,9 +1304,6 @@ class MiniMaxH3Vae:
                 edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
                 edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
                 ttnn.deallocate(edge)
-            if self.profile:
-                ttnn.synchronize_device(self.mesh_device)
-                profile["assemble"] += time.perf_counter() - mark
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
             profile["waves"] += 1
@@ -1570,7 +1549,7 @@ class MiniMaxH3Vae:
             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
         return self._yuv_pool
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, defer: bool = False, rows_partitioned: bool = False):
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
@@ -1609,11 +1588,9 @@ class MiniMaxH3Vae:
             canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
         planar = fast_device_to_host_yuv(
-            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=defer
+            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
         )
-        if defer:
-            return lambda: planar().reshape(-1, height * 3 // 2, width)
-        return planar.reshape(planar.shape[0], height * 3 // 2, width)
+        return lambda: planar().reshape(-1, height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.

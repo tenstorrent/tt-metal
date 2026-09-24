@@ -89,7 +89,6 @@ def test_packed_downsample_matches_interior(channels, pack):
 @pytest.mark.parametrize(("channels", "pack"), BANDS)
 def test_packed_kernel_widths(channels, pack):
     """The packed kernels stay short: this is what keeps the dense form's FLOPs at today's padded-conv level."""
-    widths = {}
     for kernel, dilation in [(3, 1), (7, 1), (11, 1), (3, 3), (7, 3), (11, 3), (3, 5), (7, 5), (11, 5)]:
         wp = packed_weight(
             conv1d_same(torch.ones(channels, channels, kernel), dilation),
@@ -99,12 +98,4 @@ def test_packed_kernel_widths(channels, pack):
             k_out=pack,
             support=(kernel - 1) * dilation + 1,
         )
-        widths[(kernel, dilation)] = wp.shape[-1]
         assert wp.shape[-1] == 2 * math.ceil((kernel - 1) * dilation / 2 / pack) + 1
-    up = packed_weight(
-        upsample2x_ref(kaiser_taps(), channels), c_in=channels, c_out=channels, k_in=pack, k_out=2 * pack, support=26
-    )
-    down = packed_weight(
-        downsample2x_ref(kaiser_taps(), channels), c_in=channels, c_out=channels, k_in=2 * pack, k_out=pack, support=26
-    )
-    print(f"C={channels} k={pack}: conv taps {widths}, up {up.shape}, down {down.shape}")

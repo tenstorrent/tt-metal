@@ -12,7 +12,6 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 
 from __future__ import annotations
 
-import time
 from typing import List, Sequence
 
 import torch
@@ -129,9 +128,6 @@ class AMPBlock1(Module):
         self.kernel_size = kernel_size
         self.num_branches = len(dilation)
         self.mesh_device = mesh_device
-        # pack (layers/audio_pack.py): None = depthwise resamplers and dilated convs as they are; 1 = the anti-alias
-        # resamplers as dense convs on unpacked rows; > 1 = everything on time-packed rows (B, T/pack, pack*C).
-        self.pack = pack
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
         common = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
@@ -252,13 +248,7 @@ class Vocoder(Module):
         # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
         # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
         self.pack_bands = dict(pack_bands or {})
-        # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
-        # (layers/audio_aa_snake.py), bit-identical to the chain.
-        self.act_mode = act_mode
-        # Transposed convs as polyphase convs over the unstuffed rows: a third of the multiplies, no stuff/pad/slice.
-        self.polyphase_ups = polyphase_ups
         # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
-        self.batch_shard_axis = None
         self.batch_shard = None
 
         if resblock_kernel_sizes is None:
@@ -457,22 +447,14 @@ class Vocoder(Module):
         return per_shard * factor - t_rows
 
     def forward_device_BTC(
-        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None, timings: dict | None = None
+        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
     ) -> torch.Tensor:
         """``(B, T + t_pad, C_in)`` ROW_MAJOR already on device (padded per ``t_pad_for``) -> ``(B, C_out, T_out)``
         torch. Lets a caller that produces the vocoder input on device (MiniMax-H3's ``dec_in_proj``) skip the
         readback + re-upload that ``forward_BCT`` implies."""
         self._t_pad = t_pad
-        mark = time.perf_counter()
         y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
-        if timings is not None:
-            ttnn.synchronize_device(self.mesh_device)
-            timings["vocoder"] = time.perf_counter() - mark
-            mark = time.perf_counter()
-        waveform = self._device_to_host(y_dev)
-        if timings is not None:
-            timings["readback"] = time.perf_counter() - mark
-        return waveform
+        return self._device_to_host(y_dev)
 
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.

@@ -32,8 +32,7 @@ def _f32_bits(value: float) -> int:
 
 class FusedActivation1d(Module):
     """Drop-in for ``Activation1d(channels, SnakeBeta(alpha_logscale=True))``: same state keys, same ``(B, T, C)`` or
-    packed ``(B, T / k, k C)`` fp32 ROW_MAJOR input and output. ``stage`` is a bring-up knob: 0 copies the input through
-    the gather machinery, 1 runs the resampler taps without the activation, 2 is the real thing."""
+    packed ``(B, T / k, k C)`` fp32 ROW_MAJOR input and output."""
 
     def __init__(
         self,
@@ -44,7 +43,6 @@ class FusedActivation1d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         alpha_logscale: bool = True,
-        stage: int = 2,
     ) -> None:
         super().__init__()
         if dtype != ttnn.float32:
@@ -60,7 +58,6 @@ class FusedActivation1d(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self.alpha_logscale = alpha_logscale
-        self.stage = int(stage)
         self.eps = 1e-9
         self._sharded = parallel_config is not None and parallel_config.factor > 1
         if self._sharded:
@@ -160,7 +157,7 @@ class FusedActivation1d(Module):
             C, R, pack, t_sticks, halo,
             (t_sticks + 2 * halo) // pack,  # input pages per batch item
             t_sticks // pack,  # output pages per batch item
-            self.stage, 0, nb_extra,
+            nb_extra,
         ]  # fmt: skip
         reader_ct = list(ct)
         for t in (x, self.ab.data, self._flags_tensor()):
@@ -196,8 +193,7 @@ class FusedActivation1d(Module):
         modes = [ttnn.UnpackToDestMode.Default] * 64  # one entry per circular buffer slot
         for i in (CB_UP, CB_AB, CB_DN):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
-        vec = getattr(ttnn, "VectorUnpackToDestMode", None)
-        compute_cfg.unpack_to_dest_mode = vec(modes) if vec is not None else modes
+        compute_cfg.unpack_to_dest_mode = ttnn.VectorUnpackToDestMode(modes)
 
         taps = [_f32_bits(2.0 * t) for t in self._up_taps] + [_f32_bits(t) for t in self._down_taps]
         return dict(
@@ -216,7 +212,6 @@ class FusedActivation1d(Module):
             | (batch << 32)
             | (t_sticks << 12)
             | (halo << 6)
-            | (self.stage << 4)
             | ((grid.x * grid.y) & 0xF),
         )
 
@@ -256,10 +251,7 @@ class FusedActivation1d(Module):
             **common,
         )
         program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=built["cbs"])
-        try:
-            program.custom_program_hash = built["hash"]
-        except (AttributeError, TypeError):
-            pass
+        program.custom_program_hash = built["hash"]
         return program
 
     # -- forward -----------------------------------------------------------------------------------------------

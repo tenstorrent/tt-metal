@@ -39,11 +39,6 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
-# Persistent output buffer for the C++ planar-concat fast path
-_PLANAR_OUT_BUF: np.ndarray | None = None
-_PLANAR_OUT_SHAPE: tuple[int, int] | None = None
-
-
 _FALLBACK_WARNED = False
 
 
@@ -65,15 +60,6 @@ def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
     if shard.dim() == 4:
         return shard
     return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
-
-
-def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
-    global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
-    shape = (T, row_stride)
-    if _PLANAR_OUT_SHAPE != shape:
-        _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
-        _PLANAR_OUT_SHAPE = shape
-    return _PLANAR_OUT_BUF
 
 
 def _all_contiguous(*shard_groups) -> bool:
@@ -107,7 +93,6 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
-    reuse_out_buffer: bool = False,
     defer: bool = False,
 ) -> np.ndarray | Callable[[], np.ndarray]:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
@@ -132,9 +117,7 @@ def _yuv_planar_d2h(
         the local mesh is rectangular): one ``planar_concat_cpp`` call,
         ~1.7× the Python path at the H3 chunk shape (43 MB: 10.4 -> 6.3 ms).
         Allocates per call, so the result is the caller's, exactly as the
-        fallback's is.  ``reuse_out_buffer=True`` instead writes into a
-        module-level buffer (3.6 ms), which every later call overwrites:
-        only for a caller that consumes the frame before the next one.
+        fallback's is.
       * **Python fallback**: per-shard ``_write`` tasks on the shared
         reassembly ThreadPoolExecutor (torch's strided-copy backend).
         Each scatter is a strided->strided copy; allocates a fresh output
@@ -241,18 +224,12 @@ def _yuv_planar_d2h(
                 zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
                 key=lambda t: (int(t[0][0]), int(t[0][1])),
             )
-            out_Hu, out_Wu = out_H // 2, out_W // 2
-            out_row = out_H * out_W + 2 * out_Hu * out_Wu
-            # Reusing one buffer aliases every result to the newest frame, and the H3 decode keeps
-            # all 21 chunks of a clip, so opt in only when the frame is consumed before the next.
-            out = _get_planar_out_buf(T, out_row) if reuse_out_buffer else None
             assembled = _planar_concat_cpp_impl(
                 [t[1] for t in triples],
                 [t[2] for t in triples],
                 [t[3] for t in triples],
                 "CHWT",
                 (TP_eff, SP_eff),
-                out=out,
                 out_H=out_H,
                 out_W=out_W,
             )
@@ -315,7 +292,6 @@ def fast_device_to_host_yuv(
     logical_h: int | None = None,
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
-    reuse_out_buffer: bool = False,
     defer: bool = False,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
@@ -377,10 +353,6 @@ def fast_device_to_host_yuv(
             rather than the frame itself.  The transfer is complete when it
             returns; what is left is host work the caller can overlap with the
             next frame's device work.  Calling it yields the frame.
-        reuse_out_buffer: Write the AVX2 path's result into a module-level
-            buffer instead of a fresh one.  Saves ~2.7 ms per 43 MB frame and
-            invalidates every previously returned array, so it is only for a
-            caller that consumes each frame before asking for the next.
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
@@ -517,7 +489,6 @@ def fast_device_to_host_yuv(
         out_W=new_W,
         view=d2h_view,
         pool=pool,
-        reuse_out_buffer=reuse_out_buffer,
         defer=defer,
     )
 

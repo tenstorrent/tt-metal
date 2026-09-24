@@ -1507,11 +1507,6 @@ class MiniMaxH3Pipeline:
                 act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
             )
-            logger.info(
-                f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
-                f"packing: {decoder.pack_bands or 'off'}; "
-                f"activations: {decoder.act_mode}; batch shard axis {decoder.batch_shard_axis}"
-            )
 
             def read_state() -> dict[str, torch.Tensor]:
                 """Only the decoder's half of the converted checkpoint.

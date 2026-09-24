@@ -11,7 +11,6 @@ import ttnn
 
 KERNEL_DIR = "models/tt_dit/models/vae/minimax_h3/kernels"
 _CB = 0
-_TILE = 4096
 _programs: dict = {}
 
 
@@ -92,7 +91,16 @@ def unpatchify_tiled(
     reader_acc = tuple(ttnn.TensorAccessorArgs(tokens).get_compile_time_args())
     writer_acc = tuple(ttnn.TensorAccessorArgs(out).get_compile_time_args())
     key = (
-        id(mesh_device), s_pad, d, num_frames, height, out_channels, patch_size_t, patch_size, reader_acc, writer_acc
+        id(mesh_device),
+        s_pad,
+        d,
+        num_frames,
+        height,
+        out_channels,
+        patch_size_t,
+        patch_size,
+        reader_acc,
+        writer_acc,
     )
     built = _programs.get(key)
     if built is None:
@@ -127,8 +135,5 @@ def unpatchify_tiled(
         **common,
     )
     program = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=built["cbs"])
-    try:
-        program.custom_program_hash = built["hash"]
-    except (AttributeError, TypeError):
-        pass
+    program.custom_program_hash = built["hash"]
     return ttnn.generic_op([tokens, out], program)

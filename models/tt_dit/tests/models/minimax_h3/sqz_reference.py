@@ -6,7 +6,6 @@ decode), cached as ``ref_<T>lat_b<B>.pt``; no ttnn import, so ``python -m <modul
 import json
 import os
 import sys
-import time
 
 import torch
 
@@ -14,7 +13,7 @@ HOP_LENGTH = 800
 
 
 def ref_dir() -> str:
-    return os.environ.get("SQZ_REF_DIR", os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated", "sqz_refs"))
+    return os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated", "sqz_refs")
 
 
 def reference_clip(num_latent_frames: int, batch: int):
@@ -34,11 +33,9 @@ def reference_clip(num_latent_frames: int, batch: int):
     reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
     torch.manual_seed(1)
     waveform = torch.randn(batch, 1, num_latent_frames * HOP_LENGTH) * 0.1
-    t0 = time.perf_counter()
     with torch.no_grad():
         latents = reference.encode(waveform).latent_dist.mode()[..., :num_latent_frames]
         expected = reference.decode(latents).sample
-    print(f"CPU reference for {num_latent_frames} latents x batch {batch}: {time.perf_counter() - t0:.1f} s -> {path}")
     torch.save({"latents": latents, "expected": expected}, path)
     return latents, expected
 

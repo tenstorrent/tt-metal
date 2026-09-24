@@ -12,7 +12,6 @@
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);
     constexpr uint32_t d_tiles = get_compile_time_arg_val(1);  // D / 32
-    constexpr uint32_t H = get_compile_time_arg_val(2);
     constexpr auto in_args = TensorAccessorArgs<7>();
     constexpr uint32_t TILE = 4096;
     constexpr uint32_t HALF = 2048;
@@ -40,5 +39,4 @@ void kernel_main() {
         noc.async_read_barrier();
         stage.push_back(1);
     }
-    (void)H;
 }

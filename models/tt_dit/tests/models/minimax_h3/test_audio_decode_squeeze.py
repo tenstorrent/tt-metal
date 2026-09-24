@@ -31,27 +31,15 @@ MESH = [
         id="mesh4x8_8k",
     )
 ]
-HOP_LENGTH = 800
 
-# Per-band conv split modes. Band i = ups[i] + its three AMP blocks; "pre" = dec_in_proj + conv_pre, "post" = conv_post.
-# A recipe maps a band selector to a split mode; unspecified convs keep the constructed default ("full").
 RECIPES = {
     "full": {},
     "weight": {"all": "weight"},
     "off": {"all": "off"},
-    "off_ge3": {"bands_ge": (3, "off"), "post": "off"},
-    "off_ge5": {"bands_ge": (5, "off"), "post": "off"},
-    "weight_ge3": {"bands_ge": (3, "weight"), "post": "weight"},
     # time-packed late bands (layers/audio_pack.py): 2 steps/row at 16 ch, 4 steps/row at 8 ch
     "full_pack": {"pack": {5: 2, 6: 4}},
     # the full split done inside conv3d (Conv3dConfig.operand_split): same operands, one launch per conv
     "kernel": {"all": "kernel"},
-    "kernel_pack": {"all": "kernel", "pack": {5: 2, 6: 4}},
-    "off_pack": {"all": "off", "pack": {5: 2, 6: 4}},
-    # pack 1 = dense resamplers on unpacked rows (bands 3-4 keep their dilated convs)
-    "full_pack4": {"pack": {4: 1, 5: 2, 6: 4}},
-    "full_pack34": {"pack": {3: 1, 4: 1, 5: 2, 6: 4}},
-    "off_pack34": {"all": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     # the fused anti-alias SnakeBeta kernel (layers/audio_aa_snake.py) in place of every resampler/snake chain
     "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
@@ -62,23 +50,31 @@ RECIPES = {
         "build_kwargs": {"act_mode": "fused", "batch_shard_axis": 0},
     },
 }
+RUN_ORDER = (
+    "full_pack",
+    "full",
+    "kernel_fused_pack",
+    "kernel_fused_pack_bshard",
+    "fused_pack",
+    "kernel",
+    "weight",
+    "off",
+)
 BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
 PACK_KEY = "pack"
 
 
-def _conv_modules_by_band(decoder):
-    """Yields ``(band, conv)`` for every split-capable conv; band is an int, "pre" or "post"."""
+def _split_convs(decoder):
+    """Yields every split-capable conv: dec_in_proj, conv_pre, the upsamplers, the AMP block convs and conv_post."""
     voc = decoder.decoder
-    yield "pre", decoder.dec_in_proj
-    yield "pre", voc.conv_pre
-    for i, up in enumerate(voc.ups):
-        yield i, up.conv
-    nk = voc.num_kernels
-    for idx, block in enumerate(voc.resblocks):
-        band = idx // nk
-        for conv in list(block.convs1) + list(block.convs2):
-            yield band, conv
-    yield "post", voc.conv_post
+    yield decoder.dec_in_proj
+    yield voc.conv_pre
+    for up in voc.ups:
+        yield up.conv
+    for block in voc.resblocks:
+        yield from block.convs1
+        yield from block.convs2
+    yield voc.conv_post
 
 
 def apply_recipe(decoder, recipe: dict) -> dict:
@@ -86,31 +82,22 @@ def apply_recipe(decoder, recipe: dict) -> dict:
     counts = {}
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
-    if BUILD_KWARGS_KEY in recipe:
-        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KWARGS_KEY)}
-    for band, conv in _conv_modules_by_band(decoder):
-        mode = None
+    for conv in _split_convs(decoder):
         if "all" in recipe:
-            mode = recipe["all"]
-        if isinstance(band, int) and "bands_ge" in recipe and band >= recipe["bands_ge"][0]:
-            mode = recipe["bands_ge"][1]
-        if band in recipe:
-            mode = recipe[band]
-        if mode is not None:
-            conv.split_mode = mode
+            conv.split_mode = recipe["all"]
         counts[conv.split_mode] = counts.get(conv.split_mode, 0) + 1
     return counts
 
 
-def _load(mesh_device, *, factor: int = 8, axis: int = 1, **overrides):
+def _load(mesh_device, **overrides):
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     from safetensors.torch import load_file
 
     config = load_config(weights_dir)
-    pc = None if factor <= 1 else ParallelFactor(factor=factor, mesh_axis=axis)
-    ccl = None if pc is None else CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = ParallelFactor(factor=8, mesh_axis=1)
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
     decoder = build_audio_decoder(config, mesh_device, parallel_config=pc, ccl_manager=ccl, **overrides)
     decoder.load_torch_state_dict(
         convert_minimax_h3_audio_state_dict(
@@ -147,18 +134,11 @@ def _best(fn, mesh_device, n=3):
 # kernel-split forms the pipeline ships measured 67.3 dB / 0.0034 at 600lat_b2); floors sit a little under that.
 FIDELITY_FLOORS = {
     "full_pack": (66.0, 0.006),
-    "kernel_pack": (66.0, 0.006),
     "fused_pack": (66.0, 0.006),
     "kernel_fused_pack": (66.0, 0.006),
     "kernel_fused_pack_bshard": (66.0, 0.006),
     "full": (66.0, 0.006),
-    "off_pack": (52.0, 0.020),
 }
-
-
-def _selected_recipes():
-    names = os.environ.get("SQZ_RECIPES", "full_pack,full,weight,off,off_ge3,off_ge5").split(",")
-    return [(n, RECIPES[n]) for n in names if n]
 
 
 @pytest.mark.timeout(10800)
@@ -172,7 +152,8 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
     latents, expected = reference_clip(num_latent_frames, batch)
     rows = []
     baseline_out = None
-    for name, recipe in _selected_recipes():
+    for name in RUN_ORDER:
+        recipe = RECIPES[name]
         build = dict(recipe.get(BUILD_KWARGS_KEY, {}))
         decoder, _ = _load(mesh_device, pack_bands=recipe.get(PACK_KEY), **build)
         counts = apply_recipe(decoder, recipe)
@@ -182,13 +163,6 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
         finally:
             decoder.release_trace()
         assert out.shape == expected.shape, f"{name}: shape {tuple(out.shape)} != reference {tuple(expected.shape)}"
-        if os.environ.get("SQZ_DUMP_DIR"):
-            # Raw device output, for A/Bs that live in separate processes (e.g. env-selected blocking tables).
-            os.makedirs(os.environ["SQZ_DUMP_DIR"], exist_ok=True)
-            tag = os.environ.get("SQZ_DUMP_TAG", "")
-            torch.save(
-                out.cpu(), os.path.join(os.environ["SQZ_DUMP_DIR"], f"{name}_{num_latent_frames}lat_b{batch}{tag}.pt")
-            )
         db_ref = psnr(expected, out)
         mel = _log_mel_distance(expected, out)
         if baseline_out is None:
@@ -204,7 +178,7 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
         rows.append((name, counts, eager, traced, db_ref, mel, db_base))
         logger.info(
             f"SQZ {name}: split {counts} eager {eager:.4f} s traced {traced:.4f} s | vs CPU ref {db_ref:.2f} dB "
-            f"mel {mel:.4f} | vs {_selected_recipes()[0][0]} {db_base:.2f} dB"
+            f"mel {mel:.4f} | vs {RUN_ORDER[0]} {db_base:.2f} dB"
         )
         del decoder
     logger.info(f"=== squeeze table: {num_latent_frames} latents x batch {batch}, 4x8 factor 8, traced best of 3 ===")

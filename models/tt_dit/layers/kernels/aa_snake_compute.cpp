@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused anti-aliased SnakeBeta activation, compute. Phase A: per up block, the E/O phase streams as fp32 SFPU
-// multiply-then-add over 6 taps each, then SnakeBeta. Phase B: 12 down taps per out tile. STAGE 0/1/2 = copy/taps/all.
+// multiply-then-add over 6 taps each, then SnakeBeta. Phase B: 12 down taps per out tile.
 
 #include <cstdint>
 
@@ -26,8 +26,7 @@ void kernel_main() {
     constexpr uint32_t cb_o = get_compile_time_arg_val(4);
     constexpr uint32_t cb_dn = get_compile_time_arg_val(5);
     constexpr uint32_t cb_out = get_compile_time_arg_val(6);
-    constexpr uint32_t STAGE = get_compile_time_arg_val(15);
-    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(17);
+    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(15);
 
     const uint32_t n_tiles = get_arg_val<uint32_t>(2);
     if (n_tiles == 0) {
@@ -63,50 +62,35 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < nblocks; ++blk) {
         up.wait_front(7);
         tile_regs_acquire();
-        uint32_t src_e = DST_E, src_o = DST_O;
-        if constexpr (STAGE == 0) {
-            // Identity: tap 3 of the block is x[q .. q + R); E = O = x so out = z[2n] = x[n] below.
-            reconfig_data_format_srca(cb_up);
-            copy_init(cb_up);
-            copy_tile(cb_up, 3, DST_E);
-            copy_tile(cb_up, 3, DST_O);
-        } else {
-            if constexpr (STAGE >= 2) {
-                reconfig_data_format_srca(cb_ab);
-                copy_init(cb_ab);
-                copy_tile(cb_ab, 0, DST_A);
-                copy_tile(cb_ab, 1, DST_B);
-            }
-            reconfig_data_format_srca(cb_up);
-            copy_init(cb_up);
-            copy_tile(cb_up, 0, DST_E);
-            mul_unary_tile(DST_E, s[0]);
-            for (uint32_t j = 1; j < 6; ++j) {
-                copy_tile(cb_up, j, DST_T);
-                mul_unary_tile(DST_T, s[2 * j]);
-                add_binary_tile(DST_E, DST_T, DST_E);
-            }
-            copy_tile(cb_up, 1, DST_O);
-            mul_unary_tile(DST_O, s[1]);
-            for (uint32_t j = 1; j < 6; ++j) {
-                copy_tile(cb_up, 1 + j, DST_T);
-                mul_unary_tile(DST_T, s[2 * j + 1]);
-                add_binary_tile(DST_O, DST_T, DST_O);
-            }
-            if constexpr (STAGE >= 2) {
-                snake_beta_tile<DataFormat::Float32>(DST_E, DST_A, DST_B, DST_E2);
-                snake_beta_tile<DataFormat::Float32>(DST_O, DST_A, DST_B, DST_O2);
-                src_e = DST_E2;
-                src_o = DST_O2;
-            }
+        reconfig_data_format_srca(cb_ab);
+        copy_init(cb_ab);
+        copy_tile(cb_ab, 0, DST_A);
+        copy_tile(cb_ab, 1, DST_B);
+        reconfig_data_format_srca(cb_up);
+        copy_init(cb_up);
+        copy_tile(cb_up, 0, DST_E);
+        mul_unary_tile(DST_E, s[0]);
+        for (uint32_t j = 1; j < 6; ++j) {
+            copy_tile(cb_up, j, DST_T);
+            mul_unary_tile(DST_T, s[2 * j]);
+            add_binary_tile(DST_E, DST_T, DST_E);
         }
+        copy_tile(cb_up, 1, DST_O);
+        mul_unary_tile(DST_O, s[1]);
+        for (uint32_t j = 1; j < 6; ++j) {
+            copy_tile(cb_up, 1 + j, DST_T);
+            mul_unary_tile(DST_T, s[2 * j + 1]);
+            add_binary_tile(DST_O, DST_T, DST_O);
+        }
+        snake_beta_tile<DataFormat::Float32>(DST_E, DST_A, DST_B, DST_E2);
+        snake_beta_tile<DataFormat::Float32>(DST_O, DST_A, DST_B, DST_O2);
         tile_regs_commit();
         tile_regs_wait();
         e.reserve_back(1);
         o.reserve_back(1);
-        pack_tile(src_e, cb_e);
+        pack_tile(DST_E2, cb_e);
         pack_reconfig_data_format(cb_o);
-        pack_tile(src_o, cb_o);
+        pack_tile(DST_O2, cb_o);
         pack_reconfig_data_format(cb_e);
         e.push_back(1);
         o.push_back(1);
@@ -121,16 +105,12 @@ void kernel_main() {
     for (uint32_t i = 0; i < n_tiles; ++i) {
         dn.wait_front(12);
         tile_regs_acquire();
-        if constexpr (STAGE == 0) {
-            copy_tile(cb_dn, 5, DST_E);  // k = 5: E stream, shift 0
-        } else {
-            copy_tile(cb_dn, 0, DST_E);
-            mul_unary_tile(DST_E, t[0]);
-            for (uint32_t k = 1; k < 12; ++k) {
-                copy_tile(cb_dn, k, DST_T);
-                mul_unary_tile(DST_T, t[k]);
-                add_binary_tile(DST_E, DST_T, DST_E);
-            }
+        copy_tile(cb_dn, 0, DST_E);
+        mul_unary_tile(DST_E, t[0]);
+        for (uint32_t k = 1; k < 12; ++k) {
+            copy_tile(cb_dn, k, DST_T);
+            mul_unary_tile(DST_T, t[k]);
+            add_binary_tile(DST_E, DST_T, DST_E);
         }
         tile_regs_commit();
         tile_regs_wait();

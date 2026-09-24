@@ -20,12 +20,12 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(10);
     constexpr int32_t T_LOCAL = get_compile_time_arg_val(11);
     constexpr uint32_t OUT_PAGES = get_compile_time_arg_val(14);
-    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(17);
+    constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(15);
     constexpr uint32_t STICK = C * 4;
     constexpr uint32_t PAGE = K * STICK;
     constexpr uint32_t TILE = R * STICK;
 
-    constexpr auto out_args = TensorAccessorArgs<18>();
+    constexpr auto out_args = TensorAccessorArgs<16>();
 
     const uint32_t b = get_arg_val<uint32_t>(0);
     const uint32_t o0 = get_arg_val<uint32_t>(1);
