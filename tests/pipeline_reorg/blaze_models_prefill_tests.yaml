@@ -1825,3 +1825,25 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+
+- name: "(DeepSeek-V3) dispatch_fabric2d op tests"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_fabric2d.py -k "torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: op_unit
+  test_tags: [moe, dispatch, fabric2d]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 25
+      tier: 2
+      release_ready: false
+  owner_id: U08ARDXARPF # Ilija Anastasijevic
+  team: models
+  budget_type: demo
+  sp_config: sc1
