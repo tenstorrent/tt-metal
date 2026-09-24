@@ -334,8 +334,6 @@ class TestConfig:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
-                math_rows = 4 if is_4row_arch() else 8
-                TestConfig.ARCH_SPECIFIC_OPTIONS = f"-DMATH_ROWS={math_rows}"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
@@ -719,7 +717,14 @@ class TestConfig:
     @staticmethod
     def configured_llk_include_roots() -> List[Path]:
         arch_root = Path("..") / TestConfig.ARCH_LLK_ROOT
-        return TestConfig.llk_tree_include_roots(arch_root)
+        roots = TestConfig.llk_tree_include_roots(arch_root)
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            # Selects the project parameters. There is no default: ckernel_proj_params.h lives only
+            # under proj/, so omitting this fails the compile instead of silently choosing a width.
+            roots.insert(
+                0, arch_root / "proj" / ("fpu_4row" if is_4row_arch() else "fpu_8row")
+            )
+        return roots
 
     @staticmethod
     def add_include_dirs(*dirs, prepend: bool = True) -> None:

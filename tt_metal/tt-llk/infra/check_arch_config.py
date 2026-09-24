@@ -25,7 +25,8 @@ from pathlib import Path
 
 LLK_ROOT = Path(__file__).resolve().parent.parent
 QUASAR_ROOT = LLK_ROOT / "tt_llk_quasar"
-PROJ_PARAMS = QUASAR_ROOT / "common" / "inc" / "ckernel_proj_params.h"
+PROJ_DIR = QUASAR_ROOT / "proj"
+PROJ_PARAMS = sorted(PROJ_DIR.glob("*/ckernel_proj_params.h"))
 ARCH_CONFIG = QUASAR_ROOT / "common" / "inc" / "ckernel_arch_config.h"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]ckernel_proj_params\.h[">]', re.M)
@@ -35,9 +36,29 @@ COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 
 
 def generated_macros() -> set:
-    if not PROJ_PARAMS.exists():
-        sys.exit(f"{PROJ_PARAMS} not found; the Quasar tree layout has moved")
-    return set(DEFINE_RE.findall(PROJ_PARAMS.read_text()))
+    """Macro names the configurations define, checked to be the same set in each.
+
+    The configurations under proj/ are hand-maintained copies of one upstream-generated file, so
+    they can drift. They are allowed to disagree on values -- that is what distinguishes them -- but
+    a name present in one and missing from another means a re-sync landed in only some of them.
+    """
+    if not PROJ_PARAMS:
+        sys.exit(
+            f"no ckernel_proj_params.h under {PROJ_DIR}; the Quasar tree layout has moved"
+        )
+
+    per_file = {path: set(DEFINE_RE.findall(path.read_text())) for path in PROJ_PARAMS}
+    reference, expected = next(iter(per_file.items()))
+    for path, macros in per_file.items():
+        if macros != expected:
+            missing = sorted(expected - macros)
+            extra = sorted(macros - expected)
+            sys.exit(
+                f"{path} has drifted from {reference}: "
+                f"missing {missing or 'nothing'}, unexpected {extra or 'nothing'}. "
+                f"Re-sync every configuration under proj/ together."
+            )
+    return expected
 
 
 def sources(paths):
@@ -63,8 +84,10 @@ def main() -> int:
     failures = []
     for path in sources(args.paths):
         resolved = path.resolve()
-        if resolved in (PROJ_PARAMS, ARCH_CONFIG) or not resolved.is_relative_to(
-            QUASAR_ROOT
+        if (
+            resolved == ARCH_CONFIG
+            or resolved.parent.parent == PROJ_DIR
+            or not resolved.is_relative_to(QUASAR_ROOT)
         ):
             continue
 

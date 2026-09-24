@@ -305,6 +305,11 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        // Selects the project parameters. There is no default: ckernel_proj_params.h lives only
+        // under proj/, so omitting this fails the compile instead of silently choosing an FPU width.
+        includes.push_back(
+            params.rtoptions.get_quasar_four_row() ? "tt_metal/tt-llk/tt_llk_quasar/proj/fpu_4row"
+                                                   : "tt_metal/tt-llk/tt_llk_quasar/proj/fpu_8row");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -377,10 +382,6 @@ public:
             }
         } else {
             defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
-        }
-        // FPU width is independent of the NoC API, so it applies to both branches above.
-        if (params.rtoptions.get_quasar_four_row()) {
-            defines.push_back("MATH_ROWS=4");
         }
         return defines;
     }

@@ -22,7 +22,11 @@
 #include <cstdint>
 
 #include "ckernel_instr_params.h"
-#include "ckernel_proj_params.h"
+// Angle brackets, deliberately: this header is supplied by the build, not by a neighbouring file.
+// Which configuration under tt_llk_quasar/proj/ it resolves to is chosen by the include path. A
+// quoted include would search this file's own directory first, so a stray copy landing in
+// common/inc would silently win over the selected configuration.
+#include <ckernel_proj_params.h>
 
 namespace ckernel::arch
 {
@@ -37,6 +41,9 @@ namespace ckernel::arch
 
 // Rows covered by one FPU issue (MVMUL) or one MOV*. Eight on the base part,
 // four on narrow-FPU parts. The only geometry value that varies per part.
+//
+// Which definition of MATH_ROWS arrives here is a property of the build configuration:
+// see tt_llk_quasar/proj/. This site does not know or care which one it got.
 constexpr std::uint32_t fpu_rows = MATH_ROWS;
 
 // Granularity of the dest/src row layout: sub-eight-row faces sit sparsely, one

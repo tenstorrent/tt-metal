@@ -1331,7 +1331,7 @@ static void build_worker_coord_maps(IDevice* device, std::string& worker_col_map
 // ---------------------------------------------------------------------------
 // get_extra_include_flags: Build -I flags for JIT compilation.
 // ---------------------------------------------------------------------------
-static std::string get_extra_include_flags() {
+static std::string get_extra_include_flags(bool quasar_four_row) {
 #ifdef TT_EMULE_PROJECT_SOURCE_DIR
     const std::string project_src = TT_EMULE_PROJECT_SOURCE_DIR;
     std::string extra_inc;
@@ -1342,8 +1342,13 @@ static std::string get_extra_include_flags() {
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
+    // Selects the project parameters. There is no default: ckernel_proj_params.h lives only under
+    // proj/, so omitting this fails the compile instead of silently choosing an FPU width.
+    extra_inc += " -I\"" + project_src + "/tt_metal/tt-llk/tt_llk_quasar/proj/" +
+                 (quasar_four_row ? "fpu_4row" : "fpu_8row") + "\"";
     return extra_inc;
 #else
+    (void)quasar_four_row;
     return {};
 #endif
 }
@@ -1517,10 +1522,6 @@ static std::map<std::string, std::string> build_kernel_defines(
     auto arch = metal_context.get_cluster().arch();
     if (arch == ARCH::QUASAR) {
         defines["ARCH_QUASAR"] = "1";
-        const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
-        if (rtoptions.get_quasar_four_row()) {
-            defines["MATH_ROWS"] = "4";
-        }
     } else if (arch == ARCH::WORMHOLE_B0) {
         defines["ARCH_WORMHOLE"] = "1";
     } else if (arch == ARCH::BLACKHOLE) {
@@ -4294,7 +4295,9 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
 
     auto& metal_context = MetalContext::instance(impl.get_context_id());
-    std::string extra_inc = get_extra_include_flags();
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+    const bool quasar_four_row = metal_context.get_cluster().arch() == ARCH::QUASAR && rtoptions.get_quasar_four_row();
+    std::string extra_inc = get_extra_include_flags(quasar_four_row);
 
     const auto& hal = metal_context.hal();
     uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
