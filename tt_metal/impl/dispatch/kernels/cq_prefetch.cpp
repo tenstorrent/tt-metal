@@ -1817,8 +1817,8 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     noc_async_read_set_trid(0U);
 
-    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf no
-    // longer program MID, so they would inherit them.
+    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
+    // not program MID, so they would inherit them.
     noc_async_read_clear_pcie_state();
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -2393,7 +2393,7 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 
     // Clear the host address bits these sub cmds leave in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf
-    // no longer program MID, so they would inherit them.
+    // do not program MID, so they would inherit them.
     noc_async_read_clear_pcie_state();
 }
 
@@ -2738,8 +2738,8 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
     noc_async_read_set_trid(0U);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf no
-    // longer program MID, so they would inherit them.
+    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
+    // not program MID, so they would inherit them.
     noc_async_read_clear_pcie_state();
 
     // RelayLinearH is a large command.
@@ -2846,7 +2846,7 @@ uint32_t process_relay_linear_packed_h_cmd(uintptr_t cmd_ptr, uint32_t& downstre
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // Clear the host address bits these sub cmds leave in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf
-    // no longer program MID, so they would inherit them.
+    // do not program MID, so they would inherit them.
     noc_async_read_clear_pcie_state();
 
     return stride + sizeof(CQPrefetchHToPrefetchDHeader);

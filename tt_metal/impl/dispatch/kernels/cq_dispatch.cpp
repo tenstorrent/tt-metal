@@ -599,7 +599,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
     }
 
     // Clear the host address bits a pinned destination leaves in RET_ADDR_MID. On-chip writes sharing the
-    // command buffer no longer program MID, so they would inherit them.
+    // command buffer do not program MID, so they would inherit them.
     noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
 
     cmd_ptr = data_ptr;

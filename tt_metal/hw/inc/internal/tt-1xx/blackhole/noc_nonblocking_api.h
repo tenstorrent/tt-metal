@@ -482,7 +482,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_clear_ret_addr_mid(uint32
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0);
 }
 
-// Debug only: the routing register must agree with the address being issued. The plain issue paths no longer write
+// Debug only: the routing register must agree with the address being issued. The plain issue paths do not write
 // MID, so a stale value left behind by a PCIe batch would silently misroute an on-chip transaction, and a missing
 // one would send a PCIe transaction to an on-chip core. Both read as a correct address in every other register.
 // ASSERT leaves its operand unevaluated in a release build, so the register read costs nothing there.
@@ -806,10 +806,10 @@ inline __attribute__((always_inline)) void dynamic_noc_init() {
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
 
-        // Neither MID register is programmed per transaction any more, so both halves of every command
-        // buffer start at 0 here. This also scrubs a PCIe value left behind by a previous kernel, which
-        // would otherwise misroute ordinary on-chip traffic. Buffers alias in this mode, so clearing both
-        // registers on all four covers reads, writes, register writes and atomics.
+        // Plain transactions do not program either MID register, so both halves of every command buffer
+        // start at 0 here. Firmware only runs this when the NOC mode changes, so it scrubs a PCIe value left
+        // by a kernel in the other mode but not one left by a kernel in this mode. Buffers alias in this mode,
+        // so clearing both registers on all four covers reads, writes, register writes and atomics.
 #pragma GCC unroll 0
         for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0x0);
@@ -2030,8 +2030,8 @@ inline __attribute__((always_inline)) void noc_read_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        // Metal never uses address bits 32 and above here, so MID stays at its default of zero. PCIe needs bit 60,
-        // which is set and cleared around the transfer by noc_async_read_set_pcie_state.
+        // This path only carries on-chip addresses, so MID stays at zero. 64 bit sources use the separate
+        // coordinate overload, and noc_async_read_set_pcie_state sets and clears PCIe routing around a transfer.
         ASSERT(((src_addr >> 32) & NOC_PCIE_MASK) == 0);
         NOC_CMD_BUF_WRITE_REG(
             noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
@@ -2176,8 +2176,8 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        // Metal never uses address bits 32 and above here, so MID stays at its default of zero. PCIe needs bit 60,
-        // which is set and cleared around the transfer by noc_async_write_set_pcie_state.
+        // This path only carries on-chip addresses, so MID stays at zero. 64 bit destinations use the separate
+        // coordinate overload, and noc_async_write_set_pcie_state sets and clears PCIe routing around a transfer.
         ASSERT(((dst_addr >> 32) & NOC_PCIE_MASK) == 0);
         NOC_CMD_BUF_WRITE_REG(
             noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
