@@ -2684,6 +2684,8 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     local_kv_heads=1,
     head_dim=GPT_OSS_RING_SINK_CONFIG.head_dim,
     prefix_group_counts=(0, 1, 2, 10),
+    requests=None,
+    q_chunk_size=64,
     num_iterations=2,
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
@@ -2719,10 +2721,12 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     chunk_size_global = chunk_size_local * sp_size
     # A complete first group is valid even though it has no predecessor *group*: device 0
     # clips at token zero while all other devices consume a predecessor within the group.
-    # Exercise that path and the requested cache-growth cases. Partial/wrapped Q groups remain outside
-    # this specialization.
-    prefix_lengths = tuple(groups * chunk_size_global for groups in prefix_group_counts)
-    logical_lengths = tuple(prefix + chunk_size_global for prefix in prefix_lengths)
+    # Exercise that path and the requested cache-growth or rotated/partial cases.
+    if requests is None:
+        prefix_lengths = tuple(groups * chunk_size_global for groups in prefix_group_counts)
+        logical_lengths = tuple(prefix + chunk_size_global for prefix in prefix_lengths)
+    else:
+        prefix_lengths, logical_lengths = zip(*requests)
     max_logical_n = max(logical_lengths)
 
     # Keep one physical input shape across every logical length and leave a complete extra slab
@@ -2732,9 +2736,8 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     stable_cache_seq_per_dev = stable_cache_slabs * chunk_size_local
     stable_kv_seq_len = sp_size * stable_cache_seq_per_dev
     k_chunk_size = 128
-    q_chunk_size = 64
     halo_tokens = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
-    compact_persistent_seq_len = max(halo_tokens, tile_height)
+    compact_persistent_seq_len = max(halo_tokens, tile_height) * (2 if requests is not None else 1)
 
     torch.manual_seed(CHUNKED_PREFILL_SEED + batch_size)
     q_full = fa_rand(batch_size, nhq, max_logical_n, d_q)
@@ -2821,7 +2824,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                     cache_row = group * chunk_size_local + within_group % chunk_size_local
                     valid_per_dev[dev, cache_row] = True
                 for _, dev, cache_row, _, _ in kv_pad_rotation_destinations(
-                    kv_actual_isl, chunk_size_global, sp_size, chunk_size_local
+                    kv_actual_isl, logical_n - kv_actual_isl, sp_size, chunk_size_local
                 ):
                     valid_per_dev[dev, cache_row] = True
 
@@ -2883,12 +2886,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                         # early zero-halo rejection and sliding_window_size's program-cache key.
                         run_device_call(logical_n, kv_actual_isl, sliding_window_size_arg=1)
 
-                if iteration == 0 and case_index == 2:
-                    with expect_error(RuntimeError, "complete ring-group boundary"):
-                        # Same tensor specs and KV-pad specialization: this must be rejected by
-                        # cache-hit scalar validation before the halo source group can underflow.
-                        run_device_call(logical_n - tile_height, kv_actual_isl)
-                if iteration == 0 and case_index == 3:
+                if requests is None and iteration == 0 and case_index == 3:
                     with expect_error(RuntimeError, "complete ring-group boundary"):
                         # Without KV-pad rotation logical_n is hash-pinned, so this exercises the
                         # ordinary cache-miss validation for a partial final ring group.
@@ -4505,14 +4503,33 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
 RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
-def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
-    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
+@pytest.mark.parametrize(
+    "block_cyclic,halo_slots",
+    [
+        pytest.param(False, 1, id="aligned-single-halo"),
+        pytest.param(True, 2, id="rotated-two-halos"),
+        pytest.param(
+            True,
+            1,
+            id="rotated-single-halo-guard",
+            marks=[
+                skip_with_watcher("Exercises the invalid-metadata fallback with device assertions disabled."),
+                skip_with_llk_assert("Exercises the invalid-metadata fallback with device assertions disabled."),
+            ],
+        ),
+    ],
+)
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(block_cyclic, halo_slots):
+    """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
+    invalid_wrap = block_cyclic and halo_slots == 1
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
     chunk_global = chunk_local * sp_size
-    prefix_groups = (0, 1, 2)
-    stable_groups = max(prefix_groups) + 2
+    prefix_lengths = (
+        (0, chunk_global + 32, 2 * chunk_global - 32) if block_cyclic else (0, chunk_global, 2 * chunk_global)
+    )
+    stable_groups = 4
     stable_kv_seq = sp_size * stable_groups * chunk_local
 
     local_q_heads, local_kv_heads, head_dim = 8, 1, 64
@@ -4523,14 +4540,13 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
     cache_batch = max(cache_user_slots) * num_layers + layer_idx + 1
 
     torch.manual_seed(CHUNKED_PREFILL_SEED + 701)
-    total_seq = (max(prefix_groups) + 1) * chunk_global
+    total_seq = max(prefix_lengths) + chunk_global
     q_full = fa_rand(1, nhq, total_seq, head_dim)
     k_full = fa_rand(1, nhk, total_seq, head_dim)
     v_full = fa_rand(1, nhk, total_seq, head_dim)
     chunks = []
-    for prefix_group, cache_user_slot in zip(prefix_groups, cache_user_slots, strict=True):
+    for kv_actual_isl, cache_user_slot in zip(prefix_lengths, cache_user_slots, strict=True):
         cache_batch_idx = cache_user_slot * num_layers + layer_idx
-        kv_actual_isl = prefix_group * chunk_global
         logical_n = kv_actual_isl + chunk_global
         q_host, k_host, v_host, valid_rows, _ = build_kv_pad_rotation_inputs(
             k_full[:, :, :kv_actual_isl, :],
@@ -4590,7 +4606,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
         tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
         tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
         tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
-        sliding_shape = (1, nhk, 128, head_dim)
+        sliding_shape = (1, nhk, halo_slots * 128, head_dim)
         dense_shape = (1, nhk, stable_kv_seq, head_dim)
         sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
         sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
@@ -4650,6 +4666,10 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
                 kv_cache_num_layers=num_layers if use_metadata else None,
                 kv_cache_layer_idx=layer_idx if use_metadata else None,
             )
+            sliding_args = common
+            if invalid_wrap and not use_metadata:
+                # Scalar reference for the invalid replay's first-chunk safety fallback.
+                sliding_args = {**common, "kv_actual_isl": 0, "logical_n": chunk_global}
             sliding = call_sdpa(
                 tt_q,
                 tt_k,
@@ -4657,7 +4677,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
                 p_buf_k=sliding_k,
                 p_buf_v=sliding_v,
                 sliding_window_size=128,
-                **common,
+                **sliding_args,
             )
             dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
             return sliding, dense
@@ -4723,7 +4743,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
                 ("sliding", "dense"), read_outputs(traced_outputs, chunk_index), references[chunk_index]
             ):
                 assert torch.equal(got, expected), (
-                    f"{mode} metadata replay differs from scalar path at prefix group {chunk_index}; "
+                    f"{mode} metadata replay differs from scalar path at prefix {chunks[chunk_index][0]}; "
                     f"max abs diff={(got - expected).abs().max().item()}"
                 )
 
@@ -5641,6 +5661,35 @@ def test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error
         head_dim=256,
         prefix_group_counts=(0, 1),
         num_iterations=1,
+    )
+
+
+@pytest.mark.parametrize("q_chunk_size", [64, 128])
+@pytest.mark.parametrize("local,window,heads,kv_heads,width", [(1024, 1024, 4, 2, 256), (1280, 128, 8, 1, 64)])
+def test_ring_joint_attention_block_cyclic_sliding_reuse(
+    local, window, heads, kv_heads, width, q_chunk_size, expect_error
+):
+    mesh_config = gpt_oss_chunked_mesh_config()
+    chunk = local * mesh_config.sp_size
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        mesh_config,
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=local,
+        sliding_window_size=window,
+        local_q_heads=heads,
+        local_kv_heads=kv_heads,
+        head_dim=width,
+        q_chunk_size=q_chunk_size,
+        requests=[
+            (0, 32),
+            (32, 96),
+            (local - 32, chunk + local - 32),
+            (local, chunk + local),
+            (chunk - 32, 2 * chunk - 32),
+            (2 * chunk + 32, 2 * chunk + 96),
+            (chunk + 32, 2 * chunk),
+        ],
     )
 
 

@@ -298,7 +298,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     for (const auto& input : input_tensors) {
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
     }
-    // Trace-safe halo relocation, appended after the per-input accessors so existing indices hold.
+    // Metadata accessors follow the input accessors.
     reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
         tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
@@ -359,12 +359,15 @@ void ring_attention_neighbor_halo_exchange_helper(
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
         writer_args.push_back(worker_physical.x);
         writer_args.push_back(worker_physical.y);
         writer_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+
+        writer_args.push_back(link);
 
         std::vector<uint32_t> halo_input_Wt;
         halo_input_Wt.reserve(num_inputs);
@@ -387,18 +390,24 @@ void ring_attention_neighbor_halo_exchange_helper(
                 output_Ht,
                 halo.send_to_next_count_Ht);
             TT_FATAL(
-                halo.send_to_next_start_Ht <= input_Ht &&
-                    halo.send_to_next_count_Ht <= input_Ht - halo.send_to_next_start_Ht,
+                halo.send_to_next_start_Ht <= input_Ht && halo.halo_tile_rows <= input_Ht - halo.send_to_next_start_Ht,
                 "Neighbor halo [{}, {}) exceeds input Ht={}",
                 halo.send_to_next_start_Ht,
                 halo.send_to_next_start_Ht + halo.send_to_next_count_Ht,
                 input_Ht);
 
-            const uint32_t range_start_page = halo.send_to_next_start_Ht * input_Wt;
+            const uint32_t range_start_page = 0;
+            TT_FATAL(
+                halo.send_to_next_count_Ht == halo.halo_tile_rows ||
+                    (halo.send_second_start_Ht <= input_Ht &&
+                     halo.halo_tile_rows <= input_Ht - halo.send_second_start_Ht),
+                "Second neighbor halo exceeds the input cache");
             const uint32_t range_page_count = halo.send_to_next_count_Ht * input_Wt;
             const uint32_t valid_pages = std::min(gather_valid_Ht.value_or(input_Ht), input_Ht) * input_Wt;
             TT_FATAL(
-                range_start_page <= valid_pages && range_page_count <= valid_pages - range_start_page,
+                (halo.send_to_next_start_Ht + halo.halo_tile_rows) * input_Wt <= valid_pages &&
+                    (halo.send_to_next_count_Ht == halo.halo_tile_rows ||
+                     (halo.send_second_start_Ht + halo.halo_tile_rows) * input_Wt <= valid_pages),
                 "Neighbor halo [{}, {}) exceeds the valid per-head page prefix {}",
                 range_start_page,
                 range_start_page + range_page_count,
@@ -429,6 +438,9 @@ void ring_attention_neighbor_halo_exchange_helper(
             reader_args.push_back(input_tile_start);
             reader_args.push_back(input_tile_end);
             reader_args.push_back(input_batch_base);
+            reader_args.push_back(halo.send_to_next_start_Ht * input_Wt);
+            reader_args.push_back(halo.send_second_start_Ht * input_Wt);
+            reader_args.push_back(halo.halo_tile_rows * input_Wt);
             if (halo.derives_cache_batch_on_device()) {
                 reader_args.push_back(input_shape[kBatchDimension]);
             }
@@ -437,17 +449,22 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(batch_head_count);
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
-            writer_args.push_back(range_start_page);
             halo_input_Wt.push_back(input_Wt);
         }
 
-        // Metadata block for the on-device halo relocation. Sits between the per-input descriptors and
-        // the accessor args in BOTH kernels, so the host relocation's field offsets are unaffected.
+        // Runtime metadata follows the tensor descriptors and precedes accessor addresses.
         if (halo.derives_start_on_device()) {
             uint32_t cache_local_tile_rows = input_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT;
             for (const auto& input : input_tensors) {
                 cache_local_tile_rows = std::min(
                     cache_local_tile_rows, static_cast<uint32_t>(input.padded_shape()[2] / tt::constants::TILE_HEIGHT));
+            }
+            uint32_t halo_slot_count =
+                output_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows;
+            for (const auto& output : output_tensors) {
+                halo_slot_count = std::min(
+                    halo_slot_count,
+                    static_cast<uint32_t>(output.padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows));
             }
             const auto append_halo_meta =
                 [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {
@@ -460,11 +477,12 @@ void ring_attention_neighbor_halo_exchange_helper(
                     args.push_back(halo.q_local_tile_rows);
                     args.push_back(halo.halo_tile_rows);
                     args.push_back(cache_local_tile_rows);
+                    args.push_back(halo_slot_count);
                     args.push_back(halo.source_device);
-                    args.push_back(halo.send_to_next_start_Ht);
                     if (with_ring_size) {
                         args.push_back(ring_size);
                     }
+                    args.push_back(num_links);
                     for (const uint32_t wt : halo_input_Wt) {
                         args.push_back(wt);
                     }
