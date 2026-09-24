@@ -41,6 +41,7 @@ synced to the PR code, local switches). The error ratios compare against the bas
 | B | `pr2_256k_c8192` | 256k | 8192 | #57454 as first posted | 0.9083 @L39 | FAIL | 0.9723 | 0.909x | 0/21 | 1.016x |
 | B | `pr2mlpfp32_256k_c2048` | 256k | 2048 | #57454 + MLP HiFi2 fp32 | 0.9143 @L39 | pass | 0.9744 | 0.837x | 0/21 | 0.979x |
 | B | `pr2mlpfp32_256k_c8192` | 256k | 8192 | #57454 + MLP HiFi2 fp32 | 0.9133 @L39 | pass | 0.9742 | 0.840x | 0/21 | 0.981x |
+| C | `final_993720c_c8192` | 256k | 8192 | #57454 at 993720c3d3c (committed code, no flags) | 0.9118 @L39 | pass | 0.9736 | 0.909x | 0/21 | 0.993x |
 | C | `mlpexp_c1_attnlofi_mlpm1_c8192` | 256k | 8192 | M1 + attention LoFi bf16 | 0.9009 @L39 | FAIL | 0.9698 | 1.023x | 20/21 | 1.061x |
 | C | `mlpexp_c3_attnhifi2bf16_mlpm1_c8192` | 256k | 8192 | M1 + attention HiFi2 bf16 | 0.9071 @L39 | FAIL | 0.9720 | 1.002x | 13/21 | 1.024x |
 | C | `mlpexp_m1_lofi_fp32_c2048` | 256k | 2048 | #57454 + MLP LoFi fp32 (M1) | 0.9131 @L39 | pass | 0.9744 | 0.915x | 0/21 | 0.984x |
@@ -69,6 +70,7 @@ synced to the PR code, local switches). The error ratios compare against the bas
 | `base_c8192` | `(none)` | 7facef7e68e |
 | `base_c8192_rep` | `(none)` | 7facef7e68e |
 | `dram_only_c4096` | `GEMMA4_ACTIVATIONS_DRAM_ONLY=1` | 7facef7e68e |
+| `final_993720c_c8192` | `(none)` | 9f2520ae18a |
 | `fp32acc_c4096` | `GEMMA4_DIAG_MLP_FP32ACC=1` | 7facef7e68e |
 | `mlp256k_c8192` | `GEMMA4_MLP_MM_CFG=1 GEMMA4_MLP_MM_GRID=12x10` | df0d9eaa019 |
 | `mlp_only_c4096` | `GEMMA4_MLP_MM_CFG=1 GEMMA4_MLP_MM_GRID=12x10` | 7facef7e68e |
