@@ -10,12 +10,24 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
-#include "sfpu_compare_types.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
+
+/**
+ * @brief Relational comparison selected by the SFPU binary compare kernels, testing `in0 OP in1`.
+ */
+enum class CompareOp : std::uint8_t
+{
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+};
 
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result

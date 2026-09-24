@@ -4,13 +4,26 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "sfpu_compare_types.h"
 
 namespace ckernel::sfpu
 {
+
+/**
+ * @brief Floating-point class test selected by the SFPU isinf/isnan kernels.
+ */
+enum class FiniteCheck : std::uint8_t
+{
+    isinf,
+    isposinf,
+    isneginf,
+    isnan,
+    isfinite,
+};
 
 template <FiniteCheck CHECK, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_()
