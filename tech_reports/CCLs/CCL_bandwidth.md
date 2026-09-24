@@ -128,10 +128,16 @@ The barrier thresholds count devices, so they grow with device count but not wit
 Every figure plots bus bandwidth, as `nccl-tests` defines it:
 
 ```
-bus_bandwidth = bottleneck_bytes / kernel_time
+algorithm_bandwidth = T / kernel_time
+bus_bandwidth       = algorithm_bandwidth * (N-1)/N        (2(N-1)/N for all_reduce)
+                    = bottleneck_bytes / kernel_time
 ```
 
-It says how fast the collective runs, and compares directly to `nccl-tests` output on other hardware. Its ceiling grows with the links in use.
+- `T`, the un-sharded logical tensor in bytes
+- `N`, the number of devices
+- `kernel_time`, device kernel duration
+
+Bus bandwidth says how fast the collective runs, and compares directly to `nccl-tests` output on other hardware. Its ceiling grows with the links in use.
 
 Each curve's peak also carries its link utilization, stated as a percentage of the per-link line rate:
 
@@ -139,12 +145,10 @@ Each curve's peak also carries its link utilization, stated as a percentage of t
 per_link_bandwidth = bottleneck_bytes / ( kernel_time * num_links * num_directions )
 ```
 
-- `bottleneck_bytes` from the table above
 - `num_links`, the routing planes opened per direction
 - `num_directions`, 1 for a line and 2 for a ring
-- `kernel_time`, device kernel duration
 
-`all_to_all` is the exception. Its bus bandwidth follows nccl's `(N-1)/N × B`, which leaves out the relay traffic. Its link utilization is the fairer number.
+`all_to_all` is the exception. It uses `B`, the bytes each device sends and receives, in place of `T`, and its bus bandwidth leaves out the relay traffic. Its link utilization is the fairer number.
 
 ## What we measure
 
