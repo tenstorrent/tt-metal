@@ -20,3 +20,11 @@ tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/registry.py
 # NOTE: this file is honoured by the Cycode CLI only -- the PR bot scans the diff server-side and does not
 # read it, so an entry here never suppresses a review comment.
 tests/ttnn/tracy/test_streaming_profiler.py
+
+# move_only_function benchmark harness: Cycode reports "unsanitized user input in OS command" on the
+# subprocess.run helper. Every call passes a list with shell=False, so no shell parses the arguments
+# and no injection is reachable. The interpolated values are either hardcoded in the CONFIGS table
+# (compiler, flags, candidate names) or constrained by argparse (--only uses choices=, --repetitions
+# is type=int); paths derive from __file__. The script's whole job is to invoke cmake and a compiler,
+# so anyone who can pass it arguments can already run cmake directly.
+tests/tt_stl/move_only_function_bench/reproduce.py

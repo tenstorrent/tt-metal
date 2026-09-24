@@ -39,6 +39,10 @@ COLUMNS = {"std": "StdFn", "zoo": "ZooFn", "fu2": "Fu2Fn"}
 
 
 def run(cmd, **kw):
+    # cmd is always a list and shell=False, so no shell parses these arguments and there is no
+    # injection path; every value is hardcoded in CONFIGS or constrained by argparse. Cycode's
+    # "unsanitized user input in OS command" rule still fires on the non-literal argument, so this
+    # file is listed in .cycodeignore.
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
