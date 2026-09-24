@@ -3,6 +3,7 @@
 
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <string>
@@ -99,6 +100,14 @@ struct H2HSocket::Impl {
     std::vector<uint64_t> rx_seq;
     std::vector<bool> dirty;           // peers with an unflushed put
 
+    // put -> credit, collected here because nothing above this class can see either end:
+    // submit() only queues, and the credit word is read by credit_seen() alone.
+    // One stamp per live frame, indexed exactly as the RX slot is, so the ring that bounds
+    // frames in flight bounds this too.
+    std::vector<std::chrono::steady_clock::time_point> put_at;
+    std::vector<uint64_t> credit_closed;  // sequences already turned into samples
+    std::vector<uint64_t> put_to_credit_ns;
+
     bool broken = false;
     std::string err;
 
@@ -134,6 +143,37 @@ struct H2HSocket::Impl {
         const auto* w = reinterpret_cast<const volatile uint64_t*>(cfg.region_base + credit_offset(core, host));
         return load_acquire(w);
     }
+    std::chrono::steady_clock::time_point& put_at_of(uint32_t core, uint32_t host, uint64_t seq) {
+        const size_t pair = static_cast<size_t>(core) * kMaxCreditPeers + host;
+        return put_at[pair * cfg.ring_pages + static_cast<size_t>(seq % cfg.ring_pages)];
+    }
+    uint64_t& credit_closed_at(uint32_t core, uint32_t host) {
+        return credit_closed[static_cast<size_t>(core) * kMaxCreditPeers + host];
+    }
+
+    // Turns every newly credited sequence into a sample. MUST run before this pass starts
+    // any send: a stamp lives until posted laps it by ring_pages, and the gate only permits
+    // that lap once the frame it would overwrite has been credited -- that is, once this
+    // has already read it.
+    void harvest_credits() {
+        if (!cfg.collect_timing) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        for (uint32_t c = 0; c < cfg.cores; ++c) {
+            for (uint32_t h = 0; h < topo_hosts(); ++h) {
+                const uint64_t seen = credit_seen(c, h);
+                uint64_t& closed = credit_closed_at(c, h);
+                for (; closed < seen; ++closed) {
+                    const auto d = now - put_at_of(c, h, closed);
+                    put_to_credit_ns.push_back(
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
+                }
+            }
+        }
+    }
+    uint32_t topo_hosts() const { return cfg.topo.num < kMaxCreditPeers ? cfg.topo.num : kMaxCreditPeers; }
+
     // The same, from the array keyed on the SENDING core: what OUR core has had pulled.
     uint64_t done_seen(uint32_t core, uint32_t host) const {
         const auto* w = reinterpret_cast<const volatile uint64_t*>(cfg.region_base + done_offset(core, host));
@@ -259,6 +299,11 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.tx_trailer.assign(cfg.cores, {});
     im.tx_flight.assign(cfg.cores, {});
     im.dirty.assign(cfg.topo.num, false);
+    if (cfg.collect_timing) {
+        // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
+        im.put_at.assign(per_peer * cfg.ring_pages, std::chrono::steady_clock::time_point{});
+        im.credit_closed.assign(per_peer, 0);
+    }
     return s;
 }
 
@@ -290,6 +335,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     if (im.broken || !deliver) {
         return 0;
     }
+    im.harvest_credits();
 
     // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
     // test(), is the license. test() is still required: it is what returns the request slot.
@@ -390,6 +436,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             !e.empty()) {
             im.fail("h2h: " + e);
             break;
+        }
+        if (im.cfg.collect_timing) {
+            // Keyed by the sequence this put IS, which is posted_at before the increment.
+            im.put_at_of(dest_core, host, im.posted_at(dest_core, host)) = std::chrono::steady_clock::now();
         }
         im.posted_at(dest_core, host)++;
         im.dirty[host] = true;
@@ -517,6 +567,8 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
 
 // Frames THIS core put that a far device has pulled -- the done array, not the credit one.
 // tt_uva_sync() compares it against its own put count, so it has to be exactly that.
+const std::vector<uint64_t>& H2HSocket::put_to_credit_ns() const { return impl_->put_to_credit_ns; }
+
 uint64_t H2HSocket::credit_total(uint32_t core) const {
     const Impl& im = *impl_;
     uint64_t sum = 0;

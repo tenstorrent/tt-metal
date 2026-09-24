@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "tt_metal/distributed/host_tasks.hpp"
 #include "tt_metal/distributed/host_uva.hpp"
@@ -30,6 +31,9 @@ public:
         uint64_t region_bytes = 0;
         // 0 => cores * ring_pages. Caps frames in flight across the whole socket.
         uint32_t send_window = 0;
+        // Stamps every put and closes it on the peer's credit. Off by default: the samples
+        // are only wanted by a benchmark, and the vector grows one entry per frame.
+        bool collect_timing = false;
     };
 
     // Collective: creates the window, so every rank must call it at the same point.
@@ -58,6 +62,11 @@ public:
     // Frames of this core's the peers have consumed. One peer per core today, so the
     // sum is that peer's count.
     uint64_t credit_total(uint32_t core) const;
+
+    // One entry per credited frame, oldest first: the interval from the frame's put to the
+    // peer's credit for it, on THIS host's clock -- both ends are stamped here, so the two
+    // ranks' clocks need not be related. Empty unless Config::collect_timing.
+    const std::vector<uint64_t>& put_to_credit_ns() const;
 
     std::string barrier();
 
