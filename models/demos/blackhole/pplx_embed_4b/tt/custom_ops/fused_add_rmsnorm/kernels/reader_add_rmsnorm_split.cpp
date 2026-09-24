@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Row-split add+RMSNorm reader: this core's Wc-tile slice of one row of a and b, plus its gamma slice, scaler, eps.
+// Row-split add+RMSNorm reader: this core's Wc-tile slice (k) of one row of a and b per wave, plus its gamma slice,
+// scaler, eps.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -13,8 +14,10 @@ void kernel_main() {
     const uint32_t g_addr = get_arg_val<uint32_t>(2);
     const uint32_t sc_addr = get_arg_val<uint32_t>(3);
     const uint32_t eps_addr = get_arg_val<uint32_t>(4);
-    const uint32_t row = get_arg_val<uint32_t>(5);
-    const uint32_t k = get_arg_val<uint32_t>(6);
+    const uint32_t n_waves = get_arg_val<uint32_t>(5);
+    const uint32_t row0 = get_arg_val<uint32_t>(6);
+    const uint32_t row_stride = get_arg_val<uint32_t>(7);
+    const uint32_t k = get_arg_val<uint32_t>(8);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t Wc = get_compile_time_arg_val(1);
     constexpr auto a_args = TensorAccessorArgs<2>();
@@ -31,15 +34,11 @@ void kernel_main() {
     const uint32_t ta = get_tile_size(cb_a), tb = get_tile_size(cb_b), tc = get_tile_size(cb_g);
     Noc noc;
     CircularBuffer ca(cb_a), cbb(cb_b), cg(cb_g), csc(cb_sc), ceps(cb_eps);
-    const uint32_t base = row * Wt + k * Wc;
-    ca.reserve_back(Wc);
-    cbb.reserve_back(Wc);
+    // resident constants: this core's gamma slice, the 1/W scaler, eps
     cg.reserve_back(Wc);
     csc.reserve_back(1);
     ceps.reserve_back(1);
     for (uint32_t j = 0; j < Wc; ++j) {
-        noc.async_read(sa, ca, ta, {.page_id = base + j}, {.offset_bytes = j * ta});
-        noc.async_read(sb, cbb, tb, {.page_id = base + j}, {.offset_bytes = j * tb});
         noc.async_read(sg, cg, tc, {.page_id = k * Wc + j}, {.offset_bytes = j * tc});
     }
     noc.async_read(ssc, csc, tc, {.page_id = 0}, {.offset_bytes = 0});
@@ -48,6 +47,17 @@ void kernel_main() {
     cg.push_back(Wc);
     csc.push_back(1);
     ceps.push_back(1);
-    ca.push_back(Wc);
-    cbb.push_back(Wc);
+    // one Wc-tile slice of a and b per wave; the row advances by row_stride each wave
+    for (uint32_t w = 0; w < n_waves; ++w) {
+        const uint32_t base = (row0 + w * row_stride) * Wt + k * Wc;
+        ca.reserve_back(Wc);
+        cbb.reserve_back(Wc);
+        for (uint32_t j = 0; j < Wc; ++j) {
+            noc.async_read(sa, ca, ta, {.page_id = base + j}, {.offset_bytes = j * ta});
+            noc.async_read(sb, cbb, tb, {.page_id = base + j}, {.offset_bytes = j * tb});
+        }
+        noc.async_read_barrier();
+        ca.push_back(Wc);
+        cbb.push_back(Wc);
+    }
 }

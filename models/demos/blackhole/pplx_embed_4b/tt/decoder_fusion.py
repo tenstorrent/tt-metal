@@ -80,7 +80,17 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         rows = int(x.padded_shape[-2]) * int(x.padded_shape[-3]) * int(x.padded_shape[0])
         fuse = None
         if rows >= _MIN_ROWS:
-            fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm(a, b, *consts, sum_dtype=dt, memory_config=mc)
+            # QWEN_FUSED_ADD_NORM_R >= 2: split every row over R cores (multi-wave row-split kernel). With
+            # 128-512 tile-rows on 120 cores the row-granular kernel leaves most cores idle in the last
+            # wave; R=4-5 balances it: standalone M=4096 184 -> 141 us, M=8192 320 -> 242, M=16384 597 -> 459
+            # (stock add + rms_norm -> split), vs 178 / 299 / 530 for the row-granular fused kernel.
+            R_env = int(os.getenv("QWEN_FUSED_ADD_NORM_R", "0") or 0)
+            if R_env >= 2:
+                fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm_split(
+                    a, b, *consts, R=R_env, sum_dtype=dt, memory_config=mc
+                )
+            else:
+                fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm(a, b, *consts, sum_dtype=dt, memory_config=mc)
         elif os.getenv("QWEN_FUSED_ADD_NORM_SPLIT", "0") == "1":  # probe: +5% e2e at bs1, see NEGATIVE_RESULTS 34
             # Few rows (bs1: 16 tile-rows): split each row over R cores with a partial-sum exchange.
             grid = x.device().compute_with_storage_grid_size()
