@@ -181,10 +181,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     "use_welford",
     [
         pytest.param(True, marks=pytest.mark.merge_gate),
-        # The legacy stats path flakes on the cross-core reduce (see #57652): ~2.5% of
-        # wh_n150 merge-gate runs come back with a bit-identical wrong result that only the
-        # allclose check catches (max atol delta 1.27 vs 0.065, PCC still 0.999969). Ungated
-        # until that is fixed; it still runs in the nightly/post-commit ttnn suites.
+        # The legacy path fails sporadically, see #57652.
         pytest.param(False),
     ],
     ids=welford_ids,
