@@ -141,6 +141,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     bool use_qk_l2norm,
     bool output_head_major,
     const std::optional<ChunkGdnProgramConfig>& program_config,
+    ChunkGdnWyInverse wy_inverse,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& eye,
@@ -322,7 +323,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             scale,
             flat_qk,
             H,
-            phased_cfg->prep_serial);
+            phased_cfg->prep_serial,
+            wy_inverse);
         // prep = {v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],
@@ -372,6 +374,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             out_mem,
             kernel_cfg,
             dev_cfg,
+            wy_inverse,
             flat_v,
             HV,
             qk_norm,

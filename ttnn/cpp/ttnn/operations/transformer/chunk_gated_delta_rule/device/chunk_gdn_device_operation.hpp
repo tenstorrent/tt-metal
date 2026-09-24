@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "chunk_gdn_compute_config.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -84,6 +86,8 @@ struct ChunkGdnParams {
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
     uint32_t placement = 0;
+    // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_compute_config.hpp).
+    GdnTinv tinv = GdnTinv::HORNER;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -195,6 +199,7 @@ std::vector<Tensor> chunk_gdn(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const ChunkGdnDeviceProgramConfig& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
     bool v_flat = false,
     uint32_t HV = 0,
     bool qk_norm = false,
