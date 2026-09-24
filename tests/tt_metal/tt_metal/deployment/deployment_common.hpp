@@ -22,6 +22,7 @@ std::string pci_bdf_for_device_id(uint32_t device_id);
 std::string read_text_file_trimmed(const std::string& path);
 std::string get_ubb_id_str(uint32_t chip_id);
 std::vector<std::string> get_chip_physical_locations();
+uint64_t get_asic_serial_number(uint64_t chip_id);
 
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))
 
