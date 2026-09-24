@@ -37,6 +37,27 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
             "MlaQRope requires {} INTERLEAVED. Got {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+        const auto logical_shape = tensor.logical_shape();
+        TT_FATAL(logical_shape.rank() == 4U, "MlaQRope: {} must be rank-4. Got rank {}", name, logical_shape.rank());
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "MlaQRope: {} must use the default {}x{} tile. Got {}x{}",
+            name,
+            TILE_HEIGHT,
+            TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+        auto expected_padded = logical_shape;
+        expected_padded[-2] = tt::round_up(expected_padded[-2], TILE_HEIGHT);
+        expected_padded[-1] = tt::round_up(expected_padded[-1], TILE_WIDTH);
+        TT_FATAL(
+            tensor.padded_shape() == expected_padded,
+            "MlaQRope: {} padded shape {} must be the minimally tile-padded logical shape {}. Custom alignments "
+            "are not supported.",
+            name,
+            tensor.padded_shape(),
+            expected_padded);
     };
 
     const auto& q_in = tensor_args.q_in;
@@ -57,8 +78,6 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
     // masquerade as a multiple of qk_head. qk_head and S are required to be
     // tile-aligned below, so accepted inputs still have the same padded geometry.
     const auto q_shape = q_in.logical_shape();
-    TT_FATAL(q_shape.rank() == 4U, "MlaQRope: q_in must be rank-4. Got {}", q_shape.rank());
-
     TT_FATAL(args.qk_rope_dim != 0U, "MlaQRope: qk_rope_dim must be non-zero.");
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
     if (args.packed_input) {
@@ -103,8 +122,8 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
         q_padded[2],
         q_padded[3]);
 
-    const auto cos_shape = cos.padded_shape();
-    TT_FATAL(cos_shape == sin.padded_shape(), "MlaQRope: cos and sin shapes must match.");
+    const auto cos_shape = cos.logical_shape();
+    TT_FATAL(cos_shape == sin.logical_shape(), "MlaQRope: cos and sin logical shapes must match.");
     TT_FATAL(
         cos_shape[0] == 1U && cos_shape[1] == 1U, "MlaQRope: cos/sin dims 0-1 must be 1. Got cos shape {}", cos_shape);
     TT_FATAL(
@@ -118,7 +137,7 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
         args.qk_rope_dim,
         cos_shape[3]);
 
-    const auto trans_shape = trans.padded_shape();
+    const auto trans_shape = trans.logical_shape();
     TT_FATAL(
         trans_shape[0] == 1U && trans_shape[1] == 1U && trans_shape[2] == TILE_HEIGHT && trans_shape[3] == TILE_WIDTH,
         "MlaQRope: trans_mat must be [1, 1, {}, {}]. Got {}",

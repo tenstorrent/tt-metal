@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 class MLAKVAssembleTest : public ::testing::Test {
 protected:
@@ -55,6 +57,18 @@ ttnn::Tensor make_input(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint
     const auto host = ttml::test_utils::make_uniform_vector<float>(count, -1.0F, 1.0F, seed);
     const ttnn::Shape shape({d0, d1, d2, d3});
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(host, shape, device, ttnn::Layout::TILE);
+}
+
+ttnn::Tensor make_custom_tile_input(const ttnn::Shape& shape, const std::array<uint32_t, 2>& tile_shape) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile(tile_shape)),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        device);
 }
 
 // ── Forward reference (k, v) computed from BF16-rounded packed inputs ───────────────────────────────
@@ -210,4 +224,64 @@ TEST_F(MLAKVAssembleTest, BackwardRejectsRopeDimBeyondDstBudget) {
 
     EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(dK, dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim))
         << "mla_kv_assemble_bw should reject a rope tile count that overflows the DST accumulator";
+}
+
+TEST_F(MLAKVAssembleTest, RejectsShortLogicalExtentsHiddenByTilePadding) {
+    constexpr uint32_t n_heads = 2U;
+    constexpr uint32_t qk_nope_dim = 32U;
+    constexpr uint32_t qk_rope_dim = 32U;
+    constexpr uint32_t v_dim = 32U;
+
+    auto kv_up = make_input(1U, 1U, 32U, n_heads * (qk_nope_dim + v_dim), 411U);
+    auto dK = make_input(1U, n_heads, 32U, qk_nope_dim + qk_rope_dim, 413U);
+    auto dV = make_input(1U, n_heads, 32U, v_dim, 414U);
+
+    // Each malformed logical extent has the same padded extent as the valid operand it replaces.
+    // Keep the other input valid so each expectation discriminates one validation boundary.
+    auto short_k_pe = make_input(1U, 1U, 32U, 20U, 415U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_fw(kv_up, short_k_pe, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto short_dK = make_input(1U, n_heads, 32U, 40U, 416U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(short_dK, dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto short_dV = make_input(1U, n_heads, 32U, 20U, 417U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(dK, short_dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto seq40_kv_up = make_input(1U, 1U, 40U, n_heads * (qk_nope_dim + v_dim), 418U);
+    auto seq40_k_pe = make_input(1U, 1U, 40U, qk_rope_dim, 419U);
+    EXPECT_ANY_THROW(
+        ttml::metal::mla_kv_assemble_fw(seq40_kv_up, seq40_k_pe, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto seq40_dK = make_input(1U, n_heads, 40U, qk_nope_dim + qk_rope_dim, 420U);
+    auto seq40_dV = make_input(1U, n_heads, 40U, v_dim, 421U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(seq40_dK, seq40_dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+}
+
+TEST_F(MLAKVAssembleTest, RejectsUnsupportedPhysicalGeometry) {
+    constexpr uint32_t n_heads = 2U;
+    constexpr uint32_t qk_nope_dim = 32U;
+    constexpr uint32_t qk_rope_dim = 32U;
+    constexpr uint32_t v_dim = 32U;
+
+    auto k_pe = make_input(1U, 1U, 32U, qk_rope_dim, 431U);
+    auto tiny_tile_kv_up = make_custom_tile_input(
+        ttnn::Shape{1U, 1U, 32U, n_heads * (qk_nope_dim + v_dim)}, std::array<uint32_t, 2>{16U, 32U});
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_fw(tiny_tile_kv_up, k_pe, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto oversized_storage = make_input(1U, 1U, 64U, 64U, 432U);
+    auto overpadded_k_pe =
+        ttnn::reshape(oversized_storage, ttnn::Shape{1U, 1U, 32U, 32U}, ttnn::Shape{1U, 1U, 64U, 64U});
+    auto kv_up = make_input(1U, 1U, 32U, n_heads * (qk_nope_dim + v_dim), 433U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_fw(kv_up, overpadded_k_pe, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto dV = make_input(1U, n_heads, 32U, v_dim, 434U);
+    auto tiny_tile_dK = make_custom_tile_input(
+        ttnn::Shape{1U, n_heads, 32U, qk_nope_dim + qk_rope_dim}, std::array<uint32_t, 2>{16U, 32U});
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(tiny_tile_dK, dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
+
+    auto oversized_dV_storage = make_input(1U, n_heads, 64U, v_dim, 435U);
+    auto overpadded_dV =
+        ttnn::reshape(oversized_dV_storage, ttnn::Shape{1U, n_heads, 32U, v_dim}, ttnn::Shape{1U, n_heads, 64U, v_dim});
+    auto dK = make_input(1U, n_heads, 32U, qk_nope_dim + qk_rope_dim, 436U);
+    EXPECT_ANY_THROW(ttml::metal::mla_kv_assemble_bw(dK, overpadded_dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim));
 }
