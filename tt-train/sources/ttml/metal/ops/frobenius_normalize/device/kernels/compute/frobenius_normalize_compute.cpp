@@ -6,7 +6,7 @@
 //
 // Phase 1:   square + accumulate all input tiles → cb_sq_acc (FP32 in DST)
 // Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1 using 4-byte stride)
-// Phase 3:   origin only: sfpu_reduce all partials from cb_recv, sqrt + eps + recip → cb_norm
+// Phase 3:   origin only: sfpu_reduce all partials from cb_recv, sqrt + eps + recip → cb_norm_computed
 // Phase 4:   all cores: multiply each tile by 1/norm
 //
 // BF16 I/O, all intermediates are FP32
@@ -27,8 +27,9 @@
 
 constexpr auto cb_input = tt::CBIndex::c_0;
 constexpr auto cb_sq_acc = tt::CBIndex::c_1;
+constexpr auto cb_norm_computed = tt::CBIndex::c_2;
 constexpr auto cb_recv = tt::CBIndex::c_3;
-constexpr auto cb_norm = tt::CBIndex::c_4;
+constexpr auto cb_norm_broadcast = tt::CBIndex::c_4;
 constexpr auto cb_output = tt::CBIndex::c_5;
 constexpr auto cb_sq_partial = tt::CBIndex::c_7;
 
@@ -110,7 +111,7 @@ void kernel_main() {
 
     // =========================================================================
     // Phase 3 (origin only): sfpu_reduce the reduction tile (all partials summed
-    // into one FP32 tile by reader), then sqrt + eps + recip → cb_norm
+    // into one FP32 tile by reader), then sqrt + eps + recip → cb_norm_computed
     // =========================================================================
     {
 #ifdef IS_ORIGIN
@@ -136,7 +137,7 @@ void kernel_main() {
             recip_tile<false>(0);
 
             tile_regs_commit();
-            pack_and_push(0, cb_norm);
+            pack_and_push(0, cb_norm_computed);
         }
 #endif
     }
@@ -145,9 +146,9 @@ void kernel_main() {
     // Phase 4: Multiply each tile by 1/norm
     // =========================================================================
     {
-        cb_wait_front(cb_norm, 1);
-        const uint32_t norm_u32 = read_tile_value(cb_norm, 0, 0);
-        cb_pop_front(cb_norm, 1);
+        cb_wait_front(cb_norm_broadcast, 1);
+        const uint32_t norm_u32 = read_tile_value(cb_norm_broadcast, 0, 0);
+        cb_pop_front(cb_norm_broadcast, 1);
 
         // Mid-kernel phase switch (hw startup already done at kernel top): reconfig Pack for the new
         // output, then re-point SrcA + copy_init for the final scaled copy of the input.
