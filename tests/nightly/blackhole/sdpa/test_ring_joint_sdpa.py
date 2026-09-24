@@ -6224,7 +6224,7 @@ def test_ring_mla_rotated_q_base_two_restore_accuracy_and_determinism(q_chunk_si
     local_q_chunks = 15  # 240 work units: base=2 with a moving remainder on 100/110 cores.
     assert 2 * MESH_CONFIG.sdpa_cores < local_heads * local_q_chunks < 3 * MESH_CONFIG.sdpa_cores
     chunk_size = local_q_chunks * q_chunk_size * MESH_CONFIG.sp_size
-    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads, nhv=local_heads)
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
     runtime.mesh_device.enable_program_cache()
     try:
@@ -6255,7 +6255,7 @@ def test_ring_mla_nonmoving_q_split_accuracy(all_rows_have_remainder):
     """
     chunk_size = 64 * MESH_CONFIG.sp_size
     local_heads = 2 * MESH_CONFIG.sdpa_cores - 1 if all_rows_have_remainder else MESH_CONFIG.sdpa_cores
-    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads, nhv=local_heads)
     run_ring_joint_sdpa_chunked(
         MESH_CONFIG,
         model,
