@@ -42,6 +42,7 @@ parser.add_argument(
 )
 parser.add_argument("--no-timing", action="store_true", help="accuracy only")
 parser.add_argument("--fused-fp32-dest", action="store_true", help="fused op accumulates in fp32 DEST")
+parser.add_argument("--approx-exp", action="store_true", help="fused streaming op runs the approximate exp")
 args = parser.parse_args()
 
 from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
@@ -99,6 +100,7 @@ fcfg = EncoderSDPAConfig(
     use_streaming=args.streaming,
     fp32_dest_acc_en=args.fused_fp32_dest,
     direct_concat_heads=not args.no_concat,
+    exp_approx_mode=args.approx_exp,
 )
 
 
@@ -162,8 +164,13 @@ print(
 s_out = stats("stock", stock())
 try:
     f_out = stats("fused", fused())
-    cos = torch.nn.functional.cosine_similarity(f_out.flatten(), s_out.flatten(), dim=0).item()
-    print("ACC fused-vs-stock cos %.6f" % cos, flush=True)
+    # float64: a float32 cosine over millions of elements carries ~1e-4 error.
+    cos = torch.nn.functional.cosine_similarity(f_out.flatten().double(), s_out.flatten().double(), dim=0).item()
+    print(
+        "ACC fused-vs-stock cos64 %.9f maxabs %.6f bit-identical %s"
+        % (cos, (f_out - s_out).abs().max().item(), torch.equal(f_out, s_out)),
+        flush=True,
+    )
 except Exception as exc:
     print("FUSED FAIL %s" % str(exc).split("\n")[0][:200], flush=True)
     ttnn.close_mesh_device(device)

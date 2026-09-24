@@ -59,6 +59,9 @@ class EncoderSDPAConfig:
     # Emit SDPA output directly in concat-heads layout [B,1,S,H*D]. This is
     # exact for the BGE head-fold contract and removes a DRAM reorder pass.
     direct_concat_heads: bool = False
+    # EXP_APPROX_MODE define. The stock streaming compute reads it; the local legacy
+    # compute does not. Stock SDPA on Blackhole runs the exact exp.
+    exp_approx_mode: bool = True
     # Reuse the dead previous-max CB for exp(previous_max-current_max), avoiding
     # a separate statistics-sized scratch allocation. Standard compute only.
     reuse_prev_max_for_exp: bool = False
@@ -364,9 +367,14 @@ class EncoderSDPAPlan:
             raise ValueError("F4 shared alloc too small to hold one real V chunk")
 
     def global_q_range(self, core_id: int) -> tuple[int, int]:
+        # Balanced flat split: the first total % num_cores cores take one extra unit.
+        # When the work divides evenly this is the uniform split. The kernels take
+        # the range from runtime args, so cores may hold different counts.
         if not 0 <= core_id < self.num_cores:
             raise ValueError(f"invalid core_id={core_id}")
-        return core_id * self.q_work_per_core, self.q_work_per_core
+        base, extra = divmod(self.total_q_work, self.num_cores)
+        start = core_id * base + min(core_id, extra)
+        return start, base + (1 if core_id < extra else 0)
 
     def validate_static_contract(self) -> None:
         c = self.config
@@ -386,11 +394,10 @@ class EncoderSDPAPlan:
         # forwarding chains stay inactive because this exact model path never
         # enables them (is_chain_participant flags are always 0 in runtime args).
         # (At B6 this yields exactly 3 heads/core; B1/B3 give fractional heads,
-        #  which is fine for the flat scheduler.)
-        if self.total_q_work % self.num_cores != 0:
-            raise ValueError(
-                f"non-uniform Q work: total_q_work={self.total_q_work} not divisible " f"by num_cores={self.num_cores}"
-            )
+        #  which is fine for the flat scheduler.) An uneven split is allowed:
+        # global_q_range gives each core its own start and count.
+        if self.total_q_work < self.num_cores:
+            raise ValueError(f"total_q_work={self.total_q_work} leaves idle cores on {self.num_cores}")
 
 
 def _shape_tuple(tensor: ttnn.Tensor) -> tuple[int, ...]:

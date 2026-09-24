@@ -39,6 +39,11 @@ COMPUTE_INCLUDE_PATHS = [
     "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/kernels",
     f"{_SDPA_KERNEL_DIR}/compute",
 ]
+# use_streaming runs the unmodified stock SDPA compute kernel (sdpa_standard_v2),
+# built against the stock headers only. The local compute.cpp implements only the
+# legacy sdpa_standard pipeline.
+STOCK_COMPUTE_KERNEL = f"{_SDPA_KERNEL_DIR}/compute/sdpa.cpp"
+STOCK_COMPUTE_INCLUDE_PATHS = [f"{_SDPA_KERNEL_DIR}/compute"]
 
 # Exact contiguous CB assignment for the unmasked, non-causal, FP32-dest path.
 CB_Q = 0
@@ -158,7 +163,7 @@ def _compile_defines(plan: EncoderSDPAPlan) -> list[tuple[str, str]]:
         ("MUL_BCAST_GRANULARITY", str(plan.mul_bcast_granularity)),
         ("DHT_GRANULARITY", str(plan.dht_granularity)),
         ("REDUCE_GRANULARITY", str(plan.reduce_granularity)),
-        ("EXP_APPROX_MODE", "1"),
+        ("EXP_APPROX_MODE", "1" if plan.config.exp_approx_mode else "0"),
         ("DIRECT_CONCAT_HEADS", "1" if plan.config.direct_concat_heads else "0"),
         ("REUSE_PREV_MAX_FOR_EXP", "1" if plan.config.reuse_prev_max_for_exp else "0"),
     ]
@@ -344,6 +349,39 @@ def _compute_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[in
     return args
 
 
+def _stock_compute_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int]:
+    """Compile-time args in the layout of the stock sdpa.cpp compute kernel.
+
+    Args 0-33 match the local layout (arg 30 = use_streaming_compute = 1). Stock adds
+    arg 34 (use_windowed_narrowing), then 19 CB ids in SdpaInterleavedCbIds order,
+    then the output TensorAccessorArgs.
+    """
+    base = _compute_compile_args(output, plan)[:34]
+    assert base[30] == 1, "stock compute layout is for the streaming pipeline"
+    cbs = [
+        CB_Q,
+        CB_K,
+        CB_V,
+        INACTIVE_CB,  # mask_in
+        INACTIVE_CB,  # attention_sink
+        CB_IDENTITY,
+        CB_COL_IDENTITY,
+        INACTIVE_CB,  # chunk_start_idx_compute
+        CB_RECIP_SCRATCH,
+        CB_OUT,
+        CB_QK,
+        CB_OUT_A,
+        CB_OUT_B,
+        CB_MAX_A,
+        CB_MAX_B,
+        CB_SUM_A,
+        CB_SUM_B,
+        CB_EXP_MAX_DIFF,
+        INACTIVE_CB,  # windowed_k_range
+    ]
+    return [*base, 0, *cbs, *_accessor_args(output)]
+
+
 def _runtime_args(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -441,6 +479,8 @@ def build_encoder_sdpa_descriptor(
     integration.
     """
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
+    if config.use_streaming and (config.kv_alias or config.use_runtime_lengths or config.reuse_prev_max_for_exp):
+        raise ValueError("use_streaming runs the stock compute kernel: no kv_alias, runtime lengths or reused max CB")
     if config.use_runtime_lengths:
         if valid_lengths is None:
             raise ValueError("use_runtime_lengths requires a valid_lengths tensor")
@@ -589,10 +629,14 @@ def build_encoder_sdpa_descriptor(
         compiler_include_paths=DATAFLOW_INCLUDE_PATHS,
     )
     compute = ttnn.KernelDescriptor(
-        kernel_source=COMPUTE_KERNEL,
+        kernel_source=STOCK_COMPUTE_KERNEL if plan.config.use_streaming else COMPUTE_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
-        compile_time_args=_compute_compile_args(output, plan),
+        compile_time_args=(
+            _stock_compute_compile_args(output, plan)
+            if plan.config.use_streaming
+            else _compute_compile_args(output, plan)
+        ),
         runtime_args=compute_rt,
         defines=defines,
         config=ttnn.ComputeConfigDescriptor(
@@ -601,7 +645,7 @@ def build_encoder_sdpa_descriptor(
             fp32_dest_acc_en=plan.config.fp32_dest_acc_en,
             dst_full_sync_en=plan.config.dst_full_sync_en,
         ),
-        compiler_include_paths=COMPUTE_INCLUDE_PATHS,
+        compiler_include_paths=STOCK_COMPUTE_INCLUDE_PATHS if plan.config.use_streaming else COMPUTE_INCLUDE_PATHS,
     )
 
     descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs)
