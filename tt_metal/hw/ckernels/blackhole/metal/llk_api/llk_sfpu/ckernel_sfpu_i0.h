@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -52,6 +53,13 @@ inline void calculate_i0() {
         dst_reg++;
     }
 }
+
+// Op class for the modified Bessel function I0(x).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct I0 : SfpuUnaryOp<I0<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_i0<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { i0_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

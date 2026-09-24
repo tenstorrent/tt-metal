@@ -6,6 +6,7 @@
 #pragma once
 
 #include <limits>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_ops.h"
@@ -14,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -163,7 +165,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
 
 template <
     bool APPROXIMATION_MODE /*maybe_unused*/,
-    uint32_t scale /*maybe_unused*/ = 0x3F800000,
+    std::uint32_t scale /*maybe_unused*/ = 0x3F800000,
     bool CLAMP_NEGATIVE /*maybe_unused*/ = true,
     bool EN_32BIT_DEST /*maybe_unused*/>
 void exp_init() {
@@ -171,6 +173,27 @@ void exp_init() {
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>();
 }
+
+// Op class for the exponential. scale is the input scale programmed by the approximate-mode init.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool SCALE_EN = false,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool CLAMP_NEGATIVE = true,
+    std::uint32_t scale = 0x3F800000,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Exp : SfpuUnaryOp<
+                 Exp<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE, scale, SLOT>,
+                 SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exp_base_scale_factor) {
+        calculate_exponential<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>(
+            exp_base_scale_factor);
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        exp_init<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

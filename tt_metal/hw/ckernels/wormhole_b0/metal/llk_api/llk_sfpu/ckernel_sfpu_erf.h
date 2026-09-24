@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -12,6 +13,7 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -30,10 +32,10 @@ namespace ckernel::sfpu {
 // ======================================================================
 
 #ifdef INP_FLOAT32
-constexpr uint32_t ERF_NUM_DEGREE = 16;
-constexpr uint32_t ERF_DEN_DEGREE = 16;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 36;
+constexpr std::uint32_t ERF_NUM_DEGREE = 16;
+constexpr std::uint32_t ERF_DEN_DEGREE = 16;
+constexpr std::uint32_t ERF_NUM_SEGMENTS = 1;
+constexpr std::uint32_t ERF_LUT_SIZE = 36;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f,  1.1283791065e+00f,  0.0000000000e+00f,
      2.1477432549e-01f,  0.0000000000e+00f, 6.2133435160e-02f,  0.0000000000e+00f,  5.6230435148e-03f,
@@ -49,10 +51,10 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 // n8/d8 rational (WH refit v2) — preserves MaxULP=1 vs truth; GELU-chain
 // byte-match 99.3 % vs old polynomial GELU (v1: 99.0 %; baseline: 97.9 %).
 // GELU-chain objective captures the composed error that CLIP PCC gate sees.
-constexpr uint32_t ERF_NUM_DEGREE = 8;
-constexpr uint32_t ERF_DEN_DEGREE = 8;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 20;
+constexpr std::uint32_t ERF_NUM_DEGREE = 8;
+constexpr std::uint32_t ERF_DEN_DEGREE = 8;
+constexpr std::uint32_t ERF_NUM_SEGMENTS = 1;
+constexpr std::uint32_t ERF_LUT_SIZE = 20;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
      2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
@@ -88,5 +90,12 @@ void erf_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for erf(x).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Erf : SfpuUnaryOp<Erf<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_erf<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { erf_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

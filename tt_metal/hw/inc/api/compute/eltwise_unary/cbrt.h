@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_cbrt.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -27,19 +27,13 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void cbrt_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cube_root,
-        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC));
+ALWI void cbrt_tile(std::uint32_t idst) {
+    MATH((sfpu::Cbrt<APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */>::run(idst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX))); }
+ALWI void cbrt_tile_init() { MATH((sfpu::Cbrt<APPROX>::init())); }
 
 }  // namespace ckernel

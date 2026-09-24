@@ -2,4 +2,4 @@ recip_tile
 ==========
 
 .. doxygenfunction:: recip_tile_init()
-.. doxygenfunction:: recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC)
+.. doxygenfunction:: recip_tile(std::uint32_t idst)

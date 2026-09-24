@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
+#include "tensor_shape.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -18,7 +19,7 @@ namespace ckernel {
  * None: No input clamping. Faster, but inputs below ~-88.5 will produce incorrect outputs. They
  *     will be guaranteed to be negative, so consider enabling packer ReLU when using this mode.
  */
-enum class InputClamping : uint8_t {
+enum class InputClamping : std::uint8_t {
     ClampToNegative = 1,
     None = 0,
 };
@@ -32,13 +33,17 @@ enum class InputClamping : uint8_t {
  */
 template <
     bool approx = false,
-    uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    std::uint32_t scale = 0x3F800000,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(
-        exponential,
-        sfpu::exp_init,
-        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en)));
+    MATH((sfpu::Exp<
+          approx,
+          is_fp32_dest_acc_en,
+          false /* SCALE_EN */,
+          8 /* ITERATIONS */,
+          (input_clamping == InputClamping::ClampToNegative),
+          scale>::init()));
 }
 
 // clang-format off
@@ -47,6 +52,9 @@ ALWI void exp_tile_init() {
  * in the DST register. The DST register buffer must be in an
  * acquired state via an *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ *
+ * The TENSOR_SHAPE template parameter selects the tile to process, e.g.
+ * tensor_shape_from_tile_dims(32, 16) for the left column of faces; the default is the full 32x32 tile.
  *
  * Return value: None
  *
@@ -60,7 +68,6 @@ ALWI void exp_tile_init() {
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits            | False    |
  * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
@@ -68,18 +75,33 @@ template <
     bool approx = false,
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
-    int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_exponential,
-        (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
-        idst,
-        vector_mode,
-        scale));
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    TensorShape TENSOR_SHAPE = DEFAULT_TENSOR_SHAPE>
+ALWI void exp_tile(std::uint32_t idst, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    [[maybe_unused]] constexpr bool clamp_negative = input_clamping == InputClamping::ClampToNegative;
+    MATH((sfpu::Exp<approx, is_fp32_dest_acc_en, scale_en, iterations, clamp_negative>::template run<TENSOR_SHAPE>(
+        idst, scale)));
 }
 
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the TensorShape template
+ * parameter of the overload above: VectorMode::R and VectorMode::C correspond to
+ * tensor_shape_from_tile_dims(16, 32) and tensor_shape_from_tile_dims(32, 16).
+ */
+template <
+    bool approx = false,
+    bool scale_en = false,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp_tile(std::uint32_t idst, VectorMode vector_mode, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    [[maybe_unused]] constexpr bool clamp_negative = input_clamping == InputClamping::ClampToNegative;
+    MATH((sfpu::Exp<approx, is_fp32_dest_acc_en, scale_en, iterations, clamp_negative>::run_vector_mode(
+        vector_mode, idst, scale)));
+}
+
+// The pack-thread variants are not available on Quasar.
 #ifndef ARCH_QUASAR
 
 /**
@@ -88,11 +110,17 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
  */
 template <
     bool approx = false,
-    uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    std::uint32_t scale = 0x3F800000,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_packthread_tile_init() {
-    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
-        sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en>));
+    PACK((sfpu::Exp<
+          approx,
+          is_fp32_dest_acc_en,
+          false /* SCALE_EN */,
+          8 /* ITERATIONS */,
+          (input_clamping == InputClamping::ClampToNegative),
+          scale>::init()));
 }
 
 /**
@@ -103,17 +131,30 @@ template <
     bool approx = false,
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
-    int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    TensorShape TENSOR_SHAPE = DEFAULT_TENSOR_SHAPE>
+ALWI void exp_packthread_tile(std::uint32_t idst, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    [[maybe_unused]] constexpr bool clamp_negative = input_clamping == InputClamping::ClampToNegative;
+    PACK((sfpu::Exp<approx, is_fp32_dest_acc_en, scale_en, iterations, clamp_negative>::template run<TENSOR_SHAPE>(
+        idst, scale)));
+}
+
+/**
+ * Legacy overload of exp_packthread_tile selecting the faces to process with a VectorMode. Prefer the
+ * TensorShape template parameter of the overload above.
+ */
+template <
+    bool approx = false,
+    bool scale_en = false,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_packthread_tile(
-    uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_exponential,
-        (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
-        idst,
-        vector_mode,
-        scale));
+    std::uint32_t idst, VectorMode vector_mode, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    [[maybe_unused]] constexpr bool clamp_negative = input_clamping == InputClamping::ClampToNegative;
+    PACK((sfpu::Exp<approx, is_fp32_dest_acc_en, scale_en, iterations, clamp_negative>::run_vector_mode(
+        vector_mode, idst, scale)));
 }
 #endif
 }  // namespace ckernel
