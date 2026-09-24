@@ -3264,6 +3264,22 @@ def cmd_verification_retry_context(args: argparse.Namespace) -> None:
     )
 
 
+def _dispatch_cmd(state: dict[str, Any]) -> str:
+    """The silicon-queue client, from run state or the inherited environment.
+
+    ``worker.py`` exports this as an environment variable for the solve process
+    and never writes it into state.json, which is also how every tester
+    playbook consumes it. Reading state alone meant the sealed executors found
+    no dispatcher and fell back with ``sealed_dispatch_unavailable`` on every
+    real run -- invisible until now because the no-model replay wrote the key
+    into its fixture state by hand. State still wins when present, so a sealed
+    run can pin a specific client.
+    """
+    return state.get("HW_TEST_DISPATCH_CMD") or os.environ.get(
+        "HW_TEST_DISPATCH_CMD", ""
+    )
+
+
 def _sealed_execution_identity(
     log_dir: Path, worktree: Path, scope: str
 ) -> tuple[Path, Path, dict[str, Any], dict[str, Any], Path, dict[str, Any]] | None:
@@ -3336,7 +3352,7 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
     ):
         return {"supported": False, "reason": "unsupported_functional_route"}
     dispatch = (
-        shlex.split(state.get("HW_TEST_DISPATCH_CMD") or "")
+        shlex.split(_dispatch_cmd(state))
         if any(r["backend"] == "silicon" for r in leaves)
         else []
     )
@@ -3727,7 +3743,7 @@ def _measurement_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]
         )
     ):
         return {"supported": False, "reason": "unsupported_measurement_route"}
-    dispatch = shlex.split(state.get("HW_TEST_DISPATCH_CMD") or "")
+    dispatch = shlex.split(_dispatch_cmd(state))
     if not dispatch:
         return {"supported": False, "reason": "sealed_dispatch_unavailable"}
     llk = worktree / "tt_metal/tt-llk"

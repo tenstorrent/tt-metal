@@ -6930,3 +6930,34 @@ def test_sealed_executor_reduction_drives_existing_retry_wrapper(
     before = list(calls)
     assert writer.cmd_execute_functional(args) == (0 if success else 1)
     assert calls == before  # diagnostic routing cannot resubmit the same attempt
+
+
+def test_sealed_dispatch_cmd_falls_back_to_the_environment(tmp_path, monkeypatch):
+    """worker.py exports HW_TEST_DISPATCH_CMD as env and never writes it to state.
+
+    Reading state alone made both sealed executors fall back with
+    sealed_dispatch_unavailable on every real run. The no-model replay hid it by
+    writing the key into fixture state by hand.
+    """
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    path = Path(args.log_dir) / "state.json"
+    state = json.loads(path.read_text())
+    del state["HW_TEST_DISPATCH_CMD"]
+    path.write_text(json.dumps(state))
+
+    monkeypatch.delenv("HW_TEST_DISPATCH_CMD", raising=False)
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan == {"supported": False, "reason": "sealed_dispatch_unavailable"}
+
+    monkeypatch.setenv("HW_TEST_DISPATCH_CMD", "sealed-dispatch-fixture")
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["supported"] is True
+    assert plan["dispatch"] == ["sealed-dispatch-fixture"]
+
+
+def test_sealed_dispatch_cmd_in_state_wins_over_the_environment(tmp_path, monkeypatch):
+    """State still pins a specific client when a sealed run sets one."""
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("HW_TEST_DISPATCH_CMD", "env-client")
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["dispatch"] == ["sealed-dispatch-fixture"]
