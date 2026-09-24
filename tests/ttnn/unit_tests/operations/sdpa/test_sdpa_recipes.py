@@ -110,7 +110,8 @@ def test_sdpa_recipe_rejects_unsupported(device, invalid):
         pytest.skip("Named recipes initially target Blackhole")
     host = make_inputs(512, "normal")
     if invalid == "dimension":
-        host = [x[..., :64].contiguous() for x in host]
+        # D64/D128/D256 are supported.
+        host = [x[..., :96].contiguous() for x in host]
     inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host]
     kwargs = dict(is_causal=False, precision=ttnn.SDPAPrecision.ACCURATE)
     if invalid == "causal":
