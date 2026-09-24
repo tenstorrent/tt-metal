@@ -110,14 +110,14 @@ class TtMhaCore:
         # 1. RMSNorm (T5-style: no mean subtraction, no bias).
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
-        xqkv = ttnn.linear(x_norm, wqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xqkv = ttnn.linear(x_norm, wqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_norm)
         if head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
                 xqkv,
                 num_heads=num_heads,
                 transpose_key=False,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(xqkv)
         else:
@@ -198,14 +198,14 @@ class TtMhaCore:
             ctx = ctx_unpadded
         # 7. Merge heads + output projection (no residual; caller adds it).
         if head_dim % 32 == 0:
-            merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
+            merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             # concatenate_heads also needs TILE-width heads; merge manually.
             ctx_t = ttnn.permute(ctx, (0, 2, 1, 3))
             merged = ttnn.reshape(ctx_t, (batch, seq, num_heads * head_dim))
             ttnn.deallocate(ctx_t)
         ttnn.deallocate(ctx)
-        out = ttnn.linear(merged, wo, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.linear(merged, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
         return out
 

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import torch
 
@@ -274,7 +276,18 @@ def test_tt_forward_pcc(mesh_device):
     context = torch.randn(2, 32)
     with torch.no_grad():
         expected = model(context=context, num_output_patches=1).quantile_preds
-    got = tt.forward(context=context, num_output_patches=1)
+
+    repeats = 20
+    durations = []
+    got = None
+    for i in range(repeats):
+        start = time.perf_counter()
+        got = tt.forward(context=context, num_output_patches=1)
+        durations.append(time.perf_counter() - start)
+        print(f"[PERF] forward {i + 1:2d}/{repeats}  {durations[-1]:.4f}s")
+    average = sum(durations) / len(durations)
+    print(f"[PERF] average {average:.4f}s  over {repeats} forwards")
+
     assert got.shape == expected.shape
     log_golden("tt_forward/device_quantiles", got)
     assert_with_pcc(expected.float(), got, pcc=0.99)

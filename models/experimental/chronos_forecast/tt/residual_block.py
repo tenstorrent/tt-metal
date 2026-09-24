@@ -102,13 +102,13 @@ class TtResidualBlock:
             hidden_w,
             bias=hidden_b,
             activation="relu",
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         main = ttnn.linear(
             hidden_act,
             output_w,
             bias=output_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden_act)
         # Skip projection path: 48 -> out.
@@ -116,12 +116,12 @@ class TtResidualBlock:
             x,
             residual_w,
             bias=residual_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
         if skip.memory_config() != main.memory_config():
             skip = ttnn.to_memory_config(skip, main.memory_config())
-        out = ttnn.add(main, skip, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(main, skip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(main)
         ttnn.deallocate(skip)
         # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,C).
