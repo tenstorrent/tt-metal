@@ -1120,6 +1120,14 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     return outputs;
 }
 
+RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& /*tensor_args*/) {
+    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+        return RingJointSDPARecipeMeshWorkloadFactory{};
+    }
+    return RingJointSDPAMeshWorkloadFactory{};
+}
+
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device),

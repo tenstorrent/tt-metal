@@ -8,20 +8,6 @@
 // the program over the kernel-config buffer. Force it out-of-line here.
 #define LLK_ZEROFLAG_OUTLINE 1
 
-#ifdef SDPA_RECIPE_RING
-// BF16 ring recipes do not fit the kernel config buffer at O2 on all three TRISCs.
-// Size-optimize only the pack thread: unpack/math at O2 recover most of the O2 speed
-// (Q256/K512 on 1x2: E_bfp4 2.08 -> 1.52 ms, B 2.11 -> 1.87 ms, legacy 1.53 ms).
-#if defined(WATCHER_ENABLED) || (!defined(SDPA_RECIPE_FP32) && defined(TRISC_PACK))
-#pragma GCC optimize("Os")
-#else
-#pragma GCC optimize("O2")
-#endif
-#ifdef SDPA_RECIPE_LOFI
-#include "streaming/lofi_scaling.hpp"
-#endif
-#endif
-
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
@@ -29,16 +15,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
-#ifdef SDPA_RECIPE_RING
-#include "streaming/recipe_tail.hpp"
-#include "streaming/recipe_sfpu.hpp"
-#include "streaming/recipe_streaming.hpp"
-#include "streaming/recipe_ring.hpp"
-#include "../sliding_window_geometry.hpp"
-using RingAccumulatorState = RecipeAccumulatorState;
-#else
 #include "compute_streaming.hpp"
-#endif
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
@@ -301,10 +278,6 @@ void kernel_main() {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
-#ifdef SDPA_RECIPE_RING
-    init_sdpa_streaming_semaphores();
-    CircularBuffer(cb_col_identity).wait_front(1);
-#endif
 
     const uint32_t ring_index =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -410,9 +383,6 @@ void kernel_main() {
         // The compile-time-constant mask fields are template params (static constexpr, no stack
         // storage); only the per-iter runtime fields (global/joint padded tiles, straddle, causal) are
         // set below.
-#ifdef SDPA_RECIPE_RING
-        LightweightMaskContext lw_mask;
-#else
         RingStreamingMaskCtx<
             neginf_tile_idx,
             causal_diag_tile_idx,
@@ -421,7 +391,6 @@ void kernel_main() {
             joint_l_partial_tile_idx,
             straddle_chunk_id>
             lw_mask;
-#endif
         lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col_live;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
@@ -459,39 +428,6 @@ void kernel_main() {
         const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
 
         if constexpr (use_streaming_compute) {
-#ifdef SDPA_RECIPE_RING
-            const uint32_t valid_n_rows =
-                logical_nt * 32 - (global_n_partial_col_live ? 32 - global_n_partial_col_live : 0);
-            const uint32_t n_origin = ring_id * kv_local_padded_Nt * 32;
-            const uint32_t primary_rows = valid_n_rows <= n_origin                            ? 0
-                                          : valid_n_rows - n_origin < kv_local_padded_Nt * 32 ? valid_n_rows - n_origin
-                                                                                              : kv_local_padded_Nt * 32;
-            const uint32_t valid_l_rows =
-                logical_lt * 32 - (joint_l_partial_col_live ? 32 - joint_l_partial_col_live : 0);
-            const uint32_t l_origin = joint_shard_base_tiles * 32;
-            const uint32_t joint_rows = !do_joint_kv || valid_l_rows <= l_origin           ? 0
-                                        : valid_l_rows - l_origin < joint_shard_tiles * 32 ? valid_l_rows - l_origin
-                                                                                           : joint_shard_tiles * 32;
-            sdpa_recipe_ring_segment<
-                Sq_chunk_t,
-                scale_fp32,
-#ifdef SDPA_RECIPE_FP32
-                1,
-#else
-                2,
-#endif
-                Sk_chunk_t,
-                DHt>(
-                acc_state,
-                global_q_start,
-                global_q_end,
-                num_local_k_chunks,
-                iter_num_kv_chunks,
-                primary_rows,
-                joint_rows,
-                is_first_active_iter,
-                is_last_ring_iter);
-#else
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -567,7 +503,6 @@ void kernel_main() {
                 chunked_context,
                 is_first_active_iter,
                 logical_lt);
-#endif
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
