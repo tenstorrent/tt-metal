@@ -56,29 +56,21 @@ bug, not a result.
 
 ## Running
 
-Three configurations, because the inline buffer differs by standard library:
+Everything is driven by `reproduce.py`, which configures and builds each configuration, runs all
+seven items, and prints the tables below as markdown:
 
 ```bash
-cmake -S . -B out-gcc    -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-12
-cmake -S . -B out-clang  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-20
-cmake -S . -B out-libcxx -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-20 \
-                         -DCMAKE_CXX_FLAGS=-stdlib=libc++
-for d in out-gcc out-clang out-libcxx; do cmake --build $d -j; done
-
-# run this first: it fails if the pinned capacity no longer matches std::function
-for d in out-gcc out-clang out-libcxx; do ./$d/sbo_probe || echo "MISMATCH in $d"; done
-
-./out-clang/bench --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
-./out-gcc/bench   --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
-
-# item 6
-size out-clang/CMakeFiles/codegen_{std,zoo,fu2}.dir/codegen_tu.cpp.o
-
-# item 7
-for c in std zoo fu2; do
-  /usr/bin/time -f "$c %e" cmake --build out-clang --target compile_time_$c --clean-first >/dev/null
-done
+./reproduce.py                  # everything, 5 repetitions
+./reproduce.py --repetitions 3  # faster, noisier
+./reproduce.py --only gcc       # a single configuration
+./reproduce.py --skip-build     # reuse existing build directories
 ```
+
+It aborts if `sbo_probe` reports that the pinned inline capacity no longer matches
+`std::function`, since every number below depends on that holding.
+
+Needs `g++-12`, `clang++-20`, libc++ headers, `cmake` and `size` on PATH. `--only` narrows the set
+if you have fewer. Raw google-benchmark output is not checked in; re-run the script for it.
 
 ## Results
 

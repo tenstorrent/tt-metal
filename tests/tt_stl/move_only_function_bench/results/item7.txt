@@ -1,4 +1,0 @@
-=== Item 7: compile time, best of 3 (compile_time_tu.cpp, 300 instantiations) ===
-g++-12 libstdc++             STD= 3.67s (1.00x)  ZOO= 3.58s (0.98x)  FU2=11.21s (3.05x)
-clang++-20 libstdc++         STD= 2.79s (1.00x)  ZOO= 2.53s (0.91x)  FU2= 6.23s (2.24x)
-clang++-20 libc++            STD= 7.46s (1.00x)  ZOO= 2.88s (0.39x)  FU2= 7.85s (1.05x)
