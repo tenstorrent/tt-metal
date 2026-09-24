@@ -9,3 +9,4 @@ einops>=0.7.0,<1
 pandas>=2.0,<4
 accelerate>=1.1.0,<2
 transformers>=4.41,<6
+fev>=0.8.0,<1

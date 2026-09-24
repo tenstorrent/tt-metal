@@ -3,3 +3,6 @@ weights/
 checkpoints/
 *.safetensors
 *.pth
+
+# fev-bench series files (autogluon/fev_datasets). Task YAMLs are vendored.
+data/
