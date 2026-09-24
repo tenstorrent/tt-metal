@@ -1,6 +1,6 @@
 {
   "as_of": "2026-09-24",
-  "commit": "e9e63801158 (branch arg/pplx-embed-upstream)",
+  "commit": "36714fcbffc (branch arg/pplx-embed-upstream)",
   "workload": {
     "profile": "prefill_embedding",
     "prompt_len": 512,
@@ -21,7 +21,7 @@
   },
   "e2e_ms": {
     "cold_best_of_10": {
-      "bs1": 17.5,
+      "bs1": 17.3,
       "bs8": 115.3,
       "bs16": 221.0,
       "bs32": 425.5
@@ -47,7 +47,7 @@
   },
   "x_h200": {
     "cold": {
-      "bs1": 3.22,
+      "bs1": 3.18,
       "bs8": 3.49,
       "bs16": 3.29,
       "bs32": 3.06
