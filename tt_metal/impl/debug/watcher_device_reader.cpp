@@ -720,8 +720,8 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
     const auto& hal = reader_.env.get_hal();
     // The L1[0] canary guards the reset jump that generate_risc_startup_addr writes at L1[0]. The
     // qsr.s1 simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
-    // live reset vector there and DM firmware data may overwrite it; skip the canary on that target.
-    if (hal.get_arch() == tt::ARCH::QUASAR && reader_.env.get_rtoptions().get_simulator_enabled()) {
+    // live reset vector there and DM firmware data may overwrite it; skip the canary on that model only.
+    if (reader_.env.get_rtoptions().is_qsr_s1_simulator()) {
         return;
     }
     // Read L1 address 0, looking for memory corruption

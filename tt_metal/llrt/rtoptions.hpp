@@ -818,6 +818,15 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
+    bool is_qsr_s1_simulator() const {
+        std::string simulator = simulator_path.string();
+        while (simulator.size() > 1 && simulator.back() == '/') {
+            simulator.pop_back();
+        }
+        return get_simulator_enabled() &&
+               std::filesystem::path(simulator).filename().string().starts_with("emu-qsr-s1");
+    }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size

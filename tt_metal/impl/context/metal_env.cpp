@@ -172,14 +172,10 @@ std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
     return std::filesystem::path(simulator).filename().string();
 }
 
-bool simulator_is_qsr_s1(const llrt::RunTimeOptions& rtoptions) {
-    return quasar_simulator_name(rtoptions).starts_with("emu-qsr-s1");
-}
-
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
 // TT_METAL_NOC_ATT.
 void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
-    if (!simulator_is_qsr_s1(rtoptions)) {
+    if (!rtoptions.is_qsr_s1_simulator()) {
         return;
     }
     rtoptions.set_noc_att_map("grendel_qsr1");
