@@ -373,7 +373,7 @@ void kernel_main() {
             dfb_in2.reserve_back(N_block_tiles);
 
             uint32_t l1_write_addr_in2 = dfb_in2.get_write_ptr();
-            for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
+            for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end && n_tile_id < N_tiles; n_tile_id++) {
                 noc.async_read(
                     in2_reader, CoreLocalMem<uint32_t>(l1_write_addr_in2), in2_tile_size, {.page_id = n_tile_id}, {});
                 l1_write_addr_in2 += in2_tile_size;

@@ -2810,7 +2810,7 @@ create_program_mcast_in0_in1(
     if (in0_height_sharded) {
         src0_cb_config.set_globally_allocated_address(in0_tensor);
     }
-    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -3372,6 +3372,7 @@ create_program_mcast_in0_in1(
          in1_receiver_cores,
          mm_kernel_in1_receiver_writer_other_noc_setup_id,
          in1_receiver_other_cores,
+         cb_src0,
          cb_src2,
          cb_output,
          num_cores_with_work_r,
@@ -3396,6 +3397,7 @@ void override_runtime_arguments_impl(
     auto mm_kernel_in1_receiver_writer_other_noc_setup_id =
         shared_variables.mm_kernel_in1_receiver_writer_other_noc_setup_id;
     auto in1_receiver_other_cores = shared_variables.in1_receiver_other_cores;
+    auto cb_src0 = shared_variables.cb_src0;
     auto cb_src2 = shared_variables.cb_src2;
     auto cb_output = shared_variables.cb_output;
     auto cores = shared_variables.cores;
@@ -3427,7 +3429,13 @@ void override_runtime_arguments_impl(
 
     // in0 sender
     if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src2, in0);
+        // Only one of the in0 CBs carries the globally-allocated address: c_2 for BLOCK_SHARDED,
+        // c_0 for HEIGHT_SHARDED. Re-patch the one that was actually made dynamic.
+        if (input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            UpdateDynamicCircularBufferAddress(program, cb_src2, in0);
+        } else {
+            UpdateDynamicCircularBufferAddress(program, cb_src0, in0);
+        }
     } else {
         auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
         for (const auto& core : in0_sender_interleaved_cores) {

@@ -159,8 +159,13 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
     uint32_t max_packet_size = 8192;
     uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
+    // When per_core_N_size_bytes is an exact multiple of max_packet_size the last page is a full
+    // packet, not a zero-sized remainder; a zero here would make the reader skip a whole packet.
+    uint32_t in1_block_page_size_last_remainder = per_core_N_size_bytes % max_packet_size;
     uint32_t in1_block_page_size_last =
-        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
+        per_core_N_size_bytes > max_packet_size
+            ? (in1_block_page_size_last_remainder == 0 ? max_packet_size : in1_block_page_size_last_remainder)
+            : per_core_N_size_bytes;
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {

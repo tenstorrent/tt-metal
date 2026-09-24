@@ -2283,8 +2283,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
     uint32_t max_packet_size = 8192;
     uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
+    // When per_core_N_size_bytes is an exact multiple of max_packet_size the last page is a full
+    // packet, not a zero-sized remainder; a zero here would make the reader skip a whole packet.
+    uint32_t in1_block_page_size_last_remainder = per_core_N_size_bytes % max_packet_size;
     uint32_t in1_block_page_size_last =
-        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
+        per_core_N_size_bytes > max_packet_size
+            ? (in1_block_page_size_last_remainder == 0 ? max_packet_size : in1_block_page_size_last_remainder)
+            : per_core_N_size_bytes;
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {
@@ -2413,7 +2418,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;  // 5, 7, 9...
+            output_cb_index = base_cb_index + 5 + i * 2;  // 5, 7, 9...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2435,8 +2440,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     } else {
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;   // 5, 7, 9...
-            interm0_cb_index += i * 2;  // 6, 8, 10...
+            output_cb_index = base_cb_index + 5 + i * 2;   // 5, 7, 9...
+            interm0_cb_index = base_cb_index + 6 + i * 2;  // 6, 8, 10...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2631,7 +2636,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[interm0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        // Mark every partials CB the reload uses, not just the last one the loop left in
+        // interm0_cb_index; the multi-output path has one partials CB per output.
+        for (const auto& interm_cb_index : interm_cb_indices) {
+            unpack_to_dest_mode[interm_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
     auto mm_kernel = tt_metal::CreateKernel(
@@ -2809,31 +2818,21 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) y={} not found in first-col DRAM bank map",
+                    core.x,
+                    core.y,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) y={} not found in second-col DRAM bank map",
+                    core.x,
+                    core.y,
+                    core.y);
                 bank_id = it->second;
             }
 

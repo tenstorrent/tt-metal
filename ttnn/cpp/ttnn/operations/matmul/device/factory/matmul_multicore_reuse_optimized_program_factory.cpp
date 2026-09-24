@@ -658,6 +658,24 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
+
+    // The reader/writer kernels advance in0/in1/out by the whole-matrix strides MtKt / KtNt / MtNt
+    // once per assigned block, so consecutive blocks on a core are treated as consecutive batch
+    // elements. That only matches the host's (batch, m_block, n_block) enumeration when each batch
+    // element is a single output block; otherwise a core owning more than one block reads/writes at
+    // full-matrix offsets past the correct (and past the tensor's) location.
+    TT_FATAL(
+        blocks_per_batch == 1 || (num_blocks_per_core_group_1 <= 1 && num_blocks_per_core_group_2 <= 1),
+        "matmul_multi_core_reuse requires each batch element to be a single output block "
+        "(per_core_M_per_batch == M and per_core_N == N) when a core is assigned more than one block. "
+        "Got M={}, N={}, per_core_M_per_batch={}, per_core_N={}, blocks_per_batch={}, max blocks per core={}.",
+        M,
+        N,
+        per_core_M_per_batch,
+        per_core_N,
+        blocks_per_batch,
+        (num_blocks_per_core_group_1 > num_blocks_per_core_group_2 ? num_blocks_per_core_group_1
+                                                                    : num_blocks_per_core_group_2));
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
     uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
