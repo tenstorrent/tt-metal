@@ -142,13 +142,18 @@ class TtTransformerLM:
             parts.append(spk_emb)
         parts.append(text_enc)
         parts.append(task)
+        # The prompt's embedding is this method's to free, and only it: `spk_emb` and
+        # `text_enc` are the caller's. Freed by name, not by position in `parts`, which
+        # shifts with whether a speaker vector is present.
+        prompt_emb = None
         if prompt_speech_tokens is not None and prompt_speech_tokens.shape[1] > 0:
-            parts.append(ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT))
+            prompt_emb = ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT)
+            parts.append(prompt_emb)
         out = ttnn.concat(parts, dim=1)
         ttnn.deallocate(sos)
         ttnn.deallocate(task)
-        if len(parts) > 4 and parts[-1] is not text_enc:
-            ttnn.deallocate(parts[-1])
+        if prompt_emb is not None:
+            ttnn.deallocate(prompt_emb)
         return out
 
     # ----------------------------------------------------------------------
@@ -232,12 +237,18 @@ class TtTransformerLM:
         `positional()` and `causal_mask()` memoise by size, which is right within
         one utterance and wrong across a sweep: every utterance has its own prefix
         length and its own bucket, so the tables grow without limit and the
-        allocator runs out somewhere in the middle. The weights are untouched.
+        allocator runs out somewhere in the middle. Each decoder layer's cached
+        positional projection (`TtRelPosAttention._pt_cache`) goes with them, since it
+        is keyed on one of those tables. The weights are untouched.
+
+        Only between utterances: a decode trace holds device pointers into the
+        projections, and `generate` releases its traced step before it returns.
         """
         for cache in (self._causal, self.decoder._pos_cache):
             for t in cache.values():
                 ttnn.deallocate(t)
             cache.clear()
+        self.decoder.release_pos_proj_cache()
 
     # ----------------------------------------------------------------------
     def generate(

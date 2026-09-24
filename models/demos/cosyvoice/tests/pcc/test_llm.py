@@ -359,3 +359,110 @@ def test_device_generates_tokens_greedily(device):
     print(f"\n  generated {len(tokens)} tokens, first 8: {tokens[:8]}")
     assert len(tokens) > 0
     assert all(0 <= t < meta["speech_token_size"] for t in tokens), "EOS must never be emitted as a token"
+
+
+def _allocated_bytes(ttnn, device) -> int:
+    """Bytes the device allocator holds across every DRAM and L1 bank."""
+    total = 0
+    for buffer_type in (ttnn.BufferType.DRAM, ttnn.BufferType.L1):
+        view = ttnn.get_memory_view(device, buffer_type)
+        total += view.total_bytes_allocated_per_bank * view.num_banks
+    return total
+
+
+@needs_weights
+@needs_golden
+@needs_l1_small
+@pytest.mark.parametrize("with_speaker", [False, True], ids=["no_speaker", "speaker"])
+def test_device_build_prefix_frees_the_prompt_embedding(device, with_speaker, monkeypatch):
+    """`build_prefix` frees the prompt-token embedding it creates before it returns, with or
+    without a speaker vector ahead of it in the concatenation, and leaves `spk_emb` and
+    `text_enc`, the caller's, allocated.
+
+    Unfreed, the embedding would still go once `build_prefix` returned and dropped its last
+    reference, since a device tensor's destructor frees its buffer; so the allocator alone
+    cannot tell a free from no free. The test holds its own reference to every embedding the
+    call makes and asks each one whether it is still allocated."""
+    import ttnn
+    from models.demos.cosyvoice.tt.llm.model import TtTransformerLM
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    bag = WeightBag.load(LLM_WEIGHTS)
+    model = TtTransformerLM(device, bag, bag.meta)
+
+    def ids(v):
+        return ttnn.from_torch(v, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    text_enc = model.encode_text(ids(torch.arange(10, 42, dtype=torch.int32).reshape(1, -1)))
+    spk = None
+    if with_speaker:
+        x = as_torch(load_golden("llm.spk_embed_affine")["call0.in_x"]).reshape(1, 1, -1)
+        spk = model.speaker_embedding(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
+    prompt = ids(torch.arange(100, 120, dtype=torch.int32).reshape(1, -1))
+
+    ttnn.deallocate(model.build_prefix(text_enc, spk, prompt))  # compiles; allocations after this are per call
+
+    made = []
+    embedding = ttnn.embedding
+
+    def recording_embedding(*args, **kwargs):
+        out = embedding(*args, **kwargs)
+        made.append(out)
+        return out
+
+    monkeypatch.setattr(ttnn, "embedding", recording_embedding)
+    before = _allocated_bytes(ttnn, device)
+    ttnn.deallocate(model.build_prefix(text_enc, spk, prompt))
+    after = _allocated_bytes(ttnn, device)
+    monkeypatch.undo()
+
+    print(
+        f"\n  build_prefix, speaker {with_speaker}: {len(made)} embedding(s) made, {after - before} bytes left allocated"
+    )
+    assert made, "build_prefix made no embedding, so the prompt path was not exercised"
+    assert not any(t.is_allocated() for t in made), "build_prefix returned with its prompt embedding allocated"
+    assert text_enc.is_allocated() and (spk is None or spk.is_allocated()), "build_prefix freed its caller's tensor"
+    assert after == before, f"{after - before} bytes stayed allocated after the prefix was freed"
+
+
+@needs_weights
+@needs_golden
+@needs_l1_small
+def test_device_consecutive_utterances_leave_nothing_allocated(device):
+    """One device serves consecutive utterances: `generate` then `release_caches` leaves the
+    allocator where the previous utterance left it, and no decoder layer keeps a cached
+    positional projection. The first utterance compiles and captures, so the comparison is
+    between the second and the third.
+
+    Same tokens each time on purpose: the projections are cached per positional table, and
+    `release_caches` builds each utterance a new table, so a projection kept past it adds one
+    per layer per utterance even at the same length."""
+    import ttnn
+    from models.demos.cosyvoice.tt.llm.model import TtTransformerLM
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    bag = WeightBag.load(LLM_WEIGHTS)
+    model = TtTransformerLM(device, bag, bag.meta)
+    text = ttnn.from_torch(
+        torch.arange(10, 42, dtype=torch.int32).reshape(1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    x = as_torch(load_golden("llm.spk_embed_affine")["call0.in_x"]).reshape(1, 1, -1)
+    spk = model.speaker_embedding(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
+
+    def utterance():
+        tokens = model.generate(text, spk_emb=spk, sampler="greedy", max_tokens=16)
+        model.release_caches()
+        return tokens
+
+    utterance()
+    tokens = utterance()
+    before = _allocated_bytes(ttnn, device)
+    assert utterance() == tokens
+    after = _allocated_bytes(ttnn, device)
+    held = [i for i, layer in enumerate(model.decoder.layers) if layer.attn._pt_cache]
+    print(f"\n  {len(tokens)} tokens per utterance; {after - before} bytes left allocated by one more")
+    assert after == before, f"{after - before} bytes stayed allocated after one more utterance"
+    assert not held, f"decoder layers {held} still hold a cached positional projection after release_caches()"
