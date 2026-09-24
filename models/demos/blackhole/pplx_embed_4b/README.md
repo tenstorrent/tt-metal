@@ -353,6 +353,10 @@ ttnn.close_device(device)
 
 ## 5. Optimizations
 
+A concise record of every landed optimization and its measured effect per batch size is kept in
+`perf_csv/POSITIVE_RESULTS.md` next to the repo (with `perf_csv/NEGATIVE_RESULTS.md` for what did not work); the
+sections below carry the details.
+
 Applied by default across all workloads (centralized in
 `demo/_common.py`, shared by every demo, the live serving path, and the DP
 scripts):
