@@ -1,6 +1,9 @@
 name: "LLK perf nightly gate (non speed-of-light)"
 
 on:
+  push:
+    branches:
+      - "perf-trial/nonsol-nightly"
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
