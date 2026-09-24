@@ -184,8 +184,13 @@ protected:
                     sending_ ? l1.verify_addr : 0u,
                     warmup_iters_}});
         for (uint32_t i = 0; i < cores_; ++i) {
+            // Off l1_base, which both hosts share: this is the offset land_one() resolves,
+            // so it must name the buffer the receiver kernel reads, not 0.
             SetRuntimeArgs(
-                program, sender, core_list_[i], {send_cfg[i], tt_uva_t6_global_selector(1 - rank_, 0, i, 1), 0u});
+                program,
+                sender,
+                core_list_[i],
+                {send_cfg[i], tt_uva_t6_global_selector(1 - rank_, 0, i, 1), l1.deliver_addr - l1.l1_base});
         }
 
         const std::vector<uint32_t> recv_cfg = sock_->h2d().config_addresses();
