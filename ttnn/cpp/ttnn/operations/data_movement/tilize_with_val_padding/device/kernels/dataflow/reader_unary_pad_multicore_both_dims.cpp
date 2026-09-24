@@ -92,10 +92,13 @@ void kernel_main() {
                 uint32_t this_block_size = unpadded_X_size - prev_size;
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
-                    dataflow_kernel_lib::fill_l1_range<element_size>(
-                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size,
-                        to_pad,
-                        pad_value);
+                    uint32_t fill_addr =
+                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size;
+                    // fill_l1_range CPU-writes the pad tail into the `staging` Scratchpad; scoped_lock flushes
+                    // those writes out of L2 before tt_memmove NOC-reads the region below. No-op on WH/BH.
+                    CoreLocalMem<uint8_t> fill_mem(fill_addr);
+                    auto fill_lock = fill_mem.scoped_lock(to_pad);
+                    dataflow_kernel_lib::fill_l1_range<element_size>(fill_addr, to_pad, pad_value);
                 }
 
                 tt_memmove<false, false, true, 0>(
