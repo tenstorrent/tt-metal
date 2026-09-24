@@ -17,8 +17,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
-#include "tt_metal/impl/emulation/emule_deferred_mesh_dispatch.hpp"
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#include "emule_deferred_mesh_dispatch.hpp"
+#include "emulated_program_runner.hpp"  // emule mesh register/run split
 #endif
 #include <utility>
 #include <unordered_set>
@@ -236,7 +236,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
-    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+    // by the outer begin_mesh_dispatch).
 
     if (configure_only_) {
         log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
@@ -307,7 +307,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
         // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
-        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
+        // fiber-registration race), then run once.
         // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
         bool already_registered = false;
         if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {

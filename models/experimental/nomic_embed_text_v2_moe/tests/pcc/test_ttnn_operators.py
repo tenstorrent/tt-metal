@@ -289,6 +289,23 @@ def test_l2_normalize(device, config, batch):
 # Device configuration.
 
 
+def test_the_suite_runs_on_one_chip(device):
+    """Scope guard: this port targets a single Blackhole chip, so the tests must use one.
+
+    The host here exposes four chips, because a p300 carries two per board. The plain `device`
+    fixture opens a 1x1 mesh over physical chip 0, and nothing in this model requests a wider
+    mesh, so every measurement in the suite is one chip's. Without this assertion a fixture change
+    could quietly spread the work across the board and every PCC gate would still pass.
+
+    The 110 worker cores are that one chip's compute grid, not the board's: a p300's ~240 Tensix
+    are two chips' worth. `device.id()` is the mesh handle rather than the physical chip id, so
+    read `get_device_ids()` when the physical chip matters.
+    """
+    assert device.get_num_devices() == 1, f"the suite opened {device.get_num_devices()} chips"
+    assert tuple(device.shape) == (1, 1), f"expected a 1x1 mesh, got {device.shape}"
+    assert list(device.get_device_ids()) == [0]
+
+
 def test_core_grid_is_read_from_the_device(device, tt_config):
     """The grid must come from the device, not a constant copied out of another model.
 

@@ -29,6 +29,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -193,33 +194,75 @@ def matmul_implied_math_formats(format, *, is_perf=False):
 
 
 def matmul_register_format_hints(format):
-    return (
-        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
-        else [None]
-    )
+    # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+    if format.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
+        return [None]
+    # One hint per exponent family. infer_downstream_unpack_out maps 2x_A to
+    # Float16 and 2x_B to Float16_b; the crossed output is a pack conversion
+    # owned by test_pack_quasar.
+    if format.output_format == DataFormat.Float16:
+        return [DataFormat.MxFp4_2x_A]
+    if format.output_format == DataFormat.Float16_b:
+        return [DataFormat.MxFp4_2x_B]
+    return [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
 
 
 def matmul_enable_direct_indexing(register_format_hint):
     return [False] if register_format_hint is None else [True, False]
 
 
-# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
-# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
-# entries where MxFp4 would land as an output.
-MATMUL_FORMAT = input_output_formats(
-    [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+def matmul_transpose_modes(math_fidelity, register_format_hint):
+    # 2x-formats do not work with transpose
+    if register_format_hint is not None:
+        return [Transpose.No]
+    # The transpose feature is actually independent of fidelity
+    # This is just so that the number of cases doesn't explode
+    if math_fidelity != MathFidelity.LoFi:
+        return [Transpose.No]
+
+    return [Transpose.No, Transpose.Yes]
+
+
+def matmul_tiny_transpose_modes(
+    input_tile_dimensions, math_fidelity, register_format_hint
+):
+    _, input_B_tile_dimensions = input_tile_dimensions
+
+    # Transpose only works with full-tiles
+    if input_B_tile_dimensions != (TILE_DIM, TILE_DIM):
+        return [Transpose.No]
+
+    # 2x-formats do not work with transpose
+    if register_format_hint is not None:
+        return [Transpose.No]
+
+    # The transpose feature is actually independent of fidelity
+    # This is just so that the number of cases doesn't explode
+    if math_fidelity != MathFidelity.LoFi:
+        return [Transpose.No]
+
+    return [Transpose.No, Transpose.Yes]
+
+
+# MxFp4 is an input-only (L1) format here. Each row is one exponent family:
+# matmul_register_format_hints pairs Float16 with MxFp4_2x_A and Float16_b with
+# MxFp4_2x_B, so the output matches the math format the hint selects.
+MATMUL_2X_FORMATS = [
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16),
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),
+]
+
+MATMUL_FORMAT = (
+    input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + MATMUL_2X_FORMATS
+    + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
+)
 
 FULL_MATMUL_SHAPES = [((TILE_DIM, TILE_DIM), (TILE_DIM, TILE_DIM))]
 TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
@@ -255,7 +298,7 @@ _ARCH = get_chip_architecture()
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=[Transpose.No],
+    transpose=matmul_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -568,7 +611,7 @@ def test_matmul(
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=[Transpose.No],
+    transpose=matmul_tiny_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )

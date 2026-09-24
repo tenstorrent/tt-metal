@@ -360,10 +360,15 @@ inline void set_dest_fmt(DataFormat fmt)
 
 inline bool dest_fmt_is_signed(DataFormat fmt)
 {
-    return fmt != DataFormat::UInt8 && fmt != DataFormat::UInt16;
+    // Quasar's unsigned integer DEST formats (no UInt32 in the Quasar DataFormat enum).
+    return fmt != DataFormat::UInt8 && fmt != DataFormat::UInt16 && fmt != DataFormat::UInt4;
 }
 
-// Program this thread's RISC_DEST_ACCESS_CTRL section for MMIO DEST access.
+// Program a RISC's RISC_DEST_ACCESS_CTRL section for memory-mapped (MMIO) DEST access. A RISC reads
+// DEST through RISCV_DEST_START_ADDR after this configuration; the debug-bus array read the other
+// architectures use is unavailable here because its RISCV_DEBUG_REG_* wrappers are unwired. The
+// Quasar ThreadId enum values map directly onto the section indices (UnpackThreadId=0 -> SEC0,
+// MathThreadId=1 -> SEC1, PackThreadId=2 -> SEC2), matching the RISC that issues the read.
 template <ThreadId thread_id>
 inline void configure_dest_access(DataFormat fmt, bool enable_swizzle = true)
 {

@@ -70,9 +70,10 @@ class UnaryBroadcastUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+        en_32bit_dest = config.dest_acc.cpp_enum_value
         return (
             compute_unit.src_a.bfd_alloc_and_program(BfdResource.UNP1)
-            + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, false>"
+            + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}, false>"
             f"({bfd_current(BfdResource.UNP1)}, 1);\n"
         )
 

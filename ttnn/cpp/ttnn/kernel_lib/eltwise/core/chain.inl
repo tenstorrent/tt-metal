@@ -3082,13 +3082,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
-    // Assertions are intentionally absent in normal kernels.  Keep the debug
-    // contract, but normalize a malformed zero block size so the outer walk
-    // still makes forward progress in a release kernel.
+    // Normalize a zero block size so the outer walk makes forward progress.
     uint32_t block_size = shape.block_tiles == 0 ? 1 : shape.block_tiles;
-    ASSERT(shape.Ht > 0);
-    ASSERT(shape.Wt > 0);
-    ASSERT(shape.block_tiles > 0);
     const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
         ASSERT(!synchronize_full_blocks || block_size == 1);

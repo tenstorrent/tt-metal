@@ -31,7 +31,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -868,13 +870,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
-    // Int8 quant input (dequant/requant operand A) is read through the UInt8 unpacker.
-    const auto a_data_format =
-        (is_quant_op && a_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : datatype_to_dataformat_converter(a_dtype);
+    // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
+    const auto a_data_format = cb_dataformat_for(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
     // Int8 output is packed through the UInt8 packer path.
-    const auto c_pack_data_format = (c_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : c_data_format;
+    const auto c_pack_data_format = cb_dataformat_for(c_dtype);
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
@@ -1033,6 +1034,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196). Computed here because it also bounds the number of
+    // tiles a compute batch may hold in DST (below), not only the compute kernel config.
+    const bool fp32_dest_acc_en =
+        c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
+        c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
+        b_data_format == tt::DataFormat::Float32 ||
+        (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+        (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
+        // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
+        // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
+        operation_attributes.is_quant_op;
+
     // Determine max tiles per cycle based on sharding and output data type
     // Multi-tile processing only enabled when all tensors are sharded
     uint32_t num_tiles_per_cycle = 1;  // Conservative default
@@ -1050,8 +1065,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     if (enable_multi_tile && !is_where_op) {
         if (!is_sfpu_op) {
-            // FPU kernels: 16-bit types can handle 8 tiles,
-            num_tiles_per_cycle = 8;  // Default for 16-bit types (BF16, BF8, BF4)
+            // FPU kernels: in half-sync mode DST holds 8 tiles of 16-bit data but only 4 under fp32
+            // dest accumulation (same bound as layernorm/softmax/sdpa). An 8-tile batch with fp32
+            // dest wraps past the active half; with mixed fp32/bf16 operands that corrupted tile 4
+            // of each batch (and tiles 0-3 when a LHS activation preceded the op) — issue 56958.
+            num_tiles_per_cycle = fp32_dest_acc_en ? 4 : 8;
         } else {
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
@@ -1219,17 +1237,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
-    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
-    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
-    // for broadcast multiply (issue 43196).
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
-                            b_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
-                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
-                            // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
-                            // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
-                            operation_attributes.is_quant_op;
+    // (fp32_dest_acc_en is computed above, next to the batch-size selection it also bounds.)
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;

@@ -54,8 +54,11 @@ from collections import defaultdict
 import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DEFAULT_TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
-DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
+# When this action is invoked pinned to a ref (owner/repo/path@ref), GITHUB_ACTION_PATH --
+# and hence __file__ -- resolves inside a separate checkout of that ref, not the caller's
+# own checkout. Prefer GITHUB_WORKSPACE so defaults follow the branch under test.
+DEFAULT_TESTS_DIR = os.path.join(os.environ.get("GITHUB_WORKSPACE", REPO_ROOT), "tests", "pipeline_reorg")
+DEFAULT_BUDGET_FILE = os.path.join(os.environ.get("GITHUB_WORKSPACE", REPO_ROOT), ".github", "time_budget.yaml")
 
 # Budget types that gate a merge, and the ceiling on any single test entry in them.
 GATE_BUDGET_TYPES = {"pr_gate", "merge_gate"}
@@ -93,6 +96,37 @@ def load_tests(tests_dir):
         yield os.path.basename(path), data
 
 
+def check_unique_names(basename, entries, problems):
+    """A test's name must identify it uniquely within its own yaml.
+
+    Anything selecting a single test addresses it by name, so two entries sharing one
+    leaves both unreachable. gtest_shard_index counts as part of the name. Duplicates
+    across yamls are deliberate mirroring, so this only compares within one file.
+    """
+    seen = defaultdict(list)
+    for index, test in enumerate(entries):
+        if not isinstance(test, dict):
+            continue  # collect() reports this as not_mapping
+        seen[(str(test.get("name", "")), str(test.get("gtest_shard_index", "")))].append(index)
+
+    for (name, shard), indices in seen.items():
+        if len(indices) < 2:
+            continue
+        shard_note = f" (gtest_shard_index {shard})" if shard else ""
+        problems.append(
+            problem(
+                "duplicate_name",
+                f"{basename}: {len(indices)} entries share the name '{name}'{shard_note} "
+                f"(entries #{', #'.join(str(i) for i in indices)}). "
+                "Test names must be unique within one yaml.",
+                yaml=basename,
+                test=name,
+                shard=shard,
+                indices=indices,
+            )
+        )
+
+
 def collect(tests_dir, budgets, problems):
     """Sum every test's timeouts into its bucket.
 
@@ -101,6 +135,7 @@ def collect(tests_dir, budgets, problems):
     buckets = defaultdict(lambda: defaultdict(int))
 
     for basename, entries in load_tests(tests_dir):
+        check_unique_names(basename, entries, problems)
         for index, test in enumerate(entries):
             if not isinstance(test, dict):
                 problems.append(
@@ -370,6 +405,12 @@ BUDGET_FILE_LINK = (
 # Per-kind heading and the explanation of how to fix it. Order sets comment order.
 PROBLEM_KINDS = (
     (
+        "duplicate_name",
+        "Two test entries share a name",
+        "A test's `name` is how CI addresses it, so two entries sharing one in the same yaml "
+        "leave both unaddressable. Rename one. The same name in a *different* yaml is fine.",
+    ),
+    (
         "undeclared",
         "No budget declared for a bucket",
         "These tests charge a `(team, budget_type, sku)` bucket that has no budget in "
@@ -472,7 +513,14 @@ def comment_body(problems):
             continue
         lines += ["", f"### {heading} ({len(items)})", "", explanation, ""]
         for item in items:
-            if kind == "undeclared":
+            if kind == "duplicate_name":
+                shard_note = f" (shard {item['shard']})" if item["shard"] else ""
+                entries = ", ".join(f"#{i}" for i in item["indices"])
+                lines.append(
+                    f"- {yaml_link(item['yaml'])} → **{item['test']}**{shard_note} — "
+                    f"{len(item['indices'])} entries ({entries})"
+                )
+            elif kind == "undeclared":
                 charged = ", ".join(yaml_link(b) for b in item["contributors"])
                 lines.append(
                     f"- `{item['team']}` / `{item['budget_type']}` / `{item['sku']}` — "
