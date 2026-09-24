@@ -2,9 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ops/dropout_op.hpp"
+
 #include <gtest/gtest.h>
 
 #include <array>
+#include <limits>
+#include <stdexcept>
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
@@ -57,6 +61,72 @@ TEST_F(DropoutTest, TestSeed) {
         EXPECT_FALSE(xt::allclose(result01_vec, result02_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
         EXPECT_EQ(num_cache_before, num_cache_after - 1);
     }
+}
+
+namespace {
+
+void expect_two_distinct_nonconstant_tiles(const xt::xarray<float>& output) {
+    bool tiles_match = true;
+    std::array<bool, 2> has_zero = {false, false};
+    std::array<bool, 2> has_one = {false, false};
+
+    for (uint32_t h = 0; h < 32U; ++h) {
+        for (uint32_t w = 0; w < 32U; ++w) {
+            const float first = output(0, 0, h, w);
+            const float second = output(0, 0, h, w + 32U);
+            tiles_match &= first == second;
+            has_zero[0] |= first == 0.0F;
+            has_one[0] |= first == 1.0F;
+            has_zero[1] |= second == 0.0F;
+            has_one[1] |= second == 1.0F;
+        }
+    }
+
+    EXPECT_FALSE(tiles_match) << "dropout repeated the same PRNG mask on adjacent cores";
+    EXPECT_TRUE(has_zero[0] && has_one[0]) << "first core emitted a constant dropout mask";
+    EXPECT_TRUE(has_zero[1] && has_one[1]) << "second core emitted a constant dropout mask";
+}
+
+}  // namespace
+
+TEST_F(DropoutTest, PerCoreStreamsAreDistinctAndAvoidLockState) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    if (grid.x * grid.y < 2U) {
+        GTEST_SKIP() << "test requires at least two worker cores";
+    }
+    xt::xarray<float> input_host = xt::ones<float>({1, 1, 32, 64});
+    auto input = ttml::core::from_xtensor(input_host, device);
+
+    for (const uint32_t seed : {42U, 0xFFFFFFFEU, 0xFFFFFFFFU}) {
+        auto miss =
+            ttnn::experimental::dropout(input, /*prob=*/0.5F, /*scale=*/1.0F, seed, /*use_per_device_seed=*/false);
+        auto hit =
+            ttnn::experimental::dropout(input, /*prob=*/0.5F, /*scale=*/1.0F, seed, /*use_per_device_seed=*/false);
+        const auto miss_host = ttml::core::to_xtensor(miss);
+        const auto hit_host = ttml::core::to_xtensor(hit);
+
+        expect_two_distinct_nonconstant_tiles(miss_host);
+        expect_two_distinct_nonconstant_tiles(hit_host);
+        EXPECT_TRUE(xt::allclose(miss_host, hit_host, /*rtol=*/0.0F, /*atol=*/0.0F));
+    }
+}
+
+TEST(DropoutProbabilityTest, RejectsInvalidProbabilityBeforeDeviceAccess) {
+    const ttml::autograd::TensorPtr input;
+    const std::array invalid_probabilities = {
+        -0.1F,
+        1.0F,
+        1.1F,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN(),
+    };
+
+    for (const float probability : invalid_probabilities) {
+        EXPECT_THROW(static_cast<void>(ttml::ops::dropout(input, probability)), std::invalid_argument);
+    }
+    EXPECT_EQ(ttml::ops::dropout(input, 0.0F), input);
 }
 
 TEST_F(DropoutTest, TestProb) {
