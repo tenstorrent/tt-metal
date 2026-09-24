@@ -86,10 +86,10 @@ class GLM52Adapter(MLAPrefillAdapter):
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis
-        # MTP adds K KV slots per user plus one indexer slot for the shared MTP layer, on the rank
-        # that runs the levels. Declaring the indexer slot is idempotent and must precede its read.
+        # MTP adds K KV slots per user on the rank that runs the levels; the single indexer slot for
+        # the shared MTP layer is a model fact, so every rank declares it (idempotent, precedes reads).
         mtp_levels = params.mtp_levels if params.is_last_rank else 0
-        if mtp_levels:
+        if params.mtp_levels:
             enable_mtp_indexer_slot(hf_config)
 
         kvpe_cache = init_mla_kv_cache(

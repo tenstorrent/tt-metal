@@ -249,9 +249,12 @@ class TtPrefillRuntime:
                 )
         # Resolved before the transformer is constructed: the extra indexer slot changes how every
         # trunk block sizes its index cache, and the predictor is a constructor argument.
-        if self.config.mtp_levels and self.config.is_last_rank:
+        if self.config.mtp_levels:
+            # Declared on every rank: it states a model fact, not this rank's slice, and the rank that
+            # merges the chunk table reads it to span the MTP tail only the last rank contributes.
             enable_mtp_indexer_slot(self.hf_config)
-            self._build_mtp_predictor()
+            if self.config.is_last_rank:
+                self._build_mtp_predictor()
 
         self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,

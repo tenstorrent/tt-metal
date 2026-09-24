@@ -130,10 +130,25 @@ python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
-TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
+case "${CONFIG}" in
+  sc4) TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3000}" ;;
+  *) TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-5400}" ;;
+esac
+WAITED=0
 for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
   [ -f "${TABLE_PATH}" ] && break
   kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
+  WAITED=$((WAITED + 5))
+  if [ $((WAITED % 60)) -eq 0 ]; then
+    CRASHED=$(find "${RANKLOGS}" -type f -name '*.err' 2>/dev/null \
+      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
+    [ -z "${CRASHED}" ] || {
+      echo "a rank crashed ${WAITED}s in, before the KV table was published: ${CRASHED}"
+      echo "(the launcher stays alive because surviving ranks block in the request loop and the crashed"
+      echo " rank hangs in collective teardown, so the kill -0 check above can never see it)"
+      exit 1
+    }
+  fi
   sleep 5
 done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
