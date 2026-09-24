@@ -228,6 +228,8 @@ class TtResLayer:
         style="pytorch",
         conv_cfg=None,
         dcn=None,
+        dram_activation=False,
+        dram_input=False,
     ):
         expansion = 4
 
@@ -251,6 +253,8 @@ class TtResLayer:
                 style=style,
                 conv_cfg=None,
                 dcn=dcn,
+                dram_activation=dram_activation,
+                dram_input=dram_input,
             )
         )
         inplanes = planes * expansion
@@ -270,6 +274,7 @@ class TtResLayer:
                     style=style,
                     conv_cfg=None,
                     dcn=dcn,
+                    dram_activation=dram_activation,
                 )
             )
         self.layer = layers
@@ -298,7 +303,12 @@ class TtBottleneck:
         style="pytorch",
         conv_cfg=None,
         dcn=None,
+        dram_activation=False,
+        dram_input=False,
     ):
+        """``dram_activation`` keeps the activations of conv1, conv3 and the downsample in
+        DRAM; a DCN conv2 is unaffected. ``dram_input`` only covers the convs that read the
+        block input, for a block fed by a DRAM stage whose own activations fit in L1."""
         assert style in ["pytorch", "caffe"]
         self.device = device
 
@@ -320,7 +330,11 @@ class TtBottleneck:
             self.conv2_stride = 1
 
         self.conv1 = TtnnConv2D(
-            conv_args.conv1, conv_pth.conv1, device=device, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            dram_activation=dram_activation or dram_input,
         )
 
         if not self.with_dcn:
@@ -331,6 +345,7 @@ class TtBottleneck:
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 act_block_h=32,
                 dealloc_act=True,
+                dram_activation=dram_activation,
             )
         else:
             assert self.conv_cfg is None, "conv_cfg must be None for DCN"
@@ -349,7 +364,13 @@ class TtBottleneck:
             self.bn_parameters = conv_pth.bn2
 
         self.conv3 = TtnnConv2D(
-            conv_args.conv3, conv_pth.conv3, device=device, activation=None, is_blk=conv3_blk_sharded, dealloc_act=True
+            conv_args.conv3,
+            conv_pth.conv3,
+            device=device,
+            activation=None,
+            is_blk=conv3_blk_sharded,
+            dealloc_act=True,
+            dram_activation=dram_activation,
         )
 
         if is_downsample:
@@ -360,6 +381,7 @@ class TtBottleneck:
                 activation=None,
                 is_blk=True if self.dcn else False,
                 activation_dtype=activation_dtype,
+                dram_activation=dram_activation or dram_input,
             )
 
     def __call__(self, x_identity):
@@ -371,9 +393,10 @@ class TtBottleneck:
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if self.dcn == True:
             x = ttnn.sharded_to_interleaved(x)
-            x = ttnn.reshape(x, (6, out_h, out_w, x.shape[3]))
+            batch_size = self.conv1.conv.batch_size
+            x = ttnn.reshape(x, (batch_size, out_h, out_w, x.shape[3]))
             x, out_h, out_w = self.conv2(x)
-            x = ttnn.reshape(x, (6, out_h, out_w, x.shape[3]))
+            x = ttnn.reshape(x, (batch_size, out_h, out_w, x.shape[3]))
             x = ttnn.permute(x, (0, 3, 1, 2))
             x = ttnn.batch_norm(
                 x,
@@ -431,7 +454,11 @@ class TtResNet:
         stage_with_dcn=(False, False, False, False),
         pretrained=None,
         init_cfg=None,
+        dram_activation_stages=(),
     ):
+        """``dram_activation_stages`` lists the stage indices whose activations are kept in
+        DRAM and computed in pieces, for stages whose convs do not fit in L1. A stage that
+        follows one of them and is not listed itself reads its input from DRAM the same way."""
         self.conv_args = conv_args
         self.device = device
         if depth not in self.arch_settings:
@@ -498,6 +525,8 @@ class TtResNet:
                 style=self.style,
                 conv_cfg=None,
                 dcn=dcn,
+                dram_activation=i in dram_activation_stages,
+                dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             )
             self.inplanes = planes * self.block.expansion
             self.res_layers.append(res_layer)
@@ -513,14 +542,14 @@ class TtResNet:
             _dcn_accum["device"] = 0.0
             _dcn_accum["n"] = 0
 
-        x, _, _ = self.conv1(x)
+        x, out_h, out_w = self.conv1(x)
         x = ttnn.sharded_to_interleaved(x)
         x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
         x = ttnn.max_pool2d(
             input_tensor=x,
-            batch_size=6,
-            input_h=320,
-            input_w=180,
+            batch_size=self.conv1.conv.batch_size,
+            input_h=out_h,
+            input_w=out_w,
             channels=x.shape[3],
             kernel_size=[3, 3],
             stride=[2, 2],
