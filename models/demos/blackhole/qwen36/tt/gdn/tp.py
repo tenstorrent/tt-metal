@@ -348,7 +348,25 @@ class TPGatedDeltaNet:
         # ONLY these. The other buffers below (conv_carry, the _zero_* sources, rec_state) are
         # touched once per SEQUENCE by reset_state_inplace / the prefill carry, never per token, so
         # L1 residency buys them nothing and _zero_rec alone is [B,Nv,Dk,Dv] = 8 MB at B=32.
-        self.conv_states = [z((1, self.B, self.qkv_dim_tp), ttnn.L1_MEMORY_CONFIG) for _ in range(self.K)]
+        # L1 only where it fits. These are K tensors of [1,B,qkv_dim_tp]; TILE padding rounds the
+        # B rows up to 32, so each is ~131 KB at EVERY batch and the set costs ~8.2 KB/bank per GDN
+        # layer -- ~246 KB/bank across the 30 GDN layers, held for the model's lifetime.
+        #
+        # The threshold is B == 1, and it is MEASURED, not cautious: widening it to B <= 8 puts
+        # batched_128_b8 AND batched_128_b32 back into the clash. Only the single-user path has the
+        # headroom.
+        #
+        # At B=1 that is affordable and buys the -1.1% above. At batch it is not: the batched
+        # prefill's fused-chunk kernel wants ~1.1 MB of circular buffers on a single core, and with
+        # these resident the L1 buffer floor sits at 969,600 against a CB region ending at
+        # 1,109,216 -- "Statically allocated circular buffers in program 148 clash with L1 buffers"
+        # on batched_128_b32. The conv state is touched once per token per layer, so DRAM costs it
+        # far less than the prefill costs.
+        #
+        # Blackhole keeps L1 unconditionally: 80 banks of a larger L1 absorb the same set, and its
+        # layouts are the measured ones (see tp_common's module docstring).
+        _conv_mc = ttnn.L1_MEMORY_CONFIG if (tpc.is_blackhole() or self.B == 1) else ttnn.DRAM_MEMORY_CONFIG
+        self.conv_states = [z((1, self.B, self.qkv_dim_tp), _conv_mc) for _ in range(self.K)]
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts).
         #
         # UNVALIDATED CANDIDATE: allocating this in L1 instead of DRAM removes both halves of the
