@@ -167,8 +167,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
-    const bool quasar_four_row =
-        metal_context.get_cluster().arch() == tt::ARCH::QUASAR && rtoptions.get_quasar_four_row();
+    const bool is_quasar = metal_context.get_cluster().arch() == tt::ARCH::QUASAR;
+    const bool quasar_four_row = is_quasar && rtoptions.get_quasar_four_row();
+    const bool quasar_gather = is_quasar && rtoptions.get_quasar_gather();
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -217,6 +218,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
             if (quasar_four_row) {
                 kd.defines["MATH_ROWS"] = "4";
+            }
+            if (quasar_gather) {
+                kd.defines["ENABLE_TENSIX_GATHER"] = "1";
             }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {

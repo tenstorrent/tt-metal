@@ -41,6 +41,10 @@ def is_4row_arch():
     return _env_flag_enabled("TT_METAL_QUASAR_FOUR_ROW")
 
 
+def has_tensix_gather():
+    return _env_flag_enabled("TT_METAL_QUASAR_GATHER")
+
+
 # Cache for chip architecture
 _cached_chip_architecture = None
 

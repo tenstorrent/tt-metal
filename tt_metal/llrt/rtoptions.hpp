@@ -416,6 +416,9 @@ class RunTimeOptions {
     // Use the four-row FPU LLK variant on Quasar
     bool quasar_four_row = false;
 
+    // Build for the Saturn Quasar variant with Tensix gather/compress hardware
+    bool quasar_gather = false;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -680,7 +683,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -689,7 +692,8 @@ public:
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
             get_eth_ptp_trace(),
-            get_quasar_four_row());
+            get_quasar_four_row(),
+            get_quasar_gather());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -988,6 +992,7 @@ public:
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
     bool get_quasar_four_row() const { return quasar_four_row; }
+    bool get_quasar_gather() const { return quasar_gather; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

@@ -30,7 +30,12 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
+from .chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    has_tensix_gather,
+    is_4row_arch,
+)
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
@@ -338,7 +343,10 @@ class TestConfig:
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
                 math_rows = 4 if is_4row_arch() else 8
-                TestConfig.ARCH_SPECIFIC_OPTIONS = f"-DMATH_ROWS={math_rows}"
+                tensix_gather = 1 if has_tensix_gather() else 0
+                TestConfig.ARCH_SPECIFIC_OPTIONS = (
+                    f"-DMATH_ROWS={math_rows} -DENABLE_TENSIX_GATHER={tensix_gather}"
+                )
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES

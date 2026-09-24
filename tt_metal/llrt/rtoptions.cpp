@@ -121,6 +121,7 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_QUASAR_FOUR_ROW,                           // Build the Quasar four-row FPU variant
+    TT_METAL_QUASAR_GATHER,                             // Build the Saturn Quasar variant (Tensix gather/compress)
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
@@ -922,6 +923,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (use the standard eight-row Quasar LLKs)
         // Usage: export TT_METAL_QUASAR_FOUR_ROW=1
         case EnvVarID::TT_METAL_QUASAR_FOUR_ROW: this->quasar_four_row = is_env_enabled(value); break;
+
+        // TT_METAL_QUASAR_GATHER
+        // Build for the Saturn Quasar variant, which has the Tensix gather/compress hardware.
+        // Default: false
+        // Usage: export TT_METAL_QUASAR_GATHER=1
+        case EnvVarID::TT_METAL_QUASAR_GATHER: this->quasar_gather = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
         // Controls Blackhole DRAM programmable cores in the HAL:

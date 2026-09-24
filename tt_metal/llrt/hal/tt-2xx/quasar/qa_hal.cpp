@@ -382,6 +382,9 @@ public:
         if (params.rtoptions.get_quasar_four_row()) {
             defines.push_back("MATH_ROWS=4");
         }
+        if (params.rtoptions.get_quasar_gather()) {
+            defines.push_back("ENABLE_TENSIX_GATHER=1");
+        }
         return defines;
     }
 
