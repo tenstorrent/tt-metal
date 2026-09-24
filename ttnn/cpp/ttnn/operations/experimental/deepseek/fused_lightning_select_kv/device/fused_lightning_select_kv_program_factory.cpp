@@ -4,8 +4,11 @@
 
 #include "fused_lightning_select_kv_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -71,6 +74,15 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const DFBSpecName CUR_POS_DFB{"cur_pos"};
     const DFBSpecName CTRL_DFB{"ctrl"};
     const DFBSpecName SCORES_DFB{"scores"};
+    const DFBSpecName HIST_DFB{"hist"};
+    const DFBSpecName HIST_GATHER_DFB{"hist_gather"};
+    const DFBSpecName SELECT_DFB{"select"};
+    const DFBSpecName HIST_SCATTER_DFB{"hist_scatter"};
+    const DFBSpecName HIST_SUM_DFB{"hist_sum"};
+
+    const SemaphoreSpecName SEM_HIST_ARRIVED{"hist_arrived"};
+    const SemaphoreSpecName SEM_SLICE_ARRIVED{"slice_arrived"};
+    const SemaphoreSpecName SEM_SELECT_READY{"select_ready"};
 
     const TensorParamName QUERY{"query"};
     const TensorParamName KEY_CACHE{"key_cache"};
@@ -132,14 +144,65 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .tile_format_metadata = head_group_tile,
     };
 
-    // One fp32 1x32 score tile per 32 keys, double-buffered across a block.
+    // One fp32 1x32 score tile per 32 keys. Sized for the largest per-core share of the page table so
+    // the writer can keep every score this core produces resident for the top-k select.
+    const uint32_t cores_in_grid = all_cores.num_cores();
+    const uint32_t max_num_blocks = tensor_args.page_table_tensor.logical_shape()[-1];
+    const uint32_t max_blocks_per_core = tt::div_up(max_num_blocks, cores_in_grid);
     constexpr tt::DataFormat scores_format = tt::DataFormat::Float32;
     const DataflowBufferSpec scores_dfb{
         .unique_id = SCORES_DFB,
         .entry_size = row_tile.get_tile_size(scores_format),
-        .num_entries = 2 * chunks_per_block,
+        .num_entries = std::max(max_blocks_per_core, 1u) * chunks_per_block,
         .data_format_metadata = scores_format,
         .tile_format_metadata = row_tile,
+    };
+
+    // Writer-local scratch for the top-k histogram: kTopkHistBins uint32 counts.
+    constexpr uint32_t kTopkHistBins = 256;
+    const DataflowBufferSpec hist_dfb{
+        .unique_id = HIST_DFB,
+        .entry_size = kTopkHistBins * sizeof(uint32_t),
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    // Once the threshold is known, every core sends {keys above the threshold bin, keys in it} (padded
+    // to 16 B, the NoC L1 alignment) to slot core_index of this buffer on the coordinator (core 0). It
+    // is allocated on every core so its L1 address is the same everywhere, but only core 0's copy is used.
+    const DataflowBufferSpec hist_gather_dfb{
+        .unique_id = HIST_GATHER_DFB,
+        .entry_size = 4 * sizeof(uint32_t),
+        .num_entries = cores_in_grid,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    // The global histogram is summed in parallel: bins are split into 16-byte slices (the NoC L1
+    // alignment), each owner holds a contiguous run of slices and reads its run from every core that
+    // has keys. Entry c of hist_scatter holds core c's copy of the bins this core owns.
+    constexpr uint32_t kHistBinsPerSlice = 4;
+    constexpr uint32_t kHistNumSlices = kTopkHistBins / kHistBinsPerSlice;
+    const uint32_t hist_slices_per_owner = tt::div_up(kHistNumSlices, std::min(cores_in_grid, kHistNumSlices));
+    const uint32_t hist_num_owners = tt::div_up(kHistNumSlices, hist_slices_per_owner);
+    const DataflowBufferSpec hist_scatter_dfb{
+        .unique_id = HIST_SCATTER_DFB,
+        .entry_size = hist_slices_per_owner * kHistBinsPerSlice * static_cast<uint32_t>(sizeof(uint32_t)),
+        .num_entries = cores_in_grid,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    // Owners write their summed bins here on the coordinator.
+    const DataflowBufferSpec hist_sum_dfb{
+        .unique_id = HIST_SUM_DFB,
+        .entry_size = kTopkHistBins * sizeof(uint32_t),
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    // Coordinator -> all cores: a header {threshold bin, keys above that bin, keys still needed from it,
+    // total keys}, then per core {keys to contribute, of which from the threshold bin, output offset}.
+    const uint32_t kTopkSelectWords = 4 + 3 * cores_in_grid;
+    const DataflowBufferSpec select_dfb{
+        .unique_id = SELECT_DFB,
+        .entry_size = kTopkSelectWords * sizeof(uint32_t),
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt32,
     };
 
     const DataflowBufferSpec key_dfb =
@@ -242,13 +305,69 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
                     .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
                     .dfb_spec_name = SCORES_DFB, .accessor_name = "scores", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_DFB, .accessor_name = "hist", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_DFB, .accessor_name = "hist", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_GATHER_DFB,
+                    .accessor_name = "hist_gather",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_GATHER_DFB,
+                    .accessor_name = "hist_gather",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = SELECT_DFB, .accessor_name = "select", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = SELECT_DFB, .accessor_name = "select", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_SCATTER_DFB,
+                    .accessor_name = "hist_scatter",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_SCATTER_DFB,
+                    .accessor_name = "hist_scatter",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_SUM_DFB,
+                    .accessor_name = "hist_sum",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = HIST_SUM_DFB,
+                    .accessor_name = "hist_sum",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{.semaphore_spec_name = SEM_HIST_ARRIVED, .accessor_name = "hist_arrived"},
+                SemaphoreBinding{.semaphore_spec_name = SEM_SELECT_READY, .accessor_name = "select_ready"},
+                SemaphoreBinding{.semaphore_spec_name = SEM_SLICE_ARRIVED, .accessor_name = "slice_arrived"},
             },
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
              TensorBinding{.tensor_parameter_name = SCORES, .accessor_name = "scores"}},
-        .compile_time_args = {{"k", args.k}, {"page_block_size", page_block_size}},
-        .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
+        .compile_time_args =
+            {{"k", args.k},
+             {"page_block_size", page_block_size},
+             {"num_hist_bins", kTopkHistBins},
+             {"hist_bins_per_slice", kHistBinsPerSlice},
+             {"hist_num_owners", hist_num_owners},
+             {"hist_slices_per_owner", hist_slices_per_owner},
+             {"num_select_words", kTopkSelectWords}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"core_index", "num_cores"},
+             .common_runtime_arg_names =
+                 {"coord_x",
+                  "coord_y",
+                  "mcast_x_start",
+                  "mcast_y_start",
+                  "mcast_x_end",
+                  "mcast_y_end",
+                  "num_mcast_dests"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        // NoC (x, y) of every core, in core_index order.
+        .advanced_options = {.num_common_runtime_varargs = 2 * cores_in_grid},
     };
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -307,7 +426,16 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              make_dfb(KV_DFB, tensor_args.kv_cache),
              cur_pos_dfb,
              ctrl_dfb,
-             scores_dfb},
+             scores_dfb,
+             hist_dfb,
+             hist_gather_dfb,
+             select_dfb,
+             hist_scatter_dfb,
+             hist_sum_dfb},
+        .semaphores =
+            {SemaphoreSpec{.unique_id = SEM_HIST_ARRIVED, .target_nodes = all_cores},
+             SemaphoreSpec{.unique_id = SEM_SELECT_READY, .target_nodes = all_cores},
+             SemaphoreSpec{.unique_id = SEM_SLICE_ARRIVED, .target_nodes = all_cores}},
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {WorkUnitSpec{
             .name = "fused_lightning_select_kv", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
@@ -315,8 +443,32 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     const uint32_t num_cores = cores.size();
+    // Core 0 (the first core row-wise) coordinates the top-k select and multicasts the result to the
+    // rest of the grid's bounding box, which must be exactly the grid so num_mcast_dests is right.
+    const CoreRange mcast_bbox = all_cores.bounding_box();
+    TT_FATAL(
+        mcast_bbox.size() == num_cores,
+        "fused_lightning_select_kv needs a rectangular core grid for the top-k multicast, got {}",
+        all_cores);
+    const auto coord_physical = device->worker_core_from_logical_core(cores[0]);
+    const auto mcast_start_physical = device->worker_core_from_logical_core(mcast_bbox.start_coord);
+    const auto mcast_end_physical = device->worker_core_from_logical_core(mcast_bbox.end_coord);
     KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs writer_run_args{
+        .kernel = WRITER,
+        .common_runtime_arg_values = {
+            {"coord_x", static_cast<uint32_t>(coord_physical.x)},
+            {"coord_y", static_cast<uint32_t>(coord_physical.y)},
+            {"mcast_x_start", static_cast<uint32_t>(mcast_start_physical.x)},
+            {"mcast_y_start", static_cast<uint32_t>(mcast_start_physical.y)},
+            {"mcast_x_end", static_cast<uint32_t>(mcast_end_physical.x)},
+            {"mcast_y_end", static_cast<uint32_t>(mcast_end_physical.y)},
+            {"num_mcast_dests", num_cores - 1}}};
+    for (const auto& core : cores) {
+        const auto physical = device->worker_core_from_logical_core(core);
+        writer_run_args.advanced_options.common_runtime_varargs.push_back(physical.x);
+        writer_run_args.advanced_options.common_runtime_varargs.push_back(physical.y);
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values, cores[i], {{"core_index", i}, {"num_cores", num_cores}});
