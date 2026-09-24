@@ -475,7 +475,6 @@ void kernel_main() {
     CircularBuffer output_buffer(cb_output);
     CircularBuffer sync_buffer(cb_sync);
     const uint32_t noc_scratch_addr = CircularBuffer(cb_noc_scratch).get_write_ptr();
-    // Route pages stay in the half disjoint from the reader's route pages and tile staging.
     const uint32_t writer_config_addr = noc_scratch_addr + split_scratch_bytes / 2;
 
     for (uint32_t local_chunk = 0; local_chunk < chunk_count; ++local_chunk) {
@@ -516,7 +515,6 @@ void kernel_main() {
             cb_band_config,
             band_words,
             ttnn::operations::wavelet::device_protocol::kLwt2DBandConfigWordCount);
-        // The route syncs leave the reader in its final wait before this half of scratch is reused for band writes.
         const uint32_t final_y_begin = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalYBegin];
         const uint32_t final_y_length = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalYLength];
         const uint32_t final_x_begin = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalXBegin];

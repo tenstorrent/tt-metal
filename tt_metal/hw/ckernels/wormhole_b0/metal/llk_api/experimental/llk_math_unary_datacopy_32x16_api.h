@@ -7,12 +7,6 @@
 #include "llk_math_common_api.h"
 #include "sanitizer/api.h"
 
-/**
- * Complete the math-side unpack-to-destination handshake for one 32x16 tile.
- *
- * @param dst_index Narrow destination index in [0, get_dest_max_tiles_rt(..., Tile32x16)).
- * @param operand Logical input operand; its unpack source and destination formats must both be 32-bit.
- */
 __attribute__((always_inline)) inline void llk_math_eltwise_unary_datacopy_to_dest_32x16(
     std::uint32_t dst_index, std::uint32_t operand) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x16>()), "");
