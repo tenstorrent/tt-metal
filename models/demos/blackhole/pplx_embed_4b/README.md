@@ -606,7 +606,12 @@ both bfp8-limited, fused marginally closer. Same-chip A/B (chips 4/6/7/8):
 | bs32 | 139.150 | 450.6 | **443.5** | **−1.6%** | 3.19× |
 
 `QWEN_FUSED_ADD_NORM=1` (default), `QWEN_FUSED_ADD_NORM_MIN_ROWS=8192` (flattened
-rows below which the stock ops are kept). `QWEN_FUSED_ADD_NORM_VERIFY=1` runs the stock
+rows below which the stock ops are kept). A row-split variant for bs1
+(`fused_add_rmsnorm_split`: each of the 16 tile-rows over R=5 cores with a semaphore
+partial-sum exchange, 80 cores) beats add + interleaved rms_norm standalone (35 vs 49 µs)
+but loses to the model's block-sharded LN chain e2e (23.2 → 24.4 ms, +5%): at bs1 every op
+is latency-bound and the fused op's fixed cost (~35 µs) exceeds the four stock kernels'.
+Kept as a probe (`QWEN_FUSED_ADD_NORM_SPLIT=1`); `perf_csv/NEGATIVE_RESULTS.md` §34. `QWEN_FUSED_ADD_NORM_VERIFY=1` runs the stock
 add + norm next to every fused call on the live model tensors and prints the PCCs: at bs16
 all 72 calls of a forward gave sum ≥ 0.99988 and norm ≥ 0.9993 (most 1.0000).
 
