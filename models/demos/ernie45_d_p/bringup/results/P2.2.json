@@ -1,0 +1,13 @@
+{
+ "metrics": {
+  "per_chip_total_gb": {
+   "t": "2026-09-24T19:26:42",
+   "value": 11.42
+  },
+  "plan_fits_dram": {
+   "t": "2026-09-24T19:26:42",
+   "value": 1
+  }
+ },
+ "task": "P2.2"
+}
