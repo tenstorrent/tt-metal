@@ -34,6 +34,7 @@
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
+#include "llk_sfpu/ckernel_sfpu_hypot.h"
 // Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
 // calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
@@ -1729,6 +1730,14 @@ void call_binary_sfpu_operation_init()
         // must match DST_ACCUM_MODE used by the paired call_binary_sfpu_operation().
         SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_atan2_init, (APPROXIMATION_MODE, DST_ACCUM_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::HYPOT)
+    {
+        // hypot has no dedicated SfpuType, so use the baseline add1 addrmod like atan2. Its
+        // init is sqrt_init, and the is_fp32_dest_acc_en variant decides whether the result is
+        // rounded back to bfloat16 before the store, so it must match DST_ACCUM_MODE used by
+        // the paired call_binary_sfpu_operation().
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_hypot_init, (APPROXIMATION_MODE, DST_ACCUM_MODE));
+    }
     else if constexpr (BINOP == BinaryOp::MUL_INT32)
     {
         // mul_int32 is on the LLK init's ADDR_MOD_6 dest+=2 allow-list, so drive its
@@ -2119,6 +2128,21 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_atan2,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::HYPOT)
+    {
+        // hypot(a, b) = sqrt(a^2 + b^2), symmetric in its operands. DST_ACCUM_MODE is
+        // is_fp32_dest_acc_en and decides whether the result is rounded back to bfloat16
+        // before the store, so it must match the init's variant.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_hypot,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
             dst_index_in0,
             dst_index_in1,

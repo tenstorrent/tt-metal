@@ -222,6 +222,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
     {
         MathOperation.SfpuAtan2,
         MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuHypot,
         MathOperation.SfpuBinaryMax,
         MathOperation.SfpuBinaryMin,
         MathOperation.SfpuBinaryRemainder,
@@ -812,6 +813,57 @@ def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop):
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
     )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuHypot],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_hypot(formats, dest_acc, mathop):
+    # hypot(a, b) over signed [-5, 5], so both signs of both operands are exercised. The
+    # kernel takes magnitudes first, so the sign is a correctness question rather than a
+    # numeric one; the magnitudes here are all inside the band where the plain formula
+    # already worked, which is what makes the scaled form's agreement there the claim.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuHypot],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_hypot_outside_the_square_band(formats, dest_acc, mathop):
+    """The magnitudes the plain formula cannot hold, which is the whole point of the scale.
+
+    a^2 is inf for |a| >= 2^64 and stops being normal for 0 < |a| < 2^-63, while hypot at
+    those magnitudes is an ordinary finite number. Both operands are drawn from one side of
+    the band at a time, since a pair that straddles it is the easy case: the smaller square
+    underflows to zero and the answer is the larger magnitude either way.
+    """
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    # 2^70 and 2^-70, a few binades clear of the boundary in both directions.
+    for low, high in ((2.0**69, 2.0**71), (2.0**-71, 2.0**-69)):
+        sfpu_binary(
+            formats,
+            dest_acc,
+            mathop,
+            spec_A=StimuliSpec(
+                distribution=DistributionKind.UNIFORM, low=low, high=high
+            ),
+            spec_B=StimuliSpec(
+                distribution=DistributionKind.UNIFORM, low=low, high=high
+            ),
+        )
 
 
 @parametrize(

@@ -3785,6 +3785,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
                 MathOperation.SfpuAtan2: self._atan2,
+                MathOperation.SfpuHypot: self._hypot,
                 MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
@@ -4215,6 +4216,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
         # the kernel is an approximation, so the match relies on the PCC tolerance.
         return torch.atan2(t1.to(torch.float32), t2.to(torch.float32))
+
+    def _hypot(self, t1, t2):
+        # hypot(a, b) = sqrt(a^2 + b^2). torch.hypot is the scaled form too, so it agrees with
+        # the kernel outside the band where the plain formula overflows or denormalises, and
+        # is the reference inside it. Evaluated in fp32 to mirror the SFPU path.
+        return torch.hypot(t1.to(torch.float32), t2.to(torch.float32))
 
     def _eq_int(self, t1, t2):
         # Integer equality, exact 0/1 (calculate_binary_eq_int over Int32 dest bits).

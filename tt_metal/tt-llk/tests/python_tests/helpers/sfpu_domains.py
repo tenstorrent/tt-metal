@@ -2220,6 +2220,11 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
         MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+        # hypot settles the non-finite cases before the arithmetic rather than repairing them
+        # after it: the operands are ordered by magnitude and an infinite minimum promotes the
+        # maximum, so hypot(inf, NaN) = +inf as IEEE 754 requires, and every remaining case
+        # falls out of the square root. That is a claim about the kernel, not a hope.
+        MathOperation.SfpuHypot,
     }
 )
 
