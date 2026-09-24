@@ -38,8 +38,8 @@ struct Conv3dPreparedWeight {
 Conv3dPreparedWeight prepare_conv3d_weight(
     const ttnn::Tensor& weight, uint32_t groups = 1, bool with_transposed = true);
 
-// Same op with caller-provided prepared weights; `weight` is still the autograd parameter that receives dW. Any
-// form missing from `prepared` is built on the fly.
+// Same op with caller-provided prepared weights; `weight` is still the autograd parameter that receives dW. The
+// forward forms are required; if `prepared.transposed` is empty, the input-gradient form is built on the fly.
 autograd::TensorPtr conv3d(
     const autograd::TensorPtr& input,
     const autograd::TensorPtr& weight,
