@@ -41,38 +41,59 @@ def test_gated_delta_rule_ops_have_registered_golden_functions():
     assert callable(ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq))
 
 
-def test_chunk_gated_delta_rule_golden_head_major_output():
+def test_head_major_layout():
     torch.manual_seed(0)
-    q = torch.randn(1, 4, 1, 2)
-    k = torch.randn(1, 4, 1, 2)
-    v = torch.randn(1, 4, 1, 3)
-    g = -torch.rand(1, 4, 1)
-    beta = torch.sigmoid(torch.randn(1, 4, 1))
+    B, T, HK, HV, K, V, CS = 2, 4, 2, 6, 2, 3, 2
+    q = torch.randn(B, T, HK, K)
+    k = torch.randn(B, T, HK, K)
+    v = torch.randn(B, T, HV, V)
+    g = -torch.rand(B, T, HV)
+    beta = torch.sigmoid(torch.randn(B, T, HV))
     golden = ttnn.get_golden_function(ttnn.transformer.chunk_gated_delta_rule)
 
-    token_major, final_state = golden(
+    token_major, state = golden(
         q,
         k,
         v,
         g,
         beta,
-        chunk_size=2,
+        chunk_size=CS,
         output_final_state=True,
     )
-    head_major, head_major_state = golden(
+    head_major, hm_state = golden(
         q,
         k,
         v,
         g,
         beta,
-        chunk_size=2,
+        chunk_size=CS,
         output_final_state=True,
         output_head_major=True,
     )
 
-    expected_head_major = token_major.permute(0, 2, 1, 3).reshape(1, 4, 3)
-    torch.testing.assert_close(head_major, expected_head_major)
-    torch.testing.assert_close(head_major_state, final_state)
+    assert token_major.shape == (B, T, HV, V) and head_major.shape == (B * HV, T, V)
+    # Built independently of the implementation's permute/reshape.
+    expected = torch.stack([token_major[b, :, h] for b in range(B) for h in range(HV)])
+    torch.testing.assert_close(head_major, expected)
+    torch.testing.assert_close(hm_state, state)
+
+
+def test_gqa_expansion_is_repeat_interleave():
+    torch.manual_seed(0)
+    B, T, HK, HV, K, V, CS = 2, 4, 2, 6, 2, 3, 2
+    q = torch.randn(B, T, HK, K)
+    k = torch.randn(B, T, HK, K)
+    v = torch.randn(B, T, HV, V)
+    g = -torch.rand(B, T, HV)
+    beta = torch.sigmoid(torch.randn(B, T, HV))
+    golden = ttnn.get_golden_function(ttnn.transformer.chunk_gated_delta_rule)
+
+    got, got_state = golden(q, k, v, g, beta, chunk_size=CS, output_final_state=True)
+    qe = q.repeat_interleave(HV // HK, dim=2)
+    ke = k.repeat_interleave(HV // HK, dim=2)
+    want, want_state = golden(qe, ke, v, g, beta, chunk_size=CS, output_final_state=True)
+    torch.testing.assert_close(got, want)
+    torch.testing.assert_close(got_state, want_state)
 
 
 def test_gated_delta_attn_seq_golden_matches_documented_scan():
@@ -340,9 +361,9 @@ def test_scan_mcast_bit_exact(
     monkeypatch.delenv("QWEN_GDN_DUMP", raising=False)
 
     # Realistic-shaped inputs; bit-exactness holds for any values, but keep them in the op's
-    # numeric regime (L2-normalized keys upstream, beta in (0,1), g <= 0).
-    q = torch.randn(B, T, num_k_heads, Dk, dtype=torch.bfloat16)
-    k = torch.randn(B, T, num_k_heads, Dk, dtype=torch.bfloat16)
+    # numeric regime (L2-normalized q/k upstream, beta in (0,1), g <= 0).
+    q = l2_norm(torch.randn(B, T, num_k_heads, Dk, dtype=torch.float32), dim=-1).to(torch.bfloat16)
+    k = l2_norm(torch.randn(B, T, num_k_heads, Dk, dtype=torch.float32), dim=-1).to(torch.bfloat16)
     v = torch.randn(B, T, num_v_heads, Dv, dtype=torch.bfloat16)
     beta = torch.sigmoid(torch.randn(B, T, num_v_heads, dtype=torch.float32))
     g = -torch.nn.functional.softplus(torch.randn(B, T, num_v_heads, dtype=torch.float32)) * 0.5
