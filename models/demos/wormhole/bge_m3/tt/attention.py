@@ -495,14 +495,18 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
       units, 2 or 3 per core; B16 512 units, 4 or 5 per core). B8 86.1 us against
       121.8 us for stock SDPA + concat; B16 144.7 us against 239.9 us. A 13-column
       grid keeps the stock path; it has not been measured there.
+    - B32 the same, on q256/k256 (the stock plan on 12 columns; see
+      _sdpa_program_config), 1024 units, 8 or 9 per core. 301.7 us against 571.2 us.
     """
-    if seq_len != 512 or batch_size not in (1, 8, 16) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+    if seq_len != 512 or batch_size not in (1, 8, 16, 32) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
-    if batch_size in (8, 16) and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
+    if batch_size in (8, 16, 32) and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
         return None
     from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
 
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+    if batch_size == 32:
+        k_chunk = min(k_chunk, 256)
     if batch_size == 1:
         grid_x, grid_y = 8, 8
     else:
