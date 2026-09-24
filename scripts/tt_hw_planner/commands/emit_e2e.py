@@ -445,6 +445,11 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
                 print(f"      pcc    → pytest {rel}/tests/e2e/{pcc_test.name} -svv")
             if perf_test:
                 print(f"      trace  → pytest {rel}/tests/e2e/{perf_test.name} -svv")
+        _gate_nodes = _gate_node_ids(demo_dir)
+        if _gate_nodes:
+            print("  CORRECTNESS GATE (hand this node to a consumer that takes ONE test, e.g. optimize --pcc-test):")
+            for _node in _gate_nodes:
+                print(f"      {rel}/tests/e2e/{_node}")
         print(f"  full report → {rel}/RUN_REPORT.md")
         print(bar)
 
@@ -1106,6 +1111,107 @@ def _renders_signal(demo_dir: Path) -> bool:
     return False
 
 
+# The tool's OWN protocol for the ONE test in an emitted package that is the correctness gate.
+# Nothing here names a model, a stage or a component: it is a module-level constant the emitted
+# test file sets to the name of its own gate function.
+_GATE_DECLARATION = "E2E_CORRECTNESS_GATE"
+
+
+def _declared_gate(path: Path):
+    """The gate function name a test file declares, or None.
+
+    Read as a module-level string constant so it can be found without importing the file (which
+    would need a device).
+    """
+    try:
+        tree = ast.parse(path.read_text(errors="ignore"))
+    except (OSError, SyntaxError):
+        return None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == _GATE_DECLARATION:
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    return node.value.value
+    return None
+
+
+def _function_names(path: Path) -> set:
+    """Top-level function names defined in a file."""
+    try:
+        tree = ast.parse(path.read_text(errors="ignore"))
+    except (OSError, SyntaxError):
+        return set()
+    return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def _gate_declaration_gate(demo_dir: Path):
+    """Return a failure reason (or None): the package must NAME the one test that is its
+    correctness gate.
+
+    WHY THIS EXISTS. Downstream, optimize takes a SINGLE test node id and re-runs it after every
+    change; an attempt that fails it is reverted. So exactly one of the emitted tests decides
+    whether hours of optimization are correct, and the package never said which. An operator
+    reading a file of a dozen tests picks by name, and on 2026-09-23 that picked the weakest one:
+    a final-output PCC whose reference had been teacher-forced onto the pipeline's OWN output, so
+    it could not fail for the stages that generate that output. The stricter test sat beside it in
+    the same file, unused, for the whole run.
+
+    Declaring the gate is what makes that choice the WRITER's -- who knows which test is strongest
+    -- instead of a later guess. The emitted report then prints the node id to paste.
+
+    Scoped to a pipeline that renders a SIGNAL, the same way the signal-quality gate is. The
+    teacher-forced reference that makes a gate unable to fail is an artefact of scoring a rendered,
+    autoregressive output against a trajectory-aligned golden; a model whose output is tokens or a
+    tensor is compared against an independent reference anyway, and is not asked for this.
+
+    This checks only that the declaration exists and names a real function; whether that function
+    is the strongest test is the contract's job, not something a parser can decide.
+    """
+    if not _renders_signal(demo_dir):
+        return None
+    e2e_dir = demo_dir / "tests" / "e2e"
+    if not e2e_dir.is_dir():
+        return None
+    files = sorted(e2e_dir.glob("test_*.py"))
+    if not files:
+        return None
+    declared = {path: _declared_gate(path) for path in files}
+    named = {path: fn for path, fn in declared.items() if fn}
+    if not named:
+        return (
+            "G8 gate-declaration: no tests/e2e file declares %s. Downstream, optimize runs ONE test "
+            "node as the correctness gate after every change and reverts whatever fails it, so one "
+            "test decides whether the whole optimization is correct -- and nothing here says which. "
+            'Set %s = "<the gate function\'s name>" at module level in the file that holds it, and '
+            "make it the STRICTEST test you wrote, not the most convenient: it must be able to FAIL "
+            "when the pipeline degrades. A test whose reference is built from the pipeline's own "
+            "output cannot fail that way and must not be the gate." % (_GATE_DECLARATION, _GATE_DECLARATION)
+        )
+    missing = ["%s -> %r" % (path.name, fn) for path, fn in named.items() if fn not in _function_names(path)]
+    if missing:
+        return (
+            "G8 gate-declaration: %s names a test that does not exist in its own file (%s). The "
+            "declared gate is the node optimize is handed; a name that does not resolve means the "
+            "correctness gate cannot be run at all." % (_GATE_DECLARATION, ", ".join(missing))
+        )
+    return None
+
+
+def _gate_node_ids(demo_dir: Path) -> list:
+    """`<file>::<fn>` for every declared gate -- what to hand a consumer that takes one test node."""
+    e2e_dir = demo_dir / "tests" / "e2e"
+    if not e2e_dir.is_dir():
+        return []
+    out = []
+    for path in sorted(e2e_dir.glob("test_*.py")):
+        fn = _declared_gate(path)
+        if fn:
+            out.append("%s::%s" % (path.name, fn))
+    return out
+
+
 def _signal_quality_gate(demo_dir: Path):
     """Return a failure reason (or None): a pipeline that renders a SIGNAL must score it, not
     only correlate it.
@@ -1188,6 +1294,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     _signal_reason = _signal_quality_gate(demo_dir)
     if _signal_reason:
         reasons.append(_signal_reason)
+
+    _gate_reason = _gate_declaration_gate(demo_dir)
+    if _gate_reason:
+        reasons.append(_gate_reason)
 
     _self_opens = _pipeline_self_opens_device(demo_dir)
     if _self_opens:
@@ -1606,7 +1716,37 @@ OUTPUT CORRECTNESS (what the PCC/correctness test must ASSERT, not report):
      is not enough: a number that nothing fails on is a report, and a report
      does not hold. Assert it.
 
-  3. SCORE A RENDERED SIGNAL, DO NOT ONLY CORRELATE IT. This applies ONLY when
+  3. NAME THE ONE TEST THAT IS THE CORRECTNESS GATE. Downstream, a perf tool
+     re-runs a SINGLE test node after every change and reverts whatever fails
+     it, so exactly one of your tests decides whether the optimization is
+     correct. Say which: set the module-level constant
+
+         E2E_CORRECTNESS_GATE = "<that test function's name>"
+
+     in the file that holds it. Choose the STRICTEST test you wrote, not the
+     most convenient one, and satisfy both of these:
+       - It must be ABLE TO FAIL when the pipeline degrades. A test whose
+         reference is built from the pipeline's OWN output (teacher forcing the
+         reference onto the TT trajectory) cannot: change the pipeline and the
+         reference changes with it, so the comparison holds no matter how bad
+         the output gets. Such a test is worth keeping, but it is NOT the gate.
+         The gate compares against a reference computed INDEPENDENTLY of this
+         run's output.
+       - It must cover the stages that PRODUCE the output, not only the last
+         one that renders it. If the discrete output has an exact-agreement
+         test, that is usually the gate.
+     This has been got wrong: a final-output PCC was picked as the gate while
+     the stricter test sat unused beside it in the same file, and the whole
+     optimization ran against a gate that could not fail.
+
+  4. FOLLOW THE REPOSITORY'S OWN TEST CONVENTIONS. The emitted tests are
+     committed to this repo and must pass its hooks. Check what the repo
+     enforces -- read .pre-commit-config.yaml and run the hooks over the files
+     you emit -- rather than assuming the defaults of the framework. A test
+     that trips a repo lint has to be hand-fixed or committed with the checks
+     bypassed, which is how a convention keeps getting re-broken on every model.
+
+  5. SCORE A RENDERED SIGNAL, DO NOT ONLY CORRELATE IT. This applies ONLY when
      the pipeline's output is a rendered signal — i.e. it returns the RATE the
      output is rendered at alongside it. It does NOT apply to a model whose
      output is tokens, logits, a hidden state or any other tensor; those are
