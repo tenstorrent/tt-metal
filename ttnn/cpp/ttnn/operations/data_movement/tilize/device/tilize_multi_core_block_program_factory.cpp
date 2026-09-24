@@ -229,7 +229,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(),
+            .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
@@ -256,7 +256,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
