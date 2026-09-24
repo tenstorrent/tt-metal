@@ -4,7 +4,13 @@
 #include "recipe_checkpoint.hpp"
 #include "../../dataflow/chunked_prefill_utils.hpp"
 
-template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles = 16, uint32_t d_tiles = 4>
+// QK/PV subblock widths come from the host (recipe_subblock_width in sdpa_recipe.cpp, shared with the dense
+// recipe): the largest of 4, 2 and 1 dividing the K chunk / head dim.
+#ifndef SDPA_RECIPE_PV_W
+#define SDPA_RECIPE_PV_W 4
+#endif
+
+template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles, uint32_t d_tiles>
 void sdpa_recipe_ring_segment(
     RecipeAccumulatorState& resident,
     uint32_t q_begin,
@@ -15,6 +21,7 @@ void sdpa_recipe_ring_segment(
     uint32_t joint_rows,
     bool first_ring,
     bool last_ring) {
+    static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && d_tiles % SDPA_RECIPE_PV_W == 0);
     const bool staged = q_end - q_begin > 1;
     constexpr uint32_t chunk_rows = k_tiles * 32;
     recipe_k_chunk_rows = chunk_rows;
@@ -43,9 +50,9 @@ void sdpa_recipe_ring_segment(
                 d_tiles,
                 scale,
                 subblock_h,
-                4,
+                SDPA_RECIPE_QK_W,
                 subblock_h,
-                (d_tiles < 4 ? d_tiles : 4),
+                SDPA_RECIPE_PV_W,
                 0,
                 1,
                 2,

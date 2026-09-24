@@ -12,6 +12,7 @@
 //   Policy::kPassOuterRing      Loop pass-outer, ring-inner (one recurrent state per pass across the
 //                               ring) instead of ring-outer, pass-inner.
 //   Policy::kCreditKAfterQ      Post the next K multicast credit after the Q download (single K slot).
+//   Policy::kDerivedCb          Reader -> compute mailbox for the live logical_n of a device-tensor length.
 
 #pragma once
 
@@ -137,7 +138,7 @@ void kernel_main() {
         get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 8) == 1;
     constexpr auto logical_n_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset() + 9>();
 
-    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
+    constexpr uint32_t cb_derived = Policy::kDerivedCb;
 
     // Read the live length ONCE, before the ring loop, into locals. Every logical_n-dependent quantity
     // below derives from these — including the chunk-skip predicate that sets this kernel's credit caps

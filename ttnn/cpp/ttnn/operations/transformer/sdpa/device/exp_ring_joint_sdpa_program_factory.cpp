@@ -486,7 +486,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
     if (fixed_subblock_h) {
         qk_out_subblock_h = *fixed_subblock_h;
-        qk_out_subblock_w = exp_ring_joint_sdpa::ComputeVariant::kFixedSubblockW;
+        qk_out_subblock_w = variant.fixed_subblock_w(Sk_chunk_t);
     }
 
     // A fixed schedule ends an odd Q chunk with a single-row group (the writer drains the remainder group).
@@ -515,7 +515,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     if (fixed_subblock_h) {
         // The writer drains cb_out in rows of out_out_subblock_h, matching the fixed QK@V cadence.
         out_out_subblock_h = *fixed_subblock_h;
-        out_out_subblock_w = exp_ring_joint_sdpa::ComputeVariant::kFixedSubblockW;
+        out_out_subblock_w = variant.fixed_subblock_w(DHt);
     }
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;

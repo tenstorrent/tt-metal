@@ -739,8 +739,10 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
-            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole D128, noncausal Q256/K512 recipe.
-                Preserves recurrent state across ring steps; rejects unsupported causal/cache/window/sink features.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal recipe at any tile-aligned
+                Q chunk (32-1024 rows), K chunk and head dim that fits L1; logical_n/logical_l may be scalars or
+                device tensors. Preserves recurrent state across ring steps; rejects unsupported
+                causal/cache/window/sink features.
                 Omit to retain legacy behavior. Cannot be combined with compute_kernel_config or exp_approx_mode=False.
             inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint KV
                 before communication. Required only for LOW_PRECISION.
@@ -938,10 +940,11 @@ void bind_sdpa(nb::module_& mod) {
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             num_workers_per_link (int): Must equal half the SDPA grid rows. Defaults to 1.
             num_buffers_per_channel (int): Fabric MUX buffers per channel. Defaults to 8.
-            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole D128, noncausal Q128-Q320/K512
-                numerical recipe (see docs/sdpa_precision.md). One recurrent state per Q chunk is kept in L1
-                across all active ring steps and normalized once on the last one. Currently requires a
-                scalar logical_n and the default scale; up to three head-segments per core row run pass-outer.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal numerical recipe (see
+                docs/sdpa_precision.md) at any tile-aligned Q chunk (32-1024 rows), K chunk and head dim that
+                fits L1. One recurrent state per Q chunk is kept in L1 across all active ring steps and
+                normalized once on the last one. logical_n may be a scalar or a device tensor; requires the
+                default scale; up to three head-segments per core row run pass-outer.
                 Omit to retain the legacy behavior. Cannot be combined with compute_kernel_config or
                 exp_approx_mode=False.
             inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint

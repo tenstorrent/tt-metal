@@ -31,9 +31,6 @@ struct KernelSources {
 
 class ComputeVariant {
 public:
-    // Matmul subblock width of fixed compute schedules.
-    static constexpr uint32_t kFixedSubblockW = 4;
-
     virtual ~ComputeVariant() = default;
 
     virtual KernelSources kernel_sources() const = 0;
@@ -47,6 +44,9 @@ public:
     // Fixed QK/PV matmul subblock height of the compute schedule, which then streams and accepts a partial
     // last Q row group; nullopt lets the host choose.
     virtual std::optional<uint32_t> fixed_subblock_h() const { return std::nullopt; }
+    // Matmul subblock width of a fixed compute schedule for a QK (K chunk) or PV (head dim) product of `tiles`
+    // output columns; only consulted when fixed_subblock_h is set.
+    virtual uint32_t fixed_subblock_w(uint32_t tiles) const { return tiles < 4 ? tiles : 4; }
 
     // Replaces the exp-ring CBs in desc.cbs with the variant's own compute layout and adds its defines.
     // Returns false (leaving desc and defines untouched) to keep the exp-ring layout.

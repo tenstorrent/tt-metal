@@ -10,6 +10,7 @@ struct ExpRingJointReaderPolicy {
     static constexpr bool kPartialQSubblocks = false;
     static constexpr bool kPassOuterRing = false;
     static constexpr bool kCreditKAfterQ = false;
+    static constexpr uint32_t kDerivedCb = 13;  // tt::CBIndex::c_13
 };
 
 #include "exp_ring_joint_reader_impl.hpp"

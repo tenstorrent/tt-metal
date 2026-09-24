@@ -344,7 +344,7 @@ def test_legacy_exp_ring_two_chip(exp_ring_mesh, case, record_property):
 
 @pytest.mark.parametrize(
     "case",
-    ["four_pass", "logical_n_tensor", "compute", "exp", "scale", "prepared", "unprepared", "q512", "k256", "l1_q320"],
+    ["four_pass", "compute", "exp", "scale", "prepared", "unprepared", "q1056", "k48", "l1_q320"],
 )
 def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
     """Rejected on the host before dispatch. (Causal/balanced/window/cache do not exist on this op;
@@ -357,13 +357,6 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
     grid, q_chunk = (5, 4), 320 if case == "l1_q320" else 256
     options = dict(precision=ttnn.SDPAPrecision.COMPENSATED)
     logical_n = RING * local
-    if case == "logical_n_tensor":
-        logical_n = ttnn.from_torch(
-            torch.tensor([2048], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            device=mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
     changes = {
         "compute": dict(compute_kernel_config=ttnn.init_device_compute_kernel_config(mesh.arch())),
         "exp": dict(
@@ -374,27 +367,26 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
         "scale": dict(scale=0.125),
         "prepared": dict(inputs_prepared=True),
         "unprepared": dict(precision=ttnn.SDPAPrecision.LOW_PRECISION),
-        "q512": dict(
+        "q1056": dict(
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(3, 4), q_chunk_size=512, k_chunk_size=512
+                compute_with_storage_grid_size=(3, 4), q_chunk_size=1056, k_chunk_size=512
             )
         ),
-        "k256": dict(
+        "k48": dict(
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid, q_chunk_size=256, k_chunk_size=256
+                compute_with_storage_grid_size=grid, q_chunk_size=256, k_chunk_size=48
             )
         ),
     }
     messages = {
         "four_pass": "at most 3 are supported",
-        "logical_n_tensor": "scalar logical_n",
         "compute": "not both",
         "exp": "exp_approx_mode=false",
         "scale": r"default 1/sqrt\(head_dim\) scale",
         "prepared": "LOW_PRECISION requires inputs_prepared",
         "unprepared": "LOW_PRECISION requires inputs_prepared",
-        "q512": "Q chunks from 128 to 320 rows",
-        "k256": "K512/D128",
+        "q1056": "tile-aligned Q chunks from 32 to 1024 rows",
+        "k48": "tile-aligned K chunks",
         "l1_q320": "needs .* B of L1 per core at Q320",
     }
     options.update(changes.get(case, {}))

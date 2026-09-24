@@ -294,16 +294,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
                 !kv_cache_batch_idx && !kv_actual_isl && !slot_id && !kv_actual_isl_tensor,
             "Named ring recipes currently require noncausal attention without indexed/cache/window/sink features");
         TT_FATAL(
-            std::holds_alternative<std::size_t>(logical_n) && std::holds_alternative<std::size_t>(logical_l),
-            "Named ring recipes currently require scalar logical lengths");
-        TT_FATAL(
-            (input_tensor_q.logical_shape()[3] == 64 || input_tensor_q.logical_shape()[3] == 128 ||
-             input_tensor_q.logical_shape()[3] == 256) &&
+            input_tensor_q.logical_shape()[3] % 32 == 0 && input_tensor_q.logical_shape()[3] > 0 &&
                 input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
                 input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
-            "Named ring recipes require D64, D128 or D256");
-        operations::transformer::sdpa::detail::recipe_q_tiles(program_config);
-        operations::transformer::sdpa::detail::recipe_k_tiles(program_config);
+            "Named ring recipes require matching tile-aligned Q/K/V head dims, got {}",
+            input_tensor_q.logical_shape()[3]);
+        operations::transformer::sdpa::detail::recipe_dense_q_tiles(program_config);
+        operations::transformer::sdpa::detail::recipe_dense_k_tiles(program_config);
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
             "Named ring recipes require BF16 Q and matching KV types");
@@ -489,13 +486,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
         TT_FATAL(
-            std::holds_alternative<std::size_t>(logical_n),
-            "Named exp ring recipes currently require a scalar logical_n");
-        TT_FATAL(
-            program_config.k_chunk_size == 512 && input_tensor_q.logical_shape()[3] == 128 &&
-                input_tensor_k.logical_shape()[3] == 128 && input_tensor_v.logical_shape()[3] == 128,
-            "Named exp ring recipes require K512/D128");
-        operations::transformer::sdpa::detail::recipe_q_tiles(program_config);
+            input_tensor_q.logical_shape()[3] % 32 == 0 && input_tensor_q.logical_shape()[3] > 0 &&
+                input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
+                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
+            "Named exp ring recipes require matching tile-aligned Q/K/V head dims, got {}",
+            input_tensor_q.logical_shape()[3]);
+        operations::transformer::sdpa::detail::recipe_dense_q_tiles(program_config);
+        operations::transformer::sdpa::detail::recipe_dense_k_tiles(program_config);
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
             "Named exp ring recipes require BF16 Q and matching KV types");
