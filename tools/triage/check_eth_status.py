@@ -30,9 +30,19 @@ script_config = ScriptConfig(
     depends=["run_checks"],
 )
 
-# Use the same heartbeat timeout as UMD. Fast reads must not shorten this interval.
+# UMD v0.9.9 uses 50 ms. Its former 5 ms limit rejected some running ETH cores.
+# https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/utils/timeouts.hpp
 HEARTBEAT_TIMEOUT_SECONDS = 0.05
+# Local polling interval, not the firmware update period. Avoid a busy read loop.
 HEARTBEAT_POLL_INTERVAL_SECONDS = 0.001
+
+# Wormhole L1[0x1C]: bits 31:16 identify the firmware; bits 15:0 are its counter.
+# UMD names these BASE_FW_HEARTBEAT_SIGNATURE and FABRIC_HEARTBEAT_SIGNATURE:
+# https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/firmware/erisc_firmware.hpp
+# RISC_POST_HEARTBEAT in tt_metal/hw/inc/api/dataflow/dataflow_api.h writes the fabric format.
+WORMHOLE_BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
+WORMHOLE_FABRIC_HEARTBEAT_SIGNATURE = 0xAABB
+WORMHOLE_HEARTBEAT_SIGNATURE_SHIFT = 16
 
 
 @dataclass
@@ -81,22 +91,29 @@ class EthCore(ABC):
         pass
 
     def check_for_heartbeat(self) -> bool:
-        """Check that two valid heartbeat samples have different values."""
+        """Check that two valid heartbeat samples have different values.
+
+        get_results calls this once per active ETH core during triage. The caller
+        checks cores in sequence, so the timeout cost adds up across stopped cores.
+        """
         previous_data = None
         deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
         while True:
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
             signatures = self.eth_core_definitions.heartbeat_signatures
             if signatures is not None and read_data == 0:
-                # Wormhole can read zero before firmware starts. Wait for two valid samples.
+                # Zero has no Wormhole signature. A later signed value is only a baseline.
                 previous_data = None
             else:
-                if signatures is not None and read_data >> 16 not in signatures:
+                if signatures is not None and read_data >> WORMHOLE_HEARTBEAT_SIGNATURE_SHIFT not in signatures:
                     log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{read_data:08X}")
                     return False
-                if previous_data is not None and read_data != previous_data:
+                if previous_data is None:
+                    previous_data = read_data
+                    # Take the second sample before sleeping. It may already show progress.
+                    continue
+                if read_data != previous_data:
                     return True
-                previous_data = read_data
             remaining = deadline - monotonic()
             if remaining <= 0:
                 break
@@ -183,7 +200,7 @@ class WormholeEthCore(EthCore):
             heartbeat=0x1C,
             mailbox=None,
             mailbox_slots=0,
-            heartbeat_signatures=(0xABCD, 0xAABB),
+            heartbeat_signatures=(WORMHOLE_BASE_FW_HEARTBEAT_SIGNATURE, WORMHOLE_FABRIC_HEARTBEAT_SIGNATURE),
         )
 
     def port_status_to_string(self, port_status: int) -> str | None:
