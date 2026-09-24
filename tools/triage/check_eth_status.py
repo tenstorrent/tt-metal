@@ -18,6 +18,7 @@ Owner:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from time import monotonic, sleep
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, triage_field, log_check_location, run_script
 from ttexalens import read_word_from_device
@@ -28,6 +29,10 @@ import utils
 script_config = ScriptConfig(
     depends=["run_checks"],
 )
+
+# Use the same heartbeat timeout as UMD. Fast reads must not shorten this interval.
+HEARTBEAT_TIMEOUT_SECONDS = 0.05
+HEARTBEAT_POLL_INTERVAL_SECONDS = 0.001
 
 
 @dataclass
@@ -40,6 +45,7 @@ class EthCoreDefinitions:
     heartbeat: int
     mailbox: int | None
     mailbox_slots: int
+    heartbeat_signatures: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -75,14 +81,26 @@ class EthCore(ABC):
         pass
 
     def check_for_heartbeat(self) -> bool:
-        """Check for heartbeat at the heartbeat address."""
-        previous_data = 0
-        # Check for a changing value at the heartbeat address. Read up to 100 times
-        for _ in range(100):
+        """Check that two valid heartbeat samples have different values."""
+        previous_data = None
+        deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
+        while True:
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
-            if read_data != previous_data:
-                return True
-            previous_data = read_data
+            signatures = self.eth_core_definitions.heartbeat_signatures
+            if signatures is not None and read_data == 0:
+                # Wormhole can read zero before firmware starts. Wait for two valid samples.
+                previous_data = None
+            else:
+                if signatures is not None and read_data >> 16 not in signatures:
+                    log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{read_data:08X}")
+                    return False
+                if previous_data is not None and read_data != previous_data:
+                    return True
+                previous_data = read_data
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, remaining))
         log_check_location(self.location, False, "No heartbeat detected")
         return False
 
@@ -165,6 +183,7 @@ class WormholeEthCore(EthCore):
             heartbeat=0x1C,
             mailbox=None,
             mailbox_slots=0,
+            heartbeat_signatures=(0xABCD, 0xAABB),
         )
 
     def port_status_to_string(self, port_status: int) -> str | None:
