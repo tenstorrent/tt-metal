@@ -27,11 +27,30 @@ Two things to fix, tracked separately:
 2. **craq-sim (issue #401):** ttsim should surface/trap the `ILLEGAL_FORMAT_CONVERSION` like RTL instead of
    hanging; plus the separate `qsr_convert_pack_value` bf16→fp32 (`5→0`) gap.
 
-## Root-cause status: layer-localized (tt-llk), NOT line-localized — needs waveform debug
+## Root cause (STRONG, VERIFIED CANDIDATE — ZEBU fix-test pending): missing Float32→Tf32 unpack substitution
 
-The fault is in `tt_metal/tt-llk/tt_llk_quasar/` LLK code on the `enable_32_bit_dest=true` tilize path, but the
-exact defective line is **not** yet pinned. Source-reading hypotheses were checked against working references and
-**refuted**:
+Under `enable_32_bit_dest=true`, Float32 unpacked into the SrcA/SrcB registers must be declared as **`Tf32`**, not
+raw `Float32` — SrcA/SrcB are 19-bit registers that cannot legally hold Float32. The tt-llk **test harness already
+encodes this HW rule** (`tt_metal/tt-llk/tests/python_tests/helpers/data_format_inference.py:193-205`: `Float32`
+unpacked to src registers with `is_fp32_dest_acc_en == Yes` → `Tf32`), added by commit `87a43f86f16` ("stop Quasar
+tests passing by accident") precisely because the Quasar Verilog model's X-optimism absorbed this format-rule
+violation while real hardware (ZEBU) traps it.
+
+**Production tilize never applies the substitution.** Every Quasar tilize factory sets the input DFB format to
+`datatype_to_dataformat_converter(a.dtype())` = raw `Float32` (e.g.
+`tilize_multi_core_default_program_factory.cpp:33,89`), and there is no Tf32 fallback in `tilize_helpers.inl`,
+`api/compute/tilize.h`, or the Quasar ckernel LLK. Declaring the unpack format `Float32` while `EN_32BIT_DEST` is
+set is a direct match for `UNPACKER_0 ILLEGAL_FORMAT_CONVERSION`.
+
+**Candidate fix (tt-metal / LLK side, verify on ZEBU):** apply the harness's Tf32 substitution for the Quasar
+tilize unpack path when `enable_32_bit_dest` (in the factory's format setup, or the compute-API/LLK
+`tilize_init`). **Open loose end:** the rule is Float32-specific — **uint8 also faults** and has no documented
+Tf32 equivalent (likely needs an analogous Int32/Int16 promotion; unconfirmed). Not yet implemented/verified.
+
+### Earlier hypotheses (checked + refuted, kept for the record)
+
+The fault is in the `enable_32_bit_dest=true` tilize path; before the format-rule finding, two source-reading
+hypotheses were checked against working references and **refuted**:
 
 - **REFUTED — "fast vs slow path":** on Quasar `fast_tilize_block` aliases `tilize_block`; there is no separate
   fast path.
