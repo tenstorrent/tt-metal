@@ -248,6 +248,15 @@ inline void init_env(int& argc, char**& argv) {
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        // Asked for and GRANTED are different: an implementation may hand back SERIALIZED,
+        // and a caller that then drives RMA from several threads corrupts rather than fails.
+        if (provided < MPI_THREAD_MULTIPLE) {
+            TT_THROW(
+                "MPI_Init_thread provided thread level {} but MPI_THREAD_MULTIPLE ({}) was requested; "
+                "multi-threaded one-sided callers cannot run safely",
+                provided,
+                static_cast<int>(MPI_THREAD_MULTIPLE));
+        }
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });

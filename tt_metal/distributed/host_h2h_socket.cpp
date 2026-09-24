@@ -4,12 +4,12 @@
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
 #include <chrono>
-#include <deque>
 #include <functional>
 #include <string>
 #include <vector>
 
 #include <fmt/format.h>
+#include <tt_stl/aligned_allocator.hpp>
 
 #include "tt_metal/distributed/host_rdma_window.hpp"
 #include "tt_metal/distributed/host_uva_frame.hpp"
@@ -43,6 +43,56 @@ std::size_t geometry_fingerprint(const H2HSocket::Config& cfg) {
 
 // A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
 // fields after the guard that vouches for them.
+// One flat allocation per container, sized at create() and never grown: every queue here is
+// bounded by ring_pages, so a deque's chunk churn buys nothing and costs a pointer chase.
+template <typename T>
+class CoreRings {
+public:
+    // Rounded up to a power of two so the wrap is a mask: a runtime `% cap` is an integer
+    // division, and it would run on every push and every pop of the hot path.
+    void reset(uint32_t cores, uint32_t cap) {
+        cap_ = 1;
+        while (cap_ < cap) {
+            cap_ <<= 1;
+        }
+        mask_ = cap_ - 1;
+        limit_ = cap;
+        buf_.assign(static_cast<size_t>(cores) * cap_, T{});
+        head_.assign(cores, 0);
+        count_.assign(cores, 0);
+    }
+    bool empty(uint32_t c) const { return count_[c] == 0; }
+    uint32_t size(uint32_t c) const { return count_[c]; }
+    T& front(uint32_t c) { return buf_[static_cast<size_t>(c) * cap_ + head_[c]]; }
+    // False means full. Every caller checks its own bound first; this is the backstop that
+    // turns a protocol bug into a dropped frame rather than an overwrite.
+    bool push_back(uint32_t c, const T& v) {
+        // limit_, not cap_: the protocol bound is ring_pages, and the rounding is slack.
+        if (count_[c] >= limit_) {
+            return false;
+        }
+        buf_[static_cast<size_t>(c) * cap_ + ((head_[c] + count_[c]) & mask_)] = v;
+        ++count_[c];
+        return true;
+    }
+    void pop_front(uint32_t c) {
+        if (count_[c] != 0) {
+            head_[c] = (head_[c] + 1) & mask_;
+            --count_[c];
+        }
+    }
+
+private:
+    // Cache-line aligned: once detector threads own contiguous core ranges, an unaligned
+    // base lets one thread's tail share a line with the next thread's head.
+    std::vector<T, ttsl::aligned_allocator<T, 64>> buf_;
+    std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, 64>> head_;
+    std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, 64>> count_;
+    uint32_t cap_ = 0;    // allocation stride, a power of two
+    uint32_t mask_ = 0;   // cap_ - 1
+    uint32_t limit_ = 0;  // the protocol bound this was asked for
+};
+
 uint64_t load_acquire(const volatile uint64_t* p) {
     return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
 }
@@ -58,7 +108,7 @@ struct H2HSocket::Impl {
     std::unique_ptr<RdmaWindow> win;
     uint32_t window_cap = 0;
 
-    // Per core, oldest first: one shared deque would park a completed put behind an
+    // Per core, oldest first: one shared ring would park a completed put behind an
     // outstanding one on another core, and the D2H FIFO is freed per core anyway.
     struct InFlight {
         RdmaWindow::Op op{};
@@ -71,12 +121,12 @@ struct H2HSocket::Impl {
     };
     // 1 tx_queue per core. A shared tx_queue lets a core waiting on credit park every other
     // core's sends behind it, which is the stall the previous design fixed the same way.
-    std::vector<std::deque<SendTask>> tx_queue;
+    CoreRings<SendTask> tx_queue;
     // Three stages per frame: payload put (tx_payload), then -- once a flush has made it
     // remotely visible -- the trailer put (tx_flight), then retire on its completion.
-    std::vector<std::deque<InFlight>> tx_payload;
-    std::vector<std::deque<InFlight>> tx_trailer;
-    std::vector<std::deque<InFlight>> tx_flight;
+    CoreRings<InFlight> tx_payload;
+    CoreRings<InFlight> tx_trailer;
+    CoreRings<InFlight> tx_flight;
     uint64_t in_flight = 0;
     uint64_t tx_queued = 0;
     uint32_t rr = 0;
@@ -91,7 +141,7 @@ struct H2HSocket::Impl {
         uint32_t origin = 0;  // sender's full selector: its host AND its core
         uint32_t slot = 0;    // the RX slot it landed in, so consumed() can disarm its guard
     };
-    std::vector<std::deque<Delivered>> rx_pending;
+    CoreRings<Delivered> rx_pending;
     std::vector<uint64_t> credit_out;  // frames this host has credited back, per RECEIVING core
     std::vector<uint64_t> done_out;    // the same frames counted per SENDING core
     std::vector<uint32_t> next_slot;   // next RX slot to inspect, per core
@@ -294,13 +344,15 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.posted.assign(per_peer, 0);
     im.credit_out.assign(per_peer, 0);
     im.done_out.assign(per_peer, 0);
-    im.rx_pending.assign(cfg.cores, {});
+    // ring_pages deep: submit() refuses past it, the harvest breaks at it, and the credit
+    // gate bounds payload+trailer+flight COMBINED, so each is safe at that cap.
+    im.rx_pending.reset(cfg.cores, cfg.ring_pages);
     im.next_slot.assign(cfg.cores, 0);
     im.rx_seq.assign(cfg.cores, 0);
-    im.tx_queue.assign(cfg.cores, {});
-    im.tx_payload.assign(cfg.cores, {});
-    im.tx_trailer.assign(cfg.cores, {});
-    im.tx_flight.assign(cfg.cores, {});
+    im.tx_queue.reset(cfg.cores, cfg.ring_pages);
+    im.tx_payload.reset(cfg.cores, cfg.ring_pages);
+    im.tx_trailer.reset(cfg.cores, cfg.ring_pages);
+    im.tx_flight.reset(cfg.cores, cfg.ring_pages);
     im.dirty.assign(cfg.topo.num, false);
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
@@ -324,10 +376,10 @@ bool H2HSocket::submit(const SendTask& task) {
         return false;
     }
     // A core can have at most ring_pages in tx_flight, so queueing more just defers the gate.
-    if (im.tx_queue[task.core].size() >= im.cfg.ring_pages) {
+    if (im.tx_queue.size(task.core) >= im.cfg.ring_pages) {
         return false;
     }
-    im.tx_queue[task.core].push_back(task);
+    (void)im.tx_queue.push_back(task.core, task);
     ++im.tx_queued;
     return true;
 }
@@ -343,17 +395,17 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
     // test(), is the license. test() is still required: it is what returns the request slot.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_payload[c].empty() && im.win->test(im.tx_payload[c].front().op)) {
-            im.tx_trailer[c].push_back(im.tx_payload[c].front());
-            im.tx_payload[c].pop_front();
+        while (!im.tx_payload.empty(c) && im.win->test(im.tx_payload.front(c).op)) {
+            (void)im.tx_trailer.push_back(c, im.tx_payload.front(c));
+            im.tx_payload.pop_front(c);
         }
     }
 
     // Publish the guard, now that the payload under it is visible. The trailer is one 64 B
     // line at the slot's tail, so nothing can observe an armed guard over stale bytes.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_trailer[c].empty()) {
-            Impl::InFlight f = im.tx_trailer[c].front();
+        while (!im.tx_trailer.empty(c)) {
+            Impl::InFlight f = im.tx_trailer.front(c);
             const uint64_t tail = im.cfg.page_bytes - kFrameTrailerBytes;
             if (const std::string e = im.win->put(
                     im.cfg.region_base + f.src_off + tail,
@@ -366,8 +418,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 break;
             }
             im.dirty[f.host] = true;
-            im.tx_flight[c].push_back(f);
-            im.tx_trailer[c].pop_front();
+            (void)im.tx_flight.push_back(c, f);
+            im.tx_trailer.pop_front(c);
             ++progress;
         }
     }
@@ -378,8 +430,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // Retire on the TRAILER's completion: the frame is not delivered until the guard is out,
     // and the D2H page behind it must outlive both puts. Front only, per core.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_flight[c].empty() && im.win->test(im.tx_flight[c].front().op)) {
-            im.tx_flight[c].pop_front();
+        while (!im.tx_flight.empty(c) && im.win->test(im.tx_flight.front(c).op)) {
+            im.tx_flight.pop_front(c);
             --im.in_flight;
             if (retire) {
                 retire(c, 1);
@@ -392,10 +444,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // never broken on: that is the whole point of the per-core queues.
     for (uint32_t k = 0; k < im.cfg.cores && im.tx_queued != 0 && im.in_flight < im.window_cap; ++k) {
         const uint32_t c = (im.rr + k) % im.cfg.cores;
-        if (im.tx_queue[c].empty()) {
+        if (im.tx_queue.empty(c)) {
             continue;
         }
-        const SendTask& t = im.tx_queue[c].front();
+        const SendTask& t = im.tx_queue.front(c);
         const uint32_t host = tt_uva_target_host(t.dst, im.cfg.topo);
         const uint32_t dest_core = tt_uva_t6_core(t.dst);
         // The selector carries a chip this layout cannot express, so it is checked rather
@@ -414,7 +466,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 host,
                 dest_chip,
                 dest_core));
-            im.tx_queue[c].pop_front();
+            im.tx_queue.pop_front(c);
             --im.tx_queued;
             break;
         }
@@ -449,9 +501,9 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         }
         im.posted_at(dest_core, host)++;
         im.dirty[host] = true;
-        im.tx_payload[t.core].push_back(f);
+        (void)im.tx_payload.push_back(t.core, f);
         ++im.in_flight;
-        im.tx_queue[c].pop_front();
+        im.tx_queue.pop_front(c);
         --im.tx_queued;
         ++progress;
     }
@@ -473,7 +525,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         for (uint32_t n = 0; n < im.cfg.ring_pages; ++n) {
             // The guard stays armed until consumed(), so it no longer says "not yet taken".
             // This bound does: at ring_pages outstanding, next_slot cannot lap onto a live one.
-            if (im.rx_pending[c].size() >= im.cfg.ring_pages) {
+            if (im.rx_pending.size(c) >= im.cfg.ring_pages) {
                 break;
             }
             const uint32_t slot = im.next_slot[c];
@@ -511,7 +563,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
             // Disarmed in consumed(), not here: deliver() above already released the far
             // device to pull this page, trailer included, and a zero would race that read.
-            im.rx_pending[c].push_back(Impl::Delivered{t->origin, slot});
+            (void)im.rx_pending.push_back(c, Impl::Delivered{t->origin, slot});
             im.next_slot[c] = (slot + 1) % im.cfg.ring_pages;
             ++progress;
         }
@@ -526,9 +578,9 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
     if (core >= im.cfg.cores) {
         return;
     }
-    for (; pages != 0 && !im.rx_pending[core].empty(); --pages) {
-        const Impl::Delivered d = im.rx_pending[core].front();
-        im.rx_pending[core].pop_front();
+    for (; pages != 0 && !im.rx_pending.empty(core); --pages) {
+        const Impl::Delivered d = im.rx_pending.front(core);
+        im.rx_pending.pop_front(core);
 
         // The H2D leg has reported this page drained, so the device is done reading it.
         // Still before the credit: a credit lets the peer re-arm the slot.
