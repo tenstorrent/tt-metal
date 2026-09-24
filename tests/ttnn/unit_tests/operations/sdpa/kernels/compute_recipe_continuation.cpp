@@ -18,11 +18,12 @@
 void kernel_main() {
     constexpr uint32_t chunks = get_compile_time_arg_val(0);
     constexpr uint32_t scale = get_compile_time_arg_val(1);
-    // Args 2/3 are the recipe program's Q/K tile counts; this kernel is fixed at Q256/K512.
-    static_assert(get_compile_time_arg_val(2) == 8 && get_compile_time_arg_val(3) == 16);
-    constexpr uint32_t split = get_compile_time_arg_val(4);
-    constexpr bool reload_q = get_compile_time_arg_val(5);
-    constexpr bool stage = get_compile_time_arg_val(6);
+    // Args 2/3/4 are the recipe program's Q/K/D tile counts; this kernel is fixed at Q256/K512/D128.
+    static_assert(
+        get_compile_time_arg_val(2) == 8 && get_compile_time_arg_val(3) == 16 && get_compile_time_arg_val(4) == 4);
+    constexpr uint32_t split = get_compile_time_arg_val(5);
+    constexpr bool reload_q = get_compile_time_arg_val(6);
+    constexpr bool stage = get_compile_time_arg_val(7);
     static_assert(split > 0 && split < chunks);
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 16);
     matmul_init(0, 1);
