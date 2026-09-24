@@ -14,6 +14,7 @@ compile_commands.json
 perf_data/
 *.log
 *.csv
+!docs/blackhole_cfg_setters.csv
 *.whl
 **/hw_specific/**
 
@@ -28,3 +29,7 @@ compile_flags.txt
 
 # Unignore .claude
 !.claude
+
+# HAL docs server runtime state (written by serve_hal_docs.py)
+docs/hal/document_edits.json
+docs/hal/cfg_naming_suggestions.json

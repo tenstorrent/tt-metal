@@ -1,0 +1,935 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="API guide and reference for the Blackhole hal::atomic L1 atomic interface.">
+  <title>hal::atomic — Blackhole L1 atomic HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3,h4 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; } h4 { margin:26px 0 8px; font-size:1rem; }
+    p { max-width:78ch; } ul { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .atomic-figure { margin:18px 0 28px; } .atomic-flow { display:flex; align-items:stretch; gap:10px; overflow-x:auto; padding:2px 2px 8px; }
+    .flow-card { flex:1 0 220px; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .flow-card p { margin:8px 0 0; }
+    .flow-card.operation { border-color:var(--link); background:var(--blue-soft); } .flow-card.after { border-color:var(--accent); background:var(--accent-soft); } .flow-card.blocked { border-color:var(--amber); background:var(--amber-soft); }
+    .flow-label { display:block; margin-bottom:9px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; } .flow-value { display:block; margin-top:6px; font:700 15px/1.4 var(--mono); }
+    .flow-arrow { flex:0 0 auto; align-self:center; color:var(--faint); font-size:24px; font-weight:700; }
+    .line-view { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; } .line-view span { min-width:0; padding:7px 5px; border:1px solid var(--border); border-radius:5px; background:var(--bg); text-align:center; }
+    .line-view small,.fifo-ring small { display:block; color:var(--faint); font:10px/1.3 var(--mono); } .line-view strong { display:block; margin-top:3px; overflow-wrap:anywhere; font:700 12px/1.3 var(--mono); } .line-view .selected { border-color:var(--accent); background:var(--accent-soft); }
+    .fifo-ring { display:grid; grid-template-columns:repeat(8,minmax(28px,1fr)); gap:4px; margin-top:9px; } .fifo-ring span { padding:6px 2px; border:1px solid var(--border); border-radius:5px; background:var(--bg); text-align:center; font:700 12px/1.3 var(--mono); }
+    .fifo-ring .occupied { background:var(--accent-soft); } .fifo-ring .pointer { border:2px solid var(--accent); padding:5px 1px; }
+    .fifo-lanes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; } .fifo-lane { padding:12px 14px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .fifo-lane strong { display:block; margin-bottom:5px; }
+    .atomic-figure figcaption { margin-top:8px; color:var(--muted); font-size:13px; }
+    .mask-map { min-width:880px; text-align:center; } .mask-map th,.mask-map td { text-align:center; white-space:nowrap; } .mask-map th:first-child { position:sticky; left:0; z-index:1; text-align:left; } .mask-map tbody th { color:var(--muted); background:var(--subtle); }
+    .mask-map .write { color:var(--accent); background:var(--accent-soft); font-weight:700; } .mask-map .keep { color:var(--muted); background:var(--subtle); }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } main { padding:32px 20px 70px; } .api-index,.fifo-lanes { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::atomic</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a class="current" href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Guide</h2>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#layers">Identities and descriptors</a>
+        <a href="#shared">Shared types</a>
+        <h2>Interfaces</h2>
+        <a href="#fetch-add">Fetch increment</a>
+        <a href="#fifo">FIFO pointers</a>
+        <a href="#compare-set">Compare and set</a>
+        <a href="#masked-write">Masked write</a>
+        <a href="#run">Issuing descriptors</a>
+        <h2>Reference</h2>
+        <a href="#validation">Validation</a>
+        <a href="#hardware">Hardware and completion</a>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::atomic</div>
+        <h1>Blackhole L1 atomic HAL</h1>
+        <p class="lede">Atomically update shared L1 protocol state: counters, FIFO read/write pointers, locks, and selected parts of a 16-byte line.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Header</strong> hal/atomic.h</span>
+          <span class="pill"><strong>Instructions</strong> ATINCGET · ATINCGETPTR · ATCAS · ATSWAP</span>
+          <span class="pill"><strong>Status</strong> Implemented</span>
+        </div>
+        <div class="install"><span>Include the L1 atomic interface</span><code>#include "hal/atomic.h"</code></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>// Locate: GPR[AddressIndex = 10] * 16 bytes + word 2 * 4 bytes.
+// Update: WidthBits = 16 controls wrapping; it does not affect the address.
+constexpr hal::atomic::Counter&lt;16, 10&gt; packets {
+    hal::gpr&lt;10&gt;(), // AddressIndex 10: GPR 10 contains L1 byte_address / 16.
+    2,              // Select 32-bit word 2: the third word, at byte offset +8.
+};
+
+// Build a FetchIncrement descriptor. Nothing executes.
+constexpr auto fetch = packets.fetch_add(hal::gpr&lt;11&gt;());
+
+// Read its encoded instruction word. Nothing executes.
+constexpr std::uint32_t instruction = fetch.get_operation();
+
+// Issue one posted ATINCGET; see the Functional model below.
+hal::atomic::fetch_add&lt;packets&gt;(hal::gpr&lt;11&gt;());</code></pre>
+        <p>Read the type as <code>Counter&lt;WidthBits, AddressIndex&gt;</code>:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Argument</th><th>Parameter</th><th>Meaning in this example</th></tr></thead>
+          <tbody>
+            <tr><td><code>16</code></td><td><code>WidthBits</code></td><td>Counter width, valid in <code>[1, 32]</code>. The low 16 bits of the selected 32-bit word wrap modulo <code>2^16</code>; the upper 16 bits are preserved. It is not the L1 line size.</td></tr>
+            <tr><td><code>10</code></td><td><code>AddressIndex</code></td><td>Hardware address-GPR index, valid in <code>[0, 63]</code>. <code>AddressIndex == 10</code> makes the <code>address</code> member have type <code>hal::Gpr&lt;10&gt;</code>. The expression <code>hal::gpr&lt;10&gt;()</code> calls the lowercase factory function to construct a value of that type: <code>Gpr</code> is the type name and <code>gpr()</code> is the factory function. The runtime contents of GPR 10 select the L1 line; <code>10</code> is not itself an L1 address.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout note"><span class="callout-title">The two uses of 16 are unrelated</span><p>Do not read the <code>16</code> in <code>Counter&lt;16, 10&gt;</code> as the address multiplier. That template argument is the counter width chosen by software. The separate multiplication by 16 is fixed by the ISA because the address GPR names a 16-byte L1 line.</p></div>
+        <p>The final initializer <code>2</code> is a zero-based word selector, not a number of words. At execution, the selected word starts at byte address <code>GPR[10] * 16 + 2 * 4</code>. This identity names the low 16 counter bits of that word: <code>fetch_add</code> wraps them modulo <code>2^16</code>, preserves the upper 16 bits, and returns the complete old 32-bit word.</p>
+        <div class="callout note"><span class="callout-title">The execution boundary</span><p>Identity member functions build descriptors. A descriptor's <code>.get_operation()</code> encodes one word. Neither action issues hardware. Only <code>run(...)</code> and the namespace verbs such as <code>fetch_add(...)</code> issue instructions. <code>fetch_add</code> is posted, so drain ScalarIdle before reading or reusing GPR 11. Descriptors intentionally have no <code>.apply()</code>.</p></div>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>Every operation starts from shared state in one 16-byte-aligned L1 line. The address operand is a GPR whose runtime value is multiplied by 16 to select that line. “Atomic” means the shared Scalar Unit reads the state, makes its decision, and performs the listed update as one indivisible L1 transaction. It does not make surrounding payload loads or stores part of that transaction.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Descriptor</th><th>State and size</th><th>One atomic operation</th><th>Completion</th></tr></thead>
+          <tbody>
+            <tr><td><code>FetchIncrement</code><br><code>ATINCGET</code></td><td>One selected 32-bit word; its low <code>WidthBits</code> form a wrapping counter.</td><td>Capture the old word, add the data GPR to the counter bits, write the wrapped result, and return the old word in that GPR.</td><td>Posted; drain before reading or reusing the GPR.</td></tr>
+            <tr><td><code>FifoAcquire</code><br><code>ATINCGETPTR</code></td><td>Adjacent 32-bit read and write counters describing <code>2^CapacityLog2</code> caller-defined units.</td><td>Test empty/full, capture the selected old counter, and optionally advance it by <code>2^IncrementLog2</code>. No FIFO payload is transferred.</td><td>Blocking; hardware retries while empty or full.</td></tr>
+            <tr><td><code>CompareSet</code><br><code>ATCAS</code></td><td>One selected 32-bit word.</td><td>Compare the complete word and replace it only when it equals <code>compare</code>.</td><td>Blocking; hardware retries until the comparison succeeds.</td></tr>
+            <tr><td><code>MaskedWrite</code><br><code>ATSWAP</code></td><td>One 16-byte line divided into eight 16-bit granules.</td><td>Replace every granule selected by the mask from a four-GPR source quad. Nothing returns.</td><td>Posted; drain before relying on updated memory.</td></tr>
+          </tbody>
+        </table></div>
+        <p>These are four different L1 atomic primitives, not four operations on one FIFO. Only <code>FifoAcquire</code> interprets its L1 state as FIFO control counters; the other descriptors operate on an independent counter, lock word, or masked line.</p>
+        <h3>From a public call to a descriptor</h3>
+        <p>Every public verb follows the same path: combine an identity with the call arguments to build one descriptor, then pass that descriptor to <code>run</code>. Building the descriptor or calling <code>get_operation()</code> does not execute hardware. The models below begin when the completed descriptor named <code>operation</code> is issued.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Identity or public call</th><th>Descriptor fields produced</th></tr></thead>
+          <tbody>
+            <tr><td><code>Counter&lt;WidthBits, AddressIndex&gt; counter</code><br><code>counter.fetch_add(data)</code></td><td><code>FetchIncrement operation</code><br><code>address = counter.address</code><br><code>data = data</code><br><code>word_select = counter.word</code><br><code>counter_width = WidthBits</code><br><code>AddressIndex</code> is carried by the type of <code>operation.address</code>; it is not a stored numeric field.</td></tr>
+            <tr><td><code>Fifo&lt;CapacityLog2, AddressIndex&gt; fifo</code><br><code>fifo.pop_slots&lt;IncrementLog2&gt;(result)</code></td><td><code>FifoAcquire operation</code><br><code>address = fifo.control_address</code><br><code>data = result</code> (the result destination)<br><code>pointer = FifoPointer::Read</code><br><code>capacity_log2 = CapacityLog2</code><br><code>increment_log2 = IncrementLog2</code><br><code>probe_only = false</code></td></tr>
+            <tr><td><code>fifo.push_slots&lt;IncrementLog2&gt;(result)</code></td><td>The same <code>FifoAcquire</code>, but <code>pointer = FifoPointer::Write</code>.</td></tr>
+            <tr><td><code>fifo.wait_while&lt;FifoState::Empty&gt;(result)</code><br>or <code>fifo.wait_while&lt;FifoState::Full&gt;(result)</code></td><td>The same <code>FifoAcquire</code>, with <code>pointer = Read</code> for <code>Empty</code> or <code>Write</code> for <code>Full</code>, <code>increment_log2 = 0</code>, and <code>probe_only = true</code>.</td></tr>
+            <tr><td><code>Lock&lt;AddressIndex&gt; lock</code><br><code>lock.acquire()</code><br><code>lock.release()</code><br><code>lock.compare_set&lt;Compare, Set&gt;()</code></td><td><code>CompareSet operation</code><br><code>address = lock.address</code><br><code>word_select = lock.word</code><br><code>{compare, set} = {0, 1}</code>, <code>{1, 0}</code>, or <code>{Compare, Set}</code></td></tr>
+            <tr><td><code>store_masked&lt;GranuleMask&gt;(address, data)</code><br>or <code>store_masked(address, data, mask)</code></td><td><code>MaskedWrite operation</code><br><code>address = address</code><br><code>data = data</code><br><code>granule_mask = GranuleMask</code> or <code>mask</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>In the pseudocode, <code>gpr_index(operation.address)</code> or <code>gpr_index(operation.data)</code> extracts the hardware GPR number held by the corresponding <code>hal::Gpr</code> field. <code>GPR[index]</code> then means that register's runtime contents. <code>L1.u32[byte_address]</code> and <code>L1.u16[byte_address]</code> are conceptual notation, not HAL APIs: they mean a 32-bit word or 16-bit granule at that L1 byte address. The HAL emits the atomic instruction; it does not dereference an <code>L1</code> C++ object. <code>posted</code> marks work that can finish asynchronously after the instruction sends its L1 request and releases the issuing Tensix thread.</p>
+
+        <h3>Fetch increment — <code>ATINCGET</code></h3>
+<pre><code>// operation is the FetchIncrement descriptor from the table above.
+address_index = gpr_index(operation.address);
+data_index = gpr_index(operation.data);
+
+target = GPR[address_index] * 16
+       + operation.word_select * sizeof(std::uint32_t);
+addend = GPR[data_index];
+counter_mask = operation.counter_width == 32
+    ? 0xffffffffu
+    : (1u &lt;&lt; operation.counter_width) - 1u;
+
+posted {
+    atomic {
+        old_word = L1.u32[target];
+        incremented = old_word + addend;
+        L1.u32[target] =
+            (old_word &amp; ~counter_mask)
+            | (incremented &amp; counter_mask);
+    }
+
+    // Written later than the L1 request; the complete old word is returned.
+    GPR[data_index] = old_word;
+}</code></pre>
+        <p>For <code>Counter&lt;16, 10&gt; {hal::gpr&lt;10&gt;(), 2}.fetch_add(hal::gpr&lt;11&gt;())</code>, the descriptor fields become <code>{address = gpr&lt;10&gt;, data = gpr&lt;11&gt;, word_select = 2, counter_width = 16}</code>. The mask is therefore <code>0x0000ffff</code>: the expression preserves the old upper 16 bits and replaces the low 16 bits with the wrapped sum. The data GPR is both input and output. Drain ScalarIdle before reading or reusing it.</p>
+        <h4>Concrete counter-wrap example</h4>
+        <figure class="atomic-figure">
+          <div class="atomic-flow">
+            <div class="flow-card">
+              <span class="flow-label">Before</span>
+              <div class="line-view">
+                <span><small>word 0</small><strong>same</strong></span>
+                <span><small>word 1</small><strong>same</strong></span>
+                <span class="selected"><small>word 2 · +8</small><strong>abcd|fffe</strong></span>
+                <span><small>word 3</small><strong>same</strong></span>
+              </div>
+              <span class="flow-value">GPR[11] = 0x00000005</span>
+              <p>Addend input.</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card operation">
+              <span class="flow-label">Atomic ATINCGET</span>
+              <span class="flow-value">0xabcdfffe + 5<br>= 0xabce0003</span>
+              <p>Preserve upper <code>abcd</code>; wrap the low 16-bit counter from <code>fffe</code> to <code>0003</code>.</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card after">
+              <span class="flow-label">After completion</span>
+              <div class="line-view">
+                <span><small>word 0</small><strong>same</strong></span>
+                <span><small>word 1</small><strong>same</strong></span>
+                <span class="selected"><small>word 2 · +8</small><strong>abcd|0003</strong></span>
+                <span><small>word 3</small><strong>same</strong></span>
+              </div>
+              <span class="flow-value">GPR[11] = 0xabcdfffe</span>
+              <p>The complete old word replaces the addend.</p>
+            </div>
+          </div>
+          <figcaption>If <code>GPR[10] == 0x100</code>, word 2 is at <code>0x100 * 16 + 2 * 4 == 0x1008</code>. ATINCGET is posted, so “after completion” requires the documented ScalarIdle drain.</figcaption>
+        </figure>
+
+        <h3>FIFO pointer operation — <code>ATINCGETPTR</code></h3>
+<pre><code>// operation is the FifoAcquire descriptor from the table above.
+// Public mapping: pop_slots/Empty use Read; push_slots/Full use Write.
+address_index = gpr_index(operation.address);
+result_index = gpr_index(operation.data); // This field is the result GPR here.
+
+control = L1.fifo_control_at(GPR[address_index] * 16);
+capacity = 1u &lt;&lt; operation.capacity_log2;
+counter_mask = 2u * capacity - 1u; // capacity_log2 + 1 low bits
+increment = 1u &lt;&lt; operation.increment_log2;
+
+retry:
+atomic {
+    read_pointer = control.rd;
+    write_pointer = control.wr;
+    distance = uint32(write_pointer - read_pointer);
+    empty = distance == 0;
+    full = !empty &amp;&amp; (distance % capacity) == 0;
+
+    if ((operation.pointer == FifoPointer::Read &amp;&amp; empty)
+        || (operation.pointer == FifoPointer::Write &amp;&amp; full)) {
+        goto retry;
+    }
+
+    old_pointer = operation.pointer == FifoPointer::Read
+        ? read_pointer
+        : write_pointer;
+
+    if (!operation.probe_only) {
+        incremented = old_pointer + increment;
+        new_pointer =
+            (old_pointer &amp; ~counter_mask)
+            | (incremented &amp; counter_mask);
+
+        if (operation.pointer == FifoPointer::Read)
+            control.rd = new_pointer;
+        else
+            control.wr = new_pointer;
+    }
+}
+
+GPR[result_index] = old_pointer;</code></pre>
+        <p>For <code>Fifo&lt;8, 30&gt; {hal::gpr&lt;30&gt;()}.push_slots&lt;2&gt;(hal::gpr&lt;31&gt;())</code>, the descriptor contains <code>{address = gpr&lt;30&gt;, data = gpr&lt;31&gt;, pointer = Write, capacity_log2 = 8, increment_log2 = 2, probe_only = false}</code>. Thus <code>capacity == 256</code>, <code>counter_mask == 0x1ff</code>, and a successful operation returns the old write counter in GPR 31 and advances its low nine bits by four. Calling <code>wait_while&lt;FifoState::Full&gt;</code> instead selects the same write counter but sets <code>probe_only = true</code>: it waits while full, returns the current write counter, and does not advance it. Neither form moves FIFO payload data.</p>
+        <h4>Concrete FIFO-bookkeeping example</h4>
+        <figure class="atomic-figure">
+          <div class="atomic-flow">
+            <div class="flow-card">
+              <span class="flow-label">Before · capacity 8</span>
+              <span class="flow-value">rd = 2 · wr = 5 · occupancy = 3</span>
+              <div class="fifo-ring" aria-label="Before: read pointer at slot 2, occupied slots 2 through 4, write pointer at slot 5">
+                <span><small>0</small>·</span><span><small>1</small>·</span><span class="occupied pointer"><small>2</small>R</span><span class="occupied"><small>3</small>×</span><span class="occupied"><small>4</small>×</span><span class="pointer"><small>5</small>W</span><span><small>6</small>·</span><span><small>7</small>·</span>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card operation">
+              <span class="flow-label">push_slots&lt;1&gt;</span>
+              <span class="flow-value">increment = 2<sup>1</sup> = 2</span>
+              <p>The FIFO is not full, so hardware returns old <code>wr == 5</code> and publishes two caller-prepared slots.</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card after">
+              <span class="flow-label">After</span>
+              <span class="flow-value">rd = 2 · wr = 7 · occupancy = 5</span>
+              <div class="fifo-ring" aria-label="After: read pointer at slot 2, occupied slots 2 through 6, write pointer at slot 7">
+                <span><small>0</small>·</span><span><small>1</small>·</span><span class="occupied pointer"><small>2</small>R</span><span class="occupied"><small>3</small>×</span><span class="occupied"><small>4</small>×</span><span class="occupied"><small>5</small>×</span><span class="occupied"><small>6</small>×</span><span class="pointer"><small>7</small>W</span>
+              </div>
+              <span class="flow-value">GPR[31] = 5</span>
+            </div>
+          </div>
+          <div class="fifo-lanes">
+            <div class="fifo-lane"><strong>Read / consumer counter</strong><code>wait_while&lt;FifoState::Empty&gt;</code> returns <code>rd</code> without advancing it. <code>pop_slots&lt;M&gt;</code> returns old <code>rd</code> and advances it by <code>2^M</code>.</div>
+            <div class="fifo-lane"><strong>Write / producer counter</strong><code>wait_while&lt;FifoState::Full&gt;</code> returns <code>wr</code> without advancing it. <code>push_slots&lt;M&gt;</code> returns old <code>wr</code> and advances it by <code>2^M</code>.</div>
+          </div>
+          <figcaption><code>R</code> and <code>W</code> mark the next read and write positions; <code>×</code> means logically occupied according to the counters. ATINCGETPTR moves no payload bytes. The caller must write slots 5 and 6 before publishing them. Hardware checks only “not full,” so the caller must separately establish that the complete two-slot batch fits.</figcaption>
+        </figure>
+
+        <h3>Compare and set — <code>ATCAS</code></h3>
+<pre><code>// operation is the CompareSet descriptor from the table above.
+address_index = gpr_index(operation.address);
+target = GPR[address_index] * 16
+       + operation.word_select * sizeof(std::uint32_t);
+expected = zero_extend_32(operation.compare);
+replacement = zero_extend_32(operation.set);
+
+retry:
+atomic {
+    if (L1.u32[target] != expected)
+        goto retry;
+
+    L1.u32[target] = replacement;
+}</code></pre>
+        <p>For <code>Lock {hal::gpr&lt;40&gt;(), 0}.acquire()</code>, the descriptor contains <code>{address = gpr&lt;40&gt;, word_select = 0, compare = 0, set = 1}</code>: it targets <code>GPR[40] * 16 + 0</code>, waits for the complete 32-bit word to equal zero, and writes one. <code>release()</code> changes only the descriptor values to <code>{compare = 1, set = 0}</code>. Nothing is returned.</p>
+        <h4>Concrete retry-to-acquire example</h4>
+        <figure class="atomic-figure">
+          <div class="atomic-flow">
+            <div class="flow-card blocked">
+              <span class="flow-label">Attempt 1 · blocked</span>
+              <span class="flow-value">L1 word = 1<br>expected = 0</span>
+              <p><code>1 != 0</code>, so ATCAS writes nothing and hardware retries.</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card">
+              <span class="flow-label">Independent client</span>
+              <span class="flow-value">L1 word: 1 → 0</span>
+              <p>The current owner releases the lock independently of the blocked Scalar Unit.</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-card after">
+              <span class="flow-label">Hardware retry · success</span>
+              <span class="flow-value">L1 word: 0 → 1</span>
+              <p>The complete-word comparison and replacement succeed atomically; the issuing thread unblocks.</p>
+            </div>
+          </div>
+          <figcaption><code>acquire()</code> compares the complete word with zero and sets it to one. It returns no GPR value. Progress must come from an independent L1 client, not from an instruction queued behind the blocked shared Scalar Unit.</figcaption>
+        </figure>
+
+        <h3>Masked line write — <code>ATSWAP</code></h3>
+<pre><code>// operation is the MaskedWrite descriptor from the table above.
+address_index = gpr_index(operation.address);
+data_index = gpr_index(operation.data); // Must be divisible by four.
+target_line = GPR[address_index] * 16;
+
+// Capture four consecutive GPRs as eight consecutive 16-bit granules.
+for (i = 0; i &lt; 8; ++i) {
+    source_word = GPR[data_index + i / 2];
+    source_granule[i] =
+        (source_word &gt;&gt; (16 * (i % 2))) &amp; 0xffff;
+}
+
+posted {
+    atomic {
+        for (i = 0; i &lt; 8; ++i) {
+            if (operation.granule_mask &amp; (1u &lt;&lt; i))
+                L1.u16[target_line + i * 2] = source_granule[i];
+        }
+    }
+}</code></pre>
+        <h4>Concrete mask-to-line example</h4>
+        <p>Assume these values are already in the scalar-unit GPRs when the instruction executes. GPR 50 names a conceptual L1 line at byte address <code>0x1000</code>. GPR 56 is divisible by four, so it legally names the complete source quad GPR 56–59:</p>
+<pre><code>GPR[50] = 0x00000100; // Target line = 0x100 * 16 = byte address 0x1000.
+
+GPR[56] = 0x11223344; // granule 0 = low16  0x3344; granule 1 = high16 0x1122
+GPR[57] = 0x55667788; // granule 2 = low16  0x7788; granule 3 = high16 0x5566
+GPR[58] = 0x99aabbcc; // granule 4 = low16  0xbbcc; granule 5 = high16 0x99aa
+GPR[59] = 0xddeeff00; // granule 6 = low16  0xff00; granule 7 = high16 0xddee
+
+mask = 0xa5 = 0b10100101; // Bits 0, 2, 5, and 7 are set.
+
+hal::atomic::store_masked&lt;0xa5&gt;(
+    hal::gpr&lt;50&gt;(),
+    hal::gpr&lt;56&gt;());</code></pre>
+        <div class="table-wrap"><table class="mask-map">
+          <thead>
+            <tr><th>Granule</th><th>0<br><code>+0..+1</code></th><th>1<br><code>+2..+3</code></th><th>2<br><code>+4..+5</code></th><th>3<br><code>+6..+7</code></th><th>4<br><code>+8..+9</code></th><th>5<br><code>+10..+11</code></th><th>6<br><code>+12..+13</code></th><th>7<br><code>+14..+15</code></th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Source halfword</th><td>GPR 56 low</td><td>GPR 56 high</td><td>GPR 57 low</td><td>GPR 57 high</td><td>GPR 58 low</td><td>GPR 58 high</td><td>GPR 59 low</td><td>GPR 59 high</td></tr>
+            <tr><th scope="row">Source value</th><td><code>3344</code></td><td><code>1122</code></td><td><code>7788</code></td><td><code>5566</code></td><td><code>bbcc</code></td><td><code>99aa</code></td><td><code>ff00</code></td><td><code>ddee</code></td></tr>
+            <tr><th scope="row">Mask bit</th><td class="write">1</td><td class="keep">0</td><td class="write">1</td><td class="keep">0</td><td class="keep">0</td><td class="write">1</td><td class="keep">0</td><td class="write">1</td></tr>
+            <tr><th scope="row">L1 before</th><td><code>0001</code></td><td><code>0203</code></td><td><code>0405</code></td><td><code>0607</code></td><td><code>0809</code></td><td><code>0a0b</code></td><td><code>0c0d</code></td><td><code>0e0f</code></td></tr>
+            <tr><th scope="row">Action</th><td class="write">write</td><td class="keep">keep</td><td class="write">write</td><td class="keep">keep</td><td class="keep">keep</td><td class="write">write</td><td class="keep">keep</td><td class="write">write</td></tr>
+            <tr><th scope="row">L1 after</th><td class="write"><code>3344</code></td><td class="keep"><code>0203</code></td><td class="write"><code>7788</code></td><td class="keep"><code>0607</code></td><td class="keep"><code>0809</code></td><td class="write"><code>99aa</code></td><td class="keep"><code>0c0d</code></td><td class="write"><code>ddee</code></td></tr>
+          </tbody>
+        </table></div>
+<pre><code>// Final bytes from L1 byte address 0x1000 through 0x100f (little-endian):
+44 33 | 03 02 | 88 77 | 07 06 | 09 08 | aa 99 | 0d 0c | ee dd</code></pre>
+        <p>Mask bit <code>i</code> controls the 16-bit granule at byte offset <code>2 * i</code>. All four selected halfwords change as one atomic L1 transaction; the other four retain their old values. The source GPRs are not modified and receive no old L1 data. Because ATSWAP is posted, drain ScalarIdle before relying on the final L1 contents.</p>
+      </section>
+
+      <section id="layers">
+        <h2>Identities, descriptors, and verbs</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Layer</th><th>Types or functions</th><th>Purpose</th><th>Issues hardware?</th></tr></thead>
+          <tbody>
+            <tr><td>Identity</td><td><code>Counter</code>, <code>Fifo</code>, <code>Lock</code></td><td>Names persistent L1 state and stores protocol layout once.</td><td>No</td></tr>
+            <tr><td>Descriptor</td><td><code>FetchIncrement</code>, <code>FifoAcquire</code>, <code>CompareSet</code>, <code>MaskedWrite</code></td><td>Contains every operand and field required for exactly one instruction.</td><td>No</td></tr>
+            <tr><td>Encoder</td><td><code>descriptor.get_operation()</code></td><td>Returns the descriptor's 32-bit instruction word with raw <code>TT_OP_*</code> code generation.</td><td>No</td></tr>
+            <tr><td>Issuer</td><td><code>run</code> and semantic namespace verbs</td><td>Writes or emits the descriptor's encoded instruction.</td><td>Yes</td></tr>
+          </tbody>
+        </table></div>
+        <h3>What <code>CounterIdentity</code> means</h3>
+<pre><code>template &lt;
+    auto CounterIdentity,
+    std::uint32_t DataIndex&gt;
+void fetch_add(
+    hal::Gpr&lt;DataIndex&gt; data);</code></pre>
+        <p><code>CounterIdentity</code> is a template-parameter name, not a type and not another struct. It means “the complete <code>constexpr Counter</code> supplied inside angle brackets.” In the quick start, <code>packets</code> is the <code>CounterIdentity</code> in <code>fetch_add&lt;packets&gt;(...)</code>. There is no separate counter-cell type.</p>
+      </section>
+
+      <section id="shared">
+        <h2>Shared types</h2>
+<pre><code>enum class FifoState : std::uint8_t
+{
+    Empty, // wait while the FIFO has no readable units
+    Full   // wait while the FIFO has no writable units
+};
+
+// Low-level FifoAcquire descriptor field; semantic FIFO calls hide it.
+enum class FifoPointer : std::uint8_t
+{
+    Read  = 0, // retry while empty
+    Write = 1  // retry while full
+};
+
+template &lt;std::uint32_t Index&gt;
+struct hal::Gpr;</code></pre>
+        <p><code>FifoState</code> names the condition that keeps <code>wait_while</code> blocked. <code>FifoPointer</code> mirrors the instruction encoding and appears only when constructing a low-level <code>FifoAcquire</code> descriptor directly; <code>wait_while</code>, <code>pop_slots</code>, and <code>push_slots</code> select it for the caller.</p>
+        <p><code>hal::Gpr&lt;Index&gt;</code> identifies a hardware GPR; constructing it does not read the register. Use <code>hal::gpr&lt;Index&gt;()</code> for a fixed register or <code>hal::gpr(index)</code> for a runtime-selected register. An <code>AddressIndex</code> or <code>DataIndex</code> template parameter is therefore a GPR number, not a memory address.</p>
+        <p>Names ending in <code>Log2</code> are base-two exponents. <code>CapacityLog2 == 8</code> gives a capacity of <code>2^8 == 256</code> FIFO units and a nine-bit wrapping read/write counter. <code>IncrementLog2 == 2</code> advances the selected counter by <code>2^2 == 4</code> units. A unit is whatever the surrounding protocol chooses: a slot, tile, packet, byte, or another fixed quantity. The atomic instruction manages counters; it does not know the payload element size.</p>
+      </section>
+
+      <section id="fetch-add">
+        <h2>Fetch increment: Counter and FetchIncrement</h2>
+        <h3>Declarations</h3>
+<pre><code>template &lt;
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+struct FetchIncrement
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    hal::Gpr&lt;DataIndex&gt; data;
+    std::uint8_t word_select   = 0;
+    std::uint8_t counter_width = 32;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;
+    std::uint8_t WidthBits,
+    std::uint32_t AddressIndex&gt;
+struct Counter
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    std::uint8_t word = 0;
+
+    template &lt;std::uint32_t DataIndex&gt;
+    constexpr FetchIncrement&lt;AddressIndex, DataIndex&gt; fetch_add(
+        hal::Gpr&lt;DataIndex&gt; data) const;
+};
+
+// Compile-time issuing path
+template &lt;
+    auto CounterIdentity,
+    std::uint32_t DataIndex&gt;
+void fetch_add(
+    hal::Gpr&lt;DataIndex&gt; data);
+
+// Mixed issuing path: width remains part of the Counter type
+template &lt;
+    std::uint8_t WidthBits,
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+void fetch_add(
+    Counter&lt;WidthBits, AddressIndex&gt; counter,
+    hal::Gpr&lt;DataIndex&gt; data);</code></pre>
+        <p><code>Counter</code> is the reusable identity. Its <code>fetch_add</code> member combines that identity with a data GPR and returns a <code>FetchIncrement</code> descriptor. <code>data</code> supplies the addend and later receives the complete pre-increment word. <code>counter_width</code> is in <code>[1, 32]</code>; <code>word_select</code> is in <code>[0, 3]</code>.</p>
+        <h3>Usage</h3>
+<pre><code>// Locate: GPR[AddressIndex = 10] * 16 bytes + word 2 * 4 bytes.
+// Update: WidthBits = 16 controls wrapping; it does not affect the address.
+constexpr hal::atomic::Counter&lt;16, 10&gt; packets {
+    hal::gpr&lt;10&gt;(), // AddressIndex 10: GPR 10 contains L1 byte_address / 16.
+    2,              // Select 32-bit word 2: the third word, at byte offset +8.
+};
+
+// Encode only.
+constexpr auto descriptor = packets.fetch_add(hal::gpr&lt;11&gt;());
+constexpr std::uint32_t word = descriptor.get_operation();
+
+// Issue one immediate, posted ATINCGET.
+hal::atomic::fetch_add&lt;packets&gt;(hal::gpr&lt;11&gt;());
+
+// Runtime-selected identity/GPR values; still issues ATINCGET.
+hal::atomic::fetch_add(counter, data);</code></pre>
+      </section>
+
+      <section id="fifo">
+        <h2>FIFO bookkeeping: Fifo and FifoAcquire</h2>
+        <h3>Declarations</h3>
+<pre><code>template &lt;
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+struct FifoAcquire
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    hal::Gpr&lt;DataIndex&gt; data;
+    FifoPointer pointer;
+    std::uint8_t capacity_log2;
+    std::uint8_t increment_log2 = 0;
+    bool probe_only             = false;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;
+    std::uint8_t CapacityLog2,
+    std::uint32_t AddressIndex&gt;
+struct Fifo
+{
+    hal::Gpr&lt;AddressIndex&gt; control_address;
+
+    template &lt;
+        FifoState State,
+        std::uint32_t ResultIndex&gt;
+    constexpr FifoAcquire&lt;AddressIndex, ResultIndex&gt; wait_while(
+        hal::Gpr&lt;ResultIndex&gt; result) const;
+
+    template &lt;
+        std::uint8_t IncrementLog2 = 0,
+        std::uint32_t ResultIndex&gt;
+    constexpr FifoAcquire&lt;AddressIndex, ResultIndex&gt; pop_slots(
+        hal::Gpr&lt;ResultIndex&gt; result) const;
+
+    template &lt;std::uint32_t ResultIndex&gt;
+    constexpr FifoAcquire&lt;AddressIndex, ResultIndex&gt; pop_slots(
+        hal::Gpr&lt;ResultIndex&gt; result,
+        std::uint8_t increment_log2) const;
+
+    template &lt;
+        std::uint8_t IncrementLog2 = 0,
+        std::uint32_t ResultIndex&gt;
+    constexpr FifoAcquire&lt;AddressIndex, ResultIndex&gt; push_slots(
+        hal::Gpr&lt;ResultIndex&gt; result) const;
+
+    template &lt;std::uint32_t ResultIndex&gt;
+    constexpr FifoAcquire&lt;AddressIndex, ResultIndex&gt; push_slots(
+        hal::Gpr&lt;ResultIndex&gt; result,
+        std::uint8_t increment_log2) const;
+};
+
+// Compile-time issuing paths
+template &lt;
+    FifoState State,
+    auto FifoIdentity,
+    std::uint32_t ResultIndex&gt;
+void wait_while(
+    hal::Gpr&lt;ResultIndex&gt; result);
+
+template &lt;
+    auto FifoIdentity,
+    std::uint8_t IncrementLog2 = 0,
+    std::uint32_t ResultIndex&gt;
+void pop_slots(
+    hal::Gpr&lt;ResultIndex&gt; result);
+
+template &lt;
+    auto FifoIdentity,
+    std::uint8_t IncrementLog2 = 0,
+    std::uint32_t ResultIndex&gt;
+void push_slots(
+    hal::Gpr&lt;ResultIndex&gt; result);
+
+// Mixed issuing paths: capacity remains part of the Fifo type
+template &lt;
+    FifoState State,
+    std::uint8_t CapacityLog2,
+    std::uint32_t AddressIndex,
+    std::uint32_t ResultIndex&gt;
+void wait_while(
+    Fifo&lt;CapacityLog2, AddressIndex&gt; fifo,
+    hal::Gpr&lt;ResultIndex&gt; result);
+
+template &lt;
+    std::uint8_t CapacityLog2,
+    std::uint32_t AddressIndex,
+    std::uint32_t ResultIndex&gt;
+void pop_slots(
+    Fifo&lt;CapacityLog2, AddressIndex&gt; fifo,
+    hal::Gpr&lt;ResultIndex&gt; result,
+    std::uint8_t increment_log2 = 0);
+
+template &lt;
+    std::uint8_t CapacityLog2,
+    std::uint32_t AddressIndex,
+    std::uint32_t ResultIndex&gt;
+void push_slots(
+    Fifo&lt;CapacityLog2, AddressIndex&gt; fifo,
+    hal::Gpr&lt;ResultIndex&gt; result,
+    std::uint8_t increment_log2 = 0);</code></pre>
+        <h3>State being manipulated</h3>
+        <p>The payload ring and its element size belong to the caller. This interface operates only on a separate <code>FIFOControl</code> line in L1. For capacity <code>C = 2^CapacityLog2</code>, initialize both counters to the same value and keep each value in the low <code>CapacityLog2 + 1</code> bits:</p>
+<pre><code>16-byte FIFOControl line                    Separate caller-owned payload ring
++0x0  32-bit read counter (rd)             C units: [0] [1] ... [C - 1]
++0x4  32-bit write counter (wr)
++0x8  not used by this FIFO operation       payload index = returned_counter % C
++0xc  not used by this FIFO operation
+
+occupancy = (wr - rd) modulo (2 * C)
+empty     = occupancy == 0
+full      = occupancy == C</code></pre>
+        <p>The extra counter bit distinguishes an empty ring from a full ring when <code>rd</code> and <code>wr</code> point at the same payload index. Thus a capacity-eight FIFO uses four-bit counters that wrap modulo 16, while the payload index wraps modulo 8. Bits above the counter width must remain zero. Constructing a <code>Fifo</code> only names this state; it does not allocate or initialize either the control line or the payload ring.</p>
+        <div class="callout note"><span class="callout-title">What the primitive is for</span><p>A normal load followed by a fullness check and a later store can race with another FIFO user. <code>ATINCGETPTR</code> performs the read/write-counter check, captures the selected pointer, and updates that pointer as one atomic transaction. It changes only FIFO bookkeeping; software still moves the payload and supplies any required ordering around that movement.</p></div>
+
+        <h3>What each FIFO operation does</h3>
+        <p><code>FifoIdentity</code> is the complete <code>constexpr Fifo</code> passed in angle brackets. <code>State</code> names the condition that blocks <code>wait_while</code>; <code>pop_slots</code> and <code>push_slots</code> select the read and write counters directly. <code>ResultIndex</code> is inferred from the GPR that receives the old counter. The descriptor's <code>AddressIndex</code> and <code>DataIndex</code> are likewise inferred from its GPR operands.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Operation</th><th>Condition retried by hardware</th><th>Value returned</th><th>Atomic state change</th><th>FIFO meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>wait_while&lt;FifoState::Empty&gt;</code></td><td>Wait while empty.</td><td>Current <code>rd</code>.</td><td>None.</td><td>Readable data exists; inspect the next read position without popping it.</td></tr>
+            <tr><td><code>pop_slots&lt;M&gt;</code></td><td>Wait while empty.</td><td>Old <code>rd</code>.</td><td><code>rd = (rd + 2^M) % (2*C)</code></td><td>Pop <code>2^M</code> units from FIFO bookkeeping.</td></tr>
+            <tr><td><code>wait_while&lt;FifoState::Full&gt;</code></td><td>Wait while full.</td><td>Current <code>wr</code>.</td><td>None.</td><td>Writable space exists; inspect the next write position without pushing it.</td></tr>
+            <tr><td><code>push_slots&lt;M&gt;</code></td><td>Wait while full.</td><td>Old <code>wr</code>.</td><td><code>wr = (wr + 2^M) % (2*C)</code></td><td>Push <code>2^M</code> units into FIFO bookkeeping.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>IncrementLog2 == 0</code> means advance by one unit, not “do not increment.” Only <code>wait_while</code> leaves the selected counter unchanged. Consequently, a wait does not reserve the returned position against another FIFO user. If a readiness check fails, that attempt makes no state change; the issuing Tensix thread remains blocked while hardware retries.</p>
+        <div class="callout note"><span class="callout-title">“Blocking” is a Tensix execution property</span><p>The C++ verb pushes the instruction asynchronously. Once the instruction reaches the Scalar Unit, later instructions from that Tensix thread cannot pass until the condition succeeds. Apply the documented ScalarIdle synchronization before the RISC reads the result GPR.</p></div>
+
+        <h3>Worked producer-to-consumer flow</h3>
+        <p>For a single-producer, single-consumer FIFO, or one protected by an external lock, suppose <code>Fifo&lt;2, AddressIndex&gt;</code> describes four payload slots and starts with <code>rd = wr = 0</code>:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Step</th><th>Action and result</th><th>Control state</th><th>What happened to the data</th></tr></thead>
+          <tbody>
+            <tr><td>1. Producer waits</td><td><code>wait_while&lt;FifoState::Full&gt;</code> returns <code>0</code>.</td><td><code>rd = 0, wr = 0</code> (empty)</td><td>No data moves and no slot is reserved. With this protocol, payload index <code>0 &amp; 3 == 0</code> is the producer's next position.</td></tr>
+            <tr><td>2. Producer writes</td><td>Software writes payload slot 0 and completes the ordering required by its protocol.</td><td><code>rd = 0, wr = 0</code></td><td>The payload changes; the atomic primitive is not involved.</td></tr>
+            <tr><td>3. Producer publishes</td><td><code>push_slots&lt;0&gt;</code> returns old <code>wr == 0</code>.</td><td><code>rd = 0, wr = 1</code></td><td>The atomic write-counter advance records one pushed unit.</td></tr>
+            <tr><td>4. Consumer waits</td><td><code>wait_while&lt;FifoState::Empty&gt;</code> returns <code>0</code>.</td><td><code>rd = 0, wr = 1</code></td><td>Slot <code>0 &amp; 3 == 0</code> is readable; no unit is popped yet.</td></tr>
+            <tr><td>5. Consumer reads</td><td>Software reads payload slot 0 and completes the ordering required by its protocol.</td><td><code>rd = 0, wr = 1</code></td><td>The payload is consumed outside the atomic primitive.</td></tr>
+            <tr><td>6. Consumer releases</td><td><code>pop_slots&lt;0&gt;</code> returns old <code>rd == 0</code>.</td><td><code>rd = 1, wr = 1</code> (empty)</td><td>The atomic read-counter advance records one popped unit and makes the slot reusable.</td></tr>
+          </tbody>
+        </table></div>
+        <p>After four pushes without a pop, <code>rd = 0, wr = 4</code>: both counters select payload index 0, but the phase bit differs, so the FIFO is full. After four matching pops, <code>rd = wr = 4</code>, so it is empty again. Both counters wrap after 8.</p>
+        <div class="callout warning"><span class="callout-title">The example relies on its ownership protocol</span><p><code>wait_while</code> does not reserve a position. Multiple producers or multiple consumers need an additional ownership protocol; otherwise another user can act on the same returned position before the pointer advances.</p></div>
+        <div class="callout warning"><span class="callout-title">Batched increments need a protocol check</span><p>Keep the increment no larger than the capacity. Before advancing by more than one, the surrounding protocol must also establish that the FIFO contains the complete read batch or has room for the complete write batch; hardware checks only empty/nonempty or full/nonfull.</p></div>
+        <h3>Usage</h3>
+        <p>The host or surrounding runtime must reserve a 16-byte-aligned control line and a non-overlapping payload buffer in L1, then pass their byte addresses to the kernel. A <code>Fifo</code> object does not allocate either region, and <code>hal::gpr&lt;30&gt;()</code> only names GPR 30—it does not put a value into that register. The following kernel-side setup initializes an empty FIFO and loads the control-line address into GPR 30:</p>
+<pre><code>#include "hal/atomic.h"
+#include "hal/gpr_ops.h"
+
+constexpr hal::atomic::Fifo&lt;8, 30&gt; output_fifo {
+    hal::gpr&lt;30&gt;(), // GPR 30 contains FIFOControl byte_address / 16.
+};
+
+void initialize_output_fifo(const std::uint32_t control_byte_address)
+{
+    // The host/runtime must provide a 16-byte-aligned L1 address.
+    LLK_ASSERT(
+        (control_byte_address &amp; 0xfu) == 0u,
+        "FIFOControl must be 16-byte aligned");
+
+    volatile std::uint32_t* control =
+        reinterpret_cast&lt;volatile std::uint32_t*&gt;(control_byte_address);
+
+    // Initialize the shared control state once, before any FIFO user starts.
+    ckernel::store_blocking(&amp;control[0], 0u); // rd at byte offset +0.
+    ckernel::store_blocking(&amp;control[1], 0u); // wr at byte offset +4; rd == wr means empty.
+
+    // ATINCGETPTR computes control_byte_address = GPR[30] * 16.
+    // Each Tensix thread that issues FIFO operations must set its own GPR 30.
+    hal::gpr_ops::set(
+        hal::gpr&lt;30&gt;(),
+        control_byte_address &gt;&gt; 4);
+}
+
+// Separately, the host/runtime supplies 256 payload slots because
+// CapacityLog2 == 8. It chooses each slot's byte size and layout.
+// ATINCGETPTR is not given the payload address and never moves payload data.
+
+// Encode only: push four units in the FIFO bookkeeping.
+constexpr auto descriptor = output_fifo.push_slots&lt;2&gt;(
+    hal::gpr&lt;31&gt;());
+constexpr std::uint32_t word = descriptor.get_operation();
+
+// Issue the same protocol operation.
+hal::atomic::push_slots&lt;
+    output_fifo,
+    2&gt;(hal::gpr&lt;31&gt;());
+
+// Block for readable data without advancing the read pointer.
+hal::atomic::wait_while&lt;
+    hal::atomic::FifoState::Empty,
+    output_fifo&gt;(hal::gpr&lt;31&gt;());</code></pre>
+        <div class="callout warning"><span class="callout-title">Do not apply <code>L1_ADDRESS()</code> to this control address</span><p><code>ATINCGETPTR</code> uses the exact 16-byte line address, so load <code>control_byte_address &gt;&gt; 4</code>. The Blackhole <code>L1_ADDRESS()</code> helper additionally subtracts one for other LLK address fields and would therefore select the wrong line here.</p></div>
+      </section>
+
+      <section id="compare-set">
+        <h2>Compare and set: Lock and CompareSet</h2>
+        <h3>Declarations</h3>
+<pre><code>template &lt;std::uint32_t AddressIndex&gt;
+struct CompareSet
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    std::uint8_t word_select = 0;
+    std::uint8_t compare;
+    std::uint8_t set;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;std::uint32_t AddressIndex&gt;
+struct Lock
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    std::uint8_t word = 0;
+
+    constexpr CompareSet&lt;AddressIndex&gt; acquire() const;
+    constexpr CompareSet&lt;AddressIndex&gt; release() const;
+
+    template &lt;
+        std::uint8_t Compare,
+        std::uint8_t Set&gt;
+    constexpr CompareSet&lt;AddressIndex&gt; compare_set() const;
+
+    constexpr CompareSet&lt;AddressIndex&gt; compare_set(
+        std::uint8_t compare,
+        std::uint8_t set) const;
+};
+
+// Compile-time issuing paths
+template &lt;auto LockIdentity&gt;
+void acquire();
+
+template &lt;auto LockIdentity&gt;
+void release();
+
+template &lt;
+    auto LockIdentity,
+    std::uint8_t Compare,
+    std::uint8_t Set&gt;
+void compare_set();
+
+// Mixed issuing paths
+template &lt;std::uint32_t AddressIndex&gt;
+void acquire(
+    Lock&lt;AddressIndex&gt; lock);
+
+template &lt;std::uint32_t AddressIndex&gt;
+void release(
+    Lock&lt;AddressIndex&gt; lock);
+
+template &lt;std::uint32_t AddressIndex&gt;
+void compare_set(
+    Lock&lt;AddressIndex&gt; lock,
+    std::uint8_t compare,
+    std::uint8_t set);</code></pre>
+        <p><code>LockIdentity</code> is the complete <code>constexpr Lock</code> passed in angle brackets. <code>Compare</code> and <code>Set</code> are the four-bit immediate values on the compile-time generic path. <code>AddressIndex</code> is inferred from <code>lock.address</code> on the mixed path.</p>
+        <p><code>ATCAS</code> means atomic compare-and-set. It repeatedly reads the selected 32-bit word until the entire word equals the zero-extended four-bit <code>compare</code> value. It then atomically replaces that word with the zero-extended four-bit <code>set</code> value. <code>Lock::acquire()</code> creates <code>{compare 0, set 1}</code>; <code>Lock::release()</code> creates <code>{compare 1, set 0}</code>.</p>
+        <div class="callout warning"><span class="callout-title">ATCAS compares the complete word</span><p>Nonzero upper bits or a compare value that can never occur make the instruction retry indefinitely.</p></div>
+        <h3>Usage</h3>
+<pre><code>constexpr auto lock = hal::atomic::Lock {
+    hal::gpr&lt;40&gt;(),
+    0, // Select 32-bit word 0: effective byte address = GPR[40] * 16 + 0 * sizeof(std::uint32_t).
+};
+
+// Encode only.
+constexpr auto acquire_descriptor = lock.acquire();
+constexpr std::uint32_t word = acquire_descriptor.get_operation();
+
+// Issue the lock protocol.
+hal::atomic::acquire&lt;lock&gt;();
+// Critical section.
+hal::atomic::release&lt;lock&gt;();
+
+// Wait for whole-word value 3, then replace it with 4.
+hal::atomic::compare_set&lt;lock, 3, 4&gt;();</code></pre>
+      </section>
+
+      <section id="masked-write">
+        <h2>Masked write: MaskedWrite and store_masked</h2>
+        <h3>Declarations</h3>
+<pre><code>template &lt;
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+struct MaskedWrite
+{
+    hal::Gpr&lt;AddressIndex&gt; address;
+    hal::Gpr&lt;DataIndex&gt; data;
+    std::uint8_t granule_mask;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+// Compile-time mask
+template &lt;
+    std::uint8_t GranuleMask,
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+void store_masked(
+    hal::Gpr&lt;AddressIndex&gt; address,
+    hal::Gpr&lt;DataIndex&gt; data);
+
+// Runtime mask
+template &lt;
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+void store_masked(
+    hal::Gpr&lt;AddressIndex&gt; address,
+    hal::Gpr&lt;DataIndex&gt; data,
+    std::uint8_t granule_mask);</code></pre>
+        <p><code>data</code> is the first register in a four-aligned GPR quad: 0, 4, 8, ..., 60. Requiring both <code>data &lt; 64</code> and <code>data % 4 == 0</code> guarantees that the implied four-register source remains in range; base 60 uses the final valid quad, GPRs 60–63. The address GPR may be any index in <code>[0, 63]</code>. Mask bit <code>i</code> enables 16-bit granule <code>i</code> of the 16-byte line. Nothing is returned; “swap” in the ISA name means replacement of selected granules, not an exchange.</p>
+        <div class="callout note"><span class="callout-title">What validation guarantees</span><p>Compile-time issuing rejects an out-of-range or misaligned GPR with <code>static_assert</code>. Value-selected issuing diagnoses it with <code>LLK_ASSERT</code> only while LLK assertions are enabled; disabling assertions deliberately removes those runtime checks. The mask is already a <code>std::uint8_t</code>, so every representable value <code>0x00..0xff</code> is valid: zero writes no granules and <code>0xff</code> writes all eight. If a wider runtime integer is passed, C++ converts it to <code>std::uint8_t</code> before the function executes, potentially discarding upper bits; range-check wider inputs before calling.</p></div>
+        <h3>Usage</h3>
+<pre><code>// Encode only. Source data occupies GPRs 56 through 59.
+constexpr hal::atomic::MaskedWrite descriptor {
+    hal::gpr&lt;50&gt;(),
+    hal::gpr&lt;56&gt;(),
+    0xa5,
+};
+constexpr std::uint32_t word = descriptor.get_operation();
+
+// Issue with a compile-time mask.
+hal::atomic::store_masked&lt;0xa5&gt;(
+    hal::gpr&lt;50&gt;(),
+    hal::gpr&lt;56&gt;());
+
+// Issue with a runtime mask.
+hal::atomic::store_masked(
+    address,
+    aligned_data,
+    runtime_mask);</code></pre>
+      </section>
+
+      <section id="run">
+        <h2>Issuing descriptors directly</h2>
+        <h3>Declarations</h3>
+<pre><code>// Compile-time path
+template &lt;auto Operation&gt;
+void run();
+
+// Runtime path: one typed overload for each descriptor
+template &lt;
+    std::uint32_t AddressIndex,
+    std::uint32_t DataIndex&gt;
+void run(
+    FetchIncrement&lt;AddressIndex, DataIndex&gt; operation);
+
+// Equivalent overloads exist for FifoAcquire, CompareSet, and MaskedWrite.</code></pre>
+        <p>Use a semantic verb when an identity exists; it communicates the protocol better. Use <code>run</code> when code already owns a complete descriptor. <code>run&lt;Operation&gt;()</code> emits an immediate instruction, while <code>run(operation)</code> writes the value-selected word through <code>ckernel::instrn_buffer[0]</code>.</p>
+<pre><code>constexpr auto descriptor = packets.fetch_add(hal::gpr&lt;11&gt;());
+
+// Immediate issue.
+hal::atomic::run&lt;descriptor&gt;();
+
+// Value-selected issue: construct the descriptor from runtime GPR indices and fields.
+const auto address = hal::gpr(address_index);
+const auto data = hal::gpr(data_index);
+const hal::atomic::FetchIncrement runtime_descriptor {
+    address,
+    data,
+    word,
+    counter_width,
+};
+hal::atomic::run(runtime_descriptor);</code></pre>
+      </section>
+
+      <section id="validation">
+        <h2>Validation</h2>
+        <p><code>is_valid(...)</code> overloads cover all four descriptors and all three identities. Compile-time <code>run&lt;Operation&gt;()</code> rejects invalid descriptors with <code>static_assert</code>. Value-selected <code>.get_operation()</code> checks every field with a descriptive <code>LLK_ASSERT</code>. When LLK assertions are disabled, the validation helpers are compiled out and emit no runtime code. Enable LLK assertions while diagnosing invalid runtime inputs.</p>
+        <ul>
+          <li>Every resolved GPR index must be in <code>[0, 63]</code>.</li>
+          <li>Counter width is <code>[1, 32]</code>; word selection is <code>[0, 3]</code>.</li>
+          <li>FIFO capacity and increment exponents are <code>[0, 15]</code>; probes cannot increment.</li>
+          <li>ATCAS compare and set values are four-bit values.</li>
+          <li>ATSWAP data begins at a four-aligned GPR index in <code>{0, 4, ..., 60}</code>; every eight-bit granule mask is valid.</li>
+        </ul>
+      </section>
+
+      <section id="hardware">
+        <h2>Hardware mapping and completion</h2>
+        <p>The immediate path matches raw <code>TTI_AT*</code>: compile-time validation and encoding leave exactly one embedded <code>.ttinsn</code>, with no descriptor storage, branch, call, or runtime encoding. With LLK assertions disabled, the value-selected path matches raw <code>TT_AT*</code>: it performs only the field arithmetic required to form a runtime instruction word and one write through <code>ckernel::instrn_buffer[0]</code>. It adds no validation branch, trap, allocation, or descriptor storage in optimized builds. Enabling LLK assertions intentionally adds diagnostic checks.</p>
+        <p>A genuinely runtime instruction word cannot use <code>INSTRUCTION_WORD</code>, whose immediate constraint requires a constant. Therefore “zero overhead” means parity with the corresponding raw macro: <code>TTI_AT*</code> for immediate selections and <code>TT_AT*</code> for value-selected fields. The HAL fixes the ISA memory selector and reserved fields to zero because these operations target L1.</p>
+        <p><code>FetchIncrement</code> and <code>MaskedWrite</code> are posted. Wait for ScalarIdle, while gating the actual dependent consumer, before consuming a fetch result, reusing its GPR, or relying on updated memory. <code>FifoAcquire</code> and <code>CompareSet</code> instead hold the issuing thread until success.</p>
+        <div class="callout warning"><span class="callout-title">Blocking atomics require eventual progress</span><p>An impossible FIFO condition or compare value can block all following instructions from the issuing thread and occupy the shared Scalar Unit.</p></div>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <div class="api-index">
+          <a href="../../tt_llk_blackhole/llk_lib/hal/atomic.h"><code>tt_llk_blackhole/llk_lib/hal/atomic.h</code><span>Descriptors, identities, encoders, and issuing verbs.</span></a>
+          <a href="../../tt_llk_blackhole/instructions/assembly.yaml"><code>tt_llk_blackhole/instructions/assembly.yaml</code><span>Blackhole atomic fields, FIFO control layout, and retry behavior.</span></a>
+          <a href="../../tt_llk_blackhole/llk_lib/hal/utils/gpr.h"><code>tt_llk_blackhole/llk_lib/hal/utils/gpr.h</code><span>Compile-time and runtime GPR identities.</span></a>
+          <a href="../../tt_llk_blackhole/llk_lib/hal/sync.h"><code>tt_llk_blackhole/llk_lib/hal/sync.h</code><span>Scalar-idle completion gates.</span></a>
+          <a href="../../tests/sources/risc_compute_test.cpp"><code>tests/sources/risc_compute_test.cpp</code><span>Encoding, validation, and issue-path coverage.</span></a>
+        </div>
+      </section>
+
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#layers">Identities and descriptors</a></li>
+        <li><a href="#shared">Shared types</a></li>
+        <li><a href="#fetch-add">Fetch increment</a></li>
+        <li><a href="#fifo">FIFO pointers</a></li>
+        <li><a href="#compare-set">Compare and set</a></li>
+        <li><a href="#masked-write">Masked write</a></li>
+        <li><a href="#run">Issuing descriptors</a></li>
+        <li><a href="#validation">Validation</a></li>
+        <li><a href="#hardware">Hardware and completion</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

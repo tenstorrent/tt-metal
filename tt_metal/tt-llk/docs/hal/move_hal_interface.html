@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="API guide and reference for the Blackhole hal::move transfer interface.">
+  <title>hal::move — Blackhole transfer HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .move-figure { margin:20px 0 32px; }
+    .move-figure figcaption { margin-top:9px; color:var(--muted); font-size:13px; }
+    .route-map { display:grid; gap:8px; overflow-x:auto; padding:2px 2px 8px; }
+    .route-lane { display:grid; grid-template-columns:minmax(92px,.8fr) 22px minmax(190px,1.5fr) 22px minmax(92px,.8fr) minmax(116px,.9fr); align-items:stretch; gap:7px; }
+    .route-card,.fragment-card,.address-card,.mover-card { min-width:0; padding:12px 13px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .route-card.source { border-color:var(--link); background:var(--blue-soft); }
+    .route-card.operation,.fragment-card.operation,.mover-card.operation { border-color:var(--accent); background:var(--accent-soft); }
+    .route-card.completion,.mover-card.wait { border-color:#d4a72c; background:var(--amber-soft); }
+    .route-card strong,.fragment-card strong,.address-card strong,.mover-card strong { display:block; overflow-wrap:anywhere; font:700 13px/1.4 var(--mono); }
+    .route-card small,.fragment-card small,.address-card small,.mover-card small { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.4; }
+    .flow-arrow { align-self:center; color:var(--faint); text-align:center; font-size:20px; font-weight:700; }
+    .flow-label { display:block; margin-bottom:7px; color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+    .fragment-flow,.address-flow,.mover-flow { display:flex; align-items:stretch; gap:9px; overflow-x:auto; padding:2px 2px 8px; }
+    .request-card { flex:0 0 175px; padding:14px; border:1px solid var(--link); border-radius:8px; background:var(--blue-soft); }
+    .fragment-stack { flex:1 0 430px; display:grid; grid-template-columns:repeat(2,minmax(190px,1fr)); gap:9px; }
+    .row-strip { display:grid; grid-template-columns:repeat(8,minmax(16px,1fr)); gap:3px; margin-top:9px; }
+    .row-strip span { padding:6px 2px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--muted); text-align:center; font:700 10px/1 var(--mono); }
+    .row-strip span.active { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+    .broadcast-flow { display:grid; grid-template-columns:minmax(130px,.7fr) 28px minmax(180px,1fr) 28px minmax(260px,1.4fr); align-items:center; gap:9px; }
+    .source-cell { padding:20px 14px; border:2px solid var(--link); border-radius:8px; background:var(--blue-soft); text-align:center; }
+    .source-cell strong { display:block; font:700 14px/1.4 var(--mono); }
+    .source-cell small { color:var(--muted); }
+    .dst-grid { display:grid; grid-template-columns:repeat(8,minmax(18px,1fr)); gap:3px; padding:10px; border:1px solid var(--accent); border-radius:8px; background:var(--accent-soft); }
+    .dst-grid span { aspect-ratio:1; display:grid; place-items:center; border:1px solid var(--border); border-radius:3px; color:var(--accent); background:var(--bg); font:700 9px/1 var(--mono); }
+    .address-card { flex:1 0 165px; }
+    .address-card.input { border-color:var(--link); background:var(--blue-soft); }
+    .address-card.combine { border-color:var(--accent); background:var(--accent-soft); }
+    .address-card.output { border-color:#d4a72c; background:var(--amber-soft); }
+    .half-pair { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-top:8px; }
+    .half-pair span { padding:5px; border:1px solid var(--border); border-radius:4px; background:var(--bg); text-align:center; font:700 10px/1.3 var(--mono); }
+    .half-pair .selected { border-color:var(--link); color:var(--link); background:var(--blue-soft); }
+    .mover-card { flex:1 0 175px; }
+    .cfg-words { display:grid; gap:4px; margin-top:8px; }
+    .cfg-words span { padding:5px 7px; border:1px solid var(--border); border-radius:4px; background:var(--bg); font:600 10px/1.3 var(--mono); }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } .route-lane { grid-template-columns:minmax(80px,.8fr) 18px minmax(150px,1.4fr) 18px minmax(80px,.8fr); } .route-card.completion { grid-column:1/-1; } .broadcast-flow { grid-template-columns:1fr; } .broadcast-flow .flow-arrow { transform:rotate(90deg); } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::move</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a class="current" href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Guide</h2>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#shared">Shared types</a>
+        <h2>Interfaces</h2>
+        <a href="#srca-dst">SrcA to Dst</a>
+        <a href="#srcb-dst">SrcB to Dst</a>
+        <a href="#dst-srcb">Dst to SrcB</a>
+        <a href="#l1-gpr">L1 and GPR</a>
+        <a href="#gpr-src">GPR to Src</a>
+        <a href="#mmio">MMIO</a>
+        <a href="#xmov">L1 to L1 XMOV</a>
+        <a href="#emission">run and get_operation</a>
+        <h2>Reference</h2>
+        <a href="#validation">Validation</a>
+        <a href="#hardware">Hardware mapping</a>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::move</div>
+        <h1>Blackhole transfer HAL</h1>
+        <p class="lede">Describe movement by source and destination, let the backend derive instruction modes, and issue one native operation or a compile-time-expanded sequence.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Header</strong> hal/move.h</span>
+          <span class="pill"><strong>Instructions</strong> MOVA2D · MOVB2D · MOVD2B · LOADIND · STOREIND · LOADREG · STOREREG · XMOV</span>
+          <span class="pill"><strong>Status</strong> Implemented</span>
+        </div>
+        <div class="install"><span>Include the transfer interface</span><code>#include "hal/move.h"</code></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::SrcA,
+    hal::move::Dst&gt;
+move_face {
+    .source_row = 0,
+    .destination_row = 0,
+    .address_mode = ADDR_MOD_2,
+    .number_of_rows = hal::move::rows::Face,
+};
+
+// Compile-time path: two straight-line eight-row MOVA2D instructions.
+hal::move::run&lt;move_face&gt;();</code></pre>
+        <p>The endpoint pair selects the instruction family. Semantic members select row count, broadcast, address formation, and completion. Raw modifier bits are private to the Blackhole encoder.</p>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <figure class="move-figure">
+          <div class="route-map" aria-label="Implemented transfer routes and their completion domains">
+            <div class="route-lane">
+              <div class="route-card source"><span class="flow-label">Source bank</span><strong>SrcA / SrcB</strong><small>Matrix rows selected by the current RWC state.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card operation"><span class="flow-label">Matrix path</span><strong>MOVA2D / MOVB2D</strong><small>Native row shape and broadcast come from the descriptor.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card"><span class="flow-label">Destination</span><strong>Dst</strong><small>One or more destination rows.</small></div>
+              <div class="route-card completion"><span class="flow-label">Readiness</span><strong>SourceValidity</strong><small>Wait or explicit debug bypass.</small></div>
+            </div>
+            <div class="route-lane">
+              <div class="route-card source"><span class="flow-label">Matrix source</span><strong>Dst</strong><small>Select the normal or low 16-bit half of each row.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card operation"><span class="flow-label">Reverse matrix path</span><strong>MOVD2B</strong><small>One-row or four-row native fragments.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card"><span class="flow-label">Destination bank</span><strong>SrcB</strong><small>One or more source-register rows.</small></div>
+              <div class="route-card completion"><span class="flow-label">Progression</span><strong>Dst / SrcB RWCs</strong><small>Selected ADDR_MOD entry.</small></div>
+            </div>
+            <div class="route-lane">
+              <div class="route-card source"><span class="flow-label">Memory side</span><strong>L1 / MMIO</strong><small>Immediate or GPR-indirect address formation.</small></div>
+              <div class="flow-arrow" aria-hidden="true">↔</div>
+              <div class="route-card operation"><span class="flow-label">Scalar Unit</span><strong>LOADIND · STOREIND<br>LOADREG · STOREREG</strong><small>Move 16, 4, 2, or 1 byte where the route supports size.</small></div>
+              <div class="flow-arrow" aria-hidden="true">↔</div>
+              <div class="route-card"><span class="flow-label">Register side</span><strong>GPR</strong><small>One register or an aligned four-register group.</small></div>
+              <div class="route-card completion"><span class="flow-label">Optional fence</span><strong>ScalarIdle</strong><small><code>Completion::Wait</code></small></div>
+            </div>
+            <div class="route-lane">
+              <div class="route-card source"><span class="flow-label">Mover source</span><strong>L1</strong><small>Addressed in 16-byte blocks.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card operation"><span class="flow-label">Composite path</span><strong>THCON configuration + XMOV</strong><small>Blackhole direction 3 only.</small></div>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <div class="route-card"><span class="flow-label">Mover destination</span><strong>L1</strong><small>Non-overlapping span.</small></div>
+              <div class="route-card completion"><span class="flow-label">Optional fence</span><strong>MoverIdle</strong><small><code>Completion::Wait</code></small></div>
+            </div>
+          </div>
+          <figcaption>The endpoint types choose one hardware path. Completion is part of the descriptor: matrix moves use source-bank validity, scalar transfers can append a ScalarIdle gate, and XMOV can append a MoverIdle gate.</figcaption>
+        </figure>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Route</th><th>Backend operation</th><th>Completion</th></tr></thead>
+          <tbody>
+            <tr><td><code>SrcA → Dst</code></td><td>MOVA2D or MOVDBGA2D; 1/8-row native fragments.</td><td>The instruction's source-validity policy.</td></tr>
+            <tr><td><code>SrcB → Dst</code></td><td>MOVB2D or MOVDBGB2D; 1/4 rows, or one row broadcast to 8.</td><td>The instruction's source-validity policy.</td></tr>
+            <tr><td><code>Dst → SrcB</code></td><td>MOVD2B; 1/4-row native fragments, with normal or low-16 Dst source selection.</td><td>ADDR_MOD-controlled RWC progression.</td></tr>
+            <tr><td><code>L1 ↔ Gpr</code></td><td>LOADIND or STOREIND with 16/4/2/1-byte size.</td><td>Posted; optional ScalarIdle wait.</td></tr>
+            <tr><td><code>Gpr → SrcA/SrcB</code></td><td>Fixed four-BF16 STOREIND.</td><td>Waits for source-bank ownership.</td></tr>
+            <tr><td><code>Gpr ↔ Mmio</code></td><td>STOREREG/LOADREG for immediate addresses; STOREIND for indirect writes.</td><td>Posted/asynchronous; optional ScalarIdle wait.</td></tr>
+            <tr><td><code>L1 → L1</code></td><td>Three grouped THCON writes followed by XMOV.</td><td>Optional MoverIdle wait.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Large matrix transfers repeat the same encoded source and destination rows. The selected address modifier advances the live RWCs between fragments. A distinct <code>final_address_mode</code> can wrap or jump the counters on the last fragment.</p>
+      </section>
+
+      <section id="shared">
+        <h2>Shared types</h2>
+<pre><code>struct RowCount { std::uint16_t value; };
+
+inline constexpr std::size_t MaxMatrixTransferInstructions = 8;
+
+namespace rows {
+inline constexpr RowCount One {1};
+inline constexpr RowCount Four {4};
+inline constexpr RowCount Eight {8};
+inline constexpr RowCount Face {16};
+
+template &lt;std::uint16_t Count&gt;
+constexpr RowCount faces();
+} // namespace rows
+
+namespace dst_layout {
+inline constexpr std::uint32_t RowsPerFace  = 16;
+inline constexpr std::uint32_t FacesPerTile = 4;
+inline constexpr std::uint32_t RowsPerTile  = 64;
+
+constexpr std::uint32_t tile_row(std::uint32_t tile_index, std::uint32_t face = 0, std::uint32_t row = 0);
+} // namespace dst_layout
+
+enum class RowAddressing : std::uint8_t { Absolute, CounterRelative };
+
+// Compile-time path
+template &lt;std::int32_t Offset&gt;
+constexpr std::uint32_t relative_row();
+
+// Runtime path
+constexpr std::uint32_t relative_row(std::int32_t offset);
+
+enum class Broadcast : std::uint8_t { None, Column0, Row, Scalar };
+enum class SourceValidity : std::uint8_t { Wait, Ignore };
+enum class ScalarSize : std::uint8_t { Bytes16, Bytes4, Bytes2, Bytes1 };
+enum class OffsetIncrement : std::uint8_t { None, Bytes2, Bytes4, Bytes16 };
+enum class Completion : std::uint8_t { IssueOnly, Wait };
+enum class GprHalf : std::uint8_t { Low, High };</code></pre>
+        <p><code>rows::faces&lt;N&gt;()</code> accepts a positive whole number of faces, subject to the eight-instruction expansion limit. Indirect addresses contain a base GPR, a low/high half-register offset, and an optional offset-register increment.</p>
+        <p><code>dst_layout::tile_row(tile, face, row)</code> is pure constexpr Dst geometry — the row holding one face row of one 32x32 tile (<code>tile * 64 + face * 16 + row</code>) — shared by every kernel that addresses Dst by tile and face.</p>
+        <p><code>RowAddressing</code> selects how the hardware consumes a ten-bit Dst row field: <code>Absolute</code> rows are validated against the register span, while <code>CounterRelative</code> fields hold a masked signed offset that the hardware adds to the live row counter modulo 1024. Build relative fields with <code>relative_row</code> — the compile-time form rejects out-of-range offsets at compile time; the runtime form masks to ten bits and diagnoses out-of-range offsets while LLK assertions are enabled. Where the effective counter-plus-offset row lands is the caller's contract, exactly as with the raw instruction forms.</p>
+      </section>
+
+      <section id="srca-dst">
+        <h2><code>SrcA</code> to <code>Dst</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;SrcA, Dst&gt;
+{
+    std::uint32_t source_row;
+    std::uint32_t destination_row;
+    RowAddressing destination_addressing = RowAddressing::Absolute;
+    std::uint8_t address_mode;
+    RowCount number_of_rows;
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool destination_32bit_low = false;
+    SourceValidity source_validity = SourceValidity::Wait;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p>One and eight rows are native. Four rows expand to four one-row moves; each face expands to two eight-row moves. The eight-instruction limit permits up to four faces. <code>SourceValidity::Ignore</code> selects MOVDBGA2D explicitly.</p>
+        <figure class="move-figure">
+          <div class="fragment-flow">
+            <div class="request-card">
+              <span class="flow-label">Semantic request</span>
+              <strong><code>rows::Face</code></strong>
+              <div class="row-strip" aria-label="Sixteen requested rows represented as two groups">
+                <span class="active">0</span><span class="active">1</span><span class="active">2</span><span class="active">3</span>
+                <span class="active">4</span><span class="active">5</span><span class="active">6</span><span class="active">7</span>
+              </div>
+              <div class="row-strip" aria-hidden="true">
+                <span class="active">8</span><span class="active">9</span><span class="active">10</span><span class="active">11</span>
+                <span class="active">12</span><span class="active">13</span><span class="active">14</span><span class="active">15</span>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="fragment-stack">
+              <div class="fragment-card operation">
+                <span class="flow-label">Fragment 0</span>
+                <strong>MOVA2D · 8 rows</strong>
+                <small>Encoded source and destination rows are the descriptor's original rows.</small>
+                <div class="row-strip">
+                  <span class="active">+0</span><span class="active">+1</span><span class="active">+2</span><span class="active">+3</span>
+                  <span class="active">+4</span><span class="active">+5</span><span class="active">+6</span><span class="active">+7</span>
+                </div>
+                <small><code>address_mode</code> advances SrcA and Dst RWCs by 8.</small>
+              </div>
+              <div class="fragment-card operation">
+                <span class="flow-label">Fragment 1</span>
+                <strong>MOVA2D · 8 rows</strong>
+                <small>The advanced RWCs select the second effective eight-row block.</small>
+                <div class="row-strip">
+                  <span class="active">+8</span><span class="active">+9</span><span class="active">+10</span><span class="active">+11</span>
+                  <span class="active">+12</span><span class="active">+13</span><span class="active">+14</span><span class="active">+15</span>
+                </div>
+                <small>The last instruction uses <code>final_address_mode</code> when supplied.</small>
+              </div>
+            </div>
+          </div>
+          <figcaption>A face is a semantic 16-row request, but MOVA2D's native large shape is eight rows. Compile-time <code>run</code> emits these two instructions consecutively; no software loop or immediate-row increment is added.</figcaption>
+        </figure>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::SrcA,
+    hal::move::Dst&gt;
+move_eight_without_client_wait {
+    .source_row = 8,
+    .destination_row = 32,
+    .address_mode = ADDR_MOD_2,
+    .number_of_rows = hal::move::rows::Eight,
+    .source_validity = hal::move::SourceValidity::Ignore,
+};
+
+hal::move::run&lt;move_eight_without_client_wait&gt;();</code></pre>
+      </section>
+
+      <section id="srcb-dst">
+        <h2><code>SrcB</code> to <code>Dst</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;SrcB, Dst&gt;
+{
+    std::uint32_t source_row;
+    std::uint32_t destination_row;
+    RowAddressing destination_addressing = RowAddressing::Absolute;
+    std::uint8_t address_mode;
+    RowCount number_of_rows;
+    Broadcast broadcast = Broadcast::None;
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool destination_32bit_low = false;
+    SourceValidity source_validity = SourceValidity::Wait;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p><code>None</code> and <code>Column0</code> use native one/four-row fragments and permit up to two faces. <code>Row</code> and <code>Scalar</code> use native one-row-to-eight-row broadcast fragments when divisible by eight, otherwise one-row fragments, and permit up to four faces. A one-row scalar request becomes the native column-zero form; a one-row row broadcast is rejected as a no-op request.</p>
+        <figure class="move-figure">
+          <div class="broadcast-flow">
+            <div class="source-cell">
+              <span class="flow-label">One SrcB datum</span>
+              <strong>SrcB[row][0]</strong>
+              <small>scalar value <code>s</code></small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="route-card operation">
+              <span class="flow-label">Native fragment</span>
+              <strong>MOVB2D</strong>
+              <small><code>Broadcast::Scalar</code><br>hold SrcB RWC · advance Dst RWC by 8</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div>
+              <span class="flow-label">Eight Dst rows × all columns</span>
+              <div class="dst-grid" aria-label="A representative eight by eight portion of the destination, with the same scalar copied to every cell">
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+                <span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span><span>s</span>
+              </div>
+            </div>
+          </div>
+          <figcaption>Scalar broadcast combines row replication with column-zero replication. The grid shows eight representative columns for readability; the hardware fills every column in each of the eight destination rows.</figcaption>
+        </figure>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::SrcB,
+    hal::move::Dst&gt;
+broadcast_scalar {
+    .source_row = 7,
+    .destination_row = 64,
+    .address_mode = ADDR_MOD_4,
+    .number_of_rows = hal::move::rows::Eight,
+    .broadcast = hal::move::Broadcast::Scalar,
+};
+
+hal::move::run&lt;broadcast_scalar&gt;();</code></pre>
+      </section>
+
+      <section id="dst-srcb">
+        <h2><code>Dst</code> to <code>SrcB</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;Dst, SrcB&gt;
+{
+    std::uint32_t source_row;
+    RowAddressing source_addressing = RowAddressing::Absolute;
+    std::uint32_t destination_row;
+    std::uint8_t address_mode;
+    RowCount number_of_rows;
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool source_32bit_low = false;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p>MOVD2B natively moves one or four rows. A face expands to four straight-line four-row instructions, so the eight-instruction bound permits at most two faces. <code>source_32bit_low</code> selects the low 16 bits of each 32-bit Dst row; the default selects the normal half.</p>
+        <figure class="move-figure">
+          <div class="fragment-flow">
+            <div class="request-card">
+              <span class="flow-label">Semantic request</span>
+              <strong>Dst face → SrcB face</strong>
+              <small><code>number_of_rows = rows::Face</code></small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="fragment-stack">
+              <div class="fragment-card operation"><span class="flow-label">Fragments 0–2</span><strong>3 × MOVD2B · 4 rows</strong><small><code>address_mode</code> advances Dst and SrcB RWCs by four.</small></div>
+              <div class="fragment-card operation"><span class="flow-label">Fragment 3</span><strong>1 × MOVD2B · 4 rows</strong><small><code>final_address_mode</code> can clear the RWCs after the face.</small></div>
+            </div>
+          </div>
+          <figcaption>One descriptor replaces four manually offset MOVD2B calls. Every instruction retains the descriptor's row immediates; RWC progression selects the next four effective rows, and compile-time expansion contains no loop.</figcaption>
+        </figure>
+<pre><code>hal::move::Transfer&lt;
+    hal::move::Dst,
+    hal::move::SrcB&gt;
+extract_face {
+    .source_row = hal::move::dst_layout::tile_row(dst_index, face),
+    .destination_row = 16,
+    .address_mode = ADDR_MOD_0,
+    .number_of_rows = hal::move::rows::Face,
+    .final_address_mode = ADDR_MOD_3,
+};
+
+// Runtime row addresses, compile-time-known face shape: four unrolled MOVD2B instructions.
+hal::move::run(extract_face);</code></pre>
+      </section>
+
+      <section id="l1-gpr">
+        <h2><code>L1</code> and <code>Gpr</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;L1, Gpr&gt;
+{
+    IndirectL1Address source;
+    detail::GprRef destination;
+    ScalarSize size = ScalarSize::Bytes16;
+    Completion completion = Completion::IssueOnly;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;&gt;
+struct Transfer&lt;Gpr, L1&gt;
+{
+    detail::GprRef source;
+    IndirectL1Address destination;
+    ScalarSize size = ScalarSize::Bytes16;
+    Completion completion = Completion::IssueOnly;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <figure class="move-figure">
+          <div class="address-flow">
+            <div class="address-card input">
+              <span class="flow-label">Address operands</span>
+              <strong>base = GPR[1]</strong>
+              <small>Offset comes from one selected half of GPR[2].</small>
+              <div class="half-pair">
+                <span>low16</span><span class="selected">high16</span>
+              </div>
+              <small><code>offset_increment = Bytes4</code> updates the selected half after use.</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">+</div>
+            <div class="address-card combine">
+              <span class="flow-label">Scalar Unit</span>
+              <strong>LOADIND · Bytes4</strong>
+              <small>Form the effective L1 address from the live GPR contents, then request one 32-bit word.</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="address-card output">
+              <span class="flow-label">Asynchronous result</span>
+              <strong>GPR[3].low32</strong>
+              <small>The load completes later. <code>Completion::Wait</code> appends a ScalarIdle gate before a dependent consumer.</small>
+            </div>
+          </div>
+          <figcaption>The descriptor validates register identities, half selection, transfer size, and four-register alignment where required. It cannot validate the effective address because the base and offset values exist only in the live GPRs.</figcaption>
+        </figure>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::L1,
+    hal::move::Gpr&gt;
+load_word {
+    .source = {
+        .base = hal::gpr&lt;1&gt;(),
+        .offset = {.gpr = hal::gpr&lt;2&gt;(), .half = hal::move::GprHalf::High},
+    },
+    .destination = hal::gpr&lt;3&gt;(),
+    .size = hal::move::ScalarSize::Bytes4,
+    .completion = hal::move::Completion::Wait,
+};
+
+hal::move::run&lt;load_word&gt;();</code></pre>
+        <p>Sixteen-byte transfers require the first GPR to be four-aligned. Narrow loads preserve the unselected high bits of the destination GPR; narrow stores consume its low bits.</p>
+      </section>
+
+      <section id="gpr-src">
+        <h2><code>Gpr</code> to <code>SrcA</code> or <code>SrcB</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;Gpr, SrcA&gt;
+{
+    detail::GprRef source;
+    IndirectSrcAddress destination;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;&gt;
+struct Transfer&lt;Gpr, SrcB&gt;; // Same members.</code></pre>
+        <p>The source index must be four-aligned. Hardware consumes the first two GPRs as four BF16 values; there is intentionally no generic size member.</p>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::Gpr,
+    hal::move::SrcB&gt;
+store_source_values {
+    .source = hal::gpr&lt;12&gt;(),
+    .destination = {
+        .base = hal::gpr&lt;4&gt;(),
+        .offset = {.gpr = hal::gpr&lt;5&gt;()},
+    },
+};
+
+hal::move::run&lt;store_source_values&gt;();</code></pre>
+      </section>
+
+      <section id="mmio">
+        <h2>MMIO transfers</h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;Gpr, Mmio&gt;
+{
+    detail::GprRef source;
+    MmioAddress destination;
+    Completion completion = Completion::IssueOnly;
+
+    constexpr std::uint32_t get_operation() const;
+};
+
+template &lt;&gt;
+struct Transfer&lt;Mmio, Gpr&gt;
+{
+    MmioAddress source;
+    detail::GprRef destination;
+    Completion completion = Completion::IssueOnly;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p>Immediate addresses use STOREREG or LOADREG and must be four-byte aligned in <code>0xffb11000..0xffbffffc</code>. Indirect writes use STOREIND. There is no indirect MMIO read.</p>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::Gpr,
+    hal::move::Mmio&gt;
+write_register {
+    .source = hal::gpr&lt;8&gt;(),
+    .destination = {
+        .addressing = hal::move::MmioAddressing::Immediate,
+        .byte_address = 0xffb11000,
+    },
+};
+
+hal::move::run&lt;write_register&gt;();</code></pre>
+      </section>
+
+      <section id="xmov">
+        <h2><code>L1</code> to <code>L1</code> XMOV</h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;L1, L1&gt;
+{
+    L1Address16B source;
+    L1Address16B destination;
+    BlockCount16B size;
+    Completion completion = Completion::IssueOnly;
+
+    constexpr std::uint32_t get_operation() const = delete;
+};</code></pre>
+        <p>Addresses and sizes are in 16-byte blocks. The backend programs THCON section 0 source, destination, buffer size, and direction 3 through <code>hal::cfg</code>, then emits <code>XMOV(0, 0)</code>. <code>Completion::Wait</code> appends an all-instruction MoverIdle wait.</p>
+        <figure class="move-figure">
+          <div class="mover-flow">
+            <div class="mover-card">
+              <span class="flow-label">Descriptor</span>
+              <strong>L1 → L1</strong>
+              <small>source block <code>0x100</code><br>destination block <code>0x200</code><br>size <code>64 × 16 B</code></small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="mover-card operation">
+              <span class="flow-label">Prepare THCON Sec0 Reg6</span>
+              <strong>3 CFG-word updates</strong>
+              <div class="cfg-words">
+                <span>Source_address = 0x100</span>
+                <span>Destination_address = 0x200</span>
+                <span>Buffer_size = 64 | Direction = 3</span>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="mover-card operation">
+              <span class="flow-label">Launch</span>
+              <strong>XMOV(0, 0)</strong>
+              <small>The issuing thread stalls only until the mover starts; the copy then proceeds asynchronously.</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="mover-card wait">
+              <span class="flow-label">When Wait is selected</span>
+              <strong>MoverIdle</strong>
+              <small>Gate all following instruction classes until outstanding mover work is idle.</small>
+            </div>
+          </div>
+          <figcaption>XMOV is a composite rather than a single encodable operation. Configuration and launch stay ordered in the issuing instruction stream; the optional wait observes the mover domain, not only this one descriptor.</figcaption>
+        </figure>
+<pre><code>inline constexpr hal::move::Transfer&lt;
+    hal::move::L1,
+    hal::move::L1&gt;
+copy_l1 {
+    .source = {.block = 0x100},
+    .destination = {.block = 0x200},
+    .size = {.value = 64},
+    .completion = hal::move::Completion::Wait,
+};
+
+hal::move::run&lt;copy_l1&gt;();</code></pre>
+        <div class="callout warning"><span class="callout-title">Blackhole route limit</span><p>Only direction 3, L1-to-L1, is exposed. The Blackhole THCON descriptor labels it as the only legal mover direction. Zero-fill, backend-CFG, and NCRISC-IRAM routes remain unavailable until Blackhole semantics are authoritative.</p></div>
+      </section>
+
+      <section id="emission">
+        <h2><code>run()</code> and <code>get_operation()</code></h2>
+<pre><code>// Compile-time path
+template &lt;auto Operation&gt;
+void run();
+
+// Runtime path
+template &lt;
+    typename Source,
+    typename Destination&gt;
+void run(
+    Transfer&lt;Source, Destination&gt; operation);</code></pre>
+        <p><code>run&lt;Operation&gt;()</code> statically validates and emits immediate instructions. Matrix expansion is a straight-line template expansion. <code>run(operation)</code> retains runtime selection, but its matrix path is also compile-time-unrolled into eight forward-guarded slots. Neither path contains a runtime matrix loop.</p>
+        <div class="callout note"><span class="callout-title">Bounded expansion</span><p><code>MaxMatrixTransferInstructions</code> is eight. Split a larger semantic transfer into multiple descriptors; there is no loop or slow fallback inside the HAL. Runtime oversize is diagnosed before issue when LLK assertions are enabled and is a caller-contract violation when they are disabled.</p></div>
+        <p><code>get_operation()</code> returns one word only when the complete descriptor has exactly one operation. It rejects multi-fragment matrix transfers and scalar descriptors with <code>Completion::Wait</code>. XMOV always rejects it because configuration plus launch is inherently composite.</p>
+        <h3>Production datacopy pattern</h3>
+<pre><code>// One face extraction expands to four straight-line MOVD2B instructions.
+hal::move::Transfer&lt;
+    hal::move::Dst,
+    hal::move::SrcB&gt;
+extract {
+    .source_row = hal::move::dst_layout::tile_row(dst_index, face),
+    .destination_row = datacopy_detail::HighHalfSrcBRow,
+    .address_mode = ADDR_MOD_0,
+    .number_of_rows = hal::move::rows::Face,
+    .final_address_mode = ADDR_MOD_3,
+};
+
+hal::move::run(extract);
+extract.destination_row = datacopy_detail::LowHalfSrcBRow;
+extract.source_32bit_low = true;
+hal::move::run(extract);
+
+// One semantic operation expands to eight straight-line MOVB2D instructions.
+const hal::move::Transfer&lt;
+    hal::move::SrcB,
+    hal::move::Dst&gt;
+scalar_high_half {
+    .source_row = datacopy_detail::HighHalfSrcBRow,
+    .destination_row = hal::move::dst_layout::tile_row(dst_index),
+    .address_mode = ADDR_MOD_2,
+    .number_of_rows = hal::move::rows::faces&lt;4&gt;(),
+    .broadcast = hal::move::Broadcast::Scalar,
+    .final_address_mode = ADDR_MOD_3,
+};
+
+hal::move::run(scalar_high_half);
+
+// Noncontiguous destinations reuse the same semantic face descriptor.
+hal::move::Transfer&lt;
+    hal::move::SrcB,
+    hal::move::Dst&gt;
+row_high_half {
+    .source_row = datacopy_detail::HighHalfSrcBRow,
+    .destination_row = hal::move::dst_layout::tile_row(dst_index, 0),
+    .address_mode = ADDR_MOD_2,
+    .number_of_rows = hal::move::rows::Face,
+    .broadcast = hal::move::Broadcast::Row,
+    .final_address_mode = ADDR_MOD_3,
+};
+
+hal::move::run(row_high_half);
+row_high_half.destination_row =
+    hal::move::dst_layout::tile_row(dst_index, 2);
+hal::move::run(row_high_half);</code></pre>
+        <p>The Blackhole unary-datacopy workaround programs the intermediate address mode through typed <code>hal::cfg::AddrMod</code> fields, advances the live SrcB/Dst RWCs, and uses a clearing final mode. Its column path extracts each Dst face with one reusable <code>Transfer&lt;Dst, SrcB&gt;</code> per 16-bit half. Scalar broadcast represents all four faces with one <code>faces&lt;4&gt;()</code> transfer. Row broadcast reuses one face descriptor because its destination faces are noncontiguous; column broadcast likewise reuses one face descriptor so SrcB progression restarts for the right face. Each <code>run</code> expands into one, two, four, or eight native TT instructions with no loop, helper call, or descriptor storage in optimized code. The normal datacopy MOP obtains its singular MOVA2D or MOVB2D word from <code>get_operation()</code>.</p>
+      </section>
+
+      <section id="validation">
+        <h2>Validation and caller preconditions</h2>
+        <p><code>is_valid(...)</code> covers every implemented descriptor. Compile-time <code>run</code> uses <code>static_assert</code>. Runtime checks are present only with LLK assertions enabled and compile away completely otherwise.</p>
+        <p>Row fields are full-width <code>std::uint32_t</code> and are encoded unmasked, exactly like the raw instruction macros: an out-of-range row is rejected by validation, never silently truncated, and building a descriptor from runtime values adds no masking instructions.</p>
+        <p>Selecting <code>RowAddressing::CounterRelative</code> on the ten-bit Dst-side field replaces its absolute-span validation with a ten-bit fit check; the six-bit SrcA/SrcB rows stay absolute. The in-face quad shuffle from <code>llk_math_transpose_dest.h</code>, written raw today as <code>TTI_MOVB2D(&hellip;, (0x3ff &amp; (-16 + 4)))</code>, becomes:</p>
+<pre><code>// Compile-time path
+constexpr hal::move::Transfer&lt;
+    hal::move::SrcB,
+    hal::move::Dst&gt;
+quad_shuffle {
+    .source_row             = 16,
+    .destination_row        = hal::move::relative_row&lt;-16 + 4&gt;(),
+    .destination_addressing = hal::move::RowAddressing::CounterRelative,
+    .address_mode           = ADDR_MOD_1,
+    .number_of_rows         = hal::move::rows::Four,
+};
+
+hal::move::run&lt;quad_shuffle&gt;();</code></pre>
+        <h3>Rejected descriptors</h3>
+        <ul>
+          <li>Missing required fields; unsupported enum values; GPR indices outside <code>[0, 63]</code>; or half-register indices outside <code>[0, 127]</code>.</li>
+          <li>SrcA/SrcB rows outside <code>[0, 63]</code>, Dst rows outside <code>[0, 1023]</code>, noncanonical row counts, semantic spans crossing either register file, or descriptors expanding beyond eight native TT instructions. For <code>Dst → SrcB</code>, those source and destination ranges are reversed.</li>
+          <li>Blackhole address modes outside <code>[0, 7]</code>; a distinct final mode on a one-instruction transfer; or a total one-row <code>Broadcast::Row</code>.</li>
+          <li>A 16-byte LOADIND/STOREIND or fixed-width Src store whose GPR base is not four-aligned.</li>
+          <li>An immediate MMIO address that is unaligned or outside <code>0xffb11000..0xffbffffc</code>; any indirect MMIO read.</li>
+          <li>An XMOV size outside <code>[1, 65535]</code> blocks, a span outside L1, or overlapping source and destination spans.</li>
+        </ul>
+        <h3>Live-state preconditions</h3>
+        <ul>
+          <li>Configure effective SrcA/Dst rows eight-aligned for eight-row A2D fragments, SrcB/Dst rows four-aligned for four-row B2D or D2B fragments, and Dst rows eight-aligned for row/scalar broadcast fragments.</li>
+          <li>Configure each address mode to advance the RWCs by its native fragment width; row/scalar broadcast must hold SrcB while advancing Dst, while D2B face extraction advances both Dst and SrcB.</li>
+          <li>Before MOVD2B, own or explicitly mark SrcB valid; MOVD2B does not automatically wait for SrcB bank ownership. On Blackhole, disable implied SrcA-format inference while using Dst-to-SrcB extraction.</li>
+          <li>Use <code>source_32bit_low</code> only when Dst is configured for a 32-bit representation; selecting the low half for a 16-bit Dst representation is undefined.</li>
+          <li>Do not use <code>destination_32bit_low</code> while effective TF32, FP32, or UseDst32b operation makes the Blackhole low-half erratum applicable.</li>
+          <li>Ensure indirect effective addresses name valid L1, source-bank, or writable MMIO locations; the descriptor cannot inspect runtime GPR contents.</li>
+          <li>Respect live data-format behavior, including integer-16 source zero substitution unless the corresponding zero flag is disabled, and schedule consumers only after the selected completion point.</li>
+        </ul>
+      </section>
+
+      <section id="hardware">
+        <h2>Hardware mapping and zero overhead</h2>
+        <p>A native compile-time matrix or scalar descriptor emits the same single <code>.ttinsn</code> as the matching raw <code>TTI_*</code> macro. Compile-time multi-row transfers contain only their native instruction sequence; they have no loop, branch, descriptor storage, load, or call. A requested completion adds exactly the corresponding STALLWAIT.</p>
+        <p>Runtime matrix descriptors compute their count and intermediate/final instruction words once, then issue through eight compile-time-instantiated guarded slots. There is no loop or control-flow backedge. Runtime MMIO addressing requires one route-selection branch. With LLK assertions disabled, validation contributes no code. XMOV retains only the CFG writes, launch, and requested mover wait required by the composite itself.</p>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <div class="api-index">
+          <a href="../../tt_llk_blackhole/llk_lib/hal/move.h"><code>tt_llk_blackhole/llk_lib/hal/move.h</code><span>Public descriptors, validation, private encoders, and issue paths.</span></a>
+          <a href="../../tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h"><code>tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h</code><span>Production integration for explicit broadcast workarounds and MOP instruction words.</span></a>
+          <a href="https://github.com/tenstorrent/tt-isa-documentation/blob/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor/MOVD2B.md"><code>MOVD2B functional model</code><span>Native row shapes, RWC progression, ownership, and format behavior.</span></a>
+          <a href="../../tt_llk_blackhole/llk_lib/hal/cfg/thcon.h"><code>tt_llk_blackhole/llk_lib/hal/cfg/thcon.h</code><span>Typed mover configuration fields.</span></a>
+          <a href="../../tt_llk_blackhole/llk_lib/hal/sync.h"><code>tt_llk_blackhole/llk_lib/hal/sync.h</code><span>Scalar- and mover-idle completion waits.</span></a>
+          <a href="../../tests/sources/risc_compute_test.cpp"><code>tests/sources/risc_compute_test.cpp</code><span>Encoding, invalid-case, expansion, and code-generation coverage.</span></a>
+        </div>
+      </section>
+
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#shared">Shared types</a></li>
+        <li><a href="#srca-dst">SrcA to Dst</a></li>
+        <li><a href="#srcb-dst">SrcB to Dst</a></li>
+        <li><a href="#dst-srcb">Dst to SrcB</a></li>
+        <li><a href="#l1-gpr">L1 and GPR</a></li>
+        <li><a href="#gpr-src">GPR to Src</a></li>
+        <li><a href="#mmio">MMIO</a></li>
+        <li><a href="#xmov">L1 to L1 XMOV</a></li>
+        <li><a href="#emission">run and get_operation</a></li>
+        <li><a href="#validation">Validation</a></li>
+        <li><a href="#hardware">Hardware mapping</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

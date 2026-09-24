@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="API guide and reference for the Blackhole hal::fpu matrix-unit compute interface.">
+  <title>hal::fpu — Blackhole FPU HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul,ol { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } .sidebar nav { display:flex; gap:5px; overflow-x:auto; } .sidebar h2 { display:none; } .sidebar a { white-space:nowrap; } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::fpu</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a class="current" href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#types">Shared types</a>
+        <h2>Interfaces</h2>
+        <a href="#elementwise">Elementwise</a>
+        <a href="#dot-product">DotProduct</a>
+        <a href="#matrix-multiply">MatrixMultiply</a>
+        <a href="#pool">Pool</a>
+        <h2>Reference</h2>
+        <a href="#diagnostics">Validation</a>
+        <a href="#performance">Performance</a>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::fpu</div>
+        <h1>Blackhole FPU HAL</h1>
+        <p class="lede">Describe, encode, and issue the seven Blackhole matrix-unit compute instructions — elementwise math, matrix multiply, dot product, and pooling reductions — without exposing raw instruction fields at each call site.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Header</strong> hal/fpu.h</span>
+          <span class="pill"><strong>Instructions</strong> ELWADD · ELWSUB · ELWMUL · DOTPV · MVMUL · GAPOOL · GMPOOL</span>
+          <span class="pill"><strong>Status</strong> Implemented (additive)</span>
+        </div>
+        <div class="install"><span>Include the complete typed FPU compute interface</span><code>#include "hal/fpu.h"</code></div>
+        <p>The interface is additive. It does not change an LLK function signature or migrate existing instruction call sites. Data formats, fidelity phases, Dest bases, and post-issue counter stepping remain <a href="cfg_hal_interface.html">hal::cfg</a> and ADDR_MOD preconditions. Quasar uses a different instruction family and is outside this Blackhole interface.</p>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>#include "hal/fpu.h"
+
+using namespace hal::fpu;
+
+constexpr Elementwise multiply_final_block {
+    .operation = ElementwiseOperation::Multiply,
+    .address_modifier = 3,
+    .release = SourceRelease::Both,
+};
+
+// Compile-time path: return one encoded instruction for MOP or replay.
+constexpr std::uint32_t multiply_word =
+    get_operation&lt;multiply_final_block&gt;();
+
+// Compile-time path: issue one immediate ELWMUL instruction.
+run&lt;multiply_final_block&gt;();</code></pre>
+        <p>The operation above multiplies one 8x16 SrcA/SrcB block into Dest, steps the counters through ADDR_MOD register 3, then releases both source banks back to the unpackers.</p>
+        <div class="callout note"><span class="callout-title">Source release is intentionally mandatory</span><p>Every descriptor's <code>release</code> defaults to <code>Unset</code>. The compile-time encoder rejects that sentinel, and LLK assertions diagnose it on the runtime path. State <code>None</code> for an instruction inside a longer sequence, or <code>SrcA</code>, <code>SrcB</code>, or <code>Both</code> on the instruction that finishes consuming a source bank.</p></div>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>The seven instructions share one encoding skeleton — opcode, source release, modifier bits, ADDR_MOD index, and a Dest row offset — and split into four typed descriptors.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Type</th><th>Instructions</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Elementwise</code></td><td><code>ELWADD</code> 0x28, <code>ELWSUB</code> 0x30, <code>ELWMUL</code> 0x27</td><td>Combine an 8x16 SrcA block with an 8x16 SrcB block (optionally broadcast) into eight Dest rows.</td></tr>
+            <tr><td><code>DotProduct</code></td><td><code>DOTPV</code> 0x29</td><td>Accumulate <code>Dest(8x16) += SrcB(8x16) &times; SrcA(16x16)</code>; MVMUL-equivalent legacy form without row broadcast.</td></tr>
+            <tr><td><code>MatrixMultiply</code></td><td><code>MVMUL</code> 0x26</td><td>Accumulate <code>Dest(8x16) += SrcB(8x16) &times; SrcA(16x16)</code>.</td></tr>
+            <tr><td><code>Pool</code></td><td><code>GAPOOL</code> 0x34, <code>GMPOOL</code> 0x33</td><td>Sum: accumulate <code>Dest(4x16) += SrcB(4x16) &times; SrcA(16x16)</code>. Maximum: reduce each SrcA column to its maximum into one Dest row.</td></tr>
+          </tbody>
+        </table></div>
+        <p>A compute instruction does not select data formats, fidelity phase counts, integer/FP32 Dest width, or how the SrcA/SrcB/Dest counters step afterwards. Those remain ALU configuration and ADDR_MOD preconditions. Every instruction waits for both SrcA and SrcB banks to hold valid data before executing, and the effective Dest row is the sum of the instruction's <code>dest_row_offset</code>, the Dest counter, and the configured Dest base offsets.</p>
+        <div class="callout note"><span class="callout-title">Encoding policy for metadata gaps</span><p>The local instruction metadata omits the elementwise SrcB row-broadcast value, describes the MVMUL modifier with stale datapath-bandwidth wording, claims a pool-shape field the ISA does not define, and gives DOTPV elementwise fields the hardware never reads. This interface follows <code>ckernel_ops.h</code> for bit positions and the ISA functional model for behavior. Positions without a public semantic selector are fixed rather than exposed: zero where the ISA syntax hardcodes zero, and the established Blackhole LLK compatibility value for the pooling shape position. The raw macros remain available for low-level compatibility.</p></div>
+      </section>
+
+      <section id="types">
+        <h2>Shared types</h2>
+        <p>These types describe the choices shared by the four operation descriptors. Defaults below are the defaults stored by the C++ aggregate; required or invalid defaults are called out explicitly.</p>
+
+        <h3><code>ElementwiseOperation</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Instruction</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Add</code></td><td><code>ELWADD</code></td><td>Dest receives SrcA + SrcB, overwritten or accumulated per <code>DestWriteMode</code>.</td></tr>
+            <tr><td><code>Subtract</code></td><td><code>ELWSUB</code></td><td>Dest receives SrcA &minus; SrcB, overwritten or accumulated per <code>DestWriteMode</code>.</td></tr>
+            <tr><td><code>Multiply</code></td><td><code>ELWMUL</code></td><td>Dest always accumulates SrcA &times; SrcB; see the warning under <code>DestWriteMode</code>.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>operation</code> has no declared member initializer. If it is omitted from an aggregate, C++ value-initialization produces zero, which currently maps to <code>Add</code>; set it explicitly so the selected arithmetic is visible at the call site.</p>
+
+        <h3><code>SrcBBroadcast</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>None</code></td><td>Yes</td><td>Consume SrcB rows as addressed by the SrcB counter.</td></tr>
+            <tr><td><code>Column</code></td><td>No</td><td>Replicate each SrcB row's column-0 datum across all sixteen columns.</td></tr>
+            <tr><td><code>Row</code></td><td>No</td><td>Replicate the counter-selected SrcB row onto all eight consumed rows; row broadcast lets the SrcB counter select an exact row.</td></tr>
+            <tr><td><code>Scalar</code></td><td>No</td><td>Replicate the counter-selected SrcB row's column-0 datum onto the whole 8x16 block.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3><code>SrcBRowBroadcast</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>None</code></td><td>Yes</td><td>Consume an eight-row-aligned 8x16 SrcB block and accumulate all eight result rows. Every current LLK MVMUL call site uses this value.</td></tr>
+            <tr><td><code>Row</code></td><td>No</td><td>Replicate the counter-selected SrcB row — the SrcB counter picks an exact row, free of the usual eight-row alignment — across the multiply, and accumulate the product into the even rows of a seven-row Dest block; odd rows stay unchanged. In this mode the composed Dest row keeps its lowest bit instead of aligning to eight rows. Not exercised by LLK today.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The instruction metadata describes this bit as a "compute 4 rows / compute 1 row" throughput selector; that wording is identical to the Wormhole metadata and describes internal datapath bandwidth, not the architectural result above.</p>
+
+        <h3><code>DestWriteMode</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Overwrite</code></td><td>Yes</td><td>Replace the addressed Dest rows with the result.</td></tr>
+            <tr><td><code>Accumulate</code></td><td>No</td><td>Add the result to the existing Dest values.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warning"><span class="callout-title">Multiply ignores this selection</span><p><code>ELWMUL</code> accumulates onto Dest regardless of the encoded bit — every LLK call site passes zero while relying on a prior <code>ZEROACC</code> for overwrite semantics. <code>MVMUL</code>, <code>DOTPV</code>, and the pools have no overwrite mode at all, which is why the other descriptors do not carry this field. The bit is honored only by <code>Add</code> and <code>Subtract</code>.</p></div>
+
+        <h3><code>PoolFunction</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Instruction</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Sum</code></td><td><code>GAPOOL</code></td><td>Four-row matrix multiply: <code>Dest(4x16) += SrcB(4x16) &times; SrcA(16x16)</code>, with SrcB read from the top half of the eight-row-aligned block and all four Dest rows accumulated. Participates in fidelity phases like a multiply.</td></tr>
+            <tr><td><code>Maximum</code></td><td><code>GMPOOL</code></td><td>Scale the sixteen-row SrcA block by one SrcB scaler row, reduce every column to its maximum, and combine the 1x16 result with the existing Dest row.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3><code>IndexTracking</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Disabled</code></td><td>Yes</td><td>Write only the pooled values.</td></tr>
+            <tr><td><code>Enabled</code></td><td>No</td><td>Also record each column's winning row index in the low bits of the same pooled Dest datum. Valid only with <code>Maximum</code> and usable only with a 32-bit Dest — a 16-bit Dest write discards the index bits.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Index tracking has precise, non-obvious semantics:</p>
+        <ul>
+          <li><strong>Packing</strong> — with an integer-style Dest the datum holds only the index result; with a 16-bit float format in a 32-bit Dest the maximum lands in the high sixteen bits and the index result in the low bits.</li>
+          <li><strong>Row range</strong> — only SrcA rows 0&ndash;7 can record an index. Rows 8&ndash;15 still participate in the maximum value but never update the index, so place argmax candidates in the first eight rows and pad the rest with negative infinity.</li>
+          <li><strong>Index transform</strong> — the recorded row index is permuted by <code>{0, 3, 6, 1, 4, 7, 2, 5}</code> (row <code>i</code> records <code>(3&times;i) mod 8</code>). The table is an involution, so applying it again decodes the row.</li>
+          <li><strong>Phase counter</strong> — each issue increments a four-bit phase in the datum, so chained pools onto the same Dest row yield distinct index bases; initialize the Dest low bits to zero and decode the winning issue from the phase bits.</li>
+          <li><strong>Ties</strong> — rows are visited in the order 4, 5, 6, 7, 0, 1, 2, 3 with a greater-or-equal compare, so the last-visited equal value wins.</li>
+        </ul>
+
+        <h3><code>SourceRelease</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Status</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Unset</code></td><td>Default; invalid sentinel</td><td>Has no supported instruction meaning. Compile-time validation rejects it; runtime LLK assertions diagnose it.</td></tr>
+            <tr><td><code>None</code></td><td>Valid</td><td>Keep both source banks; following instructions continue consuming the same data.</td></tr>
+            <tr><td><code>SrcA</code> / <code>SrcB</code></td><td>Valid</td><td>Flip the named bank and clear its data-valid flag so the producing unpacker can refill it.</td></tr>
+            <tr><td><code>Both</code></td><td>Valid</td><td>Release SrcA and SrcB together; typical on the last instruction of a tile.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The per-thread <code>CLR_DVALID</code> disable configuration downgrades a release to a bank flip that keeps data-valid set, which is useful when a kernel ping-pongs both banks itself.</p>
+
+        <h3>Scalar fields</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Field</th><th>Default</th><th>Range</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>address_modifier</code></td><td><code>0</code></td><td>0&ndash;7</td><td>Selects the ADDR_MOD register applied after the compute: SrcA/SrcB/Dest increments and clears, fidelity-phase stepping, and bias.</td></tr>
+            <tr><td><code>dest_row_offset</code></td><td><code>0</code></td><td>0&ndash;1023</td><td>Ten-bit row offset added to the Dest counter and the configured Dest base offsets. Hardware aligns the composed row down to eight rows (elementwise, matrix multiply) or four rows (pools).</td></tr>
+          </tbody>
+        </table></div>
+
+      </section>
+
+      <section id="elementwise">
+        <h2>Elementwise</h2>
+        <h3>Declaration</h3>
+<pre><code>struct Elementwise
+{
+    ElementwiseOperation operation;
+    SrcBBroadcast broadcast = SrcBBroadcast::None;
+    DestWriteMode dest_write = DestWriteMode::Overwrite;
+    std::uint8_t address_modifier = 0;
+    std::uint16_t dest_row_offset = 0;
+    SourceRelease release = SourceRelease::Unset;
+};
+
+// Compile-time path
+template &lt;Elementwise Operation&gt;
+constexpr std::uint32_t get_operation();
+
+template &lt;Elementwise Operation&gt;
+inline __attribute__((always_inline)) void run();
+
+// Runtime path
+inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(
+    const Elementwise operation);
+
+inline __attribute__((always_inline)) void run(
+    const Elementwise operation);</code></pre>
+        <p><code>get_operation</code> returns one encoded word and does not issue it. Compile-time <code>run</code> emits one immediate instruction. Runtime <code>run</code> checks the description when LLK assertions are enabled, constructs the word, and writes it through <code>ckernel::instrn_buffer[0]</code>.</p>
+        <h3>Face loop with a final release</h3>
+<pre><code>constexpr Elementwise add_block {
+    .operation = ElementwiseOperation::Add,
+    .release = SourceRelease::None,
+};
+
+constexpr Elementwise add_final_block {
+    .operation = ElementwiseOperation::Add,
+    .release = SourceRelease::Both,
+};
+
+run&lt;add_block&gt;();
+run&lt;add_final_block&gt;();</code></pre>
+        <h3>Column-broadcast subtract for a MOP body</h3>
+<pre><code>constexpr std::uint32_t subtract_broadcast_word = get_operation&lt;Elementwise {
+    .operation = ElementwiseOperation::Subtract,
+    .broadcast = SrcBBroadcast::Column,
+    .release = SourceRelease::None,
+}&gt;();</code></pre>
+        <p>Each issue processes one 8x16 block; a full 16-row face takes two issues. Fidelity phases for <code>Multiply</code> come from looping the same instruction with ADDR_MOD entries that step and finally clear the fidelity counter.</p>
+      </section>
+
+      <section id="dot-product">
+        <h2>DotProduct</h2>
+        <h3>Declaration</h3>
+<pre><code>struct DotProduct
+{
+    std::uint8_t address_modifier = 0;
+    std::uint16_t dest_row_offset = 0;
+    SourceRelease release = SourceRelease::Unset;
+};</code></pre>
+        <p>The compile-time and runtime <code>get_operation</code>/<code>run</code> overloads match the other descriptors. <code>DOTPV</code> computes exactly what <code>MatrixMultiply</code> computes without row broadcast — <code>Dest(8x16) += SrcB(8x16) &times; SrcA(16x16)</code>, always accumulating — at the same documented throughput.</p>
+        <div class="callout warning"><span class="callout-title">Legacy instruction — prefer MatrixMultiply</span><p><code>DOTPV</code> is the restricted legacy-compatible form of <code>MVMUL</code> and has no call site in the Blackhole LLK. The generated macros carry the elementwise accumulate and broadcast arguments, but the ISA gives those bit positions no DOTPV field — accumulation cannot be disabled and broadcast cannot be enabled — so this descriptor omits them and encodes the positions as zero. The raw macros remain available for low-level compatibility.</p></div>
+      </section>
+
+      <section id="matrix-multiply">
+        <h2>MatrixMultiply</h2>
+        <h3>Declaration</h3>
+<pre><code>struct MatrixMultiply
+{
+    SrcBRowBroadcast broadcast = SrcBRowBroadcast::None;
+    std::uint8_t address_modifier = 0;
+    std::uint16_t dest_row_offset = 0;
+    SourceRelease release = SourceRelease::Unset;
+};</code></pre>
+        <p><code>MVMUL</code> always accumulates <code>Dest(8x16) += SrcB(8x16) &times; SrcA(16x16)</code>; zero the target rows first for overwrite semantics. The instruction is the preferred matrix-multiply primitive.</p>
+        <h3>Matmul face sequence for replay recording</h3>
+<pre><code>constexpr MatrixMultiply advance_within_face {
+    .address_modifier = 0,  // srcb += 8, dest += 8
+    .release = SourceRelease::None,
+};
+
+constexpr MatrixMultiply advance_to_next_face {
+    .address_modifier = 1,  // srca += 16, dest = 0
+    .release = SourceRelease::None,
+};
+
+constexpr MatrixMultiply finish_tile {
+    .address_modifier = 2,
+    .dest_row_offset = 8,
+    .release = SourceRelease::Both,
+};
+
+run&lt;advance_within_face&gt;();
+run&lt;advance_to_next_face&gt;();
+run&lt;finish_tile&gt;();</code></pre>
+        <p>The comments show typical ADDR_MOD programming; the stepping itself lives in the ADDR_MOD registers, not in this descriptor.</p>
+      </section>
+
+      <section id="pool">
+        <h2>Pool</h2>
+        <h3>Declaration</h3>
+<pre><code>struct Pool
+{
+    PoolFunction function;
+    IndexTracking indices = IndexTracking::Disabled;
+    std::uint8_t address_modifier = 0;
+    std::uint16_t dest_row_offset = 0;
+    SourceRelease release = SourceRelease::Unset;
+};</code></pre>
+        <p>Every pool consumes the full sixteen-row SrcA block and targets an aligned four-row Dest block. <code>Sum</code> consumes four SrcB rows and accumulates all four Dest rows of the block; <code>Maximum</code> consumes one SrcB scaler row, combines the block's first row, and zeroes (or phase-stamps, when index tracking is on) the other three. The ISA defines no pool-shape field — the bit the instruction metadata calls a single-row selector is encoded at its only characterized value, and the raw macros remain the escape hatch for experimenting with the other value.</p>
+        <div class="callout note"><span class="callout-title">Column sums are a SrcB layout convention</span><p><code>Sum</code> is architecturally a four-row matrix multiply, so a row of scaled column sums requires preparing SrcB: fill one SrcB row with the scaler (1/N for an average) and read the matching Dest row. The other three Dest rows of the block are also accumulated from whatever the remaining SrcB rows hold — do not reuse them, and do not leave those SrcB rows undefined.</p></div>
+        <h3>Column reductions</h3>
+<pre><code>// Column maximum of one tile face, then hand both banks back.
+run&lt;Pool {
+    .function = PoolFunction::Maximum,
+    .release = SourceRelease::Both,
+}&gt;();
+
+// One high-fidelity phase of a scaled column sum, encoded for a MOP body.
+constexpr std::uint32_t sum_phase_word = get_operation&lt;Pool {
+    .function = PoolFunction::Sum,
+    .address_modifier = 1,  // fidelity += 1
+    .release = SourceRelease::None,
+}&gt;();</code></pre>
+        <div class="callout warning"><span class="callout-title">Zero the Dest row before a maximum pool</span><p>Uninitialized Dest rows behave as negative infinity for <code>Maximum</code>, and with index tracking the phase counter reads the old datum. Clear the target rows with <code>ZEROACC</code> before the first pool of a reduction.</p></div>
+      </section>
+
+      <section id="diagnostics">
+        <h2>Validation and diagnostics</h2>
+<pre><code>constexpr bool is_valid(const Elementwise operation);
+constexpr bool is_valid(const DotProduct operation);
+constexpr bool is_valid(const MatrixMultiply operation);
+constexpr bool is_valid(const Pool operation);</code></pre>
+        <p><code>is_valid</code> exposes the complete descriptor predicate. Compile-time encoders enforce it with <code>static_assert</code>. Runtime encoders check each field with a descriptive <code>LLK_ASSERT</code>; when LLK assertions are disabled, those validation helpers are compiled out. The predicate checks:</p>
+        <ul>
+          <li>all enum values and the mandatory source release;</li>
+          <li>the ADDR_MOD selection in the range 0&ndash;7;</li>
+          <li>the Dest row offset within its ten-bit architectural field; and</li>
+          <li>index tracking only on <code>Maximum</code> pools.</li>
+        </ul>
+        <p>With LLK assertions enabled, invalid runtime input reaches a field-specific diagnostic. With assertions disabled, the runtime path deliberately has raw-instruction semantics: call <code>is_valid</code> explicitly when untrusted values must be rejected in a production build.</p>
+        <div class="callout warning"><span class="callout-title">Configuration preconditions stay with hal::cfg</span><p>The descriptors cannot inspect ALU formats, FP32/INT8 Dest modes, zero-flag state, fidelity base phase, or the Dest base offsets. Configure those through <a href="cfg_hal_interface.html">hal::cfg</a> before issuing compute instructions.</p></div>
+      </section>
+
+      <section id="performance">
+        <h2>Performance and hardware mapping</h2>
+        <p>The compile-time path lowers to the same single immediate instruction used by existing <code>TTI_ELWADD</code>-family, <code>TTI_MVMUL</code>, and <code>TTI_GAPOOL</code>/<code>TTI_GMPOOL</code> call sites. It performs no runtime dispatch or hot-path word construction. With LLK assertions disabled, the runtime path contains only the opcode selection and field arithmetic required by the equivalent raw <code>TT_*</code> operation, followed by one instruction-buffer write. Enabling LLK assertions intentionally adds diagnostic checks.</p>
+        <p>After any of these instructions writes Dest, the written aligned 8x16 block is unreadable for a few cycles; hardware stalls automatically, but sequences that cycle across several distinct Dest blocks avoid the stall. Fidelity-phase counts, format conversion, and Src bank contention continue to come from CFG and ADDR_MOD state.</p>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <div class="api-index">
+          <a href="../../tt_llk_blackhole/llk_lib/hal/fpu.h"><code>tt_llk_blackhole/llk_lib/hal/fpu.h</code><span>Typed implementation.</span></a>
+          <a href="../../tt_llk_blackhole/common/inc/ckernel_ops.h"><code>tt_llk_blackhole/common/inc/ckernel_ops.h</code><span>Generated compatibility encoder and emitters.</span></a>
+          <a href="../../tt_llk_blackhole/instructions/assembly.yaml"><code>tt_llk_blackhole/instructions/assembly.yaml</code><span>Instruction metadata; see the functional-model caveats above.</span></a>
+          <a href="../../tests/sources/risc_compute_test.cpp"><code>tests/sources/risc_compute_test.cpp</code><span>Encoding-equivalence, invalid-state, and code-generation coverage.</span></a>
+        </div>
+      </section>
+
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#types">Shared types</a></li>
+        <li><a href="#elementwise">Elementwise</a></li>
+        <li><a href="#dot-product">DotProduct</a></li>
+        <li><a href="#matrix-multiply">MatrixMultiply</a></li>
+        <li><a href="#pool">Pool</a></li>
+        <li><a href="#diagnostics">Validation</a></li>
+        <li><a href="#performance">Performance</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

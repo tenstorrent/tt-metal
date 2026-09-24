@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Configure address modifiers and describe, encode, or issue typed packer data transfers, ordered register writes, and packer-state operations.">
+  <title>hal::pack — Blackhole Pack HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .counter-figure { margin:20px 0 32px; } .counter-flow { display:flex; align-items:stretch; gap:10px; overflow-x:auto; padding:2px 2px 8px; }
+    .counter-card { flex:1 0 250px; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .counter-card.operation { display:flex; flex-direction:column; justify-content:center; border-color:var(--link); background:var(--blue-soft); } .counter-card.after { border-color:var(--accent); background:var(--accent-soft); }
+    .flow-label { display:block; margin-bottom:9px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; } .flow-value { display:block; font:700 13px/1.5 var(--mono); }
+    .flow-arrow { flex:0 0 auto; align-self:center; color:var(--faint); font-size:24px; font-weight:700; }
+    .counter-slots { display:grid; grid-template-columns:repeat(3,minmax(72px,1fr)); gap:6px; } .counter-pair { padding:7px; border:1px solid var(--border); border-radius:6px; background:var(--bg); }
+    .counter-pair.changed { border-color:var(--accent); } .pair-name { display:block; margin-bottom:5px; color:var(--muted); font:700 11px/1.3 var(--mono); text-align:center; }
+    .pair-values { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; } .pair-values span { padding:5px 2px; border-radius:4px; background:var(--subtle); text-align:center; }
+    .pair-values small { display:block; color:var(--faint); font:9px/1.2 var(--mono); text-transform:uppercase; } .pair-values strong { display:block; margin-top:2px; font:700 13px/1.2 var(--mono); }
+    .counter-figure figcaption { margin-top:8px; color:var(--muted); font-size:13px; }
+    footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } main { padding:32px 20px 70px; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::pack</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a class="current" href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <h2>Interfaces</h2>
+        <a href="#address-modifiers">Address modifiers</a>
+        <a href="#transfer">DataTransfer</a>
+        <a href="#setreg">Register writes</a>
+        <a href="#state">Packer state</a>
+        <h2>Reference</h2>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">hal::pack</div>
+        <h1>Blackhole Pack HAL</h1>
+        <p class="lede">Configure address modifiers and describe, encode, or issue typed packer data transfers, ordered register writes, and packer-state operations.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Headers</strong> hal/pack.h · hal/utils/address_modifier.h</span>
+          <span class="pill"><strong>Instructions</strong> SETC16 · PACR · PACR_SETREG · CLREXPHIST · SETPKEDGOF</span>
+        </div>
+        <div class="install"><span>Include the package</span><code>#include "hal/pack.h"<br>#include "hal/utils/address_modifier.h"</code></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>#include "hal/pack.h"
+#include "hal/utils/address_modifier.h"
+
+// Configure two distinct ADDR_MOD_PACK sections in one grouped CFG operation.
+constexpr hal::pack::AddressModifier step_rows {
+    .selection       = hal::cfg::Sec::S0,
+    .source_row      = {.step = 1},
+    .destination_row = {.step = 1},
+};
+constexpr hal::pack::AddressModifier advance_face {
+    .selection       = hal::cfg::Sec::S1,
+    .source_row      = {.clear = true},
+    .destination_row = {.clear = true},
+    .source_face     = {.step = 1},
+};
+hal::pack::configure_address_modifiers&lt;step_rows, advance_face&gt;();
+
+// One packer data transfer appending to the current output row (untilize-style).
+constexpr hal::pack::DataTransfer face_transfer {
+    .address_modifier = ADDR_MOD_0,
+    .interfaces       = 0b0101,           // Dest-read interfaces 0 and 2
+    .concatenation    = hal::pack::Concatenation::Append,
+};
+hal::pack::run&lt;face_transfer&gt;();
+
+// The transfer that closes a tile: strided Dest walk, zero-pad the final rows to 16 datums.
+constexpr hal::pack::DataTransfer close_tile {
+    .address_modifier = ADDR_MOD_1,
+    .dest_access      = hal::pack::DestAccess::Strided,
+    .padding          = hal::pack::RowPadding::FinalOnly,
+    .alignment        = hal::pack::PaddingAlignment::To16Datums,
+    .boundary         = hal::pack::TileBoundary::Last,
+};
+hal::pack::run&lt;close_tile&gt;();
+
+hal::pack::flush_write_aligners(); // degenerate no-data PACR (Flush)</code></pre>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>Blackhole has one packer with four Dest-read interfaces; that vocabulary — not Wormhole's four packers — is this interface's language. A <code>DataTransfer</code> selects the participating interfaces (a zero mask means all four; under <code>DatumOverride::Zero</code> a zero mask instead activates the documented special mode), the Dest walk order, row padding, concatenation into the output row, and whether the transfer closes the tile. Contexts resolve directly from the descriptor or from the hardware's RTL-flop counters (<code>ContextControl</code>). The hard span rules live in the packer CFG state, outside this instruction.</p>
+        <p><code>AddressModifier</code> describes how one PACR selection updates the packer's source and destination row/face counters. <code>configure_address_modifiers</code> composes all fields for each selected 16-bit ADDR_MOD_PACK word, then emits one immediate <code>SETC16</code> per distinct selection.</p>
+        <p><code>TileBoundary::Last</code> and <code>flush_write_aligners()</code> are deliberately separate: one is a mode of a data transfer, the other is a degenerate no-data instruction — the same split as <a href="unpack_hal_interface.html">hal::unpack</a>'s canonical descriptors.</p>
+      </section>
+
+      <section id="address-modifiers">
+        <h2>Packer address modifiers</h2>
+<pre><code>struct CounterUpdate
+{
+    std::uint32_t step = 0;
+    bool clear = false;
+};
+
+struct AddressModifier
+{
+    hal::cfg::Sec selection = hal::cfg::Sec::S0;
+    CounterUpdate source_row {};
+    CounterUpdate destination_row {};
+    CounterUpdate source_face {};
+    CounterUpdate destination_face {};
+};
+
+template &lt;AddressModifier... Modifiers&gt;
+void configure_address_modifiers();</code></pre>
+        <p><code>selection</code> accepts <code>Sec::S0</code> through <code>Sec::S3</code>. Row steps are four-bit values; face steps are one-bit values. Clear applies after the PACR transfer that selects the modifier. The compile-time interface rejects an empty list, out-of-range fields, and repeated selections; repeating a selection would otherwise request multiple writes to the same CFG word.</p>
+      </section>
+
+      <section id="transfer">
+        <h2><code>DataTransfer</code> (PACR)</h2>
+<pre><code>struct DataTransfer
+{
+    std::uint8_t address_modifier      = 0;  // 2-bit ADDR_MOD_PACK index
+    ContextControl context             = ContextControl::Direct;
+    std::uint8_t configuration_context = 0;  // [0, 3]; Direct context only
+    std::uint8_t counter_context       = 0;  // [0, 2]; used with override_thread_id
+    bool override_thread_id            = false;
+    std::uint8_t interfaces            = 0;  // 4-bit Dest-read interface mask; 0 = all
+    DatumOverride datum_override       = DatumOverride::None;  // ZeroWrite
+    DestAccess dest_access             = DestAccess::RowMajor; // or Strided (0, 8, 16, 24)
+    RowPadding padding                 = RowPadding::None;
+    PaddingAlignment alignment         = PaddingAlignment::PerRow;
+    Concatenation concatenation        = Concatenation::NewRow;
+    TileBoundary boundary              = TileBoundary::NotLast;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p><code>RowPadding</code> and <code>PaddingAlignment</code> compose the hardware's 3-bit RowPadZero field; 16-datum alignment requires a padding selection. Every descriptor offers <code>get_operation()</code> for MOP and replay embedding, plus compile-time <code>run&lt;Op&gt;()</code> and runtime <code>run(op)</code>.</p>
+      </section>
+
+      <section id="setreg">
+        <h2><code>RegisterWriteValue</code> / <code>RegisterWrite</code> (PACR_SETREG)</h2>
+<pre><code>struct RegisterWriteValue { bool high_half; std::uint16_t value; };   // stage one 16-bit half
+struct RegisterWrite      { std::uint8_t address_slot; std::uint8_t stream_id; }; // ordered write</code></pre>
+        <p>Two-phase pipeline-ordered MMIO write through the packer: stage each 16-bit half of the value, then issue the write. The target address forms as {0xFFB, REG_ADDR[11:10], stream_id, REG_ADDR[9:0], 2'b00} from one of four preprogrammed TDMA address slots. No LLK call site exists; the stall-disable chicken bit is never encoded.</p>
+      </section>
+
+      <section id="state">
+        <h2>Packer state operations</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Member</th><th>Instruction</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>flush_write_aligners()</code></td><td>PACR (Flush)</td><td>Drains non-empty write-aligners with no new data.</td></tr>
+            <tr><td><code>clear_exponent_histogram()</code></td><td>CLREXPHIST</td><td>Clears the packer exponent histogram.</td></tr>
+            <tr><td><code>EdgeWindow</code></td><td>SETPKEDGOF</td><td>Edge-zeroing datum offsets; BH/WH LLKs use the PCK_EDGE_OFFSET CFG path instead (Quasar parity).</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <ul>
+          <li><code>tt_llk_blackhole/llk_lib/hal/pack.h</code></li>
+          <li><code>tt_llk_blackhole/llk_lib/hal/utils/address_modifier.h</code></li>
+          <li><code>tt_llk_blackhole/instructions/assembly.yaml</code> — PACR / PACR_SETREG field semantics</li>
+          <li><code>docs/hal/remaining_interfaces_proposal.md</code> §3.6 — design rationale</li>
+        </ul>
+      </section>
+
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#address-modifiers">Address modifiers</a></li>
+        <li><a href="#transfer">DataTransfer</a></li>
+        <li><a href="#setreg">Register writes</a></li>
+        <li><a href="#state">Packer state</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

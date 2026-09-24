@@ -82,6 +82,7 @@ Embedding assertions directly into the code provides **clear, enforceable guidan
 ### Example 1: Compile-Time Assert (Preferred when possible)
 
 ```cpp
+// Compile-time path
 template <uint32_t block_ct_dim>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
@@ -96,6 +97,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 ### Example 2: Runtime Assert (When conditions depend on runtime values)
 
 ```cpp
+// Mixed path: compile-time operation, runtime dimensions
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
 {

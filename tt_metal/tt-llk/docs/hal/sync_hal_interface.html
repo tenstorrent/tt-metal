@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer guide and API reference for Blackhole hal::sync mutexes, semaphores, wait gates, and stream waits.">
+  <title>hal::sync — Blackhole synchronization HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; } pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3,h4 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; } h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; } h4 { margin:24px 0 8px; font-size:1rem; }
+    p { max-width:78ch; } ul,ol { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; } .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; } .sidebar h2:not(:first-child) { margin-top:23px; }
+    .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; } .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); } .lede { margin:0 0 22px; color:var(--muted); font-size:18px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; } .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; } .pill strong { margin-right:5px; color:var(--text); }
+    .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); } .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); } .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; } th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .api-index span { display:block; color:var(--muted); font-size:12px; }
+    article+article { margin-top:44px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } } @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::sync</code></header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation"><nav>
+      <h2>Packages</h2>
+      <a href="index.html">Documentation home</a>
+      <a href="cfg_hal_interface.html">hal::cfg</a>
+      <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+      <a href="address_counters_hal_interface.html">hal::address_counters</a>
+      <a href="math_counters_hal_interface.html">hal::math_counters</a>
+      <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+      <a href="move_hal_interface.html">hal::move</a>
+      <a href="atomic_hal_interface.html">hal::atomic</a>
+      <a href="mop_hal_interface.html">hal::mop</a>
+      <a href="replay_hal_interface.html">hal::replay</a>
+      <a class="current" href="sync_hal_interface.html">hal::sync</a>
+      <a href="unpack_hal_interface.html">hal::unpack</a>
+      <a href="fpu_hal_interface.html">hal::fpu</a>
+      <a href="src_hal_interface.html">hal::src</a>
+      <a href="dst_hal_interface.html">hal::dst</a>
+      <a href="pack_hal_interface.html">hal::pack</a>
+      <a href="nop_hal_interface.html">hal::nop</a>
+      <a href="misc_hal_interface.html">hal::misc</a>
+      <h2>Start</h2><a href="#overview">Package overview</a><a href="#quick-start">Quick start</a><a href="#model">Functional model</a><a href="#types">Types and enumerators</a>
+      <h2>Interfaces</h2><a href="#api">Interface index</a><a href="#mask-operators">Mask operators</a><a href="#mutex">Mutexes</a><a href="#semaphore">Semaphores</a><a href="#wait-stall">Stall waits</a><a href="#wait-semaphore">Semaphore waits</a><a href="#stream">Stream waits</a>
+      <h2>Behavior</h2><a href="#performance">Emission and cost</a><a href="#sources">Sources</a>
+    </nav></aside>
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::sync</div>
+        <h1>Blackhole synchronization HAL</h1>
+        <p class="lede">Typed mutex, semaphore, Wait Gate, and NoC stream primitives mapped directly to the Blackhole SYNC ISA.</p>
+        <div class="meta"><span class="pill"><strong>Architecture</strong> Blackhole</span><span class="pill"><strong>Language</strong> C++17</span><span class="pill"><strong>Header</strong> hal/sync.h</span><span class="pill"><strong>Backend</strong> SYNC / Wait Gate</span></div>
+        <div class="install"><span>Include the complete synchronization interface</span><code>#include "hal/sync.h"</code></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <pre><code>#include "hal/sync.h"
+
+using namespace hal::sync;
+
+// Compile-time path
+// Producer: wait for capacity, then publish one token.
+wait::semaphore&lt;
+    StallTarget::Sync,
+    SemaphoreMask::MathPack,
+    SemaphoreCondition::WhileMaximum&gt;();
+semaphore::post&lt;SemaphoreMask::MathPack&gt;();
+
+// Consumer: wait for a token, then consume it.
+wait::semaphore&lt;
+    StallTarget::Sync,
+    SemaphoreMask::MathPack,
+    SemaphoreCondition::WhileZero&gt;();
+semaphore::get&lt;SemaphoreMask::MathPack&gt;();</code></pre>
+        <p><code>get()</code> is the ISA's atomic decrement operation; it does not return a value. Use <code>semaphore::read()</code> for an MMIO value read.</p>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>The SYNC unit owns four mutexes and eight semaphores shared by the three Tensix threads. <code>STALLWAIT</code>, <code>SEMWAIT</code>, and <code>STREAMWAIT</code> install one wait instruction in the issuing thread's Wait Gate. The thread continues until an instruction selected by the block mask reaches that gate; that instruction and everything behind it stop until the condition is satisfied.</p>
+        <pre><code data-language="Pseudocode">issue wait instruction:
+    current_thread.wait_gate.latched_wait = instruction
+
+each cycle:
+    evaluate the latched condition
+    if condition is active and next instruction matches block mask:
+        pause in-order issue
+    else:
+        remove the block mask after one cycle</code></pre>
+        <div class="callout warning"><span class="callout-title">One latched wait per thread</span><p>A later wait cannot pass an active wait's gate and replace it. <a href="#stall-target-sync"><code>StallTarget::Sync</code></a> extends the block to ordinary mutex and semaphore operations.</p></div>
+        <p>A zero block mask is not “block nothing”: hardware substitutes <code>Math</code>. For <code>STALLWAIT</code>, a zero condition mask substitutes <code>ScalarIdle | Unpacker0Idle | Unpacker1Idle | PackerIdle</code>. The HAL names both zero encodings <code>HardwareDefault</code>.</p>
+      </section>
+
+      <section id="types">
+        <h2>Types and enumerators</h2>
+        <p>These definitions come before the function reference so every declaration below can link its parameter types back to one place. Mask enums support <code>|</code> and <code>&amp;</code> with values of the same type.</p>
+
+        <article id="type-access">
+          <h3><code>enum class Access</code></h3>
+          <pre><code>enum class Access : std::uint8_t {
+    MMIO,
+    Tensix,
+};</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Enumerator</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Access::MMIO</code></td><td>Use the issuing RISC core's PC-buffer MMIO window for one semaphore.</td></tr>
+            <tr><td><code>Access::Tensix</code></td><td>Issue a Tensix semaphore instruction. Mask overloads can update several semaphores atomically.</td></tr>
+          </tbody></table></div>
+        </article>
+
+        <article id="type-mutex">
+          <h3><code>enum class Mutex</code></h3>
+          <pre><code>enum class Mutex : std::uint8_t {
+    M0 = 0, M2 = 2, M3 = 3, M4 = 4,
+    Math = M0, Unpacker0 = M2, Unpacker1 = M3, Packer0 = M4,
+    RegisterRmw = M0, Sfpu = M4,
+};</code></pre>
+          <p>Aliases on the same row name the same physical lock; they are not additional mutexes.</p>
+          <div class="table-wrap"><table><thead><tr><th>Value</th><th>Names</th><th>Established role</th></tr></thead><tbody>
+            <tr><td><code>0</code></td><td><code>M0</code>, <code>Math</code>, <code>RegisterRmw</code></td><td>Math-side ownership and shared CFG read-modify-write.</td></tr>
+            <tr><td><code>2</code></td><td><code>M2</code>, <code>Unpacker0</code></td><td>Unpacker 0 ownership.</td></tr>
+            <tr><td><code>3</code></td><td><code>M3</code>, <code>Unpacker1</code></td><td>Unpacker 1 ownership.</td></tr>
+            <tr><td><code>4</code></td><td><code>M4</code>, <code>Packer0</code>, <code>Sfpu</code></td><td>Packer 0 and the established SFPU lock convention.</td></tr>
+          </tbody></table></div>
+        </article>
+
+        <article id="type-semaphore">
+          <h3><code>Semaphore</code> and <code>SemaphoreMask</code></h3>
+          <pre><code>enum class Semaphore : std::uint8_t {
+    S0 = 0, S1, S2, S3, S4, S5, S6, S7,
+    FpuSfpu = S0, MathPack = S1, UnpackToDest = S2,
+    UnpackOperandSync = S3, PackDone = S4, UnpackSync = S5,
+    UnpackMathDone = S6, MathDone = S7,
+};
+
+enum class SemaphoreMask : std::uint8_t {
+    None = 0,
+    S0 = 1u &lt;&lt; 0, S1 = 1u &lt;&lt; 1, S2 = 1u &lt;&lt; 2, S3 = 1u &lt;&lt; 3,
+    S4 = 1u &lt;&lt; 4, S5 = 1u &lt;&lt; 5, S6 = 1u &lt;&lt; 6, S7 = 1u &lt;&lt; 7,
+    All = 0xffu,
+    FpuSfpu = S0, MathPack = S1, UnpackToDest = S2,
+    UnpackOperandSync = S3, PackDone = S4, UnpackSync = S5,
+    UnpackMathDone = S6, MathDone = S7,
+};</code></pre>
+          <p><code>Semaphore</code> selects one physical index. <code>SemaphoreMask</code> selects one or more indices for an atomic Tensix operation.</p>
+          <div class="table-wrap"><table><thead><tr><th>Index</th><th>Index name</th><th>Mask</th><th>Semantic alias</th></tr></thead><tbody>
+            <tr><td><code>0</code></td><td><code>Semaphore::S0</code></td><td><code>SemaphoreMask::S0</code> / <code>0x01</code></td><td><code>FpuSfpu</code></td></tr>
+            <tr><td><code>1</code></td><td><code>Semaphore::S1</code></td><td><code>SemaphoreMask::S1</code> / <code>0x02</code></td><td><code>MathPack</code></td></tr>
+            <tr><td><code>2</code></td><td><code>Semaphore::S2</code></td><td><code>SemaphoreMask::S2</code> / <code>0x04</code></td><td><code>UnpackToDest</code></td></tr>
+            <tr><td><code>3</code></td><td><code>Semaphore::S3</code></td><td><code>SemaphoreMask::S3</code> / <code>0x08</code></td><td><code>UnpackOperandSync</code></td></tr>
+            <tr><td><code>4</code></td><td><code>Semaphore::S4</code></td><td><code>SemaphoreMask::S4</code> / <code>0x10</code></td><td><code>PackDone</code></td></tr>
+            <tr><td><code>5</code></td><td><code>Semaphore::S5</code></td><td><code>SemaphoreMask::S5</code> / <code>0x20</code></td><td><code>UnpackSync</code></td></tr>
+            <tr><td><code>6</code></td><td><code>Semaphore::S6</code></td><td><code>SemaphoreMask::S6</code> / <code>0x40</code></td><td><code>UnpackMathDone</code></td></tr>
+            <tr><td><code>7</code></td><td><code>Semaphore::S7</code></td><td><code>SemaphoreMask::S7</code> / <code>0x80</code></td><td><code>MathDone</code></td></tr>
+          </tbody></table></div>
+          <p><code>SemaphoreMask::None</code> is valid while constructing a mask but rejected by operations that require a selection.</p>
+        </article>
+
+        <article id="type-stall-target">
+          <h3><code>enum class StallTarget</code></h3>
+          <pre><code>enum class StallTarget : std::uint16_t {
+    HardwareDefault = 0,
+    Compute = 1u &lt;&lt; 0, Tdma = Compute,
+    Sync = 1u &lt;&lt; 1, Pack = 1u &lt;&lt; 2, Unpack = 1u &lt;&lt; 3,
+    Mover = 1u &lt;&lt; 4, Xmov = Mover,
+    Scalar = 1u &lt;&lt; 5, Thcon = Scalar,
+    Math = 1u &lt;&lt; 6, Config = 1u &lt;&lt; 7, Cfg = Config,
+    Sfpu = 1u &lt;&lt; 8, All = 0x1ffu,
+};</code></pre>
+          <p>This mask selects which later instruction classes the issuing thread holds at its Wait Gate. It does not select the condition being observed.</p>
+          <div class="callout note" id="stall-target-sync"><span class="callout-title"><code>StallTarget::Sync</code></span><p>Hold subsequent ordinary Sync Unit operations on this thread: <code>ATGETM</code>, <code>ATRELM</code>, <code>SEMINIT</code>, <code>SEMPOST</code>, and <code>SEMGET</code>. It does not mean “wait for Sync to become idle.”</p></div>
+          <div class="table-wrap"><table><thead><tr><th>Enumerator</th><th>Bit</th><th>Blocked instruction class</th></tr></thead><tbody>
+            <tr><td><code>HardwareDefault</code></td><td><code>0x000</code></td><td>Raw zero; hardware substitutes <code>Math</code>.</td></tr>
+            <tr><td><code>Compute</code>, <code>Tdma</code></td><td><code>0x001</code></td><td>Broad miscellaneous/TDMA gate.</td></tr>
+            <tr><td><code>Sync</code></td><td><code>0x002</code></td><td>Mutex and semaphore operations.</td></tr>
+            <tr><td><code>Pack</code></td><td><code>0x004</code></td><td>Packer instructions.</td></tr>
+            <tr><td><code>Unpack</code></td><td><code>0x008</code></td><td>Unpacker instructions.</td></tr>
+            <tr><td><code>Mover</code>, <code>Xmov</code></td><td><code>0x010</code></td><td>Data-mover/XMOV instructions.</td></tr>
+            <tr><td><code>Scalar</code>, <code>Thcon</code></td><td><code>0x020</code></td><td>Scalar/Thread Controller instructions.</td></tr>
+            <tr><td><code>Math</code></td><td><code>0x040</code></td><td>FPU math instructions.</td></tr>
+            <tr><td><code>Config</code>, <code>Cfg</code></td><td><code>0x080</code></td><td>Configuration Unit instructions.</td></tr>
+            <tr><td><code>Sfpu</code></td><td><code>0x100</code></td><td>SFPU instructions.</td></tr>
+            <tr><td><code>All</code></td><td><code>0x1ff</code></td><td>Every class above; also blocks <code>NOP</code>.</td></tr>
+          </tbody></table></div>
+        </article>
+
+        <article id="type-stall-condition">
+          <h3><code>enum class StallCondition</code></h3>
+          <pre><code>enum class StallCondition : std::uint16_t {
+    HardwareDefault = 0,
+    ScalarIdle = 1u &lt;&lt; 0, Unpacker0Idle = 1u &lt;&lt; 1,
+    Unpacker1Idle = 1u &lt;&lt; 2, PackerIdle = 1u &lt;&lt; 3,
+    MathIdle = 1u &lt;&lt; 4, SrcACleared = 1u &lt;&lt; 5,
+    SrcBCleared = 1u &lt;&lt; 6, SrcAValid = 1u &lt;&lt; 7,
+    SrcBValid = 1u &lt;&lt; 8, MoverIdle = 1u &lt;&lt; 9,
+    RiscvAccessProcessed = 1u &lt;&lt; 10, SfpuIdle = 1u &lt;&lt; 11,
+    ConfigUnitIdle = 1u &lt;&lt; 12, All = 0x1fffu,
+};</code></pre>
+          <p>Selected conditions are cumulative: <code>wait::stall()</code> releases its targets only after every selected condition is ready.</p>
+          <div class="table-wrap"><table><thead><tr><th>Enumerator</th><th>Bit</th><th>Ready when…</th></tr></thead><tbody>
+            <tr><td><code>HardwareDefault</code></td><td><code>0x0000</code></td><td>Hardware substitutes <code>ScalarIdle | Unpacker0Idle | Unpacker1Idle | PackerIdle</code>.</td></tr>
+            <tr><td><code>ScalarIdle</code></td><td><code>0x0001</code></td><td>The current thread's scalar path has no outstanding memory request.</td></tr>
+            <tr><td><code>Unpacker0Idle</code></td><td><code>0x0002</code></td><td>The current thread has no instruction in Unpacker 0.</td></tr>
+            <tr><td><code>Unpacker1Idle</code></td><td><code>0x0004</code></td><td>The current thread has no instruction in Unpacker 1.</td></tr>
+            <tr><td><code>PackerIdle</code></td><td><code>0x0008</code></td><td>The current thread has no instruction in the Packer.</td></tr>
+            <tr><td><code>MathIdle</code></td><td><code>0x0010</code></td><td>The current thread has no instruction in the Matrix Unit/FPU.</td></tr>
+            <tr><td><code>SrcACleared</code></td><td><code>0x0020</code></td><td>The selected SrcA bank is available to Unpack.</td></tr>
+            <tr><td><code>SrcBCleared</code></td><td><code>0x0040</code></td><td>The selected SrcB bank is available to Unpack.</td></tr>
+            <tr><td><code>SrcAValid</code></td><td><code>0x0080</code></td><td>The selected SrcA bank is available to Math.</td></tr>
+            <tr><td><code>SrcBValid</code></td><td><code>0x0100</code></td><td>The selected SrcB bank is available to Math.</td></tr>
+            <tr><td><code>MoverIdle</code></td><td><code>0x0200</code></td><td>The Mover has no outstanding request from any thread or TDMA-RISC.</td></tr>
+            <tr><td><code>RiscvAccessProcessed</code></td><td><code>0x0400</code></td><td>The current thread's RISC request to Tensix/TDMA-RISC has been processed.</td></tr>
+            <tr><td><code>SfpuIdle</code></td><td><code>0x0800</code></td><td>The current thread has no instruction in the SFPU.</td></tr>
+            <tr><td><code>ConfigUnitIdle</code></td><td><code>0x1000</code></td><td>No thread has an instruction in the Configuration Unit.</td></tr>
+            <tr><td><code>All</code></td><td><code>0x1fff</code></td><td>Every explicit condition above.</td></tr>
+          </tbody></table></div>
+        </article>
+
+        <article id="type-semaphore-condition">
+          <h3><code>enum class SemaphoreCondition</code></h3>
+          <pre><code>enum class SemaphoreCondition : std::uint8_t {
+    WhileZero = 1u &lt;&lt; 0,
+    WhileMaximum = 1u &lt;&lt; 1,
+};</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Enumerator</th><th>Wait remains active while…</th></tr></thead><tbody>
+            <tr><td><code>WhileZero</code></td><td>Any selected semaphore has <code>Value == 0</code>.</td></tr>
+            <tr><td><code>WhileMaximum</code></td><td>Any selected semaphore has <code>Value &gt;= Max</code>.</td></tr>
+            <tr><td><code>WhileZero | WhileMaximum</code></td><td>Any selected semaphore is at either boundary.</td></tr>
+          </tbody></table></div>
+          <p>Zero is undefined by <code>SEMWAIT</code> and rejected by the HAL.</p>
+        </article>
+
+        <article id="type-stream">
+          <h3><code>StreamSlot</code>, <code>StreamTarget</code>, and <code>StreamId</code></h3>
+          <pre><code>enum class StreamSlot : std::uint8_t { S0, S1, S2, S3 };
+
+enum class StreamTarget : std::uint8_t {
+    Phase,
+    MessagesReceived,
+};
+
+struct StreamId {
+    std::uint8_t group;
+    std::uint8_t number;
+};</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Type/value</th><th>Encoding</th><th>Meaning and constraints</th></tr></thead><tbody>
+            <tr><td><code>StreamSlot::S0</code> … <code>S3</code></td><td><code>0</code> … <code>3</code></td><td>Select one of four thread-private <code>STREAM_ID_SYNC</code> entries.</td></tr>
+            <tr><td><code>StreamTarget::Phase</code></td><td><code>0</code></td><td>Compare stream phase against a 20-bit threshold.</td></tr>
+            <tr><td><code>StreamTarget::MessagesReceived</code></td><td><code>1</code></td><td>Compare received-message count against a 17-bit threshold.</td></tr>
+            <tr><td><code>StreamId::group</code></td><td>Upper three bits</td><td>Group in <code>[0, 7]</code>.</td></tr>
+            <tr><td><code>StreamId::number</code></td><td>Lower three bits</td><td>Number within the group, in <code>[0, 7]</code>.</td></tr>
+          </tbody></table></div>
+          <p><code>StreamId{group, number}</code> encodes as <code>(group &lt;&lt; 3) | number</code>, producing one tile-local overlay stream ID in <code>[0, 63]</code>. <code>StreamSlot</code> selects a mapping entry and is not part of that ID.</p>
+        </article>
+      </section>
+
+      <section id="api">
+        <h2>Interface index</h2>
+        <div class="api-index">
+          <a href="#mutex"><code>mutex::acquire / release</code><span>Own or release a Tensix mutex.</span></a>
+          <a href="#mask-operators"><code>operator| / operator&amp;</code><span>Compose typed synchronization masks.</span></a>
+          <a href="#semaphore-init"><code>semaphore::init</code><span>Assign Value and Max.</span></a>
+          <a href="#semaphore-post"><code>semaphore::post</code><span>Atomically increment.</span></a>
+          <a href="#semaphore-get"><code>semaphore::get</code><span>Atomically decrement.</span></a>
+          <a href="#semaphore-read"><code>semaphore::read</code><span>Read one value over MMIO.</span></a>
+          <a href="#wait-stall"><code>wait::stall</code><span>Wait for execution resources.</span></a>
+          <a href="#wait-semaphore"><code>wait::semaphore</code><span>Wait for semaphore predicates.</span></a>
+          <a href="#stream-configure"><code>wait::configure_stream*</code><span>Configure stream selection.</span></a>
+          <a href="#stream-raw"><code>wait::stream</code><span>Install a raw STREAMWAIT.</span></a>
+          <a href="#stream-full"><code>wait::configure_and_wait_stream</code><span>Ordered full STREAMWAIT.</span></a>
+        </div>
+      </section>
+
+      <section id="mask-operators">
+        <h2>Mask operators</h2>
+        <h3>Declarations</h3>
+        <pre><code>// Compile-time expressions
+constexpr SemaphoreMask operator|(SemaphoreMask lhs, SemaphoreMask rhs);
+constexpr SemaphoreMask operator&amp;(SemaphoreMask lhs, SemaphoreMask rhs);
+
+constexpr StallTarget operator|(StallTarget lhs, StallTarget rhs);
+constexpr StallTarget operator&amp;(StallTarget lhs, StallTarget rhs);
+
+constexpr StallCondition operator|(StallCondition lhs, StallCondition rhs);
+constexpr StallCondition operator&amp;(StallCondition lhs, StallCondition rhs);
+
+constexpr SemaphoreCondition operator|(
+    SemaphoreCondition lhs, SemaphoreCondition rhs);
+constexpr SemaphoreCondition operator&amp;(
+    SemaphoreCondition lhs, SemaphoreCondition rhs);</code></pre>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+          <tr><td><code>lhs</code>, <code>rhs</code></td><td><a href="#type-semaphore"><code>SemaphoreMask</code></a>, <a href="#type-stall-target"><code>StallTarget</code></a>, <a href="#type-stall-condition"><code>StallCondition</code></a>, or <a href="#type-semaphore-condition"><code>SemaphoreCondition</code></a></td><td>Two values of the same mask type to union with <code>|</code> or intersect with <code>&amp;</code>.</td></tr>
+        </tbody></table></div>
+        <h3>Example</h3>
+        <pre><code>// Compile-time expressions
+constexpr StallTarget blocked =
+    StallTarget::Sync | StallTarget::Math;
+
+constexpr SemaphoreMask handoff =
+    SemaphoreMask::MathPack | SemaphoreMask::MathDone;</code></pre>
+      </section>
+
+      <section id="mutex">
+        <h2>Mutex interface</h2>
+        <p><code>acquire()</code> issues <code>ATGETM</code>. It completes if the mutex is free or already owned by the issuing thread; otherwise that thread waits. <code>release()</code> issues <code>ATRELM</code>. Reacquisition is not recursively counted.</p>
+        <h3>Declarations</h3>
+        <pre><code>namespace mutex {
+// Compile-time path
+template &lt;Mutex M&gt;
+constexpr std::uint32_t acquire_operation();
+
+template &lt;Mutex M&gt;
+void acquire();
+
+template &lt;Mutex M&gt;
+constexpr std::uint32_t release_operation();
+
+template &lt;Mutex M&gt;
+void release();
+
+// Runtime path
+std::uint32_t acquire_operation(Mutex mutex);
+void acquire(Mutex mutex);
+
+std::uint32_t release_operation(Mutex mutex);
+void release(Mutex mutex);
+}</code></pre>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+          <tr><td><code>M</code></td><td><a href="#type-mutex"><code>Mutex</code></a> template value</td><td>Compile-time-selected physical mutex or semantic alias.</td></tr>
+          <tr><td><code>mutex</code></td><td><a href="#type-mutex"><code>Mutex</code></a></td><td>Runtime-selected mutex. Valid physical values are 0, 2, 3, and 4.</td></tr>
+        </tbody></table></div>
+        <p>The <code>*_operation()</code> overloads return an encoded instruction without issuing it. The other overloads issue one instruction.</p>
+        <h3>Example</h3>
+        <pre><code>// Compile-time path
+mutex::acquire&lt;Mutex::RegisterRmw&gt;();
+// Protected CFG read-modify-write operation.
+mutex::release&lt;Mutex::RegisterRmw&gt;();
+
+// Runtime path
+mutex::acquire(runtime_mutex);
+mutex::release(runtime_mutex);</code></pre>
+      </section>
+
+      <section id="semaphore">
+        <h2>Semaphore interfaces</h2>
+        <p>Each semaphore contains four-bit <code>Value</code> and <code>Max</code> fields. Tensix mask operations modify every selected semaphore atomically.</p>
+        <div class="table-wrap"><table><thead><tr><th>Interface</th><th>Effect</th><th>Access</th></tr></thead><tbody>
+          <tr><td><a href="#semaphore-init"><code>init</code></a></td><td>Assign <code>Value</code> and <code>Max</code>.</td><td>Tensix only</td></tr>
+          <tr><td><a href="#semaphore-post"><code>post</code></a></td><td>Increment <code>Value</code>, saturating at 15.</td><td>Tensix mask or one MMIO index</td></tr>
+          <tr><td><a href="#semaphore-get"><code>get</code></a></td><td>Decrement <code>Value</code>, saturating at zero.</td><td>Tensix mask or one MMIO index</td></tr>
+          <tr><td><a href="#semaphore-read"><code>read</code></a></td><td>Return current <code>Value</code>.</td><td>MMIO only</td></tr>
+        </tbody></table></div>
+        <div class="callout warning"><span class="callout-title">Saturation applies to the hardware, not to assert builds on the MMIO path</span><p>The <code>Access::MMIO</code> overloads route through <code>ckernel::semaphore_post</code> / <code>ckernel::semaphore_get</code>, which <code>LLK_ASSERT</code> that the semaphore is not already at its maximum before a post and not already at zero before a get. With assertions enabled, an MMIO post at 15 or an MMIO get at 0 traps instead of saturating; only the Tensix path (and assert-disabled builds) exhibits the pure saturating behavior in this table.</p></div>
+
+        <article id="semaphore-init">
+          <h3><code>semaphore::init</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;
+    SemaphoreMask Mask,
+    std::uint32_t Initial,
+    std::uint32_t Maximum&gt;
+constexpr std::uint32_t init_operation();
+
+template &lt;
+    SemaphoreMask Mask,
+    std::uint32_t Initial,
+    std::uint32_t Maximum&gt;
+void init();
+
+// Runtime path
+std::uint32_t init_operation(
+    SemaphoreMask mask,
+    std::uint32_t initial,
+    std::uint32_t maximum);
+
+void init(
+    SemaphoreMask mask,
+    std::uint32_t initial,
+    std::uint32_t maximum);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Mask</code>, <code>mask</code></td><td><a href="#type-semaphore"><code>SemaphoreMask</code></a></td><td>One or more semaphores; <code>None</code> is rejected.</td></tr>
+            <tr><td><code>Initial</code>, <code>initial</code></td><td><code>std::uint32_t</code></td><td>Initial <code>Value</code>, in <code>[0, 15]</code>.</td></tr>
+            <tr><td><code>Maximum</code>, <code>maximum</code></td><td><code>std::uint32_t</code></td><td>Boundary used by <code>WhileMaximum</code>, in <code>[0, 15]</code>.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>// Compile-time path
+semaphore::init&lt;
+    SemaphoreMask::MathPack | SemaphoreMask::MathDone,
+    0,
+    2&gt;();</code></pre>
+          <p>No MMIO form exists because only <code>SEMINIT</code> assigns both fields.</p>
+        </article>
+
+        <article id="semaphore-post">
+          <h3><code>semaphore::post</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;SemaphoreMask Mask&gt;
+constexpr std::uint32_t post_operation();
+
+template &lt;SemaphoreMask Mask&gt;
+void post();
+
+template &lt;Access A, Semaphore S&gt;
+void post();
+
+// Runtime-selected mask path
+std::uint32_t post_operation(SemaphoreMask mask);
+void post(SemaphoreMask mask);
+
+// Mixed path: compile-time Access, runtime Semaphore
+template &lt;Access A&gt;
+void post(Semaphore semaphore);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Mask</code>, <code>mask</code></td><td><a href="#type-semaphore"><code>SemaphoreMask</code></a></td><td>Semaphores incremented atomically by <code>SEMPOST</code>.</td></tr>
+            <tr><td><code>A</code></td><td><a href="#type-access"><code>Access</code></a></td><td>MMIO or Tensix path for one semaphore.</td></tr>
+            <tr><td><code>S</code>, <code>semaphore</code></td><td><a href="#type-semaphore"><code>Semaphore</code></a></td><td>Single semaphore index.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>// Compile-time path
+semaphore::post&lt;SemaphoreMask::MathPack | SemaphoreMask::MathDone&gt;();
+semaphore::post&lt;Access::MMIO, Semaphore::MathPack&gt;();
+
+// Mixed path: compile-time Access, runtime Semaphore
+semaphore::post&lt;Access::Tensix&gt;(runtime_semaphore);</code></pre>
+        </article>
+
+        <article id="semaphore-get">
+          <h3><code>semaphore::get</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;SemaphoreMask Mask&gt;
+constexpr std::uint32_t get_operation();
+
+template &lt;SemaphoreMask Mask&gt;
+void get();
+
+template &lt;Access A, Semaphore S&gt;
+void get();
+
+// Runtime-selected mask path
+std::uint32_t get_operation(SemaphoreMask mask);
+void get(SemaphoreMask mask);
+
+// Mixed path: compile-time Access, runtime Semaphore
+template &lt;Access A&gt;
+void get(Semaphore semaphore);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Mask</code>, <code>mask</code></td><td><a href="#type-semaphore"><code>SemaphoreMask</code></a></td><td>Semaphores decremented atomically by <code>SEMGET</code>.</td></tr>
+            <tr><td><code>A</code></td><td><a href="#type-access"><code>Access</code></a></td><td>MMIO or Tensix path for one semaphore.</td></tr>
+            <tr><td><code>S</code>, <code>semaphore</code></td><td><a href="#type-semaphore"><code>Semaphore</code></a></td><td>Single semaphore index.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>// Compile-time path
+semaphore::get&lt;SemaphoreMask::MathPack&gt;();
+semaphore::get&lt;Access::MMIO, Semaphore::MathDone&gt;();</code></pre>
+          <p><code>get()</code> means atomic decrement; it does not return a value.</p>
+        </article>
+
+        <article id="semaphore-read">
+          <h3><code>semaphore::read</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;Semaphore S&gt;
+std::uint8_t read();
+
+// Runtime path
+std::uint8_t read(Semaphore semaphore);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>S</code>, <code>semaphore</code></td><td><a href="#type-semaphore"><code>Semaphore</code></a></td><td>One semaphore whose four-bit <code>Value</code> is read over MMIO.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>// Compile-time path
+const std::uint8_t value = semaphore::read&lt;Semaphore::MathPack&gt;();</code></pre>
+        </article>
+
+        <div class="callout warning"><span class="callout-title">MMIO ordering is a RISC concern</span><p>The PC-buffer window exposes atomic semaphore accesses but does not turn a Tensix wait into a RISC memory fence. Apply the memory-ordering rules required by surrounding loads and stores.</p></div>
+      </section>
+
+      <section id="wait-stall">
+        <h2>Stall-wait interface</h2>
+        <p><code>wait::stall()</code> installs <code>STALLWAIT</code> in the current thread's Wait Gate.</p>
+        <h3>Declarations</h3>
+        <pre><code>// Compile-time path
+template &lt;
+    StallTarget Targets,
+    StallCondition Conditions&gt;
+constexpr std::uint32_t stall_operation();
+
+template &lt;
+    StallTarget Targets,
+    StallCondition Conditions&gt;
+void stall();
+
+// Runtime path
+std::uint32_t stall_operation(
+    StallTarget targets,
+    StallCondition conditions);
+
+void stall(
+    StallTarget targets,
+    StallCondition conditions);</code></pre>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+          <tr><td><code>Targets</code>, <code>targets</code></td><td><a href="#type-stall-target"><code>StallTarget</code></a></td><td>Instruction classes blocked while the wait remains active.</td></tr>
+          <tr><td><code>Conditions</code>, <code>conditions</code></td><td><a href="#type-stall-condition"><code>StallCondition</code></a></td><td>Readiness signals to observe; every selected condition must become ready.</td></tr>
+        </tbody></table></div>
+        <p><code>stall_operation()</code> returns the encoding without issuing it. <code>stall()</code> installs the wait.</p>
+        <h3>Example</h3>
+        <pre><code>// Compile-time path
+wait::stall&lt;
+    StallTarget::Config,
+    StallCondition::MathIdle | StallCondition::SfpuIdle&gt;();</code></pre>
+      </section>
+
+      <section id="wait-semaphore">
+        <h2>Semaphore-wait interface</h2>
+        <p><code>wait::semaphore()</code> installs <code>SEMWAIT</code>. Any selected semaphore that still satisfies a selected predicate keeps the wait active.</p>
+        <h3>Declarations</h3>
+        <pre><code>// Compile-time path
+template &lt;
+    StallTarget Targets,
+    SemaphoreMask Mask,
+    SemaphoreCondition Conditions&gt;
+constexpr std::uint32_t semaphore_operation();
+
+template &lt;
+    StallTarget Targets,
+    SemaphoreMask Mask,
+    SemaphoreCondition Conditions&gt;
+void semaphore();
+
+// Runtime path
+std::uint32_t semaphore_operation(
+    StallTarget targets,
+    SemaphoreMask mask,
+    SemaphoreCondition conditions);
+
+void semaphore(
+    StallTarget targets,
+    SemaphoreMask mask,
+    SemaphoreCondition conditions);</code></pre>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+          <tr><td><code>Targets</code>, <code>targets</code></td><td><a href="#type-stall-target"><code>StallTarget</code></a></td><td>Instruction classes blocked while the predicate is true.</td></tr>
+          <tr><td><code>Mask</code>, <code>mask</code></td><td><a href="#type-semaphore"><code>SemaphoreMask</code></a></td><td>One or more semaphores to observe.</td></tr>
+          <tr><td><code>Conditions</code>, <code>conditions</code></td><td><a href="#type-semaphore-condition"><code>SemaphoreCondition</code></a></td><td><code>WhileZero</code>, <code>WhileMaximum</code>, or both.</td></tr>
+        </tbody></table></div>
+        <p>Selecting both conditions releases only after every selected semaphore satisfies <code>0 &lt; Value &lt; Max</code>.</p>
+        <h3>Example</h3>
+        <pre><code>// Compile-time path
+wait::semaphore&lt;
+    StallTarget::Sync | StallTarget::Math,
+    SemaphoreMask::MathPack | SemaphoreMask::MathDone,
+    SemaphoreCondition::WhileZero&gt;();</code></pre>
+      </section>
+
+      <section id="stream">
+        <h2>Stream-wait interfaces</h2>
+        <p><code>STREAMWAIT</code> is Blackhole-only. A <a href="#type-stream"><code>StreamSlot</code></a> chooses one of four thread-private selector entries; that entry stores the six-bit tile-local overlay stream ID to observe.</p>
+
+        <article id="stream-configure">
+          <h3><code>wait::configure_stream</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path (legacy split stream ID)
+template &lt;
+    StreamSlot Slot,
+    std::uint32_t Group,
+    std::uint32_t Stream&gt;
+void configure_stream();
+
+// Mixed path: compile-time slot, runtime StreamId
+template &lt;StreamSlot Slot&gt;
+void configure_stream(StreamId stream_id);
+
+// Runtime path
+void configure_stream(
+    StreamSlot slot,
+    StreamId stream);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Slot</code>, <code>slot</code></td><td><a href="#type-stream"><code>StreamSlot</code></a></td><td>Thread-private <code>STREAM_ID_SYNC[0..3]</code> entry to program.</td></tr>
+            <tr><td><code>stream_id</code>, <code>stream</code></td><td><a href="#type-stream"><code>StreamId</code></a></td><td>Tile-local group and number, each in <code>[0, 7]</code>.</td></tr>
+            <tr><td><code>Group</code></td><td><code>std::uint32_t</code> template value</td><td>Legacy upper three bits, in <code>[0, 7]</code>.</td></tr>
+            <tr><td><code>Stream</code></td><td><code>std::uint32_t</code> template value</td><td>Legacy number within the group, in <code>[0, 7]</code>.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>const StreamId input_stream{
+    3,  // group [0, 7]
+    5,  // number within group [0, 7]
+};
+
+// Mixed path: compile-time slot, runtime StreamId
+wait::configure_stream&lt;StreamSlot::S0&gt;(input_stream);</code></pre>
+          <p>This writes <code>(3 &lt;&lt; 3) | 5 == 29</code> into selector slot <code>S0</code>. The slot is not part of stream ID 29.</p>
+        </article>
+
+        <article id="stream-target">
+          <h3><code>wait::configure_stream_target</code></h3>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;
+    StreamTarget Target,
+    std::uint32_t FullTarget&gt;
+void configure_stream_target();
+
+// Runtime path
+void configure_stream_target(
+    StreamTarget target,
+    std::uint32_t full_target);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Target</code>, <code>target</code></td><td><a href="#type-stream"><code>StreamTarget</code></a></td><td>Phase or received-message counter.</td></tr>
+            <tr><td><code>FullTarget</code>, <code>full_target</code></td><td><code>std::uint32_t</code></td><td>Complete threshold: 20 bits for phase or 17 bits for messages received.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>// Compile-time path
+wait::configure_stream_target&lt;
+    StreamTarget::Phase,
+    0x12345&gt;();</code></pre>
+          <p>The helper writes the threshold bits above bit 9 into thread CFG. The low ten bits are supplied to <code>wait::stream()</code>.</p>
+        </article>
+
+        <article id="stream-raw">
+          <h3><code>wait::stream</code></h3>
+          <p>Use the raw form only after configuring the selector slot and the matching target-high field and guaranteeing CFG completion.</p>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path
+template &lt;
+    StallTarget Targets,
+    StreamSlot Slot,
+    StreamTarget Target,
+    std::uint32_t TargetLow&gt;
+constexpr std::uint32_t stream_operation();
+
+template &lt;
+    StallTarget Targets,
+    StreamSlot Slot,
+    StreamTarget Target,
+    std::uint32_t TargetLow&gt;
+void stream();
+
+// Runtime path
+std::uint32_t stream_operation(
+    StallTarget targets,
+    StreamSlot slot,
+    StreamTarget target,
+    std::uint32_t target_low);
+
+void stream(
+    StallTarget targets,
+    StreamSlot slot,
+    StreamTarget target,
+    std::uint32_t target_low);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Targets</code>, <code>targets</code></td><td><a href="#type-stall-target"><code>StallTarget</code></a></td><td>Instruction classes blocked until the selected counter reaches the threshold.</td></tr>
+            <tr><td><code>Slot</code>, <code>slot</code></td><td><a href="#type-stream"><code>StreamSlot</code></a></td><td>Previously configured selector entry.</td></tr>
+            <tr><td><code>Target</code>, <code>target</code></td><td><a href="#type-stream"><code>StreamTarget</code></a></td><td>Counter whose high threshold bits were configured.</td></tr>
+            <tr><td><code>TargetLow</code>, <code>target_low</code></td><td><code>std::uint32_t</code></td><td>Low ten threshold bits, in <code>[0, 1023]</code>.</td></tr>
+          </tbody></table></div>
+          <p><code>stream_operation()</code> returns the encoding without issuing it. <code>stream()</code> installs the wait.</p>
+          <h4>Example</h4>
+          <pre><code>// Mixed path: compile-time slot, runtime StreamId
+wait::configure_stream&lt;StreamSlot::S0&gt;(input_stream);
+
+// Compile-time path
+wait::configure_stream_target&lt;StreamTarget::Phase, 0x12345&gt;();
+wait::stall&lt;StallTarget::Sync, StallCondition::ConfigUnitIdle&gt;();
+
+wait::stream&lt;
+    StallTarget::Unpack,
+    StreamSlot::S0,
+    StreamTarget::Phase,
+    0x345&gt;();</code></pre>
+        </article>
+
+        <article id="stream-full">
+          <h3><code>wait::configure_and_wait_stream</code></h3>
+          <p>This is the preferred complete interface. It programs the selector and target-high fields, orders those CFG writes, and then installs <code>STREAMWAIT</code>.</p>
+          <h4>Declarations</h4>
+          <pre><code>// Compile-time path (legacy split stream ID)
+template &lt;
+    StallTarget Targets,
+    StreamSlot Slot,
+    std::uint32_t Group,
+    std::uint32_t Stream,
+    StreamTarget Target,
+    std::uint32_t FullTarget&gt;
+void configure_and_wait_stream();
+
+// Mixed path: compile-time wait settings, runtime StreamId
+template &lt;
+    StallTarget Targets,
+    StreamSlot Slot,
+    StreamTarget Target,
+    std::uint32_t FullTarget&gt;
+void configure_and_wait_stream(StreamId stream_id);
+
+// Runtime path
+void configure_and_wait_stream(
+    StallTarget targets,
+    StreamSlot slot,
+    StreamId stream_id,
+    StreamTarget target,
+    std::uint32_t full_target);</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>Targets</code>, <code>targets</code></td><td><a href="#type-stall-target"><code>StallTarget</code></a></td><td>Instruction classes blocked by the installed stream wait.</td></tr>
+            <tr><td><code>Slot</code>, <code>slot</code></td><td><a href="#type-stream"><code>StreamSlot</code></a></td><td>Thread-private stream-selector entry to configure and select.</td></tr>
+            <tr><td><code>stream_id</code></td><td><a href="#type-stream"><code>StreamId</code></a></td><td>Tile-local stream group and number.</td></tr>
+            <tr><td><code>Target</code>, <code>target</code></td><td><a href="#type-stream"><code>StreamTarget</code></a></td><td>Phase or messages-received counter.</td></tr>
+            <tr><td><code>FullTarget</code>, <code>full_target</code></td><td><code>std::uint32_t</code></td><td>Full 20-bit phase or 17-bit message-count threshold.</td></tr>
+            <tr><td><code>Group</code>, <code>Stream</code></td><td><code>std::uint32_t</code> template values</td><td>Legacy split stream ID; each value is in <code>[0, 7]</code>.</td></tr>
+          </tbody></table></div>
+          <h4>Example</h4>
+          <pre><code>const StreamId input_stream{
+    3,  // group [0, 7]
+    5,  // number within group [0, 7]
+};
+
+// Mixed path: compile-time wait settings, runtime StreamId
+wait::configure_and_wait_stream&lt;
+    StallTarget::Unpack,
+    StreamSlot::S0,
+    StreamTarget::Phase,
+    0x12345&gt;(input_stream);</code></pre>
+          <p>The example waits on tile-local overlay stream ID <code>29</code>. The helper emits two <code>SETC16</code> writes, an ordering <code>STALLWAIT</code>, and the final <code>STREAMWAIT</code>.</p>
+        </article>
+
+        <article id="stream-support">
+          <h3>Feature declaration</h3>
+          <pre><code>inline constexpr bool supports_stream_wait = true;</code></pre>
+          <p>Blackhole exposes the stream-wait interfaces. Consumers can use this constant when sharing code with architectures that do not.</p>
+          <h4>Example</h4>
+          <pre><code>// Compile-time feature check
+if constexpr (supports_stream_wait) {
+    wait::configure_and_wait_stream&lt;
+        StallTarget::Unpack,
+        StreamSlot::S0,
+        StreamTarget::Phase,
+        0x12345&gt;(input_stream);
+}</code></pre>
+        </article>
+      </section>
+
+      <section id="performance">
+        <h2>Emission and cost</h2>
+        <div class="table-wrap"><table><thead><tr><th>Form</th><th>Software work</th><th>Hardware operations</th></tr></thead><tbody>
+          <tr><td>Compile-time mutex/semaphore/wait</td><td>No branch or runtime word construction</td><td>One immediate Tensix instruction</td></tr>
+          <tr><td>Runtime Tensix</td><td>Validation in assert builds; one encoded word</td><td>One instruction-buffer write</td></tr>
+          <tr><td>MMIO semaphore</td><td>Compile-time backend selection</td><td>One volatile access</td></tr>
+          <tr><td>Raw stream wait</td><td>Setup already complete</td><td>One <code>STREAMWAIT</code></td></tr>
+          <tr><td>Full stream wait</td><td>Compile-time slot avoids runtime dispatch</td><td>Two <code>SETC16</code>, one ordering <code>STALLWAIT</code>, one <code>STREAMWAIT</code></td></tr>
+        </tbody></table></div>
+        <p>The <code>*_operation()</code> interfaces return exact encoded words for MOP composition or compile-time checks without issuing them.</p>
+      </section>
+
+      <section id="sources"><h2>Sources</h2><ul>
+        <li>HAL implementation: <a href="../../tt_llk_blackhole/llk_lib/hal/sync.h"><code>tt_llk_blackhole/llk_lib/hal/sync.h</code></a></li>
+        <li>Blackhole instruction metadata: <a href="../../tt_llk_blackhole/instructions/assembly.yaml"><code>tt_llk_blackhole/instructions/assembly.yaml</code></a></li>
+        <li>CFG descriptors: <a href="../../tt_llk_blackhole/llk_lib/hal/cfg/thread.h"><code>hal/cfg/thread.h</code></a></li>
+        <li>ISA functional models: <a href="https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/TensixTile/TensixCoprocessor">Blackhole Tensix Coprocessor documentation</a></li>
+      </ul></section>
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+    <aside class="toc" aria-label="On this page"><h2>On this page</h2><ul>
+      <li><a href="#quick-start">Quick start</a></li><li><a href="#model">Functional model</a></li><li><a href="#types">Types</a></li><li><a href="#api">Interfaces</a></li><li><a href="#mask-operators">Mask operators</a></li><li><a href="#mutex">Mutexes</a></li><li><a href="#semaphore">Semaphores</a></li><li><a href="#wait-stall">Stall waits</a></li><li><a href="#wait-semaphore">Semaphore waits</a></li><li><a href="#stream">Stream waits</a></li><li><a href="#performance">Emission</a></li>
+    </ul></aside>
+  </div>
+</body>
+</html>

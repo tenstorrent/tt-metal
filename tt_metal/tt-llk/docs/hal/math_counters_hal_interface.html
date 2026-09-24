@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="API guide for the Blackhole hal::math_counters fluent register-word-counter interface.">
+  <title>hal::math_counters — Blackhole Math Counter HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .counter-figure { margin:20px 0 32px; } .counter-flow { display:flex; align-items:stretch; gap:10px; overflow-x:auto; padding:2px 2px 8px; }
+    .counter-card { flex:1 0 250px; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .counter-card.operation { display:flex; flex-direction:column; justify-content:center; border-color:var(--link); background:var(--blue-soft); } .counter-card.after { border-color:var(--accent); background:var(--accent-soft); }
+    .flow-label { display:block; margin-bottom:9px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; } .flow-value { display:block; font:700 13px/1.5 var(--mono); }
+    .flow-arrow { flex:0 0 auto; align-self:center; color:var(--faint); font-size:24px; font-weight:700; }
+    .counter-slots { display:grid; grid-template-columns:repeat(3,minmax(72px,1fr)); gap:6px; } .counter-pair { padding:7px; border:1px solid var(--border); border-radius:6px; background:var(--bg); }
+    .counter-pair.changed { border-color:var(--accent); } .pair-name { display:block; margin-bottom:5px; color:var(--muted); font:700 11px/1.3 var(--mono); text-align:center; }
+    .pair-values { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; } .pair-values span { padding:5px 2px; border-radius:4px; background:var(--subtle); text-align:center; }
+    .pair-values small { display:block; color:var(--faint); font:9px/1.2 var(--mono); text-transform:uppercase; } .pair-values strong { display:block; margin-top:2px; font:700 13px/1.2 var(--mono); }
+    .counter-figure figcaption { margin-top:8px; color:var(--muted); font-size:13px; }
+    footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } main { padding:32px 20px 70px; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::math_counters</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a class="current" href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#slot-examples">Counter-slot examples</a>
+        <a href="#types">Shared types</a>
+        <h2>Interfaces</h2>
+        <a href="#assign">Set and increment</a>
+        <a href="#modifiers">Modifiers</a>
+        <a href="#emit">Encode and issue</a>
+        <h2>Reference</h2>
+        <a href="#diagnostics">Validation</a>
+        <a href="#performance">Performance</a>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">hal::math_counters · types in hal::rwc</div>
+        <h1>Blackhole Math Counter HAL</h1>
+        <p class="lede">Build one typed SrcA, SrcB, Dest, and Bias register-word-counter update, inspect a single encoded word, or issue the minimal instruction sequence.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Header</strong> hal/math_counters.h</span>
+          <span class="pill"><strong>Instructions</strong> SETRWC · INCRWC · SETIBRWC</span>
+          <span class="pill"><strong>Path</strong> compile-time immediates</span>
+        </div>
+        <div class="install"><span>Include the fluent math-counter builder</span><code>#include "hal/math_counters.h"</code></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>#include "hal/math_counters.h"
+
+using hal::rwc::Counters;
+
+// Compile-time path: one SETRWC sets both counters to 4.
+constexpr auto reset_sources =
+    hal::math_counters
+        .set&lt;Counters::SrcA | Counters::SrcB, 4&gt;();
+
+constexpr std::uint32_t reset_word =
+    reset_sources.get_operation();
+
+reset_sources.apply();</code></pre>
+        <p>The counter mask selects both SrcA and SrcB, so the builder copies the same immediate into both instruction fields and emits one <code>SETRWC</code>.</p>
+
+<pre><code>// Compile-time path: SETRWC first, then SETIBRWC.
+hal::math_counters
+    .set&lt;Counters::SrcA | Counters::SrcB, 4&gt;()
+    .set&lt;Counters::Bias, 0x120&gt;()
+    .apply();</code></pre>
+        <div class="callout warning"><span class="callout-title">Do not call get_operation() on the combined form</span><p>Bias has a separate instruction family. <code>apply()</code> may emit the required two instructions; <code>get_operation()</code> statically rejects any description that cannot be represented by exactly one instruction word. Instruction count depends on the selected families, not the number of builder calls: <code>set&lt;Counters::SrcA | Counters::Bias, 4&gt;()</code> also requires both instructions.</p></div>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Description</th><th><code>apply()</code> result</th><th><code>get_operation()</code></th></tr></thead>
+          <tbody>
+            <tr><td>Set normal counters, release and switch source banks, clear fidelity, or advance Dest and save to carry</td><td>One <code>SETRWC</code></td><td>Available</td></tr>
+            <tr><td>Increment SrcA, SrcB, and/or Dest</td><td>One <code>INCRWC</code></td><td>Available</td></tr>
+            <tr><td>Set or increment Bias only</td><td>One <code>SETIBRWC</code></td><td>Available</td></tr>
+            <tr><td>Bias plus any normal-counter state</td><td>Normal instruction first, then <code>SETIBRWC</code></td><td>Compile-time error</td></tr>
+          </tbody>
+        </table></div>
+        <p>Repeated <code>set()</code> or <code>increment()</code> calls for disjoint masks are folded into one description. A single entry can select several counters when they share a value; separate entries can assign different values. Set and increment entries cannot be mixed.</p>
+        <div class="callout note"><span class="callout-title">Bias is normalized into the public counter mask</span><p><code>Counters::Bias</code> uses bit 3 in the HAL. The encoder remaps that selection to the independent <code>SETIBRWC</code> fields. <code>Counters::All</code> remains the one-instruction SrcA/SrcB/Dest mask; use <code>AllIncludingBias</code> when two-family behavior is intentional.</p></div>
+      </section>
+
+      <section id="slot-examples">
+        <h2>Counter-slot examples</h2>
+        <p>Each normal math counter has two hardware values: a live counter used for addressing and a carry/reset shadow retained for relative stepping and reload. The diagrams name these conceptual slots <code>live</code> and <code>CR</code>; they are hardware state, not C++ objects or memory addresses.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Selected operation</th><th>Live slot after issue</th><th>CR slot after issue</th></tr></thead>
+          <tbody>
+            <tr><td><code>set&lt;C, V&gt;()</code></td><td><code>V</code></td><td><code>V</code></td></tr>
+            <tr><td><code>increment&lt;C, V&gt;()</code></td><td><code>old_live + V</code></td><td><code>old_CR</code></td></tr>
+            <tr><td>Either entry plus <code>advance_carry_and_reload&lt;C&gt;()</code></td><td><code>old_CR + V</code></td><td><code>old_CR + V</code></td></tr>
+            <tr><td><code>advance_dest_and_save_to_carry&lt;V&gt;()</code></td><td><code>old_Dest_live + V</code></td><td><code>old_Dest_live + V</code></td></tr>
+            <tr><td>Unselected counter</td><td><code>old_live</code></td><td><code>old_CR</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>Every operation that writes a normal CR shadow also makes the corresponding live value equal to it. This interface does not expose a normal-counter operation that changes CR while preserving a different live value.</p>
+
+        <h3>Set SrcA and SrcB absolutely</h3>
+        <figure class="counter-figure">
+          <div class="counter-flow">
+            <div class="counter-card">
+              <span class="flow-label">Before</span>
+              <div class="counter-slots">
+                <div class="counter-pair"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>3</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>5</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card operation">
+              <span class="flow-label">One SETRWC</span>
+              <span class="flow-value">.set&lt;Counters::SrcA | Counters::SrcB, 4&gt;()<br>.apply()</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card after">
+              <span class="flow-label">After</span>
+              <div class="counter-slots">
+                <div class="counter-pair changed"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>4</strong></span><span><small>CR</small><strong>4</strong></span></div></div>
+                <div class="counter-pair changed"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>4</strong></span><span><small>CR</small><strong>4</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>A normal <code>set()</code> writes both slots for every selected counter. Dest is absent from the mask, so both of its slots remain unchanged.</figcaption>
+        </figure>
+
+        <h3>Increment live SrcA and SrcB only</h3>
+        <figure class="counter-figure">
+          <div class="counter-flow">
+            <div class="counter-card">
+              <span class="flow-label">Before</span>
+              <div class="counter-slots">
+                <div class="counter-pair"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>3</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>5</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card operation">
+              <span class="flow-label">One INCRWC</span>
+              <span class="flow-value">.increment&lt;Counters::SrcA | Counters::SrcB, 4&gt;()<br>.apply()</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card after">
+              <span class="flow-label">After</span>
+              <div class="counter-slots">
+                <div class="counter-pair changed"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair changed"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>9</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>A plain <code>increment()</code> adds <code>4</code> to each selected live counter. Both CR shadows and both unselected Dest slots remain unchanged.</figcaption>
+        </figure>
+
+        <h3>Advance carry shadows, then reload the live counters</h3>
+        <figure class="counter-figure">
+          <div class="counter-flow">
+            <div class="counter-card">
+              <span class="flow-label">Before</span>
+              <div class="counter-slots">
+                <div class="counter-pair"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>3</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>5</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card operation">
+              <span class="flow-label">One SETRWC</span>
+              <span class="flow-value">.set&lt;Counters::SrcA | Counters::SrcB, 4&gt;()<br>.advance_carry_and_reload&lt;Counters::SrcA | Counters::SrcB&gt;()<br>.apply()</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card after">
+              <span class="flow-label">After</span>
+              <div class="counter-slots">
+                <div class="counter-pair changed"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>13</strong></span><span><small>CR</small><strong>13</strong></span></div></div>
+                <div class="counter-pair changed"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>16</strong></span><span><small>CR</small><strong>16</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>The value <code>4</code> is relative here: SrcA computes <code>9 + 4</code> and SrcB computes <code>12 + 4</code>. Their previous live values do not participate. Each updated CR result is copied into its live slot.</figcaption>
+        </figure>
+
+        <h3>Advance live Dest, then save it to carry</h3>
+        <figure class="counter-figure">
+          <div class="counter-flow">
+            <div class="counter-card">
+              <span class="flow-label">Before</span>
+              <div class="counter-slots">
+                <div class="counter-pair"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>3</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>5</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>7</strong></span><span><small>CR</small><strong>10</strong></span></div></div>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card operation">
+              <span class="flow-label">One SETRWC</span>
+              <span class="flow-value">.advance_dest_and_save_to_carry&lt;4&gt;()<br>.apply()</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="counter-card after">
+              <span class="flow-label">After</span>
+              <div class="counter-slots">
+                <div class="counter-pair"><span class="pair-name">SrcA</span><div class="pair-values"><span><small>live</small><strong>3</strong></span><span><small>CR</small><strong>9</strong></span></div></div>
+                <div class="counter-pair"><span class="pair-name">SrcB</span><div class="pair-values"><span><small>live</small><strong>5</strong></span><span><small>CR</small><strong>12</strong></span></div></div>
+                <div class="counter-pair changed"><span class="pair-name">Dest</span><div class="pair-values"><span><small>live</small><strong>11</strong></span><span><small>CR</small><strong>11</strong></span></div></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>The old Dest CR value <code>10</code> does not participate. Hardware computes <code>7 + 4 == 11</code> from live Dest, then saves <code>11</code> into Dest CR.</figcaption>
+        </figure>
+
+        <h3>What a zero value does</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Call</th><th>Before</th><th>After</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>set&lt;Counters::SrcA, 0&gt;()</code></td><td><code>live=3, CR=9</code></td><td><code>live=0, CR=0</code></td><td>Absolute reset of both slots.</td></tr>
+            <tr><td><code>increment&lt;Counters::SrcA, 0&gt;()</code></td><td><code>live=3, CR=9</code></td><td><code>live=3, CR=9</code></td><td>Zero live increment; no state change.</td></tr>
+            <tr><td><code>set&lt;Counters::SrcA, 0&gt;().advance_carry_and_reload&lt;Counters::SrcA&gt;()</code></td><td><code>live=3, CR=9</code></td><td><code>live=9, CR=9</code></td><td>Reload live SrcA from the unchanged CR shadow.</td></tr>
+            <tr><td><code>advance_dest_and_save_to_carry&lt;0&gt;()</code></td><td><code>Dest live=7, CR=10</code></td><td><code>Dest live=7, CR=7</code></td><td>Save current live Dest into its CR shadow.</td></tr>
+          </tbody>
+        </table></div>
+
+        <div class="callout warning"><span class="callout-title">Bias shows encoding, not a simulator-validated slot transition</span><p><code>set&lt;Counters::Bias, V&gt;()</code> emits one <code>SETIBRWC</code> with its CR selector clear; adding <code>advance_carry_and_reload&lt;Counters::Bias&gt;()</code> sets that selector. Blackhole's public functional documentation and simulator do not currently validate the resulting Bias live/CR values, so this guide does not draw a numeric before/after Bias diagram.</p></div>
+      </section>
+
+      <section id="types">
+        <h2>Shared types</h2>
+        <h3><code>Counters</code></h3>
+<pre><code>enum class Counters : std::uint8_t {
+    None, SrcA = 1, SrcB = 2, Dest = 4, Bias = 8,
+    All = 7, AllIncludingBias = 15
+};</code></pre>
+        <p><code>operator|</code> composes masks. <code>All</code> deliberately excludes Bias so it stays encodable as one <code>SETRWC</code> or <code>INCRWC</code>.</p>
+
+        <h3><code>FidelityPhase</code></h3>
+<pre><code>enum class FidelityPhase : std::uint8_t { Keep, Clear };</code></pre>
+        <p>The builder normally preserves fidelity phase. <code>clear_fidelity()</code> selects <code>Clear</code> and therefore the <code>SETRWC</code> family.</p>
+      </section>
+
+      <section id="assign">
+        <h2>Set and increment</h2>
+<pre><code>// Compile-time path
+template &lt;Counters SelectedCounters, std::uint32_t Value = 0&gt;
+constexpr auto set() const;
+
+// Compile-time path
+template &lt;Counters SelectedCounters, std::uint32_t Value = 0&gt;
+constexpr auto increment() const;</code></pre>
+        <p><code>SelectedCounters</code> must be nonempty and disjoint from earlier entries. SrcA, SrcB, and Dest values are 4-bit immediates; Bias is a 12-bit immediate.</p>
+<pre><code>constexpr auto set_three_values =
+    hal::math_counters
+        .set&lt;Counters::SrcA, 1&gt;()
+        .set&lt;Counters::SrcB, 2&gt;()
+        .set&lt;Counters::Dest, 3&gt;();
+
+constexpr auto increment_sources_together =
+    hal::math_counters
+        .increment&lt;Counters::SrcA | Counters::SrcB, 4&gt;();</code></pre>
+      </section>
+
+      <section id="modifiers">
+        <h2>Modifiers</h2>
+<pre><code>// Compile-time paths
+template &lt;Counters SelectedCounters&gt;
+constexpr auto advance_carry_and_reload() const;
+
+template &lt;Counters Sources&gt;
+constexpr auto release() const;
+
+constexpr auto clear_fidelity() const;
+
+template &lt;std::uint32_t Value = 0&gt;
+constexpr auto advance_dest_and_save_to_carry() const;</code></pre>
+        <h3>Source-bank handoff</h3>
+        <p><code>release&lt;Sources&gt;()</code> means that Math has finished consuming the selected current SrcA and/or SrcB bank. The SETRWC release field switches Math to the paired bank. With the normal <code>CLR_DVALID</code> configuration, it also clears the consumed bank's data-valid state, returning that bank to the corresponding unpacker so it can be refilled.</p>
+<pre><code>// Before: Math consumes the current SrcA bank.
+hal::math_counters
+    .release&lt;Counters::SrcA&gt;()
+    .apply();
+
+// After: Math selects the paired SrcA bank. Normally, the consumed
+// bank's data-valid state is clear and its unpacker may refill it.</code></pre>
+        <p>A standalone release emits one <code>SETRWC</code> and leaves all live and CR counter slots unchanged. Selecting <code>Counters::SrcA | Counters::SrcB</code> performs both source-bank handoffs in that same instruction. A release can also be folded into a normal <code>set()</code> description without adding an instruction.</p>
+        <div class="callout warning"><span class="callout-title">Bank switching is independent of data-valid clearing</span><p>If the per-thread <code>CLR_DVALID.SrcA_Disable</code> or <code>SrcB_Disable</code> bit is set, SETRWC still switches the selected Math bank, but it preserves that bank's data-valid state. In that configuration, <code>release()</code> is a bank switch rather than a return-to-unpacker handoff.</p></div>
+
+        <h3>Counter and fidelity modifiers</h3>
+        <p><code>advance_carry_and_reload()</code> adds each matching assignment's immediate to the selected carry shadow, then reloads the live counter from that result. <code>advance_dest_and_save_to_carry()</code> performs the reverse flow: it advances live Dest by <code>Value</code>, then saves the result to the Dest carry shadow. A zero value copies the current live Dest. These two directions cannot select Dest together.</p>
+<pre><code>hal::math_counters
+    .set&lt;Counters::SrcA | Counters::SrcB, 4&gt;()
+    .advance_carry_and_reload&lt;Counters::SrcA | Counters::SrcB&gt;()
+    .release&lt;Counters::SrcA | Counters::SrcB&gt;()
+    .apply();</code></pre>
+        <p>The example computes <code>SrcA_CR += 4</code> and <code>SrcB_CR += 4</code>, then reloads both live counters from their updated shadows. Its <code>release()</code> also switches both Math source-bank selections and, under normal configuration, returns both consumed banks to their unpackers. Increment descriptions cannot release, clear fidelity, or advance Dest and save it to carry.</p>
+      </section>
+
+      <section id="emit">
+        <h2>Encode and issue</h2>
+<pre><code>// Compile-time path: exactly one instruction word
+static constexpr std::uint32_t get_operation();
+
+// Compile-time path: one or two immediate instructions
+inline void apply() const;</code></pre>
+        <p><code>get_operation()</code> is intended for MOP, replay, and other fields that hold one encoded Tensix instruction. It accepts every description that encodes as one instruction, including normal-only and Bias-only descriptions. It rejects only descriptions that need both a normal RWC instruction and <code>SETIBRWC</code>. <code>apply()</code> handles both one- and two-instruction descriptions.</p>
+<pre><code>// One word: legal for a MOP field.
+constexpr std::uint32_t bias_word =
+    hal::math_counters
+        .increment&lt;Counters::Bias, 1&gt;()
+        .get_operation();
+
+// Two words: direct issue only.
+hal::math_counters
+    .increment&lt;Counters::Dest, 8&gt;()
+    .increment&lt;Counters::Bias, 1&gt;()
+    .apply();</code></pre>
+      </section>
+
+      <section id="diagnostics">
+        <h2>Validation</h2>
+        <ul>
+          <li>An empty description, empty entry mask, repeated counter assignment, unsupported mask bit, or mixed set/increment chain fails at compile time.</li>
+          <li>Normal values must be below 16; Bias values must be below 4096.</li>
+          <li>Carry advances must correspond to assigned counters. Dest cannot advance from carry and save to carry in the same description.</li>
+          <li><code>get_operation()</code> requires exactly one emitted instruction; only the combined normal-plus-Bias form is rejected.</li>
+        </ul>
+        <div class="callout warning"><span class="callout-title">SETIBRWC runtime semantics are not simulator-validated</span><p>The Blackhole raw headers and instruction metadata expose the encoding, but the current simulator marks <code>SETIBRWC</code> unsupported and the repository has no production call sites. Tests therefore verify the exact operation word and emitted instruction count, not Bias-counter functional behavior.</p></div>
+      </section>
+
+      <section id="performance">
+        <h2>Performance</h2>
+        <p>All state is carried in template parameters and every dispatch uses compile-time selection. Normal-only and Bias-only <code>apply()</code> paths emit the same single immediate instruction as their raw <code>TTI_*</code> equivalents. Combining Bias with normal state necessarily emits two instructions and no runtime branch, call, load, store, or persistent builder state.</p>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <ul>
+          <li><a href="../../tt_llk_blackhole/llk_lib/hal/math_counters.h"><code>tt_llk_blackhole/llk_lib/hal/math_counters.h</code></a> — public builder and encoders.</li>
+          <li><a href="../../tt_llk_blackhole/common/inc/ckernel_ops.h"><code>tt_llk_blackhole/common/inc/ckernel_ops.h</code></a> — raw operation encodings.</li>
+          <li><a href="../../tests/sources/risc_compute_test.cpp"><code>tests/sources/risc_compute_test.cpp</code></a> — compile-time encoding and apply-path coverage.</li>
+        </ul>
+      </section>
+
+      <footer>TT-LLK Blackhole HAL · Math register-word counters</footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#slot-examples">Counter-slot examples</a></li>
+        <li><a href="#types">Shared types</a></li>
+        <li><a href="#assign">Set and increment</a></li>
+        <li><a href="#modifiers">Modifiers</a></li>
+        <li><a href="#emit">Encode and issue</a></li>
+        <li><a href="#diagnostics">Validation</a></li>
+        <li><a href="#performance">Performance</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

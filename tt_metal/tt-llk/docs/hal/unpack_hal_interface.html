@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="API guide and reference for the Blackhole hal::unpack UNPACR interface.">
+  <title>hal::unpack — Blackhole unpack HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul,ol { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } .sidebar nav { display:flex; gap:5px; overflow-x:auto; } .sidebar h2 { display:none; } .sidebar a { white-space:nowrap; } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::unpack</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a class="current" href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#types">Shared types</a>
+        <h2>Interfaces</h2>
+        <a href="#data-transfer">DataTransfer</a>
+        <a href="#context-increment">ContextCounterIncrement</a>
+        <a href="#cache-flush">RowStartCacheFlush</a>
+        <h2>Reference</h2>
+        <a href="#diagnostics">Validation</a>
+        <a href="#performance">Performance</a>
+        <a href="#sources">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::unpack</div>
+        <h1>Blackhole unpack HAL</h1>
+        <p class="lede">Describe, encode, and issue the three documented Blackhole <code>UNPACR</code> modes without exposing raw instruction fields at each call site.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Header</strong> hal/unpack.h</span>
+          <span class="pill"><strong>Opcode</strong> UNPACR 0x42</span>
+          <span class="pill"><strong>Status</strong> Implemented (additive)</span>
+        </div>
+        <div class="install"><span>Include the complete typed UNPACR interface</span><code>#include "hal/unpack.h"</code></div>
+        <p>The interface is additive. It does not change an LLK function signature, migrate existing instruction call sites, or model <code>UNPACR_NOP</code>. Quasar uses a different instruction family and is outside this Blackhole interface.</p>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+<pre><code>#include "hal/unpack.h"
+
+using namespace hal::unpack;
+
+constexpr DataTransfer unpack_srca {
+    .engine = Engine::Unpacker0,
+    .increments = {.channel0 = {.z = 1}},
+    .handoff = SourceHandoff::FlipAndSetDataValid,
+};
+
+// Compile-time path: return one encoded instruction for MOP or replay.
+constexpr std::uint32_t unpack_srca_word =
+    get_operation&lt;unpack_srca&gt;();
+
+// Compile-time path: issue one immediate UNPACR instruction.
+run&lt;unpack_srca&gt;();</code></pre>
+        <p>The operation above selects unpacker 0, advances channel-0 Z by one, explicitly selects configuration context 0 and address-counter context 0, then flips and publishes the completed source bank.</p>
+        <div class="callout note"><span class="callout-title">Handoff is intentionally mandatory</span><p><code>DataTransfer::handoff</code> defaults to <code>Unset</code>. The compile-time encoder rejects that sentinel, and LLK assertions diagnose it on the runtime path. State <code>Keep</code> for a partial sequence or <code>FlipAndSetDataValid</code> for the transfer that hands data to the consumer.</p></div>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>Opcode <code>0x42</code> has three disjoint typed forms. The HAL never emits a mixed special-mode word.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Type</th><th>Mode selection</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>DataTransfer</code></td><td>Bits 13 and 1 clear</td><td>Move, decompress, and convert configured L1 data through unpacker 0 or 1.</td></tr>
+            <tr><td><code>ContextCounterIncrement</code></td><td>Bit 13 set; bit 1 clear</td><td>Advance one unpacker's per-thread configuration context counter without transferring data.</td></tr>
+            <tr><td><code>RowStartCacheFlush</code></td><td>Bit 1 set; bit 13 clear</td><td>Clear compressed-row-start cache state for the current thread or all physical entries.</td></tr>
+          </tbody>
+        </table></div>
+        <p>A data-transfer instruction does not select format, dimensions, base address, compression, transpose, or SrcA-versus-Dst. Those remain configuration and address-counter preconditions. Unpacker 0 targets SrcA or Dst according to configuration; unpacker 1 targets SrcB.</p>
+        <div class="callout note"><span class="callout-title">Reserved fields stay private</span><p>Bits 5 and 14 always encode zero. Bit 5 has conflicting local Wormhole/Blackhole metadata and no portable ISA semantics, so the typed interface fixes it to zero. The raw macros remain available for low-level compatibility.</p></div>
+      </section>
+
+      <section id="types">
+        <h2>Shared types</h2>
+        <p>These types describe the choices shared by the three operation descriptors. Defaults below are the defaults stored by the C++ aggregate; required or invalid defaults are called out explicitly.</p>
+
+        <h3><code>Engine</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Selected hardware</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Unpacker0</code></td><td>Physical unpacker 0</td><td>A <code>DataTransfer</code> writes SrcA or Dst, as selected by unpacker configuration. Special operations modify unpacker-0 state.</td></tr>
+            <tr><td><code>Unpacker1</code></td><td>Physical unpacker 1</td><td>A <code>DataTransfer</code> writes SrcB. Special operations modify unpacker-1 state.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>engine</code> has no declared member initializer. If it is omitted from an aggregate, C++ value-initialization produces zero, which currently maps to <code>Unpacker0</code>; set it explicitly so the selected engine is visible at the call site.</p>
+
+        <h3><code>AddressCounterPostIncrements</code></h3>
+        <p>The four fields are independent two-bit increments applied after the transfer. Every field defaults to zero and accepts values from 0 through 3.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Field</th><th>Default</th><th>Counter effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>channel0.y</code></td><td><code>0</code></td><td>Advance input channel Y. Channel 0 supplies the input/decompressor row position.</td></tr>
+            <tr><td><code>channel0.z</code></td><td><code>0</code></td><td>Advance input channel Z, contributing to selection of the next input Z plane or face.</td></tr>
+            <tr><td><code>channel1.y</code></td><td><code>0</code></td><td>Advance output channel Y. The configured channel-1 Y stride converts this counter into an output-register address.</td></tr>
+            <tr><td><code>channel1.z</code></td><td><code>0</code></td><td>Advance output channel Z. The configured channel-1 Z stride converts this counter into an output-register address.</td></tr>
+          </tbody>
+        </table></div>
+        <p>In multi-context mode, hardware updates both the issuing thread's counters and the selected address-counter context when they differ. <code>UNPACR</code> cannot post-increment X or W; use the <a href="address_counters_hal_interface.html">address-counter HAL</a> when another dimension must change.</p>
+
+        <h3><code>ContextSelection</code> and <code>ContextSource</code></h3>
+        <p>Prefer the factories below instead of constructing the three stored fields by hand. <code>DataTransfer::context</code> defaults to <code>explicit_context()</code>, not <code>thread_default()</code>; those selections differ even though both initially name context zero.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Factory and source</th><th>Configuration selection</th><th>Address-counter selection</th><th>Additional effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>thread_default()</code><br><code>ThreadDefault</code></td><td>Configuration context 0</td><td>The issuing thread's context</td><td>Disables multi-context mode and clears both stored IDs.</td></tr>
+            <tr><td><code>explicit_context(configuration, address_counter)</code><br><code>Explicit</code></td><td>The supplied ID: 0–7 for unpacker 0; the final resolved ID must be 0 or 1 for unpacker 1</td><td>The supplied ID in the range 0–2</td><td>Enables multi-context mode without advancing the configuration-context counter.</td></tr>
+            <tr><td><code>counter(address_counter)</code><br><code>Counter</code></td><td>The selected engine's per-thread configuration-context counter</td><td>The supplied ID in the range 0–2</td><td>Enables multi-context mode, then advances and wraps the configuration-context counter after the transfer.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Stored field</th><th>Default</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>source</code></td><td><code>Explicit</code></td><td>Selects one of the three strategies above.</td></tr>
+            <tr><td><code>configuration_context</code></td><td><code>0</code></td><td>Used only by <code>Explicit</code>; the factories clear it for the other strategies.</td></tr>
+            <tr><td><code>address_counter_context</code></td><td><code>0</code></td><td>Used by <code>Explicit</code> and <code>Counter</code>; <code>ThreadDefault</code> instead uses the issuing thread.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Hardware adds the configured context offset to an explicitly selected or counter-selected configuration context. For unpacker 1, ensure the resulting context remains below two.</p>
+
+        <h3><code>SourceHandoff</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Status</th><th>Effect</th><th>When to use</th></tr></thead>
+          <tbody>
+            <tr><td><code>Unset</code></td><td>Default; invalid sentinel</td><td>Has no supported instruction meaning. Compile-time validation rejects it; runtime LLK assertions diagnose it.</td><td>Never pass it; it exists to detect a missing handoff decision.</td></tr>
+            <tr><td><code>Keep</code></td><td>Valid</td><td>Keeps the current source bank with the unpacker and does not publish or flip it. Configured source-row auto-update can still advance row state.</td><td>Use while more transfers will contribute to the same logical source task.</td></tr>
+            <tr><td><code>FlipAndSetDataValid</code></td><td>Valid</td><td>Publishes the completed SrcA or SrcB bank to the matrix unit, records its implied format on Blackhole, flips the unpacker to the other bank, and resets the per-thread source row to its configured base.</td><td>Use on the transfer that hands the completed source data to its consumer.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The generated instruction field is named <code>SetDatValid</code>; the ISA functional model calls the same bit <code>FlipSrc</code>. <code>FlipAndSetDataValid</code> names both observable parts of the operation.</p>
+
+        <h3><code>DatumOverride</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>None</code></td><td>Yes</td><td>Write the input values after normal decompression and format conversion.</td></tr>
+            <tr><td><code>Zero</code></td><td>No</td><td>Force emitted datums to zero regardless of input. Address generation, search, L1 reads, conversion, and post-increments still occur; this is not a zero-source <code>UNPACR_NOP</code>.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3><code>SearchMode</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>DatumRange</code></td><td>Yes</td><td>Use normal per-datum or range selection. Channel-0 X/Y selects the input start, and channel-1 X contributes the end or datum count.</td></tr>
+            <tr><td><code>Row</code></td><td>No</td><td>Locate selected row or blob boundaries using configured tile geometry and row-start metadata. It is especially relevant to compressed row-start tables, but does not itself enable compression.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3><code>AccumulationAction</code></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Continue</code></td><td>No</td><td>Clear the instruction's <code>Last</code> bit and keep the unpacker's accumulation buffers open for following transfers in the same assembly task.</td></tr>
+            <tr><td><code>Flush</code></td><td>Yes</td><td>Set <code>Last</code>, mark this as the final transfer in the assembly task, and flush accumulated or buffered unpack data.</td></tr>
+          </tbody>
+        </table></div>
+        <p>This selection is independent of <code>SourceHandoff</code>. Accumulation flush finishes buffered transfer work; source handoff controls whether the completed source bank is published and flipped.</p>
+
+        <h3><code>CacheScope</code></h3>
+        <p><code>CacheScope</code> is used only by <code>RowStartCacheFlush</code>; it does not affect a normal <code>DataTransfer</code>.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Value</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>CurrentThread</code></td><td>Yes</td><td>Clear the issuing thread's decompression row-start cache entry in the selected engine.</td></tr>
+            <tr><td><code>AllEntries</code></td><td>No</td><td>Clear every physical decompression row-start cache entry in the selected engine.</td></tr>
+          </tbody>
+        </table></div>
+        <p>A row-start-cache flush transfers no data. Use it when compressed backing memory is changed or rapidly reused and cached row boundaries may be stale.</p>
+
+        <div class="callout note"><span class="callout-title">Advanced mode adoption</span><p>Non-default context selection, context-counter selection, and row search follow the documented instruction encoding but have no current LLK consumers. When adopting one of these modes, validate its configured context offsets and row-search state end to end in the calling kernel.</p></div>
+
+      </section>
+
+      <section id="data-transfer">
+        <h2>DataTransfer</h2>
+        <h3>Declaration</h3>
+<pre><code>struct AddressCounterPostIncrements
+{
+    struct Channel
+    {
+        std::uint8_t y = 0;
+        std::uint8_t z = 0;
+    };
+
+    Channel channel0 = {};
+    Channel channel1 = {};
+};
+
+struct DataTransfer
+{
+    Engine engine;
+    AddressCounterPostIncrements increments = {};
+    ContextSelection context = ContextSelection::explicit_context();
+    SourceHandoff handoff = SourceHandoff::Unset;
+    DatumOverride datum_override = DatumOverride::None;
+    SearchMode search = SearchMode::DatumRange;
+    AccumulationAction accumulation = AccumulationAction::Flush;
+};
+
+// Compile-time path
+template &lt;DataTransfer Operation&gt;
+constexpr std::uint32_t get_operation();
+
+template &lt;DataTransfer Operation&gt;
+inline __attribute__((always_inline)) void run();
+
+// Runtime path
+inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(
+    const DataTransfer operation);
+
+inline __attribute__((always_inline)) void run(
+    const DataTransfer operation);</code></pre>
+        <p><code>get_operation</code> returns one encoded word and does not issue it. Compile-time <code>run</code> emits one immediate instruction. Runtime <code>run</code> checks the description when LLK assertions are enabled, constructs the word, and writes it through <code>ckernel::instrn_buffer[0]</code>.</p>
+        <h3>Delayed source handoff</h3>
+<pre><code>constexpr DataTransfer partial {
+    .engine = Engine::Unpacker0,
+    .increments = {
+        .channel0 = {.z = 1},
+        .channel1 = {.z = 1},
+    },
+    .handoff = SourceHandoff::Keep,
+};
+
+constexpr DataTransfer final {
+    .engine = Engine::Unpacker0,
+    .increments = {
+        .channel0 = {.z = 1},
+        .channel1 = {.z = 1},
+    },
+    .handoff = SourceHandoff::FlipAndSetDataValid,
+};
+
+run&lt;partial&gt;();
+run&lt;final&gt;();</code></pre>
+        <h3>Runtime force-zero transfer</h3>
+<pre><code>// Runtime path: the context ID remains selected at runtime.
+run(DataTransfer {
+    .engine = Engine::Unpacker0,
+    .context = ContextSelection::explicit_context(context_id),
+    .handoff = SourceHandoff::Keep,
+    .datum_override = DatumOverride::Zero,
+});</code></pre>
+        <p>Zero override does not skip address generation, row search, or input reads. It zeroes data after read and conversion and is not equivalent to a zero-source <code>UNPACR_NOP</code>.</p>
+      </section>
+
+      <section id="context-increment">
+        <h2>ContextCounterIncrement</h2>
+        <h3>Declaration</h3>
+<pre><code>struct ContextCounterIncrement
+{
+    Engine engine;
+};
+
+// Compile-time path
+template &lt;ContextCounterIncrement Operation&gt;
+constexpr std::uint32_t get_operation();
+
+template &lt;ContextCounterIncrement Operation&gt;
+inline __attribute__((always_inline)) void run();
+
+// Runtime path
+inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(
+    const ContextCounterIncrement operation);
+
+inline __attribute__((always_inline)) void run(
+    const ContextCounterIncrement operation);</code></pre>
+        <p>The encoder emits only unpacker selection and bit 13. Separating this mode from <code>DataTransfer</code> prevents transfer fields from leaking into the special word.</p>
+<pre><code>constexpr ContextCounterIncrement advance_unpacker0 {
+    .engine = Engine::Unpacker0,
+};
+
+constexpr std::uint32_t advance_word =
+    get_operation&lt;advance_unpacker0&gt;();</code></pre>
+      </section>
+
+      <section id="cache-flush">
+        <h2>RowStartCacheFlush</h2>
+        <h3>Declaration</h3>
+<pre><code>struct RowStartCacheFlush
+{
+    Engine engine;
+    CacheScope scope = CacheScope::CurrentThread;
+};
+
+// Compile-time path
+template &lt;RowStartCacheFlush Operation&gt;
+constexpr std::uint32_t get_operation();
+
+template &lt;RowStartCacheFlush Operation&gt;
+inline __attribute__((always_inline)) void run();
+
+// Runtime path
+inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(
+    const RowStartCacheFlush operation);
+
+inline __attribute__((always_inline)) void run(
+    const RowStartCacheFlush operation);</code></pre>
+        <p><code>CurrentThread</code> clears the issuing thread's cache entry. <code>AllEntries</code> clears every physical cache entry for the selected unpacker.</p>
+<pre><code>constexpr RowStartCacheFlush flush_all_unpacker0_entries {
+    .engine = Engine::Unpacker0,
+    .scope = CacheScope::AllEntries,
+};
+
+run&lt;flush_all_unpacker0_entries&gt;();</code></pre>
+      </section>
+
+      <section id="diagnostics">
+        <h2>Validation and diagnostics</h2>
+<pre><code>constexpr bool is_valid(const DataTransfer operation);
+constexpr bool is_valid(const ContextCounterIncrement operation);
+constexpr bool is_valid(const RowStartCacheFlush operation);</code></pre>
+        <p><code>is_valid</code> exposes the complete descriptor predicate. Compile-time encoders enforce it with <code>static_assert</code>. Runtime encoders check each field with a descriptive <code>LLK_ASSERT</code>; when LLK assertions are disabled, those validation helpers are compiled out. The predicate checks:</p>
+        <ul>
+          <li>all enum values and the mandatory source handoff;</li>
+          <li>each address increment in the range 0–3;</li>
+          <li>configuration context in the range 0–7 and address-counter context in the range 0–2;</li>
+          <li>explicit unpacker-1 configuration context below two; and</li>
+          <li>canonical special modes with unrelated bits cleared by construction.</li>
+        </ul>
+        <p>With LLK assertions enabled, invalid runtime input reaches a field-specific diagnostic. With assertions disabled, the runtime path deliberately has raw-instruction semantics: call <code>is_valid</code> explicitly when untrusted values must be rejected in a production build.</p>
+        <div class="callout warning"><span class="callout-title">Configuration precondition for unpacker 1</span><p>Explicit or counter selection combines with the configured context offset, which the instruction description cannot inspect. Ensure the final unpacker-1 configuration context remains below two.</p></div>
+      </section>
+
+      <section id="performance">
+        <h2>Performance and hardware mapping</h2>
+        <p>The compile-time path lowers to the same single immediate instruction used by existing <code>TTI_UNPACR</code> call sites. It performs no runtime dispatch or hot-path word construction. With LLK assertions disabled, the runtime path contains only the context selection and field packing required by the equivalent raw <code>TT_UNPACR</code> operation, followed by one instruction-buffer write. Enabling LLK assertions intentionally adds diagnostic checks.</p>
+        <p>The interface does not change configured format conversion, compression, upsampling, throttling, or dual-unpacker contention. Those characteristics continue to come from CFG and address-counter state.</p>
+      </section>
+
+      <section id="sources">
+        <h2>Sources</h2>
+        <div class="api-index">
+          <a href="../../tt_llk_blackhole/llk_lib/hal/unpack.h"><code>tt_llk_blackhole/llk_lib/hal/unpack.h</code><span>Typed implementation.</span></a>
+          <a href="../../tt_llk_blackhole/common/inc/ckernel_ops.h"><code>tt_llk_blackhole/common/inc/ckernel_ops.h</code><span>Generated compatibility encoder and emitters.</span></a>
+          <a href="../../tests/sources/risc_compute_test.cpp"><code>tests/sources/risc_compute_test.cpp</code><span>Encoding-equivalence, invalid-state, and code-generation coverage.</span></a>
+        </div>
+      </section>
+
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#types">Shared types</a></li>
+        <li><a href="#data-transfer">DataTransfer</a></li>
+        <li><a href="#context-increment">ContextCounterIncrement</a></li>
+        <li><a href="#cache-flush">RowStartCacheFlush</a></li>
+        <li><a href="#diagnostics">Validation</a></li>
+        <li><a href="#performance">Performance</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer guide and API reference for the Blackhole hal::replay instruction replay interface.">
+  <title>hal::replay — Blackhole replay HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme: light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; }
+    pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; }
+    h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul,ol { padding-left:23px; } li+li { margin-top:5px; }
+    .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; }
+    .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+    .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); }
+    .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; }
+    .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); }
+    .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); }
+    .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } }
+    @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } .sidebar nav { display:flex; gap:5px; overflow-x:auto; } .sidebar h2 { display:none; } .sidebar a { white-space:nowrap; } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::replay</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a class="current" href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#range">Range and wraparound</a>
+        <h2>Guides</h2>
+        <a href="#record">Record a sequence</a>
+        <a href="#run">Run a sequence</a>
+        <a href="#mop">Embed replay in MOP</a>
+        <a href="#performance">Performance</a>
+        <h2>Reference</h2>
+        <a href="#api">API index</a>
+        <a href="#source">Sources</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::replay</div>
+        <h1>Blackhole replay HAL</h1>
+        <p class="lede">Record a short Tensix instruction sequence once, replay it inline, or place its replay operation inside a MOP configuration.</p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Language</strong> C++17 + SFPI extensions</span>
+          <span class="pill"><strong>Header</strong> hal/replay.h</span>
+          <span class="pill"><strong>State</strong> Per thread</span>
+        </div>
+        <div class="install"><span>Include the complete replay interface</span><code>#include "hal/replay.h"</code></div>
+        <p>Each Tensix thread has an independent 32-instruction circular replay buffer. A <code>REPLAY</code> instruction either records the next <code>Count</code> instructions into that buffer or emits a previously recorded range into the instruction stream.</p>
+        <div class="callout note"><span class="callout-title">Three public operations</span><p><code>record()</code> populates a range, <code>run()</code> issues it now, and <code>get_operation()</code> returns its encoded instruction for another expander such as MOP.</p></div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>Suppose a two-instruction row epilogue must run repeatedly. Record those instructions into slots 16 and 17, then replay them whenever the row completes.</p>
+<pre><code>#include "hal/replay.h"
+
+constexpr hal::replay::BufferRange row_epilogue{
+    .start = 16,
+    .count = 2,
+};
+
+// Compile-time path
+void configure_row_epilogue()
+{
+    hal::replay::record&lt;row_epilogue&gt;([] {
+        TTI_NOP;
+        TTI_NOP;
+    });
+}
+
+void run_row_epilogue()
+{
+    hal::replay::run&lt;row_epilogue&gt;();
+}</code></pre>
+        <p>The compile-time form emits one immediate <code>REPLAY</code> instruction before the two recorded instructions and one immediate <code>REPLAY</code> instruction at each call to <code>run()</code>.</p>
+        <div class="callout note"><span class="callout-title">Compiler-aware lowering</span><p>Both compile-time and runtime forms use the SFPI REPLAY builtin internally. Compile-time ranges still become one immediate instruction, while the builtin keeps the operation visible to target-specific optimization and register allocation.</p></div>
+        <div class="callout warning"><span class="callout-title">Current SFPI lowering limits</span><p>The current SFPI compiler requires the builtin replay start index to resolve to a constant. Its immediate-count path accepts counts 1–32, so compile-time <code>record()</code> and <code>run()</code> do not currently accept counts 33–64 even though the ISA and <code>BufferRange</code> model them. A dynamic count can be lowered when the start index remains constant. <code>get_operation()</code> constructs the raw playback word and supports the documented 1–64 range.</p></div>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <p>The Replay Expander is in each thread's frontend, after the MOP Expander and before the Wait Gate. Non-REPLAY instructions pass through unchanged. The following pseudocode uses the HAL names and shows the state owned by one thread.</p>
+        <pre><code data-language="Pseudocode">replay_buffer = array[32]
+
+forever:
+    instruction = next instruction after MOP expansion
+
+    if instruction is not REPLAY:
+        emit instruction
+
+    else if instruction records:
+        index = instruction.start
+        repeat public_count(instruction.count) times:
+            recorded = next instruction after MOP expansion
+            replay_buffer[index] = recorded
+            index = (index + 1) modulo 32
+            if instruction.behavior is RecordAndExecute:
+                emit recorded
+
+    else:
+        index = instruction.start
+        repeat public_count(instruction.count) times:
+            emit replay_buffer[index]
+            index = (index + 1) modulo 32</code></pre>
+        <p><code>public_count(0)</code> is 64; every other encoded value is used directly. The HAL keeps this encoding detail private and accepts public counts from 1 through 64.</p>
+        <div class="callout warning"><span class="callout-title">Count the post-MOP stream</span><p>Recording happens after MOP expansion. If the recording body issues a MOP, its expanded operations—not the single MOP control instruction—consume replay slots.</p></div>
+        <div class="callout warning"><span class="callout-title">Expansion does not recurse</span><p>Replay output cannot travel backward through the earlier MOP Expander. Do not place raw MOP or REPLAY control words in replay-buffer data: they are emitted downstream rather than recursively expanded. A MOP issued normally by the recording body is different—it expands before its resulting operations reach the Replay Expander.</p></div>
+      </section>
+
+      <section id="range">
+        <h2>Range and wraparound</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>HAL field</th><th>ISA name</th><th>Valid public value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>BufferRange::start</code></td><td><code>Index</code></td><td>0–31</td><td>First replay-buffer slot.</td></tr>
+            <tr><td><code>BufferRange::count</code></td><td><code>Count</code></td><td>1–64</td><td>Number of post-MOP instructions to record or replay. Public 64 is encoded as ISA value 0.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Indexing is circular. <code>{.start = 30, .count = 4}</code> visits slots 30, 31, 0, and 1. Counts larger than 32 revisit slots. Recording 64 distinct instructions overwrites every slot twice, leaving only instructions 33–64; replaying that 64-count range emits the final 32-entry contents twice.</p>
+        <p>Compile-time ranges are checked with <code>static_assert</code>. Runtime ranges use <code>LLK_ASSERT</code>; invalid runtime values are unsupported when assertions are disabled and are not normalized by the HAL.</p>
+      </section>
+
+      <section id="record">
+        <h2>Record a sequence</h2>
+        <p>The default behavior stores instructions without sending them farther down the pipeline. Use <code>RecordAndExecute</code> when configuration and first execution should happen together. Both overloads forward any trailing arguments after the callable to the callable itself.</p>
+        <pre><code>// Compile-time path: range and behavior emit immediate REPLAY.
+hal::replay::record&lt;
+    row_epilogue,
+    hal::replay::RecordBehavior::RecordAndExecute&gt;([] {
+    TTI_NOP;
+    TTI_NOP;
+});
+
+// Mixed path: runtime count, compile-time behavior. The start slot
+// must still resolve to a constant (see "Current SFPI lowering limits").
+void record_epilogue(const std::uint32_t count)
+{
+    hal::replay::record&lt;hal::replay::RecordBehavior::RecordOnly&gt;(
+        hal::replay::BufferRange{.start = 16, .count = count},
+        [](const std::uint32_t n) {
+            for (std::uint32_t i = 0; i &lt; n; ++i)
+            {
+                TTI_NOP;
+            }
+        },
+        count); // Trailing arguments are forwarded to the callable.
+}</code></pre>
+        <div class="callout warning"><span class="callout-title">There is no record terminator</span><p>The callable must expand to exactly <code>range.count</code> post-MOP instructions. Too few causes later instructions to be recorded; too many leaves the tail outside the buffer. The HAL cannot infer this count from C++ source.</p></div>
+        <p>When gathering is enabled by the JIT build, <code>record()</code> preserves the existing safety workaround by disabling gathering around the recording body and re-enabling it afterward.</p>
+      </section>
+
+      <section id="run">
+        <h2>Run a recorded sequence</h2>
+        <pre><code>// Compile-time path: one immediate REPLAY instruction.
+hal::replay::run&lt;row_epilogue&gt;();
+
+// Runtime-count path: the start slot must still resolve to a
+// constant (see "Current SFPI lowering limits").
+hal::replay::run({.start = 16, .count = count});</code></pre>
+        <p><code>run()</code> does not track initialization. Record the range first, or ensure another configuration path has populated the same per-thread slots. The runtime overload accepts a <code>BufferRange</code> built at runtime, but the current SFPI lowering still requires its <code>start</code> to fold to a compile-time constant; only <code>count</code> may be genuinely dynamic.</p>
+      </section>
+
+      <section id="mop">
+        <h2>Embed replay in MOP</h2>
+        <p>Because MOP expansion happens before replay expansion, any MOP operation field can contain an encoded replay operation. <code>get_operation()</code> returns the playback form without issuing it.</p>
+        <pre><code>// Compile-time path
+constexpr std::uint32_t row_epilogue_op =
+    hal::replay::get_operation&lt;row_epilogue&gt;();
+
+constexpr hal::mop::MopConfig&lt;hal::mop::MopTemplate::Template1&gt; rows{
+    .outer_loop = {
+        .count = 4,
+        .end_op = row_epilogue_op,
+    },
+    .inner_loop = {
+        .count = 1,
+        .body_op = pack_row_op,
+    },
+};</code></pre>
+        <p>A runtime overload, <code>get_operation(range)</code>, supports runtime MOP programming. It returns only the encoded word and does not touch the replay buffer. Both overloads intentionally encode playback only; the HAL does not expose raw record-control words for embedding.</p>
+      </section>
+
+      <section id="performance">
+        <h2>Frontend behavior and performance</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Mode</th><th>Frontend input</th><th>Frontend output</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td>Ordinary instruction</td><td>1 per cycle</td><td>1 per cycle</td><td>Passes through.</td></tr>
+            <tr><td><code>RecordAndExecute</code></td><td>1 per cycle</td><td>1 per cycle</td><td>Stores and forwards each instruction.</td></tr>
+            <tr><td><code>RecordOnly</code></td><td>1 per cycle</td><td>None while recording</td><td>Consumes the REPLAY control, then stores <code>count</code> inputs.</td></tr>
+            <tr><td><code>run()</code></td><td>No new input for the remaining expansion</td><td>1 per cycle</td><td>Consumes the REPLAY control, then emits the selected buffer range.</td></tr>
+          </tbody>
+        </table></div>
+        <p>There is no transition penalty between modes. Downstream backpressure can extend replay time; gaps in the incoming stream can extend recording time.</p>
+      </section>
+
+      <section id="api">
+        <h2>API index</h2>
+        <div class="api-index">
+          <a href="#range"><code>BufferRange</code><span>Start slot and public instruction count.</span></a>
+          <a href="#record"><code>RecordBehavior</code><span>Record only or record and execute.</span></a>
+          <a href="#record"><code>record&lt;Range, Behavior&gt;(callable, args...)</code><span>Compile-time range; args are forwarded to callable.</span></a>
+          <a href="#record"><code>record&lt;Behavior&gt;(range, callable, args...)</code><span>Runtime range; args are forwarded to callable.</span></a>
+          <a href="#run"><code>run&lt;Range&gt;()</code><span>Compile-time playback.</span></a>
+          <a href="#run"><code>run(range)</code><span>Runtime playback.</span></a>
+          <a href="#mop"><code>get_operation&lt;Range&gt;()</code><span>Compile-time encoded playback operation.</span></a>
+          <a href="#mop"><code>get_operation(range)</code><span>Runtime encoded playback operation.</span></a>
+        </div>
+      </section>
+
+      <section id="source">
+        <h2>Sources</h2>
+        <ul>
+          <li>HAL implementation: <code>tt_llk_blackhole/llk_lib/hal/replay.h</code></li>
+          <li>Blackhole instruction encoding: <code>tt_llk_blackhole/instructions/assembly.yaml</code></li>
+          <li>Pinned functional model: <a href="https://github.com/tenstorrent/tt-isa-documentation/blob/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor/REPLAY.md">REPLAY ISA documentation</a></li>
+        </ul>
+      </section>
+      <footer>Blackhole HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2><ul>
+        <li><a href="#quick-start">Quick start</a></li><li><a href="#model">Functional model</a></li><li><a href="#range">Range</a></li><li><a href="#record">Record</a></li><li><a href="#run">Run</a></li><li><a href="#mop">MOP integration</a></li><li><a href="#performance">Performance</a></li><li><a href="#api">API index</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

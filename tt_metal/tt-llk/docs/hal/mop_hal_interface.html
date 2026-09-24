@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer guide and API reference for the Blackhole hal::mop macro-operation expander interface.">
+  <title>hal::mop — Blackhole MOP HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --subtle: #f6f8fa;
+      --code: #0d1117;
+      --border: #d8dee4;
+      --text: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --link: #0969da;
+      --link-hover: #0550ae;
+      --accent: #007a6f;
+      --accent-soft: #e8f7f4;
+      --blue-soft: #eef5ff;
+      --amber: #9a6700;
+      --amber-soft: #fff8c5;
+      --red: #cf222e;
+      --red-soft: #ffebe9;
+      --green: #1a7f37;
+      --green-soft: #dafbe1;
+      --sidebar: 250px;
+      --toc: 220px;
+      --topbar: 58px;
+      --content: 900px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: calc(var(--topbar) + 24px); }
+    body { margin: 0; color: var(--text); background: var(--bg); font: 15px/1.58 var(--sans); }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { color: var(--link-hover); text-decoration: underline; }
+    code, pre { font-family: var(--mono); }
+    code { padding: .12em .34em; border-radius: 5px; background: var(--subtle); font-size: .9em; }
+    pre { margin: 14px 0 20px; padding: 17px 19px; overflow: auto; border: 1px solid #30363d; border-radius: 8px; color: #e6edf3; background: var(--code); font-size: 13px; line-height: 1.55; tab-size: 4; }
+    pre code { padding: 0; color: inherit; background: transparent; font-size: inherit; }
+    h1, h2, h3, h4 { line-height: 1.25; }
+    h1 { margin: 0 0 10px; font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -.035em; }
+    h2 { margin: 54px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 1.72rem; letter-spacing: -.018em; }
+    h3 { margin: 34px 0 10px; font-size: 1.24rem; }
+    h4 { margin: 24px 0 8px; font-size: 1rem; }
+    p { max-width: 78ch; }
+    ul, ol { padding-left: 23px; }
+    li + li { margin-top: 5px; }
+    strong { font-weight: 650; }
+    :target { scroll-margin-top: calc(var(--topbar) + 24px); }
+
+    .topbar { position: sticky; top: 0; z-index: 20; height: var(--topbar); display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, .96); backdrop-filter: blur(8px); }
+    .brand { color: var(--text); font-weight: 700; letter-spacing: -.01em; }
+    .brand:hover { color: var(--text); text-decoration: none; }
+    .crumb { color: var(--faint); }
+    .topbar code { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, var(--content)) var(--toc); justify-content: center; min-height: calc(100vh - var(--topbar)); }
+    .sidebar, .toc { position: sticky; top: var(--topbar); align-self: start; max-height: calc(100vh - var(--topbar)); overflow-y: auto; }
+    .sidebar { padding: 26px 20px 40px; border-right: 1px solid var(--border); }
+    .toc { padding: 28px 18px; border-left: 1px solid var(--border); }
+    .sidebar h2, .toc h2 { margin: 0 0 9px; padding: 0; border: 0; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .sidebar h2:not(:first-child) { margin-top: 23px; }
+    .sidebar a, .toc a { display: block; padding: 4px 8px; border-radius: 5px; color: var(--muted); font-size: 13px; }
+    .sidebar a:hover, .toc a:hover { color: var(--link); background: var(--subtle); text-decoration: none; }
+    .sidebar .current { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+    .toc ul { margin: 0; padding: 0; list-style: none; }
+    .toc li + li { margin-top: 1px; }
+    .toc .sub a { padding-left: 18px; font-size: 12px; }
+
+    main { min-width: 0; padding: 46px 48px 90px; }
+    .package-label { margin-bottom: 12px; color: var(--accent); font: 650 13px/1 var(--mono); }
+    .lede { margin: 0 0 22px; color: var(--muted); font-size: 18px; line-height: 1.55; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 4px; }
+    .pill { display: inline-flex; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--subtle); font-size: 12px; }
+    .pill strong { margin-right: 5px; color: var(--text); }
+    .install { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 26px 0 34px; padding: 14px 17px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); }
+    .install span { color: var(--muted); font-size: 13px; }
+    .install code { padding: 0; color: var(--text); background: transparent; }
+
+    .cards, .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0 26px; }
+    .card { padding: 17px 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+    .card h3, .card h4 { margin-top: 0; }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font: 650 11px/1.2 var(--mono); text-transform: uppercase; }
+    .callout { margin: 20px 0; padding: 14px 17px; border: 1px solid var(--border); border-left: 4px solid var(--link); border-radius: 6px; background: var(--blue-soft); }
+    .callout.note { border-left-color: var(--accent); background: var(--accent-soft); }
+    .callout.warning { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout p { margin: 0; }
+    .callout p + p { margin-top: 8px; }
+    .callout-title { display: block; margin-bottom: 4px; font-weight: 700; }
+
+    .steps { counter-reset: step; margin: 20px 0; padding: 0; list-style: none; }
+    .steps li { position: relative; margin: 0 0 14px; padding: 2px 0 12px 42px; border-bottom: 1px solid var(--border); }
+    .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--accent); font: 700 12px/1 var(--mono); }
+    .steps li:last-child { border-bottom: 0; }
+    .steps strong { display: block; }
+
+    .table-wrap { margin: 16px 0 28px; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; background: var(--bg); font-size: 14px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); background: var(--subtle); font-size: 12px; font-weight: 650; letter-spacing: .025em; }
+    tr:last-child td { border-bottom: 0; }
+    td code { white-space: nowrap; }
+    .yes { color: var(--green); font-weight: 650; }
+    .no { color: var(--red); }
+
+    .api-index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 22px; margin: 18px 0 32px; padding: 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); }
+    .api-index a { font-family: var(--mono); font-size: 13px; }
+    .api-index span { display: block; color: var(--muted); font-family: var(--sans); font-size: 12px; }
+    .symbol { margin: 30px 0 42px; }
+    .symbol-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; margin-bottom: 10px; }
+    .symbol-head h3 { margin: 0; font-family: var(--mono); font-size: 1.27rem; }
+    .kind { padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 650 10px/1.5 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+    details { margin: 12px 0; border: 1px solid var(--border); border-radius: 7px; }
+    summary { padding: 12px 15px; cursor: pointer; font-weight: 650; background: var(--subtle); }
+    details > div { padding: 4px 15px 15px; }
+    footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: var(--sidebar) minmax(0, var(--content)); }
+      .toc { display: none; }
+    }
+    @media (max-width: 820px) {
+      .topbar { padding: 0 16px; }
+      .layout { display: block; }
+      .sidebar { position: static; max-height: none; padding: 14px 16px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border); }
+      .sidebar h2 { display: none; }
+      .sidebar nav { display: flex; gap: 5px; overflow-x: auto; }
+      .sidebar a { white-space: nowrap; }
+      main { padding: 32px 20px 70px; }
+      .cards, .quick-grid, .api-index { grid-template-columns: 1fr; }
+    }
+    @media print {
+      .topbar, .sidebar, .toc { display: none; }
+      .layout { display: block; }
+      main { max-width: none; padding: 0; }
+      a { color: inherit; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a>
+    <span class="crumb">/</span>
+    <span>Blackhole</span>
+    <span class="crumb">/</span>
+    <code>hal::mop</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a class="current" href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#template1-model">Template 1 fields and expansion</a>
+        <a href="#template0-model">Template 0 fields and expansion</a>
+        <a href="#choose-template">Choose a template</a>
+
+        <h2>Guides</h2>
+        <a href="#lifecycle">Configure and run</a>
+        <a href="#compile-runtime">Compile time or runtime</a>
+        <a href="#patch-field">Patch one configured field</a>
+        <a href="#safety">Constraints and safety</a>
+
+        <h2>Reference</h2>
+        <a href="#api-index">API index</a>
+        <a href="#configuration-api">Configuration API</a>
+        <a href="#runner-api">Runner API</a>
+        <a href="#hardware">Hardware mapping</a>
+        <a href="#examples">Examples</a>
+        <a href="#source">Source</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::mop</div>
+        <h1>Blackhole MOP HAL</h1>
+        <p class="lede">
+          Configure and run the Tensix macro-operation expander so one MOP
+          instruction can generate a repeated instruction sequence.
+        </p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Language</strong> C++17</span>
+          <span class="pill"><strong>Header</strong> hal/mop.h</span>
+          <span class="pill"><strong>Namespace</strong> hal::mop</span>
+        </div>
+        <div class="install">
+          <span>Include the complete MOP interface</span>
+          <code>#include "hal/mop.h"</code>
+        </div>
+
+        <p>
+          MOP is a small hardware instruction expander. Software first writes a
+          template configuration for the current Tensix thread, then issues one
+          MOP instruction through a matching <code>Runner</code>. The expander
+          turns that instruction into the configured sequence.
+        </p>
+        <div class="callout note">
+          <span class="callout-title">The rule of thumb</span>
+          <p>
+            Use <strong>Template 0</strong> when each iteration chooses a normal
+            or shadow path from a mask. Use <strong>Template 1</strong> for a
+            nested loop with optional start, end, alternating, and last-iteration
+            operations.
+          </p>
+        </div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>
+          Suppose the unpacker must read a 2×2 grid of faces from operand A and
+          operand B, pairing the two operands face by face. Describe one SrcA
+          unpack and one SrcB unpack with the
+          <a href="unpack_hal_interface.html"><code>hal::unpack</code></a>
+          interface, then use their encoded operations as the alternating
+          Template 1 operations. If the unpack descriptors are new to you, read
+          the <a href="unpack_hal_interface.html">unpack HAL guide</a> first;
+          this page only consumes the words it produces.
+        </p>
+        <pre><code>#include "hal/mop.h"
+#include "hal/unpack.h"
+
+// Compile-time path. Descriptors are plain constexpr values, so one
+// factory builds both operations; they differ only in the engine.
+constexpr hal::unpack::DataTransfer face_unpack(const hal::unpack::Engine engine)
+{
+    return {
+        .engine     = engine,
+        .increments = {.channel0 = {.z = 1}},
+        .handoff    = hal::unpack::SourceHandoff::FlipAndSetDataValid,
+    };
+}
+
+constexpr hal::unpack::DataTransfer unpack_srca = face_unpack(hal::unpack::Engine::Unpacker0);
+constexpr hal::unpack::DataTransfer unpack_srcb = face_unpack(hal::unpack::Engine::Unpacker1);
+
+constexpr hal::mop::MopConfig&lt;hal::mop::MopTemplate::Template1&gt; unpack_faces{
+    .outer_loop = {
+        .count = 2, // Two face rows.
+    },
+    .inner_loop = {
+        .count = 2, // Two A/B face pairs per row.
+        .body_op        = hal::unpack::get_operation&lt;unpack_srca&gt;(),
+        .alternating_op = hal::unpack::get_operation&lt;unpack_srcb&gt;(),
+    },
+};
+
+void unpack_tile()
+{
+    hal::mop::program&lt;unpack_faces&gt;();
+    hal::mop::Runner&lt;hal::mop::MopTemplate::Template1&gt;::run();
+}</code></pre>
+        <p>
+          Each logical inner iteration emits the <code>unpack_srca</code>
+          operation followed by the <code>unpack_srcb</code> operation. The two
+          outer iterations and two configured inner iterations therefore unpack
+          four paired faces. The last fields are omitted because the normal
+          final operation is already <code>unpack_srcb</code>.
+        </p>
+        <div class="callout note">
+          <span class="callout-title">Configuration fields hold encoded instructions</span>
+          <p><code>hal::unpack::get_operation()</code> returns a 32-bit instruction word without issuing it. <code>program()</code> stores that word in the MOP configuration; the unpack operations are issued only when <code>run()</code> expands the template. Any encoded operation works in a MOP field — <code>hal::replay::get_operation()</code> and raw <code>TT_OP_*</code> words follow the same pattern.</p>
+        </div>
+        <div class="quick-grid">
+          <article class="card">
+            <span class="eyebrow">Template 0</span>
+            <h3>Mask-selected loop</h3>
+            <p>The configuration describes the normal and shadow sequences. The runner supplies the iteration count and selector mask.</p>
+          </article>
+          <article class="card">
+            <span class="eyebrow">Template 1</span>
+            <h3>Nested loop</h3>
+            <p>The configuration owns both loop counts and all loop operations. The runner may use those counts or override either count for one Blackhole expansion.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="template1-model">
+        <h2>Template 1 fields and expansion</h2>
+        <p>
+          Template 1 groups fields by where they execute:
+          <code>outer_loop</code> holds the count and operations surrounding the
+          inner loop, while <code>inner_loop</code> holds the count and operations
+          occupying inner-loop positions. Both count fields accept 32-bit
+          values, and the Blackhole functional model consumes the low ten bits. Every
+          instruction field is optional, so callers describe only positions
+          that differ from the defaults.
+        </p>
+
+        <h3>Field placement and defaults</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>HAL field</th><th>ISA name</th><th>Default or requirement</th><th>Placement</th></tr></thead>
+            <tbody>
+              <tr><td><code>outer_loop.count</code></td><td><code>OuterCount</code></td><td>Written as supplied</td><td>Number of outer iterations; the low ten bits are consumed</td></tr>
+              <tr><td><code>inner_loop.count</code></td><td><code>InnerCount</code></td><td>Written as supplied</td><td>Number of inner iterations before optional alternating expansion</td></tr>
+              <tr><td><code>outer_loop.start_op</code></td><td><code>StartOp</code></td><td>Plain <code>NOP</code></td><td>Before the inner loop</td></tr>
+              <tr><td><code>outer_loop.end_op</code></td><td><code>EndOp0</code></td><td>Plain <code>NOP</code></td><td>After the inner loop</td></tr>
+              <tr><td><code>outer_loop.second_end_op</code></td><td><code>EndOp1</code></td><td>Plain <code>NOP</code></td><td>After <code>outer_loop.end_op</code>; forced to NOP when that operation is NOP</td></tr>
+              <tr><td><code>inner_loop.body_op</code></td><td><code>LoopOp</code></td><td>Plain <code>NOP</code></td><td>Each normal inner-loop position</td></tr>
+              <tr><td><code>inner_loop.alternating_op</code></td><td><code>LoopOp1</code></td><td>Plain <code>NOP</code></td><td>Alternates with <code>inner_loop.body_op</code>; NOP disables alternating mode</td></tr>
+              <tr><td><code>inner_loop.last_op_on_final_outer_iteration</code></td><td><code>Loop0Last</code></td><td>Normal final loop operation</td><td>Final inner position of the final outer iteration</td></tr>
+              <tr><td><code>inner_loop.last_op_on_nonfinal_outer_iteration</code></td><td><code>Loop1Last</code></td><td>Normal final loop operation</td><td>Final inner position of every non-final outer iteration</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The normal final operation is <code>inner_loop.body_op</code> in a
+          one-operation loop and <code>inner_loop.alternating_op</code> in an alternating loop. This makes the
+          common cases complete without repeating either operation in the last
+          fields.
+        </p>
+
+        <h3>How the fields expand</h3>
+        <p>
+          The pseudocode below uses the HAL field names after omitted fields
+          have been resolved according to the table above.
+        </p>
+        <pre><code data-language="Pseudocode">effective_outer_count = outer_loop.count &amp; 1023
+effective_inner_count = inner_loop.count &amp; 1023
+
+if MOP outer override is nonzero:
+    effective_outer_count = MOP outer override
+if MOP inner override is nonzero:
+    effective_inner_count = MOP inner override
+
+if inner_loop.alternating_op is NOP:
+    alternating_delta = 0
+else:
+    alternating_delta = inner_loop.body_op XOR inner_loop.alternating_op
+    effective_inner_count *= 2
+
+if outer_loop.start_op is NOP and effective_inner_count == 0 and
+   outer_loop.end_op is not NOP:
+    reject configuration              // Weak-confidence hardware anomaly.
+
+current_inner_op = inner_loop.body_op
+repeat effective_outer_count times as outer index:
+    emit outer_loop.start_op unless it is NOP
+
+    repeat effective_inner_count times as inner index:
+        if inner index is not the final inner iteration:
+            emit current_inner_op
+        else if outer index is not the final outer iteration:
+            emit inner_loop.last_op_on_nonfinal_outer_iteration
+        else:
+            emit inner_loop.last_op_on_final_outer_iteration
+        current_inner_op ^= alternating_delta
+
+    if outer_loop.end_op is not NOP:
+        emit outer_loop.end_op
+        emit outer_loop.second_end_op unless it is NOP</code></pre>
+
+        <h3>Alternating mode</h3>
+        <p>
+          A non-NOP <code>inner_loop.alternating_op</code> (ISA
+          <code>LoopOp1</code>) doubles the effective inner count and alternates
+          <code>inner_loop.body_op, inner_loop.alternating_op</code>. For configured
+          <code>inner_loop.count == 3</code>, one outer iteration contains six
+          positions:
+        </p>
+        <pre><code>inner_loop.body_op,
+inner_loop.alternating_op,
+inner_loop.body_op,
+inner_loop.alternating_op,
+inner_loop.body_op,
+final-position override</code></pre>
+
+        <h3>Plain NOP has position-specific behavior</h3>
+        <p>
+          Only the opcode is checked. <code>DMANOP</code> and <code>SFPNOP</code>
+          are not plain NOP and remain ordinary instructions.
+        </p>
+        <ul>
+          <li>Plain-NOP <code>outer_loop.start_op</code>, <code>outer_loop.end_op</code>, and <code>outer_loop.second_end_op</code> are suppressed.</li>
+          <li>Plain-NOP <code>inner_loop.alternating_op</code> disables alternating mode.</li>
+          <li>Plain-NOP <code>inner_loop.body_op</code> and either last-position override are emitted when their positions are reached.</li>
+        </ul>
+
+        <details>
+          <summary>Template 1 hardware entry layout</summary>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>MopCfg entry</th><th>HAL field</th><th>Hardware name</th></tr></thead>
+              <tbody>
+                <tr><td><code>MopCfg[0]</code></td><td><code>outer_loop.count</code></td><td><code>OuterCount</code></td></tr>
+                <tr><td><code>MopCfg[1]</code></td><td><code>inner_loop.count</code></td><td><code>InnerCount</code></td></tr>
+                <tr><td><code>MopCfg[2]</code></td><td><code>outer_loop.start_op</code></td><td><code>StartOp</code></td></tr>
+                <tr><td><code>MopCfg[3]</code></td><td><code>outer_loop.end_op</code></td><td><code>EndOp0</code></td></tr>
+                <tr><td><code>MopCfg[4]</code></td><td><code>outer_loop.second_end_op</code></td><td><code>EndOp1</code></td></tr>
+                <tr><td><code>MopCfg[5]</code></td><td><code>inner_loop.body_op</code></td><td><code>LoopOp</code></td></tr>
+                <tr><td><code>MopCfg[6]</code></td><td><code>inner_loop.alternating_op</code></td><td><code>LoopOp1</code></td></tr>
+                <tr><td><code>MopCfg[7]</code></td><td><code>inner_loop.last_op_on_final_outer_iteration</code></td><td><code>Loop0Last</code></td></tr>
+                <tr><td><code>MopCfg[8]</code></td><td><code>inner_loop.last_op_on_nonfinal_outer_iteration</code></td><td><code>Loop1Last</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section id="template0-model">
+        <h2>Template 0 fields and expansion</h2>
+        <p>
+          Template 0 is a counted loop with two configured paths. The runner
+          supplies a 32-bit selector mask. Each iteration consumes one mask bit,
+          starting at bit 0.
+        </p>
+
+        <h3>Configuration shape</h3>
+        <pre><code data-language="Pseudocode">MopConfig&lt;Template0&gt; {
+    required {
+        start_op;
+        start_op_shadow;
+    }
+
+    optional_group mid_ops {         // Supply all three or none.
+        op_a;
+        op_b;
+        op_c;
+    }
+
+    optional_group end_ops {         // Supply both or neither.
+        end_op;
+        end_op_shadow;
+    }
+}</code></pre>
+        <p>
+          <code>start_op</code> begins the mask-zero path and
+          <code>start_op_shadow</code> begins the mask-one path. The optional
+          <code>mid_ops</code> group runs only on the mask-zero path. The
+          <code>end_op</code> and <code>end_op_shadow</code> pair closes the
+          corresponding path. The HAL derives the hardware enable flags from
+          group presence, so callers never set <code>HasA123</code> or
+          <code>HasB</code> directly.
+        </p>
+
+        <h3>How one iteration expands</h3>
+        <pre><code data-language="Pseudocode">repeat count times as iteration:
+    if mask bit iteration is 0:
+        emit start_op
+        if mid_ops is supplied:
+            emit mid_ops.op_a
+            emit mid_ops.op_b
+            emit mid_ops.op_c
+        if end_op is supplied:
+            emit end_op
+    else:
+        emit start_op_shadow
+        if end_op_shadow is supplied:
+            emit end_op_shadow</code></pre>
+        <p>
+          The normal and shadow end fields are one optional pair, so
+          <code>end_op</code> and <code>end_op_shadow</code> are either both
+          supplied or both omitted.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Mask bit</th><th>Configured groups</th><th>Expanded sequence</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td>Required only</td><td><code>start_op</code></td></tr>
+              <tr><td><code>0</code></td><td>Middle group</td><td><code>start_op, op_a, op_b, op_c</code></td></tr>
+              <tr><td><code>0</code></td><td>End group</td><td><code>start_op, end_op</code></td></tr>
+              <tr><td><code>0</code></td><td>Middle and end groups</td><td><code>start_op, op_a, op_b, op_c, end_op</code></td></tr>
+              <tr><td><code>1</code></td><td>No end group</td><td><code>start_op_shadow</code></td></tr>
+              <tr><td><code>1</code></td><td>End group</td><td><code>start_op_shadow, end_op_shadow</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Count and mask encoding</h3>
+        <p>
+          The public runner count is the number of iterations, valid from 1
+          through 128. Hardware stores <code>Count - 1</code> in the seven-bit
+          MOP count field. Mask bits 0–15 are encoded in the MOP instruction;
+          bits 16–31 live in persistent per-thread <code>MaskHi</code> state set
+          by <code>MOP_CFG</code>.
+        </p>
+        <div class="callout note">
+          <span class="callout-title">Upper-mask handling is automatic</span>
+          <p>The fully compile-time runner emits <code>MOP_CFG</code> when the mask uses upper bits or the count can consume them. Runtime-bearing overloads program the upper half unconditionally, which also clears stale upper-mask state when the value is zero.</p>
+        </div>
+
+        <details>
+          <summary>Template 0 hardware entry layout</summary>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>MopCfg entry</th><th>Programmed value</th><th>Role</th></tr></thead>
+              <tbody>
+                <tr><td><code>MopCfg[0]</code></td><td>Untouched</td><td>Unused by Template 0</td></tr>
+                <tr><td><code>MopCfg[1]</code></td><td>Bit 0 = end group; bit 1 = middle group</td><td><code>HasB</code> and <code>HasA123</code></td></tr>
+                <tr><td><code>MopCfg[2]</code></td><td><code>end_op</code> when enabled</td><td><code>InsnB</code></td></tr>
+                <tr><td><code>MopCfg[3]</code></td><td><code>start_op</code></td><td><code>InsnA0</code></td></tr>
+                <tr><td><code>MopCfg[4..6]</code></td><td><code>mid_ops.op_a/op_b/op_c</code> when enabled</td><td><code>InsnA1..3</code></td></tr>
+                <tr><td><code>MopCfg[7]</code></td><td><code>start_op_shadow</code></td><td><code>SkipA0</code></td></tr>
+                <tr><td><code>MopCfg[8]</code></td><td><code>end_op_shadow</code> when enabled</td><td><code>SkipB</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section id="choose-template">
+        <h2>Choose a template</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Question</th><th>Template 0</th><th>Template 1</th></tr></thead>
+            <tbody>
+              <tr><td>Loop shape</td><td>One loop</td><td>Nested outer and inner loops</td></tr>
+              <tr><td>Per-iteration choice</td><td>Mask bit chooses normal or shadow sequence</td><td>Loop position chooses normal or last operation</td></tr>
+              <tr><td>Alternating inner operations</td><td class="no">No</td><td class="yes">Yes</td></tr>
+              <tr><td>Optional start and end operations</td><td>Configured normal/shadow groups</td><td class="yes">Yes, using plain NOP as the disabled value</td></tr>
+              <tr><td>Where counts live</td><td>Passed to <code>Runner::run()</code></td><td>Programmed in <code>MopCfg[0..1]</code>, with optional per-issue Blackhole overrides</td></tr>
+              <tr><td>Runtime configuration</td><td>Operations, count, and mask may be runtime</td><td>Selected counts or the entire configuration may be runtime</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <section id="lifecycle">
+        <h2>Configure and run</h2>
+        <p>Both templates follow the same three-stage lifecycle.</p>
+        <ol class="steps">
+          <li><strong>Describe the sequence.</strong>Create a <code>MopConfig&lt;Template0&gt;</code> or <code>MopConfig&lt;Template1&gt;</code> aggregate.</li>
+          <li><strong>Program the current thread.</strong>Call <code>program&lt;config&gt;()</code>, pass tagged runtime counts to <code>program&lt;config&gt;(...)</code>, or pass a runtime aggregate for either template to <code>program(config)</code>. Programming waits for a preceding MOP expansion before replacing the write-only configuration.</li>
+          <li><strong>Issue the expansion.</strong>Call the <code>Runner</code> specialization for the same template. The programmed configuration remains available for later runs until it is replaced.</li>
+        </ol>
+        <div class="callout warning">
+          <span class="callout-title">Configuration and execution are separate</span>
+          <p><code>program()</code> writes the expander state but does not execute it. <code>Runner::run()</code> executes the state already programmed on the current T0, T1, or T2 thread.</p>
+        </div>
+      </section>
+
+      <section id="compile-runtime">
+        <h2>Compile time or runtime</h2>
+        <p>Choose the overload from the values that are actually known at the call site.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Template</th><th>Known values</th><th>Interface</th><th>Validation</th></tr></thead>
+            <tbody>
+              <tr><td>Template 0 configuration</td><td>All operations at compile time</td><td><code>program&lt;config&gt;()</code></td><td><code>static_assert</code></td></tr>
+              <tr><td>Template 0 configuration</td><td>Any operation at runtime</td><td><code>program(config)</code></td><td><code>LLK_ASSERT</code></td></tr>
+              <tr><td>Template 0 run</td><td>Count and mask at compile time</td><td><code>run&lt;Count, Mask&gt;()</code></td><td><code>static_assert</code></td></tr>
+              <tr><td>Template 0 run</td><td>Runtime count, compile-time mask</td><td><code>run&lt;Mask&gt;(count)</code></td><td><code>LLK_ASSERT</code> for count</td></tr>
+              <tr><td>Template 0 run</td><td>Compile-time count, runtime mask</td><td><code>run_with_runtime_mask&lt;Count&gt;(mask)</code></td><td><code>static_assert</code> for count</td></tr>
+              <tr><td>Template 0 run</td><td>Runtime count and mask</td><td><code>run(count, mask)</code></td><td><code>LLK_ASSERT</code> for count</td></tr>
+              <tr><td>Template 0 field patch</td><td>One enabled instruction slot changes</td><td><code>write&lt;Template0Field::...&gt;(value)</code></td><td>Field selected at compile time</td></tr>
+              <tr><td>Template 1 configuration</td><td>All fields at compile time</td><td><code>program&lt;config&gt;()</code></td><td><code>static_assert</code> for the anomaly shape</td></tr>
+              <tr><td>Template 1 configuration</td><td>Runtime outer count, inner count, or both</td><td><code>program&lt;config&gt;(runtime_field&lt;Field&gt;(value), ...)</code></td><td>Compile-time field validation; conditional <code>LLK_ASSERT</code> for the final counts</td></tr>
+              <tr><td>Template 1 configuration</td><td>Any runtime fields</td><td><code>program(config)</code></td><td><code>LLK_ASSERT</code> for the anomaly shape</td></tr>
+              <tr><td>Template 1 field patch</td><td>Value at compile time or runtime</td><td><code>write&lt;Field&gt;(value)</code></td><td>Field selected at compile time</td></tr>
+              <tr><td>Template 1 run</td><td>Counts already programmed</td><td><code>run()</code></td><td>Uses zero instruction overrides</td></tr>
+              <tr><td>Template 1 run</td><td>Either count changes for one expansion</td><td><code>run&lt;overrides&gt;()</code> or <code>run(overrides)</code></td><td>Both override fields must fit in ten bits</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Use tagged <code>runtime_field</code> arguments when either or both loop
+          counts are dynamic; operation placement and default resolution remain at
+          compile time. Runtime fields must be unique. Use the runtime Template 1
+          aggregate when instruction fields are dynamic.
+        </p>
+        <pre><code>// Mixed path: compile-time configuration, runtime counts
+hal::mop::program&lt;mop_config&gt;(
+    hal::mop::runtime_field&lt;
+        hal::mop::Template1Field::OuterLoopCount&gt;(outer),
+    hal::mop::runtime_field&lt;
+        hal::mop::Template1Field::InnerLoopCount&gt;(inner));</code></pre>
+      </section>
+
+      <section id="patch-field">
+        <h2>Patch one configured field</h2>
+        <p>
+          Use <code>write()</code> when a complete Template 1 configuration is
+          already programmed and only one count or operation changes. The field
+          selector identifies one of <code>MopCfg[0..8]</code> at compile time;
+          the value may be compile-time or runtime. A constant value folds into
+          the same code as a dedicated compile-time overload, so one interface
+          covers both cases. Each call waits for the
+          preceding expansion and performs exactly one configuration-word store.
+        </p>
+        <p>
+          Template 0 also permits patching an instruction slot selected by
+          <code>Template0Field</code>. Its middle and end enable flags are deliberately
+          not writable through this interface: patch only a slot already enabled by the
+          complete configuration, and call <code>program(config)</code> to change group presence.
+        </p>
+        <pre><code>// Mixed path: compile-time field, runtime value
+hal::mop::write&lt;
+    hal::mop::Template1Field::OuterLoopCount&gt;(num_tiles);
+
+// Compile-time value folded at the call site
+hal::mop::write&lt;
+    hal::mop::Template1Field::LastOpOnFinalOuterIteration&gt;(final_pacr);
+
+// Running is unchanged.
+hal::mop::Runner&lt;hal::mop::MopTemplate::Template1&gt;::run();</code></pre>
+        <div class="callout warning">
+          <span class="callout-title">Patch only known programmed state</span>
+          <p>A field write does not resolve omitted operations or validate the complete Template 1 anomaly shape because MopCfg is write-only. Program a complete valid configuration first, then preserve its invariants when patching one field.</p>
+        </div>
+      </section>
+
+
+
+      <section id="safety">
+        <h2>Constraints and safety</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Rule</th><th>Reason and diagnostic</th></tr></thead>
+            <tbody>
+              <tr><td>Template 0 public count must be 1–128.</td><td>The runner encodes <code>Count - 1</code> in a seven-bit field. Compile-time forms use <code>static_assert</code>; runtime-count forms use <code>LLK_ASSERT</code>.</td></tr>
+              <tr><td>Template 0 middle operations are all-or-none.</td><td>One hardware flag enables all three slots. A partial group is rejected with <code>static_assert</code>.</td></tr>
+              <tr><td>Template 0 end operations are paired.</td><td>The same flag enables the normal and shadow end slots. An unpaired group is rejected with <code>static_assert</code>.</td></tr>
+              <tr><td>Template 1 count fields accept 32-bit values.</td><td>The HAL writes each value unchanged to MopCfg. Blackhole uses <code>count &amp; 1023</code> as the effective loop count.</td></tr>
+              <tr><td>Template 1 instruction overrides are ten-bit values.</td><td>Zero preserves the corresponding MopCfg count; values 1–1023 replace it for one expansion. The ISA marks this capability as requiring hardware validation.</td></tr>
+              <tr><td>Do not program while an earlier expansion is active.</td><td><code>program()</code> calls <code>mop_sync()</code> before writing the new configuration.</td></tr>
+              <tr><td>Patch only known, fully programmed state.</td><td><code>write()</code> synchronizes and replaces exactly one write-only MopCfg entry; it cannot inspect or validate the other entries.</td></tr>
+              <tr><td>Program and run on the intended thread.</td><td>Each T0, T1, and T2 thread owns independent write-only <code>MopCfg</code> and <code>MaskHi</code> state.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout danger">
+          <span class="callout-title">Template 1 unsupported anomaly shape</span>
+          <p>
+            The HAL conservatively rejects a plain-NOP
+            <code>outer_loop.start_op</code>, effective
+            <code>(inner_loop.count &amp; 1023) == 0</code>, and non-NOP
+            <code>outer_loop.end_op</code>. The current ISA describes different
+            unexpected outer-count increments depending on <code>EndOp1</code> and
+            marks the behavior weak-confidence, so the entire shape is excluded.
+          </p>
+        </div>
+        <div class="callout warning">
+          <span class="callout-title">Runtime assertions depend on the LLK assertion build</span>
+          <p><code>LLK_ASSERT</code> produces the configured runtime assertion behavior when LLK assertions are enabled. Keep runtime inputs valid in every build; release configurations may type-check assertions without executing them.</p>
+        </div>
+        <div class="callout note">
+          <span class="callout-title">Why Template 1 writes all nine entries</span>
+          <p>The configuration registers are write-only and persistent. Optional fields reduce caller input, but the HAL still writes every resolved entry so values from an earlier configuration cannot leak into a later expansion.</p>
+        </div>
+      </section>
+
+      <section id="api-index">
+        <h2>API index</h2>
+        <div class="api-index">
+          <a href="#mop-template">MopTemplate<span>Select Template 0 or Template 1</span></a>
+          <a href="#template0-field">Template0Field<span>Select one enabled Template 0 instruction slot</span></a>
+          <a href="#template1-field">Template1Field<span>Select one Template 1 MopCfg entry</span></a>
+          <a href="#runtime-field">RuntimeField<span>Carry one tagged runtime Template 1 count</span></a>
+          <a href="#template1-overrides">Template1CountOverrides<span>Override counts for one Blackhole expansion</span></a>
+          <a href="#mid-ops">MidOps<span>Describe the optional Template 0 middle group</span></a>
+          <a href="#outer-loop">OuterLoop<span>Place operations around the Template 1 inner loop</span></a>
+          <a href="#inner-loop">InnerLoop<span>Describe the Template 1 inner-loop body</span></a>
+          <a href="#template0-config">MopConfig&lt;Template0&gt;<span>Describe normal and shadow paths</span></a>
+          <a href="#template1-config">MopConfig&lt;Template1&gt;<span>Describe a nested loop</span></a>
+          <a href="#program-compile-time">program&lt;Config&gt;()<span>Validate and program a constexpr configuration</span></a>
+          <a href="#runtime-field-factory">runtime_field&lt;Field&gt;()<span>Tag one runtime Template 1 count</span></a>
+          <a href="#program-runtime">program(config)<span>Program a runtime configuration</span></a>
+          <a href="#write-field">write&lt;Field&gt;()<span>Patch one programmed instruction or Template 1 field</span></a>
+          <a href="#get-operation">get_operation()<span>Encode a Blackhole Template 1 MOP instruction</span></a>
+          <a href="#template0-runner">Runner&lt;Template0&gt;<span>Run with count and mask</span></a>
+          <a href="#template1-runner">Runner&lt;Template1&gt;<span>Run from programmed counts</span></a>
+        </div>
+      </section>
+
+      <section id="configuration-api">
+        <h2>Configuration API</h2>
+
+        <article class="symbol" id="mop-template">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>MopTemplate</h3></div>
+          <pre><code>enum class MopTemplate : std::uint8_t
+{
+    Template0,
+    Template1
+};</code></pre>
+          <p>Selects the configuration layout and matching runner specialization.</p>
+        </article>
+
+        <article class="symbol" id="template0-field">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>Template0Field</h3></div>
+          <pre><code>enum class Template0Field : std::uint8_t
+{
+    EndOp         = 2,
+    StartOp       = 3,
+    MidOpA        = 4,
+    MidOpB        = 5,
+    MidOpC        = 6,
+    StartOpShadow = 7,
+    EndOpShadow   = 8,
+};</code></pre>
+          <p>Selects one Template 0 instruction slot. The enable flags are not exposed; use a complete <code>program(config)</code> call when the middle or end group changes presence.</p>
+        </article>
+
+        <article class="symbol" id="template1-field">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>Template1Field</h3></div>
+          <pre><code>enum class Template1Field : std::uint8_t
+{
+    OuterLoopCount                      = 0, // ISA: OuterCount
+    InnerLoopCount                      = 1, // ISA: InnerCount
+    OuterLoopStartOp                    = 2, // ISA: StartOp
+    OuterLoopEndOp                      = 3, // ISA: EndOp0
+    OuterLoopSecondEndOp                = 4, // ISA: EndOp1
+    InnerLoopBodyOp                     = 5, // ISA: LoopOp
+    InnerLoopAlternatingOp              = 6, // ISA: LoopOp1
+    LastOpOnFinalOuterIteration         = 7, // ISA: Loop0Last
+    LastOpOnNonfinalOuterIteration      = 8, // ISA: Loop1Last
+};</code></pre>
+          <p>Selects one Template 1 configuration entry without exposing a numeric MopCfg index at the call site.</p>
+        </article>
+
+        <article class="symbol" id="runtime-field">
+          <div class="symbol-head"><span class="kind">struct template</span><h3>RuntimeField</h3></div>
+          <pre><code>template &lt;Template1Field Field&gt;
+struct RuntimeField
+{
+    std::uint32_t value;
+};</code></pre>
+          <p>Carries one runtime outer- or inner-loop count while preserving the selected field in the type. Construct it with <code>runtime_field()</code>.</p>
+        </article>
+
+        <article class="symbol" id="template1-overrides">
+          <div class="symbol-head"><span class="kind">struct</span><h3>Template1CountOverrides</h3></div>
+          <pre><code>struct Template1CountOverrides
+{
+    std::uint32_t outer_loop_count = 0;
+    std::uint32_t inner_loop_count = 0;
+};</code></pre>
+          <p>Holds the Blackhole MOP instruction fields at bits 19:10 and 9:0. A zero field uses the corresponding programmed count; a nonzero ten-bit field overrides it for one expansion.</p>
+        </article>
+
+        <article class="symbol" id="runtime-field-factory">
+          <div class="symbol-head"><span class="kind">function template</span><h3>runtime_field</h3></div>
+          <pre><code>// Mixed path: compile-time field, runtime value
+template &lt;Template1Field Field&gt;
+constexpr RuntimeField&lt;Field&gt; runtime_field(
+    std::uint32_t value);</code></pre>
+          <p>Tags a runtime count for mixed Template 1 programming. Only <code>OuterLoopCount</code> and <code>InnerLoopCount</code> are accepted.</p>
+        </article>
+
+        <article class="symbol" id="mid-ops">
+          <div class="symbol-head"><span class="kind">struct</span><h3>MidOps</h3></div>
+          <pre><code>struct MidOps
+{
+    detail::OptionalMopInstruction op_a;
+    detail::OptionalMopInstruction op_b;
+    detail::OptionalMopInstruction op_c;
+};</code></pre>
+          <p>The optional Template 0 middle group. Supply all three encoded instructions or leave all three omitted.</p>
+        </article>
+
+        <article class="symbol" id="outer-loop">
+          <div class="symbol-head"><span class="kind">struct</span><h3>OuterLoop</h3></div>
+          <pre><code>struct OuterLoop
+{
+    std::uint32_t count;                          // ISA: OuterCount
+    detail::OptionalMopInstruction start_op;      // ISA: StartOp
+    detail::OptionalMopInstruction end_op;        // ISA: EndOp0
+    detail::OptionalMopInstruction second_end_op; // ISA: EndOp1
+};</code></pre>
+          <p>Groups the count and operations that surround one execution of the inner loop. The ISA names remain alongside the intent-based HAL names for direct comparison with the functional model.</p>
+        </article>
+
+        <article class="symbol" id="inner-loop">
+          <div class="symbol-head"><span class="kind">struct</span><h3>InnerLoop</h3></div>
+          <pre><code>struct InnerLoop
+{
+    std::uint32_t count;                                                // ISA: InnerCount
+    detail::OptionalMopInstruction body_op;                             // ISA: LoopOp
+    detail::OptionalMopInstruction alternating_op;                      // ISA: LoopOp1
+    detail::OptionalMopInstruction last_op_on_final_outer_iteration;    // ISA: Loop0Last
+    detail::OptionalMopInstruction last_op_on_nonfinal_outer_iteration; // ISA: Loop1Last
+};</code></pre>
+          <p>Groups operations that occupy inner-loop positions. The two explicit final-position fields distinguish the final outer iteration from every preceding outer iteration.</p>
+        </article>
+
+        <article class="symbol" id="template0-config">
+          <div class="symbol-head"><span class="kind">struct specialization</span><h3>MopConfig&lt;Template0&gt;</h3></div>
+          <pre><code>template &lt;&gt;
+struct MopConfig&lt;MopTemplate::Template0&gt;
+{
+    detail::OptionalMopInstruction start_op;
+    MidOps mid_ops;
+    detail::OptionalMopInstruction end_op;
+    detail::OptionalMopInstruction start_op_shadow;
+    detail::OptionalMopInstruction end_op_shadow;
+};</code></pre>
+          <p>
+            <code>start_op</code> and <code>start_op_shadow</code> are required.
+            The middle triple and end pair are optional groups validated by the
+            selected programming function.
+          </p>
+        </article>
+
+        <article class="symbol" id="template1-config">
+          <div class="symbol-head"><span class="kind">struct specialization</span><h3>MopConfig&lt;Template1&gt;</h3></div>
+          <pre><code>template &lt;&gt;
+struct MopConfig&lt;MopTemplate::Template1&gt;
+{
+    OuterLoop outer_loop;
+    InnerLoop inner_loop;
+};</code></pre>
+          <p>
+            The nested aggregates make operation placement visible at the call
+            site. Counts are 32-bit configuration values whose low ten bits
+            determine the effective loop counts. Every
+            instruction field distinguishes omission from an explicitly
+            supplied 32-bit instruction and is resolved according to the
+            Template 1 model. Callers assign an encoded instruction directly or
+            omit the field; they do not need to construct the detail type explicitly.
+          </p>
+        </article>
+
+        <article class="symbol" id="program-compile-time">
+          <div class="symbol-head"><span class="kind">function template</span><h3>program&lt;Config&gt;</h3></div>
+          <pre><code>// Compile-time path
+template &lt;MopConfig&lt;MopTemplate::Template0&gt; Config&gt;
+void program();
+
+template &lt;MopConfig&lt;MopTemplate::Template1&gt; Config&gt;
+void program();
+
+// Mixed path: compile-time configuration, runtime count fields
+template &lt;
+    MopConfig&lt;MopTemplate::Template1&gt; Config,
+    Template1Field FirstField,
+    Template1Field... RestFields&gt;
+void program(
+    RuntimeField&lt;FirstField&gt; first,
+    RuntimeField&lt;RestFields&gt;... rest);</code></pre>
+          <p>Validates a structural configuration and its unique runtime count tags, waits for the preceding expansion, and writes the selected template layout. Runtime count selection is resolved at compile time; programming still performs one synchronization and writes every slot of the selected layout — eight stores for Template 0 (<code>MopCfg[0]</code> stays untouched) and nine stores for Template 1.</p>
+        </article>
+
+        <article class="symbol" id="program-runtime">
+          <div class="symbol-head"><span class="kind">function</span><h3>program(config)</h3></div>
+          <pre><code>// Runtime path
+void program(
+    const MopConfig&lt;MopTemplate::Template0&gt;&amp; config);
+
+void program(
+    const MopConfig&lt;MopTemplate::Template1&gt;&amp; config);</code></pre>
+          <p>Validates and programs either template from runtime data. Template 0 checks required and grouped slots; Template 1 resolves defaults and rejects the unsupported anomaly shape.</p>
+        </article>
+
+        <article class="symbol" id="write-field">
+          <div class="symbol-head"><span class="kind">function template</span><h3>write</h3></div>
+          <pre><code>// Mixed path: compile-time field, runtime value
+template &lt;Template0Field Field&gt;
+void write(std::uint32_t value);
+
+template &lt;Template1Field Field&gt;
+void write(std::uint32_t value);</code></pre>
+          <p>Waits for the preceding MOP expansion and replaces exactly one field of known programmed state. Template 0 exposes instruction slots only; Template 1 exposes all nine entries.</p>
+        </article>
+
+        <article class="symbol" id="get-operation">
+          <div class="symbol-head"><span class="kind">function</span><h3>get_operation</h3></div>
+          <pre><code>// Compile-time path
+template &lt;Template1CountOverrides Overrides&gt;
+constexpr std::uint32_t get_operation();
+
+// Runtime path
+std::uint32_t get_operation(Template1CountOverrides overrides);</code></pre>
+          <p>Encodes the Blackhole Template 1 MOP word without issuing it. Both forms validate ten-bit override fields and safely mask runtime values before packing.</p>
+        </article>
+      </section>
+
+      <section id="runner-api">
+        <h2>Runner API</h2>
+
+        <article class="symbol" id="template0-runner">
+          <div class="symbol-head"><span class="kind">struct specialization</span><h3>Runner&lt;Template0&gt;</h3></div>
+          <pre><code>// Compile-time count and mask
+template &lt;std::uint32_t Count, std::uint32_t Mask&gt;
+static void run();
+
+// Runtime count, compile-time mask
+template &lt;std::uint32_t Mask&gt;
+static void run(std::uint32_t count);
+
+// Compile-time count, runtime mask
+template &lt;std::uint32_t Count&gt;
+static void run_with_runtime_mask(std::uint32_t mask);
+
+// Runtime count and mask
+static void run(std::uint32_t count, std::uint32_t mask);</code></pre>
+          <p>Issues Template 0 with all four compile-time/runtime combinations for the count and mask.</p>
+        </article>
+
+        <article class="symbol" id="template1-runner">
+          <div class="symbol-head"><span class="kind">struct specialization</span><h3>Runner&lt;Template1&gt;</h3></div>
+          <pre><code>// Compile-time path: use programmed counts
+static void run();
+
+// Compile-time override path
+template &lt;Template1CountOverrides Overrides&gt;
+static void run();
+
+// Runtime override path
+static void run(Template1CountOverrides overrides);</code></pre>
+          <p>
+            The parameterless form issues <code>MOP(1, 0, 0)</code>. The other forms
+            pack optional Blackhole outer and inner count overrides into bits 19:10
+            and 9:0 of the issued instruction.
+          </p>
+        </article>
+      </section>
+
+      <section id="hardware">
+        <h2>Hardware mapping</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Software operation</th><th>Hardware action</th></tr></thead>
+            <tbody>
+              <tr><td>Any Template 0 <code>program()</code> form</td><td>Synchronizes, derives two enable bits, and writes all Template 0 operation slots.</td></tr>
+              <tr><td><code>write&lt;Template0Field&gt;(value)</code></td><td>Synchronizes and replaces one already-enabled Template 0 instruction slot.</td></tr>
+              <tr><td><code>Runner&lt;Template0&gt;::run(...)</code></td><td>Optionally issues <code>MOP_CFG</code> for <code>MaskHi</code>, then issues <code>MOP(0, Count - 1, MaskLo)</code>.</td></tr>
+              <tr><td>Any Template 1 <code>program()</code> form</td><td>Synchronizes, resolves defaults, and writes all nine <code>MopCfg</code> entries.</td></tr>
+              <tr><td><code>write&lt;Template1Field&gt;(value)</code></td><td>Synchronizes and replaces one selected <code>MopCfg</code> entry.</td></tr>
+              <tr><td><code>Runner&lt;Template1&gt;::run()</code></td><td>Issues <code>MOP(1, 0, 0)</code>.</td></tr>
+              <tr><td><code>Runner&lt;Template1&gt;::run(overrides)</code></td><td>Issues a MOP with optional ten-bit outer and inner count overrides.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Each RISC-V T0, T1, or T2 core accesses the write-only MOP
+          configuration belonging to the corresponding Tensix coprocessor
+          thread at <code>TENSIX_MOP_CFG_BASE</code>. Reading that range is not a
+          supported way to inspect configuration state.
+        </p>
+      </section>
+
+      <section id="examples">
+        <h2>Examples</h2>
+
+        <h3>Unpack one broadcast value, then all SrcA faces</h3>
+        <p>
+          For scalar broadcast, the unpacker needs the single SrcB value once,
+          followed by every SrcA face. Put the SrcB unpack in
+          <code>outer_loop.start_op</code> and repeat the SrcA unpack in the
+          inner loop. The example reuses the <code>hal::unpack</code>
+          descriptors from the <a href="#quick-start">quick start</a>.
+        </p>
+        <pre><code>// Compile-time path
+constexpr hal::mop::MopConfig&lt;hal::mop::MopTemplate::Template1&gt; unpack_scalar_b{
+    .outer_loop = {
+        .count = 1,
+        .start_op = hal::unpack::get_operation&lt;unpack_srcb&gt;(),
+    },
+    .inner_loop = {
+        .count = 4,
+        .body_op = hal::unpack::get_operation&lt;unpack_srca&gt;(),
+    },
+};
+
+void unpack_scalar_b_tile()
+{
+    hal::mop::program&lt;unpack_scalar_b&gt;();
+    hal::mop::Runner&lt;hal::mop::MopTemplate::Template1&gt;::run();
+}</code></pre>
+        <p>The expansion is <code>unpack_srcb</code> once, then <code>unpack_srca</code> four times. No explicit NOP or last-operation fields are needed.</p>
+
+        <h3>Pack runtime-selected rows and close the final row</h3>
+        <p>
+          To pack row-major data, each normal PACR advances Y with
+          <code>ADDR_MOD_0</code>. The final PACR instead uses
+          <code>ADDR_MOD_1</code> and sets <code>Last=1</code> to close the block
+          and reset Y. The row count may be known only at runtime. Pack
+          operations do not have a HAL encoder yet, so this example builds the
+          <code>PACR</code> words with raw <code>TT_OP_PACR</code>.
+        </p>
+        <pre><code>constexpr std::uint32_t pack_row = TT_OP_PACR(
+    ckernel::p_pacr::CFG_CTXT_0,
+    ckernel::p_pacr::NO_ROW_PAD_ZERO,
+    ckernel::p_pacr::DST_ACCESS_NORMAL_MODE,
+    ckernel::ADDR_MOD_0,
+    ckernel::p_pacr::ADDR_CNT_CTXT_0,
+    ckernel::p_pacr::P_ZERO_OUTPUT_DISABLED,
+    ckernel::p_pacr::SINGLE_INTF_ACTIVE,
+    0, 0, ckernel::p_pacr::NO_CTXT_CTRL, 0,
+    0); // Last = 0.
+
+constexpr std::uint32_t pack_last_row = TT_OP_PACR(
+    ckernel::p_pacr::CFG_CTXT_0,
+    ckernel::p_pacr::NO_ROW_PAD_ZERO,
+    ckernel::p_pacr::DST_ACCESS_NORMAL_MODE,
+    ckernel::ADDR_MOD_1,
+    ckernel::p_pacr::ADDR_CNT_CTXT_0,
+    ckernel::p_pacr::P_ZERO_OUTPUT_DISABLED,
+    ckernel::p_pacr::SINGLE_INTF_ACTIVE,
+    0, 0, ckernel::p_pacr::NO_CTXT_CTRL, 0,
+    1); // Last = 1.
+
+void pack_rows_to_l1(const std::uint32_t num_rows)
+{
+    LLK_ASSERT(num_rows &gt;= 1 &amp;&amp; num_rows &lt;= 64, "num_rows must be between 1 and 64");
+
+    constexpr hal::mop::MopConfig&lt;hal::mop::MopTemplate::Template1&gt; pack_rows{
+        .outer_loop = {
+            .count = 1,
+        },
+        .inner_loop = {
+            .count = 0,
+            .body_op = pack_row,
+            .last_op_on_final_outer_iteration = pack_last_row,
+        },
+    };
+
+    // Mixed path: compile-time configuration, runtime inner count
+    hal::mop::program&lt;pack_rows&gt;(
+        hal::mop::runtime_field&lt;
+            hal::mop::Template1Field::InnerLoopCount&gt;(num_rows));
+    hal::mop::Runner&lt;hal::mop::MopTemplate::Template1&gt;::run();
+}</code></pre>
+        <p>
+          Because there is one outer iteration, only
+          <code>last_op_on_final_outer_iteration</code> is needed. The first
+          <code>num_rows - 1</code> positions use <code>pack_row</code>; the final
+          position uses <code>pack_last_row</code>.
+        </p>
+
+        <h3>Select the unpack replay sequence for the active configuration context</h3>
+        <p>
+          Suppose the unpacker replay buffer contains one row-unpack sequence
+          for configuration context 0 and an equivalent sequence for context 1.
+          Template 0 can select the matching replay instruction on every row.
+        </p>
+        <pre><code>// Compile-time configuration
+constexpr std::uint32_t replay_half_len = 3;
+constexpr hal::replay::BufferRange context0_rows{.start = 0, .count = replay_half_len};
+constexpr hal::replay::BufferRange context1_rows{.start = replay_half_len, .count = replay_half_len};
+
+constexpr hal::mop::MopConfig&lt;hal::mop::MopTemplate::Template0&gt; unpack_rows{
+    .start_op        = hal::replay::get_operation&lt;context0_rows&gt;(),
+    .start_op_shadow = hal::replay::get_operation&lt;context1_rows&gt;(),
+};
+
+void unpack_face_rows(
+    const std::uint32_t face_r_dim,
+    const std::uint32_t active_context)
+{
+    hal::mop::program&lt;unpack_rows&gt;();
+
+    // Runtime count and mask path; the runner takes the iteration
+    // count directly (one MOP iteration per face row).
+    const std::uint32_t context_mask = active_context == 0 ? 0 : 0xffff;
+    hal::mop::Runner&lt;hal::mop::MopTemplate::Template0&gt;::run(
+        face_r_dim,
+        context_mask);
+}</code></pre>
+        <p>A zero mask bit replays the context-0 sequence; a one bit replays the context-1 sequence. The runtime runner applies the same choice to each requested row and clears any stale upper-mask state.</p>
+      </section>
+
+      <section id="source">
+        <h2>Source</h2>
+        <p>
+          The public implementation is in
+          <a href="../../tt_llk_blackhole/llk_lib/hal/mop.h"><code>tt_llk_blackhole/llk_lib/hal/mop.h</code></a>.
+          Instruction encodings, synchronization, and assertion support come
+          from the Blackhole <code>ckernel</code> headers. For exhaustive emitted
+          sequence examples, see the
+          <a href="../mop_expander_expansion_reference.md">MOP Expander expansion reference</a>.
+        </p>
+      </section>
+
+      <footer>Blackhole MOP HAL guide · Choose a template, program the current thread, and run the configured expansion.</footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#template1-model">Template 1 fields and expansion</a></li>
+        <li><a href="#template0-model">Template 0 fields and expansion</a></li>
+        <li><a href="#choose-template">Choose a template</a></li>
+        <li><a href="#lifecycle">Configure and run</a></li>
+        <li><a href="#compile-runtime">Compile time or runtime</a></li>
+        <li><a href="#safety">Constraints and safety</a></li>
+        <li><a href="#api-index">API index</a></li>
+        <li><a href="#configuration-api">Configuration API</a></li>
+        <li><a href="#runner-api">Runner API</a></li>
+        <li><a href="#hardware">Hardware mapping</a></li>
+        <li><a href="#examples">Examples</a></li>
+        <li><a href="#source">Source</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

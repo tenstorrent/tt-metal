@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer guide and API reference for the Blackhole hal::gpr_ops scalar GPR interface.">
+  <title>hal::gpr_ops — Blackhole scalar GPR HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root { color-scheme:light; --bg:#fff; --subtle:#f6f8fa; --code:#0d1117; --border:#d8dee4; --text:#1f2328; --muted:#59636e; --faint:#818b98; --link:#0969da; --accent:#007a6f; --accent-soft:#e8f7f4; --blue-soft:#eef5ff; --amber:#9a6700; --amber-soft:#fff8c5; --red:#cf222e; --red-soft:#ffebe9; --sidebar:250px; --toc:220px; --topbar:58px; --content:900px; --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; scroll-padding-top:82px; } body { margin:0; color:var(--text); background:var(--bg); font:15px/1.58 var(--sans); }
+    a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; } code,pre { font-family:var(--mono); } code { padding:.12em .34em; border-radius:5px; background:var(--subtle); font-size:.9em; }
+    pre { margin:14px 0 20px; padding:17px 19px; overflow:auto; border:1px solid #30363d; border-radius:8px; color:#e6edf3; background:var(--code); font-size:13px; line-height:1.55; } pre code { padding:0; color:inherit; background:transparent; font-size:inherit; }
+    h1,h2,h3 { line-height:1.25; } h1 { margin:0 0 10px; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.035em; } h2 { margin:54px 0 14px; padding-bottom:9px; border-bottom:1px solid var(--border); font-size:1.72rem; } h3 { margin:34px 0 10px; font-size:1.24rem; }
+    p { max-width:78ch; } ul { padding-left:23px; } li+li { margin-top:5px; } .topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:14px; padding:0 24px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); }
+    .brand { color:var(--text); font-weight:700; } .crumb { color:var(--faint); } .topbar code { color:var(--accent); background:var(--accent-soft); font-weight:650; } .layout { display:grid; grid-template-columns:var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content:center; min-height:calc(100vh - var(--topbar)); }
+    .sidebar,.toc { position:sticky; top:var(--topbar); align-self:start; max-height:calc(100vh - var(--topbar)); overflow-y:auto; } .sidebar { padding:26px 20px 40px; border-right:1px solid var(--border); } .toc { padding:28px 18px; border-left:1px solid var(--border); }
+    .sidebar h2,.toc h2 { margin:0 0 9px; padding:0; border:0; color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; } .sidebar h2:not(:first-child) { margin-top:23px; } .sidebar a,.toc a { display:block; padding:4px 8px; border-radius:5px; color:var(--muted); font-size:13px; }
+    .sidebar a:hover,.toc a:hover { color:var(--link); background:var(--subtle); text-decoration:none; } .sidebar .current { color:var(--accent); background:var(--accent-soft); font-weight:650; } .toc ul { margin:0; padding:0; list-style:none; } .toc li+li { margin-top:1px; }
+    main { min-width:0; padding:46px 48px 90px; } .package-label { margin-bottom:12px; color:var(--accent); font:650 13px/1 var(--mono); } .lede { margin:0 0 22px; color:var(--muted); font-size:18px; } .meta { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 4px; }
+    .pill { display:inline-flex; padding:4px 9px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--subtle); font-size:12px; } .pill strong { margin-right:5px; color:var(--text); } .install { display:flex; justify-content:space-between; gap:18px; margin:26px 0 34px; padding:14px 17px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }
+    .callout { margin:20px 0; padding:14px 17px; border:1px solid var(--border); border-left:4px solid var(--link); border-radius:6px; background:var(--blue-soft); } .callout.note { border-left-color:var(--accent); background:var(--accent-soft); } .callout.warning { border-left-color:var(--amber); background:var(--amber-soft); } .callout p { margin:0; } .callout-title { display:block; margin-bottom:4px; font-weight:700; }
+    .table-wrap { margin:16px 0 28px; overflow-x:auto; border:1px solid var(--border); border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:14px; } th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; } th { color:var(--muted); background:var(--subtle); font-size:12px; } tr:last-child td { border-bottom:0; }
+    .api-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; margin:18px 0 32px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--subtle); } .api-index span { display:block; color:var(--muted); font-size:12px; } footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+    .symbol { margin:28px 0 42px; padding-top:2px; } .symbol-head { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; } .symbol-head h3 { margin:0; } .kind { color:var(--accent); font:650 11px/1 var(--mono); letter-spacing:.06em; text-transform:uppercase; }
+    .constraints { margin:16px 0; padding:13px 16px; border:1px solid var(--border); border-radius:7px; background:var(--subtle); } .constraints strong { display:block; margin-bottom:5px; } .constraints ul { margin:0; }
+    @media (max-width:1180px) { .layout { grid-template-columns:var(--sidebar) minmax(0,var(--content)); } .toc { display:none; } } @media (max-width:820px) { .layout { display:block; } .sidebar { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--border); } .sidebar nav { display:flex; gap:5px; overflow-x:auto; } .sidebar h2 { display:none; } .sidebar a { white-space:nowrap; } main { padding:32px 20px 70px; } .api-index { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="index.html">TT-LLK</a><span class="crumb">/</span><span>Blackhole</span><span class="crumb">/</span><code>hal::gpr_ops</code></header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation"><nav>
+      <h2>Packages</h2><a href="index.html">Documentation home</a><a href="cfg_hal_interface.html">hal::cfg</a><a href="cfg_field_catalog.html">hal::cfg field catalog</a><a href="address_counters_hal_interface.html">hal::address_counters</a><a href="math_counters_hal_interface.html">hal::math_counters</a><a class="current" href="gpr_ops_hal_interface.html">hal::gpr_ops</a><a href="move_hal_interface.html">hal::move</a><a href="atomic_hal_interface.html">hal::atomic</a><a href="mop_hal_interface.html">hal::mop</a><a href="replay_hal_interface.html">hal::replay</a><a href="sync_hal_interface.html">hal::sync</a><a href="unpack_hal_interface.html">hal::unpack</a><a href="fpu_hal_interface.html">hal::fpu</a><a href="src_hal_interface.html">hal::src</a><a href="dst_hal_interface.html">hal::dst</a><a href="pack_hal_interface.html">hal::pack</a><a href="nop_hal_interface.html">hal::nop</a><a href="misc_hal_interface.html">hal::misc</a>
+      <h2>Start</h2><a href="#overview">Package overview</a><a href="#quick-start">Quick start</a><a href="#model">Functional model</a><a href="#types">Types and enum</a>
+      <h2>Interfaces</h2><a href="#api">Interface index</a><a href="#set">set</a><a href="#set-halves">set_low / set_high</a><a href="#add">add</a><a href="#subtract">subtract</a><a href="#multiply">multiply_low_u16</a><a href="#bitwise">Bitwise operations</a><a href="#shifts">Shifts</a><a href="#compare">compare</a>
+      <h2>Details</h2><a href="#emission">Emission paths</a><a href="#diagnostics">Constraints</a><a href="#hardware">Hardware mapping</a><a href="#scope">Scope</a><a href="#sources">Sources</a>
+    </nav></aside>
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::gpr_ops</div><h1>Blackhole scalar GPR HAL</h1>
+        <p class="lede">Set and transform scalar-unit general-purpose registers with typed operands and semantic operation names.</p>
+        <div class="meta"><span class="pill"><strong>Architecture</strong> Blackhole</span><span class="pill"><strong>Language</strong> C++17</span><span class="pill"><strong>Header</strong> hal/gpr_ops.h</span><span class="pill"><strong>Registers</strong> GPR 0–63</span></div>
+        <div class="install"><span>Include the scalar GPR operation interface</span><code>#include "hal/gpr_ops.h"</code></div>
+      </section>
+
+      <section id="quick-start"><h2>Quick start</h2><pre><code>#include "hal/gpr_ops.h"
+
+using namespace hal::gpr_ops;
+
+// Compile-time path
+set&lt;0x12345678&gt;(hal::gpr&lt;0&gt;());
+add(
+    hal::gpr&lt;1&gt;(),
+    hal::gpr&lt;0&gt;(),
+    immediate&lt;7&gt;());
+compare&lt;Compare::LessThan&gt;(
+    hal::gpr&lt;2&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate&lt;16&gt;());
+
+// Runtime path
+shift_right(
+    hal::gpr(destination_index),
+    hal::gpr(lhs_index),
+    hal::gpr(rhs_index));</code></pre><p>The destination is always first. Binary operations read a GPR lhs and either a GPR or explicitly typed immediate rhs.</p></section>
+
+      <section id="model"><h2>Functional model</h2>
+        <pre><code>// Binary operations
+GPR[destination] = operation(GPR[lhs], rhs);
+
+// Comparison
+GPR[destination] = predicate(GPR[lhs], rhs) ? 1 : 0;
+
+// Full-width set
+GPR[destination][15:0]  = value[15:0];
+GPR[destination][31:16] = value[31:16];</code></pre>
+        <p>Each GPR is 32 bits and is selected by an index in <code>[0, 63]</code>. An rhs can name another GPR or use the public HAL's immediate range of <code>[0, 63]</code>. Emitter functions issue the instruction; functions ending in <code>_operation</code> return its encoded 32-bit word without issuing it.</p>
+        <div class="callout note"><span class="callout-title">Compile time versus runtime</span><p>The operand objects determine the path. Fully compile-time operands emit an immediate Tensix instruction. If any index or immediate is runtime-selected, the HAL validates the values, constructs the same instruction word, and writes it through the instruction buffer. One exception: the compile-time-value setters (<code>set&lt;Value&gt;</code>, <code>set_low&lt;Value&gt;</code>, <code>set_high&lt;Value&gt;</code>, and their <code>*_operation</code> forms) accept only a compile-time <code>gpr&lt;N&gt;()</code> destination — no overload combines a compile-time value with a runtime <code>gpr(index)</code>, so that call shape is a compile error, not a runtime path.</p></div>
+      </section>
+
+      <section id="types"><h2>Shared types and enum</h2>
+        <article class="symbol" id="gpr-type"><div class="symbol-head"><span class="kind">struct · namespace hal</span><h3><code>Gpr</code></h3></div>
+          <pre class="signature"><code>template &lt;std::uint32_t Index&gt;
+struct Gpr
+{
+    static constexpr std::uint32_t index = Index;
+};
+
+// Compile-time path
+template &lt;std::uint32_t Index&gt;
+constexpr auto gpr();
+
+// Runtime path
+constexpr auto gpr(const std::uint32_t index);</code></pre>
+          <p><code>Gpr</code> identifies one register; it does not describe an operation. <code>Index</code> is the compile-time register index. The runtime factory stores <code>index</code> in a runtime-specialized operand.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li>The consuming operation validates the index in <code>[0, 63]</code>.</li><li><code>hal::gpr&lt;N&gt;()</code> selects the compile-time path; <code>hal::gpr(index)</code> keeps the index runtime.</li></ul></div>
+          <pre><code>// Compile-time path
+const auto fixed_source = hal::gpr&lt;3&gt;();
+
+// Runtime path
+const auto selected_source = hal::gpr(source_index);</code></pre>
+        </article>
+
+        <article class="symbol" id="immediate-type"><div class="symbol-head"><span class="kind">struct and factories · namespace hal::gpr_ops</span><h3><code>Immediate</code> and <code>immediate</code></h3></div>
+          <pre class="signature"><code>template &lt;std::uint32_t Value&gt;
+struct Immediate
+{
+    static constexpr std::uint32_t value = Value;
+};
+
+// Compile-time path
+template &lt;std::uint32_t Value&gt;
+constexpr auto immediate();
+
+// Runtime path
+constexpr auto immediate(const std::uint32_t value);</code></pre>
+          <p><code>Immediate&lt;Value&gt;</code> marks an rhs as a constant rather than a GPR index. A bare integer is deliberately not accepted, preventing an index from being confused with an immediate value.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li>Public binary operations accept immediate values in <code>[0, 63]</code>.</li><li>The compile-time factory produces a compile-time diagnostic; the runtime factory is checked with <code>LLK_ASSERT</code> when consumed.</li></ul></div>
+          <pre><code>// Compile-time path
+add(hal::gpr&lt;0&gt;(), hal::gpr&lt;1&gt;(), immediate&lt;5&gt;());
+
+// Runtime path
+add(hal::gpr&lt;0&gt;(), hal::gpr&lt;1&gt;(), immediate(runtime_value));</code></pre>
+        </article>
+
+        <article class="symbol" id="compare-enum"><div class="symbol-head"><span class="kind">enum · namespace hal::gpr_ops</span><h3><code>Compare</code></h3></div>
+          <pre class="signature"><code>enum class Compare : std::uint8_t
+{
+    GreaterThan,
+    LessThan,
+    Equal
+};</code></pre>
+          <div class="table-wrap"><table><thead><tr><th>Enumerator</th><th>Predicate</th><th>Result</th></tr></thead><tbody>
+            <tr><td><code>Compare::GreaterThan</code></td><td><code>lhs &gt; rhs</code></td><td>Writes 1 when true, otherwise 0.</td></tr>
+            <tr><td><code>Compare::LessThan</code></td><td><code>lhs &lt; rhs</code></td><td>Writes 1 when true, otherwise 0.</td></tr>
+            <tr><td><code>Compare::Equal</code></td><td><code>lhs == rhs</code></td><td>Writes 1 when true, otherwise 0.</td></tr>
+          </tbody></table></div>
+          <pre><code>// Compile-time path
+compare&lt;Compare::Equal&gt;(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate&lt;0&gt;());</code></pre>
+        </article>
+
+        <article class="symbol" id="declaration-names"><div class="symbol-head"><span class="kind">template and parameter names</span><h3>How to read the declarations</h3></div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Meaning</th><th>Accepted form</th></tr></thead><tbody>
+            <tr><td><code>Index</code></td><td>Compile-time index carried by a <code>hal::Gpr</code> operand.</td><td><code>0..63</code>, or the internal runtime specialization returned by <code>hal::gpr(index)</code>.</td></tr>
+            <tr><td><code>Value</code></td><td>Compile-time value used by a setter or immediate operand.</td><td>32 bits for <code>set</code>, 16 bits for half setters, and six encoded bits for a binary immediate.</td></tr>
+            <tr><td><code>Destination</code></td><td>Template index carried by the first GPR operand; receives the result.</td><td><a href="#gpr-type"><code>hal::Gpr</code></a>.</td></tr>
+            <tr><td><code>Lhs</code></td><td>Template index carried by the second GPR operand; supplies the left-hand value.</td><td><a href="#gpr-type"><code>hal::Gpr</code></a>.</td></tr>
+            <tr><td><code>Rhs</code></td><td>Type of the right-hand operand.</td><td><a href="#gpr-type"><code>hal::Gpr</code></a> or <a href="#immediate-type"><code>Immediate</code></a>.</td></tr>
+            <tr><td><code>Predicate</code></td><td>Compile-time comparison selection.</td><td><a href="#compare-enum"><code>Compare</code></a>.</td></tr>
+            <tr><td><code>destination / lhs / rhs</code></td><td>Function arguments carrying the selected operands.</td><td>Compile-time, runtime, or a mixture of typed operands.</td></tr>
+          </tbody></table></div>
+        </article>
+      </section>
+
+      <section id="api"><h2>Interface index</h2><div class="api-index">
+        <a href="#gpr-type"><code>Gpr / gpr</code><span>Compile-time or runtime register identity.</span></a><a href="#immediate-type"><code>Immediate / immediate</code><span>Explicit compile-time or runtime rhs constant.</span></a><a href="#compare-enum"><code>Compare</code><span>GreaterThan, LessThan, or Equal.</span></a><a href="#set"><code>set</code><span>Write all 32 bits with two SETDMAREG instructions.</span></a><a href="#set-halves"><code>set_low_operation / set_high_operation</code><span>Encode one 16-bit half write.</span></a><a href="#set-halves"><code>set_low / set_high</code><span>Issue one 16-bit half write.</span></a><a href="#add"><code>add_operation / add</code><span>Encode or issue wrapping addition.</span></a><a href="#subtract"><code>subtract_operation / subtract</code><span>Encode or issue wrapping subtraction.</span></a><a href="#multiply"><code>multiply_low_u16_operation / multiply_low_u16</code><span>Encode or issue low-half multiplication.</span></a><a href="#bitwise"><code>bit_and_operation / bit_and</code><span>Encode or issue bitwise AND.</span></a><a href="#bitwise"><code>bit_or_operation / bit_or</code><span>Encode or issue bitwise OR.</span></a><a href="#bitwise"><code>bit_xor_operation / bit_xor</code><span>Encode or issue bitwise XOR.</span></a><a href="#shifts"><code>shift_left_operation / shift_left</code><span>Encode or issue a logical left shift.</span></a><a href="#shifts"><code>shift_right_operation / shift_right</code><span>Encode or issue a logical right shift.</span></a><a href="#compare"><code>compare_operation / compare</code><span>Encode or issue an unsigned comparison.</span></a>
+      </div></section>
+
+      <section id="set"><h2><code>set</code></h2>
+        <pre class="signature"><code>// Compile-time value path
+template &lt;std::uint32_t Value, std::uint32_t Index&gt;
+void set(const hal::Gpr&lt;Index&gt; destination);
+
+// Runtime value path; destination may be compile-time or runtime
+template &lt;std::uint32_t Index&gt;
+void set(
+    const hal::Gpr&lt;Index&gt; destination,
+    const std::uint32_t value);</code></pre>
+        <p><code>Value</code> or <code>value</code> supplies all 32 destination bits. <code>Index</code> identifies the destination GPR. The function emits low-half SETDMAREG followed by high-half SETDMAREG.</p>
+        <div class="callout note"><span class="callout-title">No <code>set_operation()</code></span><p>A full-width set is an ordered pair of instructions, so it cannot be represented by one operation word.</p></div>
+        <pre><code>// Compile-time path
+set&lt;0x12345678&gt;(hal::gpr&lt;5&gt;());
+
+// Runtime path
+set(hal::gpr(destination_index), runtime_value);</code></pre>
+      </section>
+
+      <section id="set-halves"><h2><code>set_low</code> and <code>set_high</code></h2>
+        <pre class="signature"><code>// Compile-time value path: return one encoded word
+template &lt;std::uint32_t Value, std::uint32_t Index&gt;
+constexpr std::uint32_t set_low_operation(const hal::Gpr&lt;Index&gt; destination);
+
+template &lt;std::uint32_t Value, std::uint32_t Index&gt;
+constexpr std::uint32_t set_high_operation(const hal::Gpr&lt;Index&gt; destination);
+
+// Runtime value path: return one encoded word
+template &lt;std::uint32_t Index&gt;
+std::uint32_t set_low_operation(
+    const hal::Gpr&lt;Index&gt; destination,
+    const std::uint32_t value);
+
+template &lt;std::uint32_t Index&gt;
+std::uint32_t set_high_operation(
+    const hal::Gpr&lt;Index&gt; destination,
+    const std::uint32_t value);
+
+// Compile-time value path: emit one instruction
+template &lt;std::uint32_t Value, std::uint32_t Index&gt;
+void set_low(const hal::Gpr&lt;Index&gt; destination);
+
+template &lt;std::uint32_t Value, std::uint32_t Index&gt;
+void set_high(const hal::Gpr&lt;Index&gt; destination);
+
+// Runtime value path: emit one instruction
+template &lt;std::uint32_t Index&gt;
+void set_low(
+    const hal::Gpr&lt;Index&gt; destination,
+    const std::uint32_t value);
+
+template &lt;std::uint32_t Index&gt;
+void set_high(
+    const hal::Gpr&lt;Index&gt; destination,
+    const std::uint32_t value);</code></pre>
+        <p>These interfaces replace only bits <code>[15:0]</code> or <code>[31:16]</code>. <code>Value</code> and <code>value</code> must fit in 16 bits.</p>
+        <pre><code>// Compile-time path: emit low-half write
+set_low&lt;0x5678&gt;(hal::gpr&lt;5&gt;());
+
+// Runtime path: emit high-half write
+set_high(hal::gpr(destination_index), runtime_half);
+
+// Compile-time path: encode without issuing
+constexpr std::uint32_t load_high =
+    set_high_operation&lt;0x1234&gt;(hal::gpr&lt;5&gt;());</code></pre>
+      </section>
+
+      <section id="add"><h2><code>add</code></h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: return one encoded word
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t add_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: emit one instruction
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void add(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p>Writes the 32-bit wrapping sum <code>lhs + rhs</code>. <code>Rhs</code> must be <a href="#gpr-type"><code>hal::Gpr</code></a> or <a href="#immediate-type"><code>Immediate</code></a>.</p>
+        <pre><code>// Compile-time path
+add(hal::gpr&lt;2&gt;(), hal::gpr&lt;2&gt;(), immediate&lt;1&gt;());
+
+// Mixed path: runtime rhs GPR
+add(hal::gpr&lt;2&gt;(), hal::gpr&lt;2&gt;(), hal::gpr(rhs_index));</code></pre>
+      </section>
+
+      <section id="subtract"><h2><code>subtract</code></h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: return one encoded word
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t subtract_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: emit one instruction
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void subtract(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p>Writes the 32-bit wrapping difference <code>lhs - rhs</code>.</p>
+        <pre><code>// Compile-time path
+subtract(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate&lt;4&gt;());</code></pre>
+      </section>
+
+      <section id="multiply"><h2><code>multiply_low_u16</code></h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: return one encoded word
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t multiply_low_u16_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: emit one instruction
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void multiply_low_u16(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p>Multiplies the low 16 bits of <code>lhs</code> and <code>rhs</code>, then writes the 32-bit product.</p>
+        <pre><code>// Compile-time path
+multiply_low_u16(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    hal::gpr&lt;2&gt;());</code></pre>
+      </section>
+
+      <section id="bitwise"><h2>Bitwise operations</h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: AND encoder and emitter
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t bit_and_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void bit_and(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: OR encoder and emitter
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t bit_or_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void bit_or(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: XOR encoder and emitter
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t bit_xor_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void bit_xor(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p><code>bit_and</code>, <code>bit_or</code>, and <code>bit_xor</code> write the corresponding 32-bit bitwise result. They map to different operation selectors of BITWOPDMAREG.</p>
+        <pre><code>// Compile-time paths
+bit_and(hal::gpr&lt;0&gt;(), hal::gpr&lt;1&gt;(), immediate&lt;15&gt;());
+bit_or(hal::gpr&lt;2&gt;(), hal::gpr&lt;2&gt;(), hal::gpr&lt;3&gt;());
+bit_xor(hal::gpr&lt;4&gt;(), hal::gpr&lt;4&gt;(), immediate&lt;63&gt;());</code></pre>
+      </section>
+
+      <section id="shifts"><h2><code>shift_left</code> and <code>shift_right</code></h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: left-shift encoder and emitter
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t shift_left_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void shift_left(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: right-shift encoder and emitter
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+constexpr std::uint32_t shift_right_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+template &lt;std::uint32_t Destination, std::uint32_t Lhs, typename Rhs&gt;
+void shift_right(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p>Performs a logical left or right shift of <code>lhs</code>. The shift amount comes from a GPR or an explicit immediate operand.</p>
+        <pre><code>// Compile-time path
+shift_left(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate&lt;4&gt;());
+
+// Runtime path
+shift_right(
+    hal::gpr(destination_index),
+    hal::gpr(lhs_index),
+    hal::gpr(rhs_index));</code></pre>
+        <div class="callout warning"><span class="callout-title">Use shift amounts 0–31</span><p>The pinned scalar-unit specification defines a five-bit immediate and masks a GPR shift count with <code>0x1f</code>. Blackhole instruction metadata and the current HAL validator accept six encoded bits, through 63. Until that discrepancy is reconciled, keep immediate shift amounts in <code>[0, 31]</code>; do not rely on bit 5.</p></div>
+      </section>
+
+      <section id="compare"><h2><code>compare</code></h2>
+        <pre class="signature"><code>// Compile-time, mixed, or runtime operands: return one encoded word
+template &lt;
+    Compare Predicate,
+    std::uint32_t Destination,
+    std::uint32_t Lhs,
+    typename Rhs&gt;
+constexpr std::uint32_t compare_operation(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);
+
+// Compile-time, mixed, or runtime operands: emit one instruction
+template &lt;
+    Compare Predicate,
+    std::uint32_t Destination,
+    std::uint32_t Lhs,
+    typename Rhs&gt;
+void compare(
+    const hal::Gpr&lt;Destination&gt; destination,
+    const hal::Gpr&lt;Lhs&gt; lhs,
+    const Rhs rhs);</code></pre>
+        <p><code>Predicate</code> uses the <a href="#compare-enum"><code>Compare</code></a> enum. The function compares the unsigned 32-bit operands and writes 1 when the predicate is true, otherwise 0.</p>
+        <pre><code>// Compile-time path
+compare&lt;Compare::GreaterThan&gt;(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate&lt;7&gt;());
+
+// Mixed path: runtime rhs immediate
+compare&lt;Compare::Equal&gt;(
+    hal::gpr&lt;0&gt;(),
+    hal::gpr&lt;1&gt;(),
+    immediate(runtime_value));</code></pre>
+      </section>
+
+      <section id="emission"><h2>Emission paths and operation words</h2>
+        <div class="table-wrap"><table><thead><tr><th>Call shape</th><th>Path</th><th>Result</th></tr></thead><tbody>
+          <tr><td>All <code>gpr&lt;N&gt;()</code> and <code>immediate&lt;N&gt;()</code></td><td>Compile-time</td><td>Emitter issues one immediate <code>.ttinsn</code>; encoder is a constant expression.</td></tr>
+          <tr><td>Any <code>gpr(index)</code> or <code>immediate(value)</code></td><td>Runtime or mixed</td><td>Emitter writes a constructed instruction word through <code>ckernel::instrn_buffer[0]</code>.</td></tr>
+          <tr><td>Compile-time <code>Value</code> with runtime destination: <code>set&lt;V&gt;(gpr(index))</code>, <code>set_low&lt;V&gt;(gpr(index))</code>, <code>set_high&lt;V&gt;(gpr(index))</code></td><td>Unsupported</td><td>Compile error (<code>static_assert</code>): the compile-time-value setters require a compile-time <code>gpr&lt;N&gt;()</code> destination. Use the runtime-value overload, e.g. <code>set_low(gpr(index), value)</code>.</td></tr>
+          <tr><td>Any matching <code>*_operation(...)</code></td><td>Encode only</td><td>Returns one validated <code>std::uint32_t</code> instruction word without issuing it.</td></tr>
+          <tr><td><code>set(...)</code></td><td>Two instructions</td><td>Writes the low half, then the high half; no single encoded-word form exists.</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section id="diagnostics"><h2>Constraints and diagnostics</h2>
+        <div class="table-wrap"><table><thead><tr><th>Rule</th><th>Compile-time path</th><th>Runtime or mixed path</th></tr></thead><tbody>
+          <tr><td>GPR index is <code>0..63</code></td><td><code>static_assert</code></td><td><code>LLK_ASSERT</code></td></tr>
+          <tr><td>Binary immediate is <code>0..63</code></td><td><code>static_assert</code></td><td><code>LLK_ASSERT</code></td></tr>
+          <tr><td>Shift immediate should be <code>0..31</code></td><td colspan="2">Required by the pinned scalar-unit semantics; current HAL validation is broader and is called out under <a href="#shifts">Shifts</a>.</td></tr>
+          <tr><td>Half-register value is <code>0..65535</code></td><td><code>static_assert</code></td><td><code>LLK_ASSERT</code></td></tr>
+          <tr><td>Binary rhs is a typed GPR or immediate</td><td colspan="2">Rejected by the type system when another type is supplied.</td></tr>
+        </tbody></table></div>
+        <p>The destination may alias <code>lhs</code> or a GPR <code>rhs</code>, so in-place updates are supported.</p>
+      </section>
+
+      <section id="hardware"><h2>Hardware mapping</h2>
+        <div class="table-wrap"><table><thead><tr><th>HAL interface</th><th>Blackhole instruction</th><th>Operation selector</th></tr></thead><tbody>
+          <tr><td><code>set / set_low / set_high</code></td><td><code>SETDMAREG</code></td><td>16-bit register half selected by encoded half index.</td></tr>
+          <tr><td><code>add</code></td><td><code>ADDDMAREG</code></td><td>Dedicated opcode.</td></tr>
+          <tr><td><code>subtract</code></td><td><code>SUBDMAREG</code></td><td>Dedicated opcode.</td></tr>
+          <tr><td><code>multiply_low_u16</code></td><td><code>MULDMAREG</code></td><td>Dedicated opcode.</td></tr>
+          <tr><td><code>bit_and / bit_or / bit_xor</code></td><td><code>BITWOPDMAREG</code></td><td>AND = 0, OR = 1, XOR = 2.</td></tr>
+          <tr><td><code>shift_left / shift_right</code></td><td><code>SHIFTDMAREG</code></td><td>LEFT = 0, RIGHT = 1.</td></tr>
+          <tr><td><code>compare</code></td><td><code>CMPDMAREG</code></td><td>Greater = 0, Less = 1, Equal = 2.</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section id="scope"><h2>Interface boundary</h2><p>This package covers instructions whose public meaning is a GPR value transformation. CFG and address-counter transfers remain in their existing HAL packages. Packer status reads, memory loads and stores, MMIO address construction, <a href="atomic_hal_interface.html">L1 atomics</a>, scalar flush, and scalar NOP are outside this interface.</p></section>
+
+      <section id="sources"><h2>Sources</h2><ul><li>HAL implementation: <a href="../../tt_llk_blackhole/llk_lib/hal/gpr_ops.h"><code>tt_llk_blackhole/llk_lib/hal/gpr_ops.h</code></a></li><li>GPR identity type: <a href="../../tt_llk_blackhole/llk_lib/hal/utils/gpr.h"><code>hal/utils/gpr.h</code></a></li><li>Blackhole instruction metadata: <a href="../../tt_llk_blackhole/instructions/assembly.yaml"><code>tt_llk_blackhole/instructions/assembly.yaml</code></a></li><li>Scalar-unit ISA reference: <a href="https://github.com/tenstorrent/tt-isa-documentation/blob/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor/ScalarUnit.md">pinned Tensix Scalar Unit documentation</a></li></ul></section>
+      <footer>Blackhole scalar GPR HAL reference · <a href="index.html">Documentation home</a></footer>
+    </main>
+    <aside class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#quick-start">Quick start</a></li><li><a href="#model">Functional model</a></li><li><a href="#types">Types and enum</a></li><li><a href="#api">Interface index</a></li><li><a href="#set">set</a></li><li><a href="#set-halves">set_low / set_high</a></li><li><a href="#add">add</a></li><li><a href="#subtract">subtract</a></li><li><a href="#multiply">multiply_low_u16</a></li><li><a href="#bitwise">Bitwise</a></li><li><a href="#shifts">Shifts</a></li><li><a href="#compare">compare</a></li><li><a href="#emission">Emission paths</a></li><li><a href="#diagnostics">Constraints</a></li><li><a href="#hardware">Hardware mapping</a></li></ul></aside>
+  </div>
+</body>
+</html>

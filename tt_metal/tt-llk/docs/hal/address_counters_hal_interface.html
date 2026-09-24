@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer documentation for the Blackhole hal::address_counters fluent Tensix address-counter interface.">
+  <title>hal::address_counters — Blackhole Address Counter HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --subtle: #f6f8fa;
+      --code: #0d1117;
+      --border: #d8dee4;
+      --text: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --link: #0969da;
+      --accent: #007a6f;
+      --accent-soft: #e8f7f4;
+      --blue-soft: #eef5ff;
+      --amber: #9a6700;
+      --amber-soft: #fff8c5;
+      --red: #cf222e;
+      --red-soft: #ffebe9;
+      --sidebar: 250px;
+      --toc: 220px;
+      --topbar: 58px;
+      --content: 900px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: calc(var(--topbar) + 24px); }
+    body { margin: 0; color: var(--text); background: var(--bg); font: 15px/1.58 var(--sans); }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre { font-family: var(--mono); }
+    code { padding: .12em .34em; border-radius: 5px; background: var(--subtle); font-size: .9em; }
+    pre { margin: 14px 0 20px; padding: 17px 19px; overflow: auto; border: 1px solid #30363d; border-radius: 8px; color: #e6edf3; background: var(--code); font-size: 13px; line-height: 1.55; }
+    pre code { padding: 0; color: inherit; background: transparent; font-size: inherit; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 10px; font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -.035em; }
+    h2 { margin: 52px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 1.72rem; }
+    h3 { margin: 32px 0 10px; font-size: 1.22rem; }
+    p { max-width: 78ch; }
+    ul, ol { padding-left: 23px; }
+    li + li { margin-top: 5px; }
+    :target { scroll-margin-top: calc(var(--topbar) + 24px); }
+    .topbar { position: sticky; top: 0; z-index: 20; height: var(--topbar); display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.96); backdrop-filter: blur(8px); }
+    .brand { color: var(--text); font-weight: 700; }
+    .brand:hover { text-decoration: none; }
+    .crumb { color: var(--faint); }
+    .topbar code { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0,var(--content)) var(--toc); justify-content: center; min-height: calc(100vh - var(--topbar)); }
+    .sidebar, .toc { position: sticky; top: var(--topbar); align-self: start; max-height: calc(100vh - var(--topbar)); overflow-y: auto; }
+    .sidebar { padding: 26px 20px 40px; border-right: 1px solid var(--border); }
+    .toc { padding: 28px 18px; border-left: 1px solid var(--border); }
+    .sidebar h2, .toc h2 { margin: 0 0 9px; padding: 0; border: 0; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .sidebar h2:not(:first-child) { margin-top: 23px; }
+    .sidebar a, .toc a { display: block; padding: 4px 8px; border-radius: 5px; color: var(--muted); font-size: 13px; }
+    .sidebar a:hover, .toc a:hover { color: var(--link); background: var(--subtle); text-decoration: none; }
+    .sidebar .current { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+    .toc ul { margin: 0; padding: 0; list-style: none; }
+    .toc li + li { margin-top: 1px; }
+    main { min-width: 0; padding: 46px 48px 90px; }
+    .package-label { margin-bottom: 12px; color: var(--accent); font: 650 13px/1 var(--mono); }
+    .lede { margin: 0 0 22px; color: var(--muted); font-size: 18px; line-height: 1.55; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 4px; }
+    .pill { display: inline-flex; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--subtle); font-size: 12px; }
+    .pill strong { margin-right: 5px; color: var(--text); }
+    .install { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 26px 0 34px; padding: 14px 17px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); }
+    .install span { color: var(--muted); font-size: 13px; }
+    .install code { padding: 0; color: var(--text); background: transparent; }
+    .cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin: 18px 0 26px; }
+    .card { padding: 17px 18px; border: 1px solid var(--border); border-radius: 8px; }
+    .card h3 { margin-top: 0; }
+    .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font: 650 11px/1.2 var(--mono); text-transform: uppercase; }
+    .callout { margin: 20px 0; padding: 14px 17px; border: 1px solid var(--border); border-left: 4px solid var(--link); border-radius: 6px; background: var(--blue-soft); }
+    .callout.note { border-left-color: var(--accent); background: var(--accent-soft); }
+    .callout.warning { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout p { margin: 0; }
+    .callout-title { display: block; margin-bottom: 4px; font-weight: 700; }
+    .table-wrap { margin: 16px 0 28px; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); background: var(--subtle); font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    td code { white-space: nowrap; }
+    .api-index { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px 22px; margin: 18px 0 32px; padding: 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); }
+    .api-index a { font-family: var(--mono); font-size: 13px; }
+    .api-index span { display: block; color: var(--muted); font-family: var(--sans); font-size: 12px; }
+    .symbol { margin: 30px 0 42px; }
+    .symbol-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; margin-bottom: 10px; }
+    .symbol-head h3 { margin: 0; font-family: var(--mono); font-size: 1.27rem; }
+    .kind { padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 650 10px/1.5 var(--mono); text-transform: uppercase; }
+    footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    @media (max-width: 1180px) { .layout { grid-template-columns: var(--sidebar) minmax(0,var(--content)); } .toc { display: none; } }
+    @media (max-width: 820px) { .layout { display: block; } .sidebar { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); } main { padding: 32px 20px 70px; } .cards, .api-index { grid-template-columns: 1fr; } }
+    @media print { .topbar, .sidebar, .toc { display: none; } .layout { display: block; } main { max-width: none; padding: 0; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a>
+    <span class="crumb">/</span>
+    <span>Blackhole</span>
+    <span class="crumb">/</span>
+    <code>hal::address_counters</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a class="current" href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#choose-builder">Choose a builder</a>
+
+        <h2>Guides</h2>
+        <a href="#channels">Client and channel meanings</a>
+        <a href="#emission">Instruction emission</a>
+        <a href="#recipes">Common recipes</a>
+        <a href="#safety">Constraints and diagnostics</a>
+
+        <h2>Reference</h2>
+        <a href="#api-index">API index</a>
+        <a href="#enums">Enums</a>
+        <a href="#compile-time-api">Compile-time API</a>
+        <a href="#runtime-api">Runtime-value API</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal · entry point address_counters</div>
+        <h1>Blackhole Address Counter HAL</h1>
+        <p class="lede">
+          Fluent, type-state builders for programming Blackhole Tensix X/Y/Z/W
+          address counters with the SETADC, INCADC, ADDRCR, and GPR-sourced REG2FLOP instruction families.
+        </p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Language</strong> C++17</span>
+          <span class="pill"><strong>Header</strong> hal/address_counters.h</span>
+          <span class="pill"><strong>Namespace</strong> hal</span>
+        </div>
+        <div class="install">
+          <span>Include the address-counter interface</span>
+          <code>#include "hal/address_counters.h"</code>
+        </div>
+        <div class="callout note">
+          <p><strong class="callout-title">Symbol, not nested namespace</strong><code>hal::address_counters</code> is the global compile-time builder object inside namespace <code>hal</code>. The package title follows the entry point used by callers.</p>
+        </div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>Choose clients, select a channel, assign counters, and finish with an emission operation.</p>
+        <pre><code>// Compile-time path
+hal::address_counters
+    .client&lt;hal::AddressCounterClient::Unpacker0&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X&lt;face_r_dim&gt;()
+    .Y&lt;0&gt;()
+    .channel&lt;hal::AddressChannel::Channel1&gt;()
+    .X&lt;face_r_dim&gt;()
+    .Y&lt;0&gt;()
+    .apply();</code></pre>
+        <p>Every operation before <code>apply()</code> returns a new builder type. Client, channel, selected-counter mask, and—on this builder—counter values are all encoded in that type.</p>
+      </section>
+
+      <section id="model">
+        <h2>Functional model</h2>
+        <pre><code data-language="Pseudocode">for each selected client on the issuing thread:
+    for each mask-selected X/Y or Z/W counter:
+        carry_reset_shadow += configured_increment
+        live_counter = carry_reset_shadow</code></pre>
+        <p><code>ADDRCRXY</code> applies this transition to X/Y and <code>ADDRCRZW</code> applies it to Z/W. The mask keeps unselected dimensions unchanged. With an increment of zero, the operation reloads the live counter from its existing shadow.</p>
+        <h3>Choose a builder</h3>
+        <div class="cards">
+          <article class="card">
+            <span class="eyebrow">All constants</span>
+            <h3><code>address_counters</code></h3>
+            <p>Use template setters such as <code>X&lt;value&gt;()</code>. Selection and values are compile-time, allowing complete instruction words to be embedded directly.</p>
+          </article>
+          <article class="card">
+            <span class="eyebrow">Runtime data</span>
+            <h3><code>runtime_address_counters</code></h3>
+            <p>Use ordinary arguments such as <code>X(value)</code>. Selection remains compile-time, so emission has no runtime dispatch; only instruction data is runtime.</p>
+          </article>
+          <article class="card">
+            <span class="eyebrow">GPR source</span>
+            <h3><code>X/Y/Z/W().from_gpr(hal::gpr&lt;Index&gt;())</code></h3>
+            <p>Reuse the normal client and channel selectors, choose one X/Y/Z/W destination, then attach a common GPR operand. The result emits one REG2FLOP with no runtime dispatch or completion NOP.</p>
+          </article>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Property</th><th><code>address_counters</code></th><th><code>runtime_address_counters</code></th></tr></thead>
+            <tbody>
+              <tr><td>Client and channel selection</td><td>Compile-time</td><td>Compile-time</td></tr>
+              <tr><td>Selected X/Y/Z/W slots</td><td>Compile-time</td><td>Compile-time</td></tr>
+              <tr><td>Counter values</td><td>Compile-time template arguments</td><td>Runtime function arguments</td></tr>
+              <tr><td><code>apply()</code> may cover X/Y and Z/W together</td><td>Yes; emits one instruction per family</td><td>No; one family per builder</td></tr>
+              <tr><td><code>get_operation()</code></td><td>Compile-time encoded word</td><td>Runtime encoded word</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="choose-builder">
+        <h2>Builder flow</h2>
+        <ol>
+          <li><code>client&lt;...&gt;()</code> adds one or more hardware clients.</li>
+          <li><code>channel&lt;...&gt;()</code> selects the channel targeted by subsequent setters.</li>
+          <li><code>X/Y/Z/W</code> records a value only for the currently selected channel.</li>
+          <li>Select the other channel, if needed, and assign its values.</li>
+          <li><code>apply()</code>, <code>increment()</code>, <code>advance_and_reset()</code>, or <code>get_operation&lt;...&gt;()</code> consumes the description.</li>
+        </ol>
+        <pre><code>// Compile-time path: keep the returned type when building in stages.
+constexpr auto counters = hal::address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X&lt;0&gt;()
+    .Y&lt;0&gt;();
+
+counters.apply();</code></pre>
+        <div class="callout warning"><p><strong class="callout-title">The builder is immutable</strong>Calling a selector or setter without chaining it or storing its return value discards that choice.</p></div>
+        <h3>GPR-source flow</h3>
+        <p>Select exactly one client, channel, and destination counter with the existing builder, then finish with <code>from_gpr(hal::gpr&lt;Index&gt;())</code>. An optional <code>thread&lt;T0/T1/T2&gt;()</code> after X/Y/Z/W redirects the destination ADC while the source GPR remains in the issuing thread.</p>
+        <div class="callout warning"><p><strong class="callout-title">GPR mode cannot follow pending constant assignments</strong>The counter-less <code>X()</code>/<code>Y()</code>/<code>Z()</code>/<code>W()</code> selectors that begin the GPR-source flow reject a builder that still carries unapplied constant counter values (<code>static_assert</code>: “REG2FLOP cannot share a builder with pending constant assignments; apply them first, then start a new builder”). A chain such as <code>.X&lt;5&gt;().Y().from_gpr(...)</code> does not compile — emit the constant assignments with <code>apply()</code> first, then start a fresh builder for the GPR-sourced write.</p></div>
+        <pre><code>// Compile-time GPR-source path
+hal::address_counters
+    .client&lt;hal::AddressCounterClient::Unpacker0&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X()
+    .from_gpr(hal::gpr&lt;5&gt;())
+    .apply();</code></pre>
+      </section>
+
+      <section id="channels">
+        <h2>Client and channel meanings</h2>
+        <h3>Clients</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Enumerator</th><th>Mask</th><th>Hardware target</th></tr></thead>
+            <tbody>
+              <tr><td><code>AddressCounterClient::Unpacker0</code></td><td><code>0x1</code></td><td>Unpacker 0 X/Y/Z/W counters</td></tr>
+              <tr><td><code>AddressCounterClient::Unpacker1</code></td><td><code>0x2</code></td><td>Unpacker 1 X/Y/Z/W counters</td></tr>
+              <tr><td><code>AddressCounterClient::Packers</code></td><td><code>0x4</code></td><td>The X/Y/Z/W counters shared by all four packers</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The client selector is variadic, so one instruction can target several clients where the hardware instruction permits it:</p>
+        <pre><code>// Compile-time selection
+.client&lt;
+    hal::AddressCounterClient::Unpacker0,
+    hal::AddressCounterClient::Unpacker1&gt;()</code></pre>
+
+        <h3>Channels</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Client</th><th>Dimension</th><th>Channel 0</th><th>Channel 1</th></tr></thead>
+            <tbody>
+              <tr><td>Unpacker 0/1</td><td>X</td><td>Input address generation: L1 address plus part of datum count</td><td>Input address generation: part of datum count</td></tr>
+              <tr><td>Unpacker 0/1</td><td>Y, Z, W</td><td>Decompressor row seek within L1</td><td>Output address generation: Dst/SrcA for unpacker 0, SrcB for unpacker 1</td></tr>
+              <tr><td>Packers</td><td>X</td><td>Input address generation: Dst address plus part of datum count</td><td>Input address generation: part of datum count</td></tr>
+              <tr><td>Packers</td><td>Y, Z, W</td><td>Input address generation from Dst</td><td>Output address generation to L1</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><code>channel&lt;Channel0&gt;()</code> and <code>channel&lt;Channel1&gt;()</code> accumulate in the builder, but the most recent call becomes the current channel for later setters. Selecting the same channel twice is rejected at compile time.</p>
+      </section>
+
+      <section id="emission">
+        <h2>Instruction emission</h2>
+        <p>The builder selects the smallest applicable instruction form from the counters and channels that were assigned.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Description</th><th>Setter emission</th><th>Increment emission</th><th>Advance/reset emission</th></tr></thead>
+            <tbody>
+              <tr><td>One counter on one channel</td><td><code>SETADC</code></td><td><code>INCADCXY</code> or <code>INCADCZW</code></td><td><code>ADDRCRXY</code> or <code>ADDRCRZW</code></td></tr>
+              <tr><td>X on both channels, no other counter</td><td><code>SETADCXX</code></td><td><code>INCADCXY</code></td><td><code>ADDRCRXY</code></td></tr>
+              <tr><td>Any other X/Y selection</td><td><code>SETADCXY</code></td><td><code>INCADCXY</code></td><td><code>ADDRCRXY</code></td></tr>
+              <tr><td>Any other Z/W selection</td><td><code>SETADCZW</code></td><td><code>INCADCZW</code></td><td><code>ADDRCRZW</code></td></tr>
+              <tr><td>Compile-time builder containing X/Y and Z/W</td><td>One X/Y instruction and one Z/W instruction</td><td>One <code>INCADCXY</code> and one <code>INCADCZW</code></td><td>One <code>ADDRCRXY</code> and one <code>ADDRCRZW</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3><code>apply()</code></h3>
+        <p>Issues absolute counter writes immediately. The compile-time builder may emit both instruction families. The runtime-value builder accepts exactly one family per call.</p>
+
+        <h3><code>increment()</code></h3>
+        <p>Interprets the selected values as increments and emits INCADC instructions. As with <code>apply()</code>, split runtime X/Y and Z/W increments into separate builders.</p>
+
+        <h3><code>advance_and_reset()</code></h3>
+        <p>Interprets the selected values as increments to each counter's carry/reset shadow, then reloads the live counter from that updated shadow. It emits <code>ADDRCRXY</code> for X/Y and <code>ADDRCRZW</code> for Z/W. A zero increment restores the live counter from the unchanged shadow; it is not a no-op.</p>
+        <pre><code>// Compile-time path
+hal::address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .W&lt;0&gt;()
+    .advance_and_reset();</code></pre>
+        <p>The compile-time builder emits both instructions when X/Y and Z/W are selected together. The runtime-value builder accepts one family per terminal call.</p>
+
+        <h3><code>get_operation()</code></h3>
+        <p>Returns one SETADC, INCADC, or ADDRCR instruction instead of issuing it, for example for a MOP or replay-buffer slot. Describe exactly one encodable X/Y or Z/W family.</p>
+        <pre><code>// Compile-time path
+constexpr std::uint32_t advance_w = hal::address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .W&lt;1&gt;()
+    .get_operation&lt;hal::GetOpType::INCREMENT&gt;();</code></pre>
+
+        <h3>GPR-sourced REG2FLOP</h3>
+        <p><code>from_gpr&lt;Width, ByteOffset&gt;(hal::gpr&lt;Index&gt;())</code> attaches a compile-time GPR slice to the selected destination. Its result emits one REG2FLOP or returns that instruction from the no-argument <code>get_operation()</code>. Valid slices are 32-bit at Byte0, 16-bit at Byte0 or Byte2, and 8-bit at any byte.</p>
+        <p>REG2FLOP normally takes two cycles, occupies the Scalar Unit for its duration, and blocks subsequent issue from the calling thread. Contending Configuration Unit writes to THCON can extend that latency even though this form targets an ADC.</p>
+        <div class="callout warning"><p><strong class="callout-title">Live counter versus carry/reset shadow</strong>SETADC writes both the live counter and its <code>_Cr</code> shadow. REG2FLOP writes exactly one. <code>X/Y/Z/W()</code> defaults to the live counter; pass <code>AddressCounterValue::Carry</code> to target the shadow.</p></div>
+      </section>
+
+      <section id="recipes">
+        <h2>Common recipes</h2>
+
+        <h3>Reset several counters</h3>
+        <pre><code>// Compile-time path
+hal::address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X&lt;0&gt;()
+    .Y&lt;0&gt;()
+    .Z&lt;0&gt;()
+    .apply();</code></pre>
+
+        <h3>Apply runtime data without runtime dispatch</h3>
+        <pre><code>// Mixed path: compile-time selection, runtime values
+hal::runtime_address_counters
+    .client&lt;hal::AddressCounterClient::Unpacker0&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X(face_r_dim)
+    .Y(row_offset)
+    .apply();</code></pre>
+
+        <h3>Configure both channels independently</h3>
+        <pre><code>// Mixed path: compile-time selection, runtime values
+hal::runtime_address_counters
+    .client&lt;hal::AddressCounterClient::Unpacker0&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;()
+    .X(input_count)
+    .Y(row_seek)
+    .channel&lt;hal::AddressChannel::Channel1&gt;()
+    .X(datum_count)
+    .Y(output_address)
+    .apply();</code></pre>
+
+        <h3>Split runtime X/Y and Z/W operations</h3>
+        <pre><code>// Mixed path: compile-time selection, runtime values
+auto selected = hal::runtime_address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel0&gt;();
+
+selected.X(x).Y(y).apply();
+
+// Execute the operation that uses the programmed X/Y counters here.
+
+selected.Z(z).W(w).apply();</code></pre>
+
+        <h3>Move the upper half of a GPR to a packer carry/reset shadow</h3>
+        <pre><code>// Compile-time GPR-source path
+hal::address_counters
+    .client&lt;hal::AddressCounterClient::Packers&gt;()
+    .channel&lt;hal::AddressChannel::Channel1&gt;()
+    .W&lt;hal::AddressCounterValue::Carry&gt;()
+    .thread&lt;hal::AddressCounterThread::T2&gt;()
+    .from_gpr&lt;hal::AddressCounterGprWidth::Bits16,
+              hal::GprByteOffset::Byte2&gt;(hal::gpr&lt;60&gt;())
+    .apply();</code></pre>
+      </section>
+
+      <section id="api-index">
+        <h2>API index</h2>
+        <div class="api-index">
+          <a href="#client-enum">AddressCounterClient<span>Choose unpackers or packers</span></a>
+          <a href="#channel-enum">AddressChannel<span>Choose channel 0 or 1</span></a>
+          <a href="#operation-enum">GetOpType<span>Choose setter, increment, or advance/reset encoding</span></a>
+          <a href="#gpr-enums">REG2FLOP enums<span>Choose width, byte, thread, and live/carry destination</span></a>
+          <a href="#address-counters">address_counters<span>Compile-time-value builder root</span></a>
+          <a href="#runtime-address-counters">runtime_address_counters<span>Runtime-value builder root</span></a>
+          <a href="#client-method">client()<span>Add one or more clients</span></a>
+          <a href="#channel-method">channel()<span>Select the current channel</span></a>
+          <a href="#counter-methods">X/Y/Z/W<span>Assign selected counter slots</span></a>
+          <a href="#terminal-methods">Terminal emitters<span>Apply, increment, or advance/reset counters</span></a>
+          <a href="#get-operation">get_operation()<span>Return one encoded instruction</span></a>
+          <a href="#from-gpr">from_gpr()<span>Attach a common GPR operand</span></a>
+        </div>
+      </section>
+
+      <section id="enums">
+        <h2>Enums</h2>
+        <article class="symbol" id="client-enum">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>AddressCounterClient</h3></div>
+          <pre><code>enum class AddressCounterClient : std::uint8_t
+{
+    Unpacker0 = 0x1,
+    Unpacker1 = 0x2,
+    Packers   = 0x4
+};</code></pre>
+          <p>Bit-valued hardware client selectors. Pass one or more as template arguments to <code>client()</code>.</p>
+        </article>
+        <article class="symbol" id="channel-enum">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>AddressChannel</h3></div>
+          <pre><code>enum class AddressChannel : std::uint8_t
+{
+    Channel0 = 0x1,
+    Channel1 = 0x2
+};</code></pre>
+          <p>Selects which slot subsequent X/Y/Z/W setters update.</p>
+        </article>
+        <article class="symbol" id="operation-enum">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>GetOpType</h3></div>
+          <pre><code>enum class GetOpType : std::uint8_t
+{
+    SETTER,
+    INCREMENT,
+    ADVANCE_AND_RESET
+};</code></pre>
+          <p>Selects a SETADC, INCADC, or ADDRCR instruction from <code>get_operation()</code>.</p>
+        </article>
+        <article class="symbol" id="gpr-enums">
+          <div class="symbol-head"><span class="kind">enum classes</span><h3>REG2FLOP source and destination selectors</h3></div>
+          <pre><code>AddressCounterGprWidth::{Bits32, Bits16, Bits8}
+GprByteOffset::{Byte0, Byte1, Byte2, Byte3}
+AddressCounterThread::{T0, T1, T2}
+AddressCounterValue::{Counter, Carry}</code></pre>
+          <p>These selectors map directly to REG2FLOP SizeSel, Shift8, thread override, and Cr fields. Omitting <code>thread()</code> keeps the current issuing thread as the destination.</p>
+        </article>
+      </section>
+
+      <section id="compile-time-api">
+        <h2>Compile-time API</h2>
+        <article class="symbol" id="address-counters">
+          <div class="symbol-head"><span class="kind">inline constexpr object</span><h3>address_counters</h3></div>
+          <pre><code>// Compile-time builder
+inline constexpr ADC&lt;&gt; address_counters {};</code></pre>
+          <p>The root of the fully compile-time fluent builder. Callers normally let each chained return type be deduced rather than naming an <code>ADC&lt;...&gt;</code> specialization.</p>
+        </article>
+        <article class="symbol" id="client-method">
+          <div class="symbol-head"><span class="kind">builder method</span><h3>client</h3></div>
+          <pre><code>// Compile-time path
+template &lt;AddressCounterClient... Clients&gt;
+constexpr auto client() const;</code></pre>
+          <p>Adds the selected client bits to the builder. The variadic form supports broadcasting one counter operation to multiple clients.</p>
+        </article>
+        <article class="symbol" id="from-gpr">
+          <div class="symbol-head"><span class="kind">terminal builder method</span><h3>from_gpr</h3></div>
+          <pre><code>// Compile-time path
+template &lt;
+    AddressCounterGprWidth Width = AddressCounterGprWidth::Bits32,
+    GprByteOffset ByteOffset = GprByteOffset::Byte0,
+    std::uint32_t Index&gt;
+constexpr auto from_gpr(hal::Gpr&lt;Index&gt; source) const;</code></pre>
+          <p>Available after a singleton client, channel, and X/Y/Z/W destination have been selected. The common <code>hal::gpr&lt;Index&gt;()</code> operand supplies the source identity; Width and ByteOffset remain operation-specific. The result's <code>apply()</code> emits one immediate REG2FLOP and <code>get_operation()</code> returns its encoded word.</p>
+        </article>
+        <article class="symbol" id="channel-method">
+          <div class="symbol-head"><span class="kind">builder method</span><h3>channel</h3></div>
+          <pre><code>// Compile-time path
+template &lt;AddressChannel Channel&gt;
+constexpr auto channel() const;</code></pre>
+          <p>Adds the channel to the cumulative selection and makes it current. A channel cannot be selected twice in one builder chain.</p>
+        </article>
+        <article class="symbol" id="counter-methods">
+          <div class="symbol-head"><span class="kind">builder methods</span><h3>X / Y / Z / W</h3></div>
+          <pre><code>// Compile-time path
+template &lt;std::uint32_t Value&gt;
+constexpr auto X() const;
+
+template &lt;std::uint32_t Value&gt;
+constexpr auto Y() const;
+
+template &lt;std::uint8_t Value&gt;
+constexpr auto Z() const;
+
+template &lt;std::uint8_t Value&gt;
+constexpr auto W() const;</code></pre>
+          <p>Assign a compile-time value to the indicated counter for the current channel.</p>
+        </article>
+        <article class="symbol" id="terminal-methods">
+          <div class="symbol-head"><span class="kind">emitters</span><h3>apply / increment / advance_and_reset</h3></div>
+          <pre><code>// Compile-time path
+void apply() const;
+void increment() const;
+void advance_and_reset() const;</code></pre>
+          <p><code>apply()</code> emits SETADC, <code>increment()</code> emits INCADC, and <code>advance_and_reset()</code> emits ADDRCR instructions. Compile-time mixed X/Y and Z/W selections emit one instruction from each family.</p>
+        </article>
+        <article class="symbol" id="get-operation">
+          <div class="symbol-head"><span class="kind">encoder</span><h3>get_operation</h3></div>
+          <pre><code>// Compile-time path
+template &lt;GetOpType Operation&gt;
+static constexpr std::uint32_t get_operation();</code></pre>
+          <p>Returns one encoded operation. It does not issue the instruction.</p>
+        </article>
+      </section>
+
+      <section id="runtime-api">
+        <h2>Runtime-value API</h2>
+        <article class="symbol" id="runtime-address-counters">
+          <div class="symbol-head"><span class="kind">inline constexpr object</span><h3>runtime_address_counters</h3></div>
+          <pre><code>// Mixed path: compile-time selection, runtime values
+inline constexpr RuntimeADC&lt;&gt; runtime_address_counters {};</code></pre>
+          <p>The runtime-valued builder root. Its <code>client()</code> and <code>channel()</code> methods have the same template interface as <code>ADC</code>.</p>
+        </article>
+        <article class="symbol">
+          <div class="symbol-head"><span class="kind">builder methods</span><h3>X / Y / Z / W</h3></div>
+          <pre><code>// Mixed path: compile-time selection, runtime values
+constexpr auto X(std::uint32_t value) const;
+constexpr auto Y(std::uint32_t value) const;
+constexpr auto Z(std::uint32_t value) const;
+constexpr auto W(std::uint32_t value) const;</code></pre>
+          <p>The selected slot remains part of the type, while its value is carried by the builder object.</p>
+        </article>
+        <article class="symbol">
+          <div class="symbol-head"><span class="kind">emitters and encoder</span><h3>apply / increment / advance_and_reset / get_operation</h3></div>
+          <pre><code>// Mixed path: compile-time operation shape, runtime values
+void apply() const;
+void increment() const;
+void advance_and_reset() const;
+
+template &lt;GetOpType Operation&gt;
+std::uint32_t get_operation() const;</code></pre>
+          <p>Each runtime-value terminal must describe exactly one X/Y or Z/W instruction family. This keeps the emitted path branch-free with respect to the selected operation shape.</p>
+        </article>
+      </section>
+
+      <section id="safety">
+        <h2>Constraints and diagnostics</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Rule</th><th>Reason</th></tr></thead>
+            <tbody>
+              <tr><td>Select at least one client before emission.</td><td>The instruction needs a nonzero hardware client mask.</td></tr>
+              <tr><td>Select a channel before assigning counters.</td><td>Setters write only the current channel slot.</td></tr>
+              <tr><td>Do not select the same channel twice in one chain.</td><td>The builder rejects duplicate channel selection with <code>static_assert</code>.</td></tr>
+              <tr><td>Use one X/Y or Z/W family for runtime terminals.</td><td><code>RuntimeADC</code> emits exactly one instruction per terminal call.</td></tr>
+              <tr><td>Use one encodable family with <code>get_operation()</code>.</td><td>The function returns one 32-bit instruction word.</td></tr>
+              <tr><td>Keep ADDRCR channel-0 values and channel-1 X/Z within <code>[0, 7]</code>, and channel-1 Y/W within <code>[0, 63]</code>.</td><td>These are the instruction's asymmetric encoded field widths; compile-time paths use <code>static_assert</code> and runtime paths use <code>LLK_ASSERT</code>.</td></tr>
+              <tr><td>Chain calls or retain the returned object.</td><td>Builders are immutable values; methods do not mutate the source object.</td></tr>
+              <tr><td>Use a GPR index in <code>[0, 63]</code> with <code>from_gpr</code>.</td><td>REG2FLOP encodes InputReg in six bits.</td></tr>
+              <tr><td>Select one client, channel, and X/Y/Z/W destination in GPR mode.</td><td>The ADC REG2FLOP encoding has singleton selectors rather than SETADC masks.</td></tr>
+              <tr><td>Do not enter GPR mode on a builder with pending constant assignments.</td><td>REG2FLOP cannot share a builder with unapplied constant counter values; the counter-less X/Y/Z/W selectors reject it with <code>static_assert</code>. Apply the constants first, then start a new builder.</td></tr>
+              <tr><td>Match byte selection to width.</td><td>32-bit accepts Byte0; 16-bit accepts Byte0 or Byte2; 8-bit accepts Byte0 through Byte3.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout danger"><p><strong class="callout-title">No implicit hardware readback</strong>The builder describes writes and increments only. It does not inspect current counter state or validate that a numerical increment is meaningful for the active kernel.</p></div>
+      </section>
+
+      <section id="source">
+        <h2>Source</h2>
+        <p>The address-counter builders are in <a href="../../tt_llk_blackhole/llk_lib/hal/address_counters.h"><code>tt_llk_blackhole/llk_lib/hal/address_counters.h</code></a>, and the shared GPR identity is in <a href="../../tt_llk_blackhole/llk_lib/hal/utils/gpr.h"><code>hal/utils/gpr.h</code></a>. Instruction encodings and emission macros come from the Blackhole <code>ckernel</code> headers.</p>
+      </section>
+
+      <footer>Blackhole Address Counter HAL reference · Constant, runtime-value, and GPR-sourced counter programming.</footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#choose-builder">Choose a builder</a></li>
+        <li><a href="#channels">Clients and channels</a></li>
+        <li><a href="#emission">Instruction emission</a></li>
+        <li><a href="#recipes">Recipes</a></li>
+        <li><a href="#api-index">API index</a></li>
+        <li><a href="#enums">Enums</a></li>
+        <li><a href="#compile-time-api">Compile-time API</a></li>
+        <li><a href="#runtime-api">Runtime-value API</a></li>
+        <li><a href="#safety">Constraints</a></li>
+        <li><a href="#source">Source</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>

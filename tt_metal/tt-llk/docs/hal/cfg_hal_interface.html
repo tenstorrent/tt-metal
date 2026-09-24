@@ -1,0 +1,1634 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Developer documentation for the Blackhole hal::cfg typed configuration-register interface.">
+  <title>hal::cfg — Blackhole CFG HAL</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <script src="hal_theme.js"></script>
+  <link rel="stylesheet" href="hal_docs.css">
+  <script src="hal_docs.js" defer></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-subtle: #f6f8fa;
+      --bg-code: #0d1117;
+      --border: #d8dee4;
+      --border-strong: #b6bec8;
+      --text: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --link: #0969da;
+      --link-hover: #0550ae;
+      --accent: #007a6f;
+      --accent-soft: #e8f7f4;
+      --blue-soft: #eef5ff;
+      --amber: #9a6700;
+      --amber-soft: #fff8c5;
+      --red: #cf222e;
+      --red-soft: #ffebe9;
+      --green: #1a7f37;
+      --green-soft: #dafbe1;
+      --sidebar: 248px;
+      --toc: 218px;
+      --topbar: 58px;
+      --content: 900px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: calc(var(--topbar) + 24px); }
+    body { margin: 0; color: var(--text); background: var(--bg); font: 15px/1.58 var(--sans); }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { color: var(--link-hover); text-decoration: underline; }
+    code, pre { font-family: var(--mono); }
+    code { padding: .12em .34em; border-radius: 5px; background: var(--bg-subtle); font-size: .9em; }
+    pre { margin: 14px 0 20px; padding: 17px 19px; overflow: auto; border: 1px solid #30363d; border-radius: 8px; color: #e6edf3; background: var(--bg-code); font-size: 13px; line-height: 1.55; tab-size: 4; }
+    pre code { padding: 0; color: inherit; background: transparent; font-size: inherit; }
+    h1, h2, h3, h4 { line-height: 1.25; }
+    h1 { margin: 0 0 10px; font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -.035em; }
+    h2 { margin: 54px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 1.72rem; letter-spacing: -.018em; }
+    h3 { margin: 34px 0 10px; font-size: 1.24rem; }
+    h4 { margin: 24px 0 8px; font-size: 1rem; }
+    p { max-width: 78ch; }
+    ul, ol { padding-left: 23px; }
+    li + li { margin-top: 5px; }
+    strong { font-weight: 650; }
+    :target { scroll-margin-top: calc(var(--topbar) + 24px); }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      height: var(--topbar);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, .96);
+      backdrop-filter: blur(8px);
+    }
+    .brand { color: var(--text); font-weight: 700; letter-spacing: -.01em; }
+    .brand:hover { color: var(--text); text-decoration: none; }
+    .crumb { color: var(--faint); }
+    .topbar code { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, var(--content)) var(--toc);
+      justify-content: center;
+      min-height: calc(100vh - var(--topbar));
+    }
+    .sidebar, .toc { position: sticky; top: var(--topbar); align-self: start; max-height: calc(100vh - var(--topbar)); overflow-y: auto; }
+    .sidebar { padding: 26px 20px 40px; border-right: 1px solid var(--border); }
+    .toc { padding: 28px 18px; border-left: 1px solid var(--border); }
+    .sidebar h2, .toc h2 { margin: 0 0 9px; padding: 0; border: 0; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .sidebar h2:not(:first-child) { margin-top: 23px; }
+    .sidebar a, .toc a { display: block; padding: 4px 8px; border-radius: 5px; color: var(--muted); font-size: 13px; }
+    .sidebar a:hover, .toc a:hover { color: var(--link); background: var(--bg-subtle); text-decoration: none; }
+    .sidebar .current { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+    .toc ul { margin: 0; padding: 0; list-style: none; }
+    .toc li + li { margin-top: 1px; }
+    .toc .sub a { padding-left: 18px; font-size: 12px; }
+
+    main { min-width: 0; padding: 46px 48px 90px; }
+    .package-label { margin-bottom: 12px; color: var(--accent); font: 650 13px/1 var(--mono); }
+    .lede { margin: 0 0 22px; color: var(--muted); font-size: 18px; line-height: 1.55; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 4px; }
+    .pill { display: inline-flex; align-items: center; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--bg-subtle); font-size: 12px; }
+    .pill strong { margin-right: 5px; color: var(--text); }
+
+    .install { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 26px 0 34px; padding: 14px 17px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); }
+    .install span { color: var(--muted); font-size: 13px; }
+    .install code { padding: 0; color: var(--text); background: transparent; font-size: 13px; }
+
+    .callout { margin: 20px 0; padding: 14px 17px; border: 1px solid var(--border); border-left: 4px solid var(--link); border-radius: 6px; background: var(--blue-soft); }
+    .callout.note { border-left-color: var(--accent); background: var(--accent-soft); }
+    .callout.warning { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout p { margin: 0; }
+    .callout p + p { margin-top: 8px; }
+    .callout-title { display: block; margin-bottom: 4px; font-weight: 700; }
+
+    .quick-grid, .concept-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0 24px; }
+    .card { padding: 17px 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+    .card h3, .card h4 { margin-top: 0; }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    .card .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font: 650 11px/1.2 var(--mono); text-transform: uppercase; }
+
+    .table-wrap { margin: 16px 0 28px; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; background: var(--bg); font-size: 14px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); background: var(--bg-subtle); font-size: 12px; font-weight: 650; letter-spacing: .025em; }
+    tr:last-child td { border-bottom: 0; }
+    td code { white-space: nowrap; }
+    .yes { color: var(--green); font-weight: 650; }
+    .no { color: var(--red); }
+
+    .api-index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 22px; margin: 18px 0 32px; padding: 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); }
+    .api-index a { font-family: var(--mono); font-size: 13px; }
+    .api-index span { display: block; color: var(--muted); font-family: var(--sans); font-size: 12px; }
+
+    .symbol { margin: 30px 0 42px; }
+    .symbol-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; margin-bottom: 10px; }
+    .symbol-head h3 { margin: 0; font-family: var(--mono); font-size: 1.27rem; }
+    .kind { padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 650 10px/1.5 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+    .signature { border-color: #30363d; }
+    .parameters { margin: 14px 0; }
+    .parameters dt { margin-top: 10px; font-family: var(--mono); font-weight: 650; }
+    .parameters dd { margin: 2px 0 0 22px; color: var(--muted); }
+    .constraints { margin: 15px 0; padding: 12px 15px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-subtle); }
+    .constraints strong { display: block; margin-bottom: 5px; }
+    .constraints ul { margin: 0; }
+
+    .steps { counter-reset: step; margin: 20px 0; padding: 0; list-style: none; }
+    .steps li { position: relative; margin: 0 0 14px; padding: 2px 0 12px 42px; border-bottom: 1px solid var(--border); }
+    .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--accent); font: 700 12px/1 var(--mono); }
+    .steps li:last-child { border-bottom: 0; }
+
+    details { margin: 12px 0; border: 1px solid var(--border); border-radius: 7px; }
+    summary { padding: 12px 15px; cursor: pointer; font-weight: 650; background: var(--bg-subtle); }
+    details > div { padding: 4px 15px 15px; }
+    footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: var(--sidebar) minmax(0, var(--content)); }
+      .toc { display: none; }
+    }
+    @media (max-width: 820px) {
+      .topbar { padding: 0 16px; }
+      .layout { display: block; }
+      .sidebar { position: static; max-height: none; padding: 14px 16px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border); }
+      .sidebar h2 { display: none; }
+      .sidebar nav { display: flex; gap: 5px; overflow-x: auto; }
+      .sidebar a { white-space: nowrap; }
+      main { padding: 32px 20px 70px; }
+      .quick-grid, .concept-grid, .api-index { grid-template-columns: 1fr; }
+    }
+    @media print {
+      .topbar, .sidebar, .toc { display: none; }
+      .layout { display: block; }
+      main { max-width: none; padding: 0; }
+      a { color: inherit; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">TT-LLK</a>
+    <span class="crumb">/</span>
+    <span>Blackhole</span>
+    <span class="crumb">/</span>
+    <code>hal::cfg</code>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <nav>
+        <h2>Packages</h2>
+        <a href="index.html">Documentation home</a>
+        <a class="current" href="cfg_hal_interface.html">hal::cfg</a>
+        <a href="cfg_field_catalog.html">hal::cfg field catalog</a>
+        <a href="address_counters_hal_interface.html">hal::address_counters</a>
+        <a href="math_counters_hal_interface.html">hal::math_counters</a>
+        <a href="gpr_ops_hal_interface.html">hal::gpr_ops</a>
+        <a href="move_hal_interface.html">hal::move</a>
+        <a href="atomic_hal_interface.html">hal::atomic</a>
+        <a href="mop_hal_interface.html">hal::mop</a>
+        <a href="replay_hal_interface.html">hal::replay</a>
+        <a href="sync_hal_interface.html">hal::sync</a>
+        <a href="unpack_hal_interface.html">hal::unpack</a>
+        <a href="fpu_hal_interface.html">hal::fpu</a>
+        <a href="src_hal_interface.html">hal::src</a>
+        <a href="dst_hal_interface.html">hal::dst</a>
+        <a href="pack_hal_interface.html">hal::pack</a>
+        <a href="nop_hal_interface.html">hal::nop</a>
+        <a href="misc_hal_interface.html">hal::misc</a>
+
+        <h2>Start</h2>
+        <a href="#overview">Package overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#model">Functional model</a>
+        <a href="#types">Types and enums</a>
+
+        <h2>Interfaces</h2>
+        <a href="#api-index">Interface index</a>
+        <a href="#choose">Choose an operation</a>
+        <a href="#builders">Builders</a>
+        <a href="#reads">Read API</a>
+        <a href="#writes">Write API</a>
+        <a href="#batch">WriteBatch</a>
+
+        <h2>Additional guides</h2>
+        <a href="#recipes">Common recipes</a>
+        <a href="#compile-time-iteration">Compile-time iteration</a>
+
+        <h2>Details</h2>
+        <a href="#hardware">Hardware mapping</a>
+        <a href="#ordering">Ordering and safety</a>
+        <a href="#diagnostics">Compile-time checks</a>
+        <a href="#descriptors">Descriptor catalog</a>
+        <a href="#sources">Source files</a>
+      </nav>
+    </aside>
+
+    <main id="top">
+      <section id="overview">
+        <div class="package-label">namespace hal::cfg</div>
+        <h1>Blackhole CFG HAL</h1>
+        <p class="lede">
+          A typed, compile-time interface for reading and programming Blackhole
+          thread and state configuration registers without copying raw addresses,
+          masks, or shifts into kernel code.
+        </p>
+        <div class="meta">
+          <span class="pill"><strong>Architecture</strong> Blackhole</span>
+          <span class="pill"><strong>Language</strong> C++17</span>
+          <span class="pill"><strong>Public header</strong> hal/cfg.h</span>
+          <span class="pill"><strong>Namespace</strong> hal::cfg</span>
+        </div>
+
+        <div class="install">
+          <span>Include the complete public interface</span>
+          <code>#include "hal/cfg.h"</code>
+        </div>
+
+        <p>
+          The API combines a generated <a href="#field"><code>Field</code></a>
+          descriptor with an <a href="#access"><code>Access</code></a> policy.
+          The descriptor identifies the register file, address, repeated sections,
+          bit shift, and mask. The access policy selects RISC MMIO, the Tensix
+          Configuration Unit, or the Tensix Scalar Unit. Both are template
+          arguments, so selection adds no runtime dispatch.
+        </p>
+
+        <div class="callout note">
+          <span class="callout-title">The rule of thumb</span>
+          <p>
+            Name the field, choose <code>Access::MMIO</code> or
+            <code>Access::TensixCfgUnit</code>, select its <code>Sec</code>, and pass an unshifted value. Select
+            <code>Access::TensixScalarUnit</code> only for an explicit GPR-to-THCON
+            REG2FLOP transfer. Use
+            <code>set()</code> to group assignments automatically by physical word,
+            and <code>from_gpr()</code> to place complete-word transfers in the same ordered call.
+          </p>
+        </div>
+      </section>
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>A minimal runtime field write needs an access path, a generated field, an explicit section, and a value.</p>
+        <pre><code>#include "hal/cfg.h"
+
+void configure(const std::uint32_t enable)
+{
+    // Mixed path: compile-time field, runtime value
+    hal::cfg::write&lt;
+        hal::cfg::Access::TensixCfgUnit,
+        hal::cfg::AluAccCtrl::Fp32_enabled,
+        hal::cfg::Sec::S0&gt;(enable);
+}</code></pre>
+
+        <div class="quick-grid">
+          <article class="card">
+            <span class="eyebrow">Runtime value</span>
+            <h3>Write one field</h3>
+            <pre><code>// Mixed path: compile-time field, runtime value
+cfg::write&lt;
+    cfg::Access::TensixCfgUnit,
+    cfg::AluAccCtrl::Fp32_enabled,
+    cfg::Sec::S0&gt;(enable);</code></pre>
+            <p>The descriptor supplies the address, mask, and shift.</p>
+          </article>
+          <article class="card">
+            <span class="eyebrow">Runtime result</span>
+            <h3>Read one field</h3>
+            <pre><code>// Compile-time-selected MMIO path
+const auto seed = cfg::read&lt;
+    cfg::Access::MMIO,
+    cfg::PrngSeed::Seed_Val,
+    cfg::Sec::S0&gt;();</code></pre>
+            <p>The returned value is masked and shifted down to bit zero.</p>
+          </article>
+        </div>
+
+        <h3>A realistic grouped write</h3>
+        <p>
+          Fields across several physical words can be described together. The HAL
+          groups assignments by register file and address, checks mask compatibility
+          at compile time, and emits one logical update per group.
+        </p>
+        <pre><code>namespace cfg = hal::cfg;
+
+// Mixed path: compile-time fields, runtime values, multiple words
+cfg::write&lt;cfg::Access::TensixCfgUnit&gt;(
+    cfg::set&lt;cfg::AluAccCtrl::INT8_math_enabled, cfg::Sec::S0&gt;(int8_mode),
+    cfg::set&lt;cfg::StaccRelu::ApplyRelu, cfg::Sec::S0&gt;(relu_mode),
+    cfg::set&lt;cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0&gt;(fp32_mode),
+    cfg::set&lt;cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0&gt;(fp32_mode));</code></pre>
+
+        <h3>Combine field updates and GPR transfers</h3>
+        <p>Use <code>from_gpr()</code> when one ordered Configuration Unit sequence contains both field updates and complete-word WRCFG transfers. Consecutive <code>set()</code> operations are grouped at compile time; each GPR transfer is an ordering barrier.</p>
+        <pre><code>// Mixed path: compile-time destinations, runtime values
+cfg::write&lt;cfg::Access::TensixCfgUnit&gt;(
+    cfg::set&lt;cfg::AluFormatSpecReg1::SrcB, cfg::Sec::S0&gt;(dst_format),
+    cfg::set&lt;cfg::Thcon[cfg::Reg0].TileDescriptor.InDataFormat, cfg::Sec::S1&gt;(src_format),
+    cfg::from_gpr&lt;cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S1&gt;(
+        cfg::gpr&lt;p_gpr_unpack::L1_BUFFER_ADDR,
+                 cfg::GprTransferSize::Bits32,
+                 cfg::WrcfgCompletion::Deferred&gt;()),
+    cfg::set&lt;cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0&gt;(haloize));</code></pre>
+      </section>
+      <section id="model">
+        <h2>Functional model</h2>
+
+        <pre><code>address = F.addr32(S);
+shift   = F.shamt(S);
+mask    = F.mask(S);
+
+// Read one field
+result = (read_word(address) &amp; mask) &gt;&gt; shift;
+
+// Preserve unrelated bits in a partial state-CFG write
+next_word = (current_word &amp; ~mask) | ((value &lt;&lt; shift) &amp; mask);
+
+// Group identity for field assignments
+group_key = (register_file, address);</code></pre>
+        <p>A generated <code>Field</code> resolves the register file, physical address, repeated section, shift, and mask. <code>Access</code> then selects how the logical read or write reaches hardware; there is no runtime dispatch for that selection.</p>
+
+        <h3>Two register files</h3>
+        <div class="concept-grid">
+          <article class="card">
+            <span class="eyebrow">RegisterFile::Thread</span>
+            <h3>Thread CFG</h3>
+            <ul>
+              <li>Private to each Tensix thread.</li>
+              <li>16-bit physical words.</li>
+              <li>Written by Tensix <code>SETC16</code>.</li>
+              <li>Read by TRISC or BRISC through the CREG-selector MMIO path.</li>
+              <li>A write replaces the complete 16-bit word; bits not supplied are zero.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="eyebrow">RegisterFile::State</span>
+            <h3>State CFG</h3>
+            <ul>
+              <li>32-bit ALU, PACK, UNPACK, THCON, and global configuration.</li>
+              <li>Accessible through RISC MMIO and Tensix CFG instructions.</li>
+              <li>Partial field writes preserve unrelated bits.</li>
+              <li>Banked blocks use the current thread's active CFG state.</li>
+            </ul>
+          </article>
+        </div>
+
+        <h3>Field descriptors are addresses plus layout</h3>
+        <p>
+          Generated register families expose <code>static constexpr Field</code>
+          members. A final expression such as
+          <code>Thcon[Reg0].TileDescriptor.InDataFormat</code> is a complete
+          descriptor. Callers should not repeat its numeric address, shift, or mask.
+        </p>
+        <pre><code>// A nested state-CFG field.
+hal::cfg::Thcon[hal::cfg::Reg0].TileDescriptor.InDataFormat
+
+// A repeated thread-CFG field.
+hal::cfg::AddrMod[hal::cfg::SrcA].Incr</code></pre>
+
+        <h3>Section and CFG state are different axes</h3>
+        <div class="callout warning">
+          <span class="callout-title"><code>Sec::S0</code> does not mean CFG state 0.</span>
+          <p>
+            <code>Sec</code> selects a repeated descriptor section. The active
+            state-CFG bank is selected independently by
+            <code>CfgStateId::StateID</code> and by the RISC pointer returned from
+            <code>ckernel::get_cfg_pointer()</code>.
+          </p>
+        </div>
+
+        <h3>Access coverage</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Hardware path</th><th>Thread CFG</th><th>State CFG</th><th>HAL form</th></tr></thead>
+            <tbody>
+              <tr><td>RISC MMIO write</td><td class="no">Not supported</td><td class="yes">Supported</td><td><code>write&lt;Access::MMIO, F, S&gt;(value)</code></td></tr>
+              <tr><td>RISC MMIO read</td><td class="yes">Supported</td><td class="yes">Supported</td><td><code>read&lt;Access::MMIO, F, S, Target&gt;()</code></td></tr>
+              <tr><td>Tensix Configuration Unit write</td><td class="yes">SETC16</td><td class="yes">RMWCIB or WRCFG</td><td><code>write&lt;Access::TensixCfgUnit, ...&gt;</code></td></tr>
+              <tr><td>Tensix Configuration Unit read</td><td class="no">Not supported</td><td class="yes">RDCFG</td><td><code>read&lt;Access::TensixCfgUnit, F, S&gt;(gpr&lt;I&gt;())</code></td></tr>
+              <tr><td>Tensix Scalar Unit write</td><td class="no">Not supported</td><td class="yes">REG2FLOP for THCON only</td><td><code>write&lt;Access::TensixScalarUnit, F, S&gt;(gpr(...))</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="types">
+        <h2>Types and enums</h2>
+
+        <article class="symbol" id="access">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>Access</h3></div>
+          <pre class="signature"><code>enum class Access : std::uint8_t
+{
+    MMIO,
+    TensixCfgUnit,
+    TensixScalarUnit
+};</code></pre>
+          <p><code>MMIO</code> selects the TRISC/BRISC memory-mapped path. <code>TensixCfgUnit</code> selects SETC16, RMWCIB, WRCFG, or RDCFG according to the overload and register file. <code>TensixScalarUnit</code> selects REG2FLOP and is valid only for a GPR-backed write to THCON.</p>
+          <pre><code>// Mixed path: compile-time access and field, runtime value
+write&lt;
+    Access::TensixCfgUnit,
+    AluAccCtrl::Fp32_enabled,
+    Sec::S0&gt;(enabled);</code></pre>
+        </article>
+
+        <article class="symbol" id="register-file">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>RegisterFile</h3></div>
+          <pre class="signature"><code>enum class RegisterFile : std::uint8_t { Thread, State };</code></pre>
+          <p>Carried by every generated <code>Field</code>. Callers normally do not choose it directly.</p>
+          <pre><code>// Compile-time descriptor inspection
+static_assert(
+    AluAccCtrl::Fp32_enabled.file == RegisterFile::State);</code></pre>
+        </article>
+
+        <article class="symbol" id="sec">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>Sec</h3></div>
+          <pre class="signature"><code>enum class Sec : std::uint8_t { S0, S1, S2, S3, S4, S5, S6, S7 };</code></pre>
+          <p>Selects one repeated section of a descriptor. Public field APIs require an explicit compile-time section, including <code>S0</code>, so every call exposes the complete register-file, field, and field-section selection. Each field declares its supported section count in <code>Field::count</code>; selecting <code>S &gt;= F.count</code> fails compilation.</p>
+          <pre><code>// Mixed path: compile-time section, runtime value
+write&lt;
+    Access::TensixCfgUnit,
+    Thcon[Reg0].TileDescriptor.InDataFormat,
+    Sec::S1&gt;(format);</code></pre>
+          <div class="callout danger"><span class="callout-title">Sections are field-specific.</span><pre><code>// Compile error: Fp32_enabled has count == 1 and supports only S0.
+write&lt;
+    Access::TensixCfgUnit,
+    AluAccCtrl::Fp32_enabled,
+    Sec::S1&gt;(enable);</code></pre></div>
+        </article>
+
+        <article class="symbol" id="descriptor-selectors">
+          <div class="symbol-head"><span class="kind">enums, tag structs, and constants</span><h3>Descriptor selectors</h3></div>
+          <pre class="signature"><code>enum class PackerReg   : std::uint8_t { Reg0, Reg1 };
+enum class UnpackerReg : std::uint8_t { Reg0, Reg1 };
+enum class BlobContext : std::uint8_t { Context01, Context23 };
+
+struct SrcASelector {};
+struct SrcBSelector {};
+struct SrcSelector {};
+struct DestSelector {};
+struct FidelitySelector {};
+struct BiasSelector {};
+struct YSelector {};
+struct ZSelector {};
+
+inline constexpr SrcASelector SrcA {};
+inline constexpr SrcBSelector SrcB {};
+inline constexpr SrcSelector Src {};
+inline constexpr DestSelector Dest {};
+inline constexpr FidelitySelector Fidelity {};
+inline constexpr BiasSelector Bias {};
+inline constexpr YSelector Y {};
+inline constexpr ZSelector Z {};
+
+// Reg0 through Reg11 follow this tag-object pattern.
+struct ThconReg0Selector {};
+inline constexpr ThconReg0Selector Reg0 {};</code></pre>
+          <p><code>PackerReg</code> selects an address register set below <code>Packer[0].AddrCtrl</code> or <code>Packer[0].AddrBase</code>. <code>UnpackerReg</code> does the same below an unpacker. <code>BlobContext</code> selects one of unpacker 0's grouped blob-context fields. The empty selector structs give overloaded <code>operator[]</code> calls distinct types; callers pass the corresponding constants such as <code>SrcA</code>, <code>Dest</code>, <code>Y</code>, or <code>Reg0</code>.</p>
+          <pre><code>// Compile-time descriptor selection
+constexpr const Field&amp; packer_z_stride =
+    Packer[0].AddrCtrl[PackerReg::Reg0].Zstride;</code></pre>
+        </article>
+
+        <article class="symbol" id="descriptor-trees">
+          <div class="symbol-head"><span class="kind">constexpr selector objects</span><h3>Generated descriptor trees</h3></div>
+          <p>The generated API groups related fields behind typed, <code>inline constexpr</code> root objects. The declarations below show their public selection shape; entry structs expose the terminal <code>Field</code> members listed in the <a href="cfg_field_catalog.html">field catalog</a>.</p>
+          <pre class="signature"><code>// Compile-time selector path
+struct ThconFields
+{
+    constexpr ThconReg0Fields operator[](
+        ThconReg0Selector) const;
+    // Equivalent overloads select Reg1 through Reg11.
+};
+inline constexpr ThconFields Thcon {};
+
+// Compile-time selector path
+struct AddrModFields
+{
+    constexpr AddrModSrcEntry operator[](
+        SrcASelector) const;
+    constexpr AddrModSrcEntry operator[](
+        SrcBSelector) const;
+    constexpr AddrModPackEntry operator[](
+        SrcSelector) const;
+    constexpr AddrModDestEntry operator[](
+        DestSelector) const;
+    constexpr AddrModFidelityEntry operator[](
+        FidelitySelector) const;
+    constexpr AddrModBiasEntry operator[](
+        BiasSelector) const;
+};
+inline constexpr AddrModFields AddrMod {};
+
+struct PackerFields
+{
+    // Compile-time index path
+    template &lt;std::uint32_t PackerIndex&gt;
+    constexpr PackerEntry operator[](
+        detail::CompileTimeIndex&lt;PackerIndex&gt;) const;
+
+    // Runtime index path
+    constexpr PackerEntry operator[](
+        std::uint32_t packer) const;
+};
+inline constexpr PackerFields Packer {};
+
+struct UnpackerFields
+{
+    // Compile-time index path
+    template &lt;std::uint32_t UnpackerIndex&gt;
+    constexpr StaticUnpackerEntry&lt;UnpackerIndex&gt; operator[](
+        detail::CompileTimeIndex&lt;UnpackerIndex&gt;) const;
+
+    // Runtime index path
+    constexpr UnpackerEntry operator[](
+        std::uint32_t unpacker) const;
+
+    // Compile-time iteration path
+    template &lt;typename Function&gt;
+    constexpr void forEach(Function&amp;&amp; function) const;
+};
+inline constexpr UnpackerFields Unpacker {};
+
+struct TileRowSetMappingRow
+{
+    // Compile-time set-index path
+    template &lt;std::uint32_t SetIndex&gt;
+    constexpr const Field&amp; operator[](
+        detail::CompileTimeIndex&lt;SetIndex&gt;) const;
+
+    // Runtime set-index path
+    constexpr const Field&amp; operator[](
+        std::uint32_t set_index) const;
+
+    template &lt;typename Function&gt;
+    constexpr void forEach(Function&amp;&amp; function) const;
+};
+
+struct TileRowSetMappingFields
+{
+    // Compile-time mapping-index path
+    template &lt;std::uint32_t MappingIndex&gt;
+    constexpr TileRowSetMappingRow operator[](
+        detail::CompileTimeIndex&lt;MappingIndex&gt;) const;
+
+    // Runtime mapping-index path
+    constexpr TileRowSetMappingRow operator[](
+        std::uint32_t mapping_index) const;
+
+    template &lt;typename Function&gt;
+    constexpr void forEach(Function&amp;&amp; function) const;
+};
+inline constexpr TileRowSetMappingFields TileRowSetMapping {};
+
+// TileFaceSetMappingRow and TileFaceSetMappingFields provide the
+// same compile-time, runtime, and forEach paths for face-set fields.
+inline constexpr TileFaceSetMappingFields TileFaceSetMapping {};
+
+struct DisableImpliedFmtFields
+{
+    constexpr const Field&amp; operator[](SrcASelector) const;
+    constexpr const Field&amp; operator[](SrcBSelector) const;
+};
+inline constexpr DisableImpliedFmtFields DisableImpliedFmt {};
+
+struct PerfCntCmdEntry
+{
+    const Field&amp; Start;
+    const Field&amp; Stop;
+};
+inline constexpr PerfCntCmdEntry PerfCntCmd[] = { /* four entries */ };</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Root</th><th>Selection</th><th>Range and result</th></tr></thead>
+              <tbody>
+                <tr><td><code>Thcon</code></td><td><code>Thcon[Reg0]</code> through <code>Thcon[Reg11]</code></td><td>Selects the named THCON register group. A terminal member is a <code>Field</code>.</td></tr>
+                <tr><td><code>AddrMod</code></td><td><code>SrcA</code>, <code>SrcB</code>, <code>Src</code>, <code>Dest</code>, <code>Fidelity</code>, or <code>Bias</code></td><td>Selects an address-modifier family. Pack source and destination entries accept a second <code>Y</code> or <code>Z</code> selector.</td></tr>
+                <tr><td><code>Packer</code></td><td>Numeric packer index</td><td>Blackhole exposes address configuration for packer <code>0</code> only; invalid runtime indices trap.</td></tr>
+                <tr><td><code>Unpacker</code></td><td>Numeric unpacker index</td><td>Selects unpacker <code>0</code> or <code>1</code>; invalid runtime indices trap. <code>forEach()</code> supplies compile-time indices.</td></tr>
+                <tr><td><code>TileRowSetMapping</code></td><td><code>[mapping][set]</code></td><td>Four mappings, each containing sixteen 2-bit row-set fields.</td></tr>
+                <tr><td><code>TileFaceSetMapping</code></td><td><code>[mapping][set]</code></td><td>Four mappings, each containing sixteen 2-bit face-set fields.</td></tr>
+                <tr><td><code>DisableImpliedFmt</code></td><td><code>SrcA</code> or <code>SrcB</code></td><td>Selects the source-specific thread-CFG field.</td></tr>
+                <tr><td><code>PerfCntCmd</code></td><td><code>[0]</code> through <code>[3]</code></td><td>Selects a performance-counter entry exposing <code>Start</code> and <code>Stop</code>.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>// Compile-time descriptor paths
+constexpr const Field&amp; input_format =
+    Thcon[Reg0].TileDescriptor.InDataFormat;
+
+constexpr const Field&amp; source_increment =
+    AddrMod[SrcA].Incr;
+
+constexpr const Field&amp; pack_z_increment =
+    AddrMod[Dest][Z].Incr;
+
+constexpr const Field&amp; unpacker_stride =
+    Unpacker[1].AddrCtrl[UnpackerReg::Reg0].Xstride;</code></pre>
+        </article>
+
+        <article class="symbol" id="thread-target">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>ThreadTarget</h3></div>
+          <pre class="signature"><code>enum class ThreadTarget : std::uint8_t { Current, T0, T1, T2 };</code></pre>
+          <p>Selects the private thread-CFG bank used by a RISC MMIO read. <code>Current</code> resolves to the issuing TRISC and is invalid for BRISC; BRISC must name an explicit target.</p>
+          <pre><code>// Compile-time-selected MMIO path
+const std::uint32_t state = read&lt;
+    Access::MMIO,
+    CfgStateId::StateID,
+    Sec::S0,
+    ThreadTarget::T2&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="gpr-size">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>GprTransferSize</h3></div>
+          <pre class="signature"><code>enum class GprTransferSize : std::uint8_t { Bits32, Bits128 };</code></pre>
+          <p>Selects a one-word or four-word WRCFG or REG2FLOP transfer. RDCFG supports <code>Bits32</code> only.</p>
+          <pre><code>// Compile-time GPR and transfer-width path
+const auto source = gpr&lt;16, GprTransferSize::Bits128&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="wrcfg-completion">
+          <div class="symbol-head"><span class="kind">enum class</span><h3>WrcfgCompletion</h3></div>
+          <pre class="signature"><code>enum class WrcfgCompletion : std::uint8_t { Wait, Deferred };</code></pre>
+          <p><code>Wait</code> emits a spacing NOP immediately after WRCFG and is the safe default: the next instruction must not consume the new configuration. <code>Deferred</code> omits it because the surrounding sequence already provides the required spacing; it does not mean that completion is checked dynamically.</p>
+          <pre><code>// Compile-time GPR and policy path
+const auto deferred_source = gpr&lt;
+    16,
+    GprTransferSize::Bits32,
+    WrcfgCompletion::Deferred&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="field">
+          <div class="symbol-head"><span class="kind">struct</span><h3>Field</h3></div>
+          <pre class="signature"><code>struct Field
+{
+    RegisterFile file;
+    std::uint32_t wbits;
+    std::uint32_t base;
+    std::uint32_t word;
+    std::uint32_t shamt0;
+    std::uint32_t width;
+    std::uint32_t count;
+    std::uint32_t sec_bits;
+
+    constexpr std::uint32_t abs0() const;
+    constexpr std::uint32_t addr32(Sec) const;
+    constexpr std::uint32_t shamt(Sec) const;
+    constexpr std::uint32_t mask(Sec) const;
+    constexpr std::uint32_t words() const;
+};</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Member</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>file</code></td><td>Thread or state register file.</td></tr>
+                <tr><td><code>wbits</code></td><td>Physical word width: 16 for thread CFG, 32 for state CFG.</td></tr>
+                <tr><td><code>base</code>, <code>word</code></td><td>Section-zero register base and field word offset.</td></tr>
+                <tr><td><code>shamt0</code>, <code>width</code></td><td>Section-zero bit position and field width.</td></tr>
+                <tr><td><code>count</code>, <code>sec_bits</code></td><td>Number of sections and bit stride between them.</td></tr>
+                <tr><td><code>addr32(S)</code></td><td>Physical word address containing a selected section.</td></tr>
+                <tr><td><code>shamt(S)</code>, <code>mask(S)</code></td><td>Selected field shift and shifted mask.</td></tr>
+                <tr><td><code>words()</code></td><td>Number of physical words occupied by the field.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Generated code constructs descriptors. Normal callers consume them through the typed APIs and should not instantiate <code>Field</code> manually. The raw arithmetic members accept a runtime <code>Sec</code> and do not validate it; exposed compile-time interfaces validate <code>S &lt; F.count</code> before using those members.</p>
+          <pre><code>// Compile-time field descriptor
+constexpr const Field&amp; fp32_enabled =
+    AluAccCtrl::Fp32_enabled;
+
+static_assert(fp32_enabled.width == 1);
+static_assert(fp32_enabled.file == RegisterFile::State);</code></pre>
+        </article>
+
+        <article class="symbol" id="declaration-names">
+          <div class="symbol-head"><span class="kind">template and parameter names</span><h3>How to read the declarations</h3></div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Meaning</th><th>Type or values</th></tr></thead><tbody>
+            <tr><td><code>A</code> or <code>B</code></td><td>Compile-time hardware access path.</td><td><a href="#access"><code>Access</code></a>.</td></tr>
+            <tr><td><code>F</code> or <code>Anchor</code></td><td>Generated descriptor identifying a field or the first physical word.</td><td><code>const Field&amp;</code>.</td></tr>
+            <tr><td><code>S</code></td><td>Explicit repeated descriptor section.</td><td><a href="#sec"><code>Sec</code></a>; pass <code>S0</code> for the first section.</td></tr>
+            <tr><td><code>Target</code></td><td>Private thread-CFG bank for an MMIO read.</td><td><a href="#thread-target"><code>ThreadTarget</code></a>.</td></tr>
+            <tr><td><code>Value</code> / <code>value</code></td><td>Compile-time / runtime unshifted field value.</td><td><code>std::uint32_t</code>.</td></tr>
+            <tr><td><code>WordOffset</code></td><td>Compile-time word displacement from an anchor.</td><td><code>std::uint32_t</code>.</td></tr>
+            <tr><td><code>Count</code> / <code>ArrayCount</code></td><td>Requested word count / source array extent.</td><td><code>std::uint32_t</code> / <code>std::size_t</code>.</td></tr>
+            <tr><td><code>Index</code> or <code>GprIndex</code></td><td>Compile-time or runtime Tensix GPR index.</td><td><code>0..63</code>.</td></tr>
+            <tr><td><code>Size</code></td><td>GPR transfer width.</td><td><a href="#gpr-size"><code>GprTransferSize</code></a>.</td></tr>
+            <tr><td><code>Completion</code></td><td>Whether WRCFG emits its completion NOP immediately.</td><td><a href="#wrcfg-completion"><code>WrcfgCompletion</code></a>.</td></tr>
+          </tbody></table></div>
+        </article>
+      </section>
+      <section id="api-index">
+        <h2>Interface index</h2>
+        <p>Each declaration below uses the shared names defined in <a href="#declaration-names">How to read the declarations</a>, then explains its behavior and shows a usage example before the next interface. Constraint-only SFINAE parameters and attributes are omitted where they do not change the public call shape.</p>
+        <div class="api-index">
+          <a href="#access">Access<span>Access-path policy</span></a>
+          <a href="#register-file">RegisterFile<span>Architectural register class</span></a>
+          <a href="#sec">Sec<span>Repeated-section selector</span></a>
+          <a href="#descriptor-selectors">Descriptor selectors<span>Packer, unpacker, and blob register choices</span></a>
+          <a href="#descriptor-trees">Descriptor trees<span>THCON, address-modifier, packer, and unpacker roots</span></a>
+          <a href="#thread-target">ThreadTarget<span>Thread bank for MMIO reads</span></a>
+          <a href="#gpr-size">GprTransferSize<span>GPR-backed transfer width</span></a>
+          <a href="#wrcfg-completion">WrcfgCompletion<span>WRCFG completion policy</span></a>
+          <a href="#field">Field<span>Generated field descriptor</span></a>
+          <a href="#declaration-names">Declaration names<span>Meaning of A, F, S, Target, Value, and transfer parameters</span></a>
+          <a href="#compile-time-iteration">forEach()<span>Expand a supported descriptor collection</span></a>
+          <a href="#gpr">gpr()<span>Construct a GPR operand</span></a>
+          <a href="#set">set()<span>Construct a field assignment</span></a>
+          <a href="#from-gpr">from_gpr()<span>Construct an ordered GPR transfer</span></a>
+          <a href="#field-assignment">FieldAssignment<span>Runtime field value with compile-time layout</span></a>
+          <a href="#constant-field-assignment">ConstantFieldAssignment<span>Compile-time field value and layout</span></a>
+          <a href="#gpr-write">GprWrite<span>Complete-word GPR transfer descriptor</span></a>
+          <a href="#word-addr">word_addr<span>Resolved constexpr address</span></a>
+          <a href="#read-field">read() → value<span>Extract a field through RISC MMIO</span></a>
+          <a href="#read-word">read_word()<span>Read a complete physical word</span></a>
+          <a href="#read-gpr">read() → GPR<span>Issue RDCFG</span></a>
+          <a href="#write-field">write(value)<span>Write one runtime field</span></a>
+          <a href="#write-constant">write&lt;A, F, S, Value&gt;()<span>Emit a constant field write</span></a>
+          <a href="#write-assignments">write(set...)<span>Group and write field assignments</span></a>
+          <a href="#write-operations">write(set/from_gpr...)<span>Emit one optimized ordered sequence</span></a>
+          <a href="#write-whole-word">write(cfg, value)<span>Replace one prepacked word</span></a>
+          <a href="#write-array">write(array)<span>Write consecutive words</span></a>
+          <a href="#write-gpr">write(gpr)<span>Issue WRCFG or REG2FLOP</span></a>
+          <a href="#write-thread-constant-section">write(section, value)<span>Internal constant-propagated SETC16 compatibility path</span></a>
+          <a href="#batch">WriteBatch<span>Reuse a resolved access context</span></a>
+        </div>
+      </section>
+      <section id="choose">
+        <h2>Choose an operation</h2>
+        <p>Start with what the caller has and what the hardware operation must preserve.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>You need to…</th><th>Use</th><th>Important behavior</th></tr></thead>
+            <tbody>
+              <tr><td>Write one runtime field</td><td><a href="#write-field"><code>write&lt;A, F, S&gt;(value)</code></a></td><td>Partial state fields preserve unrelated bits.</td></tr>
+              <tr><td>Embed a constant field write</td><td><a href="#write-constant"><code>write&lt;TensixCfgUnit, F, S, Value&gt;()</code></a></td><td>Address and data are encoded at compile time.</td></tr>
+              <tr><td>Update fields across one or more words</td><td><a href="#write-assignments"><code>write&lt;A&gt;(set(...), set(...))</code></a></td><td>Assignments are grouped by register file and address; masks within each group cannot overlap.</td></tr>
+              <tr><td>Combine field updates and GPR transfers</td><td><a href="#write-operations"><code>write&lt;TensixCfgUnit&gt;(set(...), from_gpr(...), ...)</code></a></td><td>Maximal consecutive assignment runs are grouped; every GPR transfer preserves source order and separates the runs.</td></tr>
+              <tr><td>Replace one prepacked word through a resolved CFG pointer</td><td><a href="#write-whole-word"><code>write&lt;MMIO, Anchor, S&gt;(cfg, value)</code></a></td><td>Exactly one complete-word MMIO store; the anchor's field mask and shift are intentionally ignored.</td></tr>
+              <tr><td>Store prepacked consecutive words</td><td><a href="#write-array"><code>write&lt;MMIO, F, S, Count&gt;(array)</code></a></td><td><code>Access::MMIO</code> only; complete 32-bit state words.</td></tr>
+              <tr><td>Write from one or four GPRs</td><td><a href="#write-gpr"><code>write&lt;TensixCfgUnit, F, S&gt;(gpr(...))</code></a></td><td>WRCFG replaces complete state words.</td></tr>
+              <tr><td>Write THCON from one or four GPRs through the Scalar Unit</td><td><a href="#write-gpr"><code>write&lt;TensixScalarUnit, F, S&gt;(gpr(...))</code></a></td><td>REG2FLOP replaces complete THCON words without a completion NOP.</td></tr>
+              <tr><td>Read and extract a field in C++</td><td><a href="#read-field"><code>read&lt;MMIO, F, S, Target&gt;()</code></a></td><td>Supports state CFG and selected thread-CFG banks.</td></tr>
+              <tr><td>Read a complete word in C++</td><td><a href="#read-word"><code>read_word&lt;MMIO, F, S, Offset, Target&gt;()</code></a></td><td>No field mask or shift is applied.</td></tr>
+              <tr><td>Read a state word into a GPR</td><td><a href="#read-gpr"><code>read&lt;TensixCfgUnit, F, S&gt;(gpr&lt;Index&gt;())</code></a></td><td>RDCFG returns the complete containing word.</td></tr>
+              <tr><td>Reuse one resolved MMIO bank</td><td><a href="#batch"><code>write&lt;MMIO&gt;([&amp;](auto&amp; out) { ... })</code></a></td><td>The CFG pointer is resolved once.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="builders">
+        <h2>Operand and assignment builders</h2>
+
+        <article class="symbol" id="gpr">
+          <div class="symbol-head"><span class="kind">function</span><h3>gpr</h3></div>
+          <pre class="signature"><code>// Compile-time index path
+template &lt;std::uint32_t Index&gt;
+constexpr auto hal::gpr();
+
+// Runtime index path
+constexpr auto hal::gpr(const std::uint32_t index);
+
+// Compile-time index path with CFG policy
+template &lt;
+    std::uint32_t Index,
+    GprTransferSize Size = GprTransferSize::Bits32,
+    WrcfgCompletion Completion = WrcfgCompletion::Wait&gt;
+constexpr auto gpr();
+
+// Runtime index path with CFG policy
+template &lt;
+    GprTransferSize Size = GprTransferSize::Bits32,
+    WrcfgCompletion Completion = WrcfgCompletion::Wait&gt;
+constexpr auto gpr(const std::uint32_t index);</code></pre>
+          <p><code>hal::gpr</code> constructs the common index-only GPR identity shared by CFG and address-counter operations. CFG read/write accepts it with the default 32-bit transfer and wait policy. <code>cfg::gpr</code> decorates the same identity when a 128-bit transfer or deferred WRCFG completion is required. Each family offers compile-time and runtime-index forms.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li>RDCFG accepts only the compile-time-index form and only <code>Bits32</code>.</li><li>WRCFG accepts compile-time or runtime indices and either transfer size.</li></ul></div>
+          <pre><code>// Compile-time path: 128-bit GPR block with default completion wait
+const auto block = gpr&lt;16, GprTransferSize::Bits128&gt;();
+
+// Runtime path: 32-bit GPR selected at runtime
+const auto selected = gpr(runtime_gpr_index);</code></pre>
+        </article>
+
+        <article class="symbol" id="set">
+          <div class="symbol-head"><span class="kind">function</span><h3>set</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time field, runtime value
+template &lt;const Field&amp; F, Sec S&gt;
+constexpr FieldAssignment&lt;F, S&gt; set(const std::uint32_t value);
+
+// Compile-time path
+template &lt;const Field&amp; F, Sec S, std::uint32_t Value&gt;
+constexpr ConstantFieldAssignment&lt;F, S, Value&gt; set();</code></pre>
+          <p>Associates an unshifted runtime or compile-time value with a generated field. It describes an assignment; it does not access hardware by itself.</p>
+          <div class="callout warning"><span class="callout-title">Runtime values are not range-checked</span><p><code>set&lt;F, S&gt;(value)</code> stores the supplied value and masks it to <code>F</code> when the assignment is encoded. The compile-time <code>set&lt;F, S, Value&gt;()</code> form instead rejects a value that does not fit.</p></div>
+          <pre><code>// Mixed path: compile-time field, runtime value
+const auto runtime_assignment =
+    set&lt;AluAccCtrl::Fp32_enabled, Sec::S0&gt;(fp32_enabled);
+
+// Compile-time path: field and value
+constexpr auto constant_assignment =
+    set&lt;AluAccCtrl::Fp32_enabled, Sec::S0, 1&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="from-gpr">
+          <div class="symbol-head"><span class="kind">function</span><h3>from_gpr</h3></div>
+          <pre class="signature"><code>// Compile-time destination with CFG transfer policy
+template &lt;const Field&amp; F, Sec S, typename Source&gt;
+constexpr GprWrite&lt;F, S, Source&gt; from_gpr(const Source source);</code></pre>
+          <p>Associates a state-CFG destination with a GPR operand for use inside the heterogeneous <a href="#write-operations"><code>write()</code></a> interface. It describes a complete one-word or four-word WRCFG transfer and does not access hardware by itself.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>F</code> must belong to state CFG and begin at bit zero.</li><li><code>S</code> must identify an existing section.</li><li>The source must come from <code>hal::gpr()</code> or <code>cfg::gpr()</code>.</li></ul></div>
+          <pre><code>// Compile-time path: destination, GPR, width, and completion policy
+const auto base_address = from_gpr&lt;
+    Thcon[Reg3].Base_address,
+    Sec::S1&gt;(
+        gpr&lt;p_gpr_unpack::L1_BUFFER_ADDR,
+            GprTransferSize::Bits32,
+            WrcfgCompletion::Deferred&gt;());</code></pre>
+        </article>
+
+        <article class="symbol" id="field-assignment">
+          <div class="symbol-head"><span class="kind">struct template</span><h3>FieldAssignment</h3></div>
+          <pre class="signature"><code>template &lt;const Field&amp; F, Sec S&gt;
+struct FieldAssignment
+{
+    static constexpr RegisterFile file;
+    static constexpr std::uint32_t addr;
+    static constexpr std::uint32_t shift;
+    static constexpr std::uint32_t mask;
+
+    std::uint32_t value;
+};</code></pre>
+          <p>Returned by <code>set&lt;F, S&gt;(value)</code>. The location and layout remain compile-time constants while <code>value</code> may be supplied at runtime. Callers normally let <code>set()</code> infer the type.</p>
+          <pre><code>// Mixed path: compile-time field, runtime stored value
+const FieldAssignment&lt;AluAccCtrl::Fp32_enabled, Sec::S0&gt; assignment =
+    set&lt;AluAccCtrl::Fp32_enabled, Sec::S0&gt;(fp32_enabled);</code></pre>
+        </article>
+
+        <article class="symbol" id="constant-field-assignment">
+          <div class="symbol-head"><span class="kind">struct template</span><h3>ConstantFieldAssignment</h3></div>
+          <pre class="signature"><code>template &lt;
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t Value&gt;
+struct ConstantFieldAssignment
+{
+    static constexpr RegisterFile file;
+    static constexpr std::uint32_t addr;
+    static constexpr std::uint32_t shift;
+    static constexpr std::uint32_t mask;
+    static constexpr std::uint32_t value;
+};</code></pre>
+          <p>Returned by <code>set&lt;F, S, Value&gt;()</code>. The value and layout are all compile-time constants, allowing an immediate instruction path and a compile-time range check.</p>
+          <pre><code>// Compile-time path: field and value are part of the type
+constexpr ConstantFieldAssignment&lt;
+    AluAccCtrl::Fp32_enabled,
+    Sec::S0,
+    1&gt; assignment = set&lt;AluAccCtrl::Fp32_enabled, Sec::S0, 1&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="gpr-write">
+          <div class="symbol-head"><span class="kind">struct template</span><h3>GprWrite</h3></div>
+          <pre class="signature"><code>template &lt;const Field&amp; F, Sec S, typename Source&gt;
+struct GprWrite
+{
+    static constexpr RegisterFile file;
+    static constexpr std::uint32_t addr;
+    static constexpr std::uint32_t words;
+
+    Source source;
+};</code></pre>
+          <p>Returned by <code>from_gpr()</code>. The destination and span remain compile-time constants while the source can carry a compile-time or runtime GPR index. Callers normally let <code>from_gpr()</code> infer this type.</p>
+        </article>
+
+        <article class="symbol" id="word-addr">
+          <div class="symbol-head"><span class="kind">variable template</span><h3>word_addr</h3></div>
+          <pre class="signature"><code>// Compile-time path
+template &lt;const Field&amp; F, Sec S&gt;
+inline constexpr std::uint32_t word_addr = [] {
+    static_assert(
+        static_cast&lt;std::uint32_t&gt;(S) &lt; F.count,
+        "section index out of range for this register");
+    return F.addr32(S);
+}();</code></pre>
+          <p>Exposes a resolved physical word address for another low-level interface. Instantiation fails at compile time when <code>S &gt;= F.count</code>. Normal CFG reads and writes do not need it.</p>
+          <pre><code>// Compile-time path
+constexpr std::uint32_t tile_descriptor_address = word_addr&lt;
+    Thcon[Reg0].TileDescriptor.Raw,
+    Sec::S1&gt;;</code></pre>
+        </article>
+      </section>
+      <section id="reads">
+        <h2>Read API</h2>
+
+        <article class="symbol" id="read-field">
+          <div class="symbol-head"><span class="kind">function</span><h3>read — extracted value</h3></div>
+          <pre class="signature"><code>// Compile-time-selected path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    ThreadTarget Target = ThreadTarget::Current&gt;
+std::uint32_t read();</code></pre>
+          <p>Reads the containing word through RISC MMIO, applies <code>F.mask(S)</code>, and shifts the result down to bit zero.</p>
+          <dl class="parameters"><dt>A</dt><dd>Must be <code>Access::MMIO</code>.</dd><dt>F</dt><dd>A state- or thread-CFG field no wider than one physical word.</dd><dt>S</dt><dd>Explicit repeated section; compilation fails when <code>S &gt;= F.count</code>.</dd><dt>Target</dt><dd>Used only for thread CFG. State reads must leave it at <code>Current</code>.</dd></dl>
+          <p>Thread reads issue a CREG-selector request, wait one cycle, read the response, then extract the field.</p>
+          <pre><code>// Compile-time-selected MMIO path
+const std::uint32_t seed = read&lt;
+    Access::MMIO,
+    PrngSeed::Seed_Val,
+    Sec::S0&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="read-word">
+          <div class="symbol-head"><span class="kind">function</span><h3>read_word</h3></div>
+          <pre class="signature"><code>// Compile-time-selected path
+template &lt;
+    Access A,
+    const Field&amp; Anchor,
+    Sec S,
+    std::uint32_t WordOffset = 0,
+    ThreadTarget Target = ThreadTarget::Current&gt;
+std::uint32_t read_word();
+
+// Mixed path: compile-time address, runtime MMIO pointer
+template &lt;
+    Access A,
+    const Field&amp; Anchor,
+    Sec S,
+    std::uint32_t WordOffset = 0&gt;
+std::uint32_t read_word(
+    const volatile std::uint32_t* tt_reg_ptr cfg);</code></pre>
+          <p>Reads a complete physical word at <code>Anchor.addr32(S) + WordOffset</code>. It does not apply the anchor's field mask or shift.</p>
+          <ul>
+            <li>State anchors return the complete 32-bit word.</li>
+            <li>Thread anchors return the complete 16-bit word in the low bits.</li>
+            <li>The pointer overload is state-only and reuses a pointer from <code>ckernel::get_cfg_pointer()</code>.</li>
+          </ul>
+          <pre><code>// Compile-time-selected MMIO path
+const std::uint32_t descriptor_word = read_word&lt;
+    Access::MMIO,
+    Thcon[Reg0].TileDescriptor.Raw,
+    Sec::S0&gt;();
+
+// Mixed path: compile-time address, runtime MMIO pointer
+const std::uint32_t next_word = read_word&lt;
+    Access::MMIO,
+    Thcon[Reg0].TileDescriptor.Raw,
+    Sec::S0,
+    1&gt;(cfg);</code></pre>
+        </article>
+
+        <article class="symbol" id="read-gpr">
+          <div class="symbol-head"><span class="kind">function · RDCFG</span><h3>read — GPR destination</h3></div>
+          <pre class="signature"><code>// Compile-time common GPR path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t GprIndex&gt;
+void read(const hal::Gpr&lt;GprIndex&gt; destination);
+
+// Compile-time CFG-policy GPR path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t GprIndex,
+    GprTransferSize Size,
+    WrcfgCompletion Completion&gt;
+void read(
+    detail::GprOperand&lt;GprIndex, Size, Completion&gt; destination);</code></pre>
+          <p>Issues RDCFG and places the complete containing 32-bit state word in <code>GprIndex</code>. The field is an address anchor; no extraction is performed. The <code>detail::GprOperand</code> type is an implementation return type of <code>cfg::gpr()</code>; callers construct it through that public factory rather than naming it.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::TensixCfgUnit</code>.</li><li>The GPR index must be compile-time.</li><li>The transfer size must be <code>Bits32</code>.</li><li><code>F</code> must belong to state CFG.</li></ul></div>
+          <div class="callout danger"><span class="callout-title">Do not issue RDCFG concurrently from multiple Tensix threads</span><p>The pinned hardware reference documents a same-cycle arbitration erratum: simultaneous RDCFG requests can silently drop all but one request. Synchronize the threads or schedule their reads in different cycles.</p></div>
+          <pre><code>// Compile-time path
+read&lt;
+    Access::TensixCfgUnit,
+    Thcon[Reg0].TileDescriptor.Raw,
+    Sec::S0&gt;(hal::gpr&lt;5&gt;());</code></pre>
+        </article>
+      </section>
+      <section id="writes">
+        <h2>Write API</h2>
+
+        <article class="symbol" id="write-field">
+          <div class="symbol-head"><span class="kind">function</span><h3>write — runtime field</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time field, runtime value
+template &lt;Access A, const Field&amp; F, Sec S&gt;
+void write(const std::uint32_t value);</code></pre>
+          <p>Writes an unshifted runtime value to one field.</p>
+          <div class="callout warning"><span class="callout-title">The caller owns runtime range validation</span><p>This overload does not assert that <code>value</code> fits <code>F.width</code>. State-CFG partial writes mask excess bits. A thread-CFG SETC16 replaces the complete 16-bit word, so pass a value that fits the selected field and remember that unrelated bits are written as zero.</p></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Combination</th><th>Behavior</th></tr></thead>
+              <tbody>
+                <tr><td><code>MMIO</code> + state field</td><td>Complete-word store for a 32-bit field; otherwise MMIO read-modify-write.</td></tr>
+                <tr><td><code>TensixCfgUnit</code> + state field</td><td>RMWCIB for every byte lane touched by the field mask.</td></tr>
+                <tr><td><code>TensixCfgUnit</code> + thread field</td><td>SETC16 replaces the complete 16-bit thread word.</td></tr>
+                <tr><td><code>TensixScalarUnit</code> + value</td><td class="no">Rejected; REG2FLOP requires a GPR operand.</td></tr>
+                <tr><td><code>MMIO</code> + thread field</td><td class="no">Rejected at compile time.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>// Mixed path: compile-time access and field, runtime value
+write&lt;
+    Access::TensixCfgUnit,
+    AluAccCtrl::Fp32_enabled,
+    Sec::S0&gt;(fp32_enabled);</code></pre>
+        </article>
+
+        <article class="symbol" id="write-constant">
+          <div class="symbol-head"><span class="kind">function</span><h3>write — compile-time field</h3></div>
+          <pre class="signature"><code>// Compile-time path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t Value&gt;
+void write();</code></pre>
+          <p>Embeds the address and value directly in Tensix instruction words. Only byte lanes covered by a state-field mask emit RMWCIB instructions.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::TensixCfgUnit</code>.</li><li><code>Value</code> must fit in the field width.</li></ul></div>
+          <pre><code>// Compile-time path
+write&lt;
+    Access::TensixCfgUnit,
+    AluAccCtrl::Fp32_enabled,
+    Sec::S0,
+    1&gt;();</code></pre>
+        </article>
+
+        <article class="symbol" id="write-assignments">
+          <div class="symbol-head"><span class="kind">function</span><h3>write — grouped assignments</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time fields, runtime or compile-time values
+template &lt;Access A, typename... Assignments&gt;
+void write(const Assignments&amp;... assignments);
+
+template &lt;Access A, typename... Assignments&gt;
+void write(
+    volatile std::uint32_t* tt_reg_ptr cfg,
+    const Assignments&amp;... assignments);
+
+// Call with values returned by set():
+write&lt;Access&gt;(set&lt;FieldA, Sec::S0&gt;(a), set&lt;FieldB, Sec::S0&gt;(b));</code></pre>
+          <p>Partitions assignments by register file and resolved physical address, composes every group, and emits groups in the order their addresses first appear. Assignments for one address may be interleaved with assignments for another address. Use separate <code>write()</code> calls when the hardware programming sequence must follow the source argument order.</p>
+          <p>With <code>Access::TensixCfgUnit</code>, dispatch is selected independently for every group. A group made entirely from <code>set&lt;F, S, Value&gt;()</code> uses immediate TTI instructions. If any value in a group comes from <code>set&lt;F, S&gt;(value)</code>, that complete group uses runtime TT instructions. A mixed Thread CFG group produces one runtime <code>SETC16</code> because that instruction replaces the complete 16-bit word.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li>Every assignment argument must come from <code>set()</code>.</li><li>Fields within one register-file/address group must have disjoint masks.</li><li><code>Access::MMIO</code> accepts only state-CFG assignments and resolves its pointer once per call.</li><li>The pointer overload requires <code>Access::MMIO</code> and a pointer from <code>ckernel::get_cfg_pointer()</code>.</li></ul></div>
+          <pre><code>// Mixed path: compile-time fields, runtime values, multiple addresses
+write&lt;Access::TensixCfgUnit&gt;(
+    set&lt;AluAccCtrl::Fp32_enabled, Sec::S0, 1&gt;(),
+    set&lt;StaccRelu::ApplyRelu, Sec::S0&gt;(relu_mode),
+    set&lt;AluAccCtrl::SFPU_Fp32_enabled, Sec::S0, 1&gt;());</code></pre>
+          <p>The two <code>AluAccCtrl</code> assignments form one constant TTI group even though they are not adjacent. <code>StaccRelu</code> forms a separate runtime TT group.</p>
+        </article>
+
+        <article class="symbol" id="write-operations">
+          <div class="symbol-head"><span class="kind">function · grouped RMWCIB / SETC16 / WRCFG</span><h3>write — heterogeneous ordered operations</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time destinations and policies, runtime or compile-time values
+template &lt;Access A, typename First, typename... Rest&gt;
+void write(
+    const First&amp; first,
+    const Rest&amp;... rest);
+
+// Call with at least one value returned by from_gpr():
+write&lt;Access::TensixCfgUnit&gt;(
+    set&lt;FieldA, Sec::S0&gt;(a),
+    from_gpr&lt;WordAnchor, Sec::S0&gt;(gpr&lt;Index&gt;()),
+    set&lt;FieldB, Sec::S0&gt;(b));</code></pre>
+          <p>Accepts one ordered sequence of operations returned by <code>set()</code> and <code>from_gpr()</code>. At compile time, the HAL partitions the sequence into maximal consecutive runs of field assignments. It applies the normal address and byte-lane grouping independently to each run. A GPR transfer ends the current run, emits WRCFG with its declared completion policy, and starts a new run.</p>
+          <p>The operation kinds, destinations, run boundaries, grouping, instruction family, and constant/runtime choice are all resolved from template types. The generated code contains no dispatcher, loop, or additional branch.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::TensixCfgUnit</code>.</li><li>Every argument must come from <code>set()</code> or <code>from_gpr()</code>, with at least one GPR transfer.</li><li>No two field masks may overlap at one physical address.</li><li>No field assignment may target a word replaced by a GPR transfer anywhere in the call.</li><li>GPR destination spans may not overlap; a 128-bit transfer occupies four words.</li></ul></div>
+          <pre><code>// Mixed path: runtime values, compile-time grouping and GPR policies
+write&lt;Access::TensixCfgUnit&gt;(
+    set&lt;AluFormatSpecReg1::SrcB, Sec::S0&gt;(dst_format),
+    set&lt;Thcon[Reg0].TileDescriptor.InDataFormat, Sec::S1&gt;(src_format),
+    from_gpr&lt;Thcon[Reg3].Base_address, Sec::S1&gt;(
+        gpr&lt;p_gpr_unpack::L1_BUFFER_ADDR,
+            GprTransferSize::Bits32,
+            WrcfgCompletion::Deferred&gt;()),
+    from_gpr&lt;Thcon[Reg3].Base_cntx1_address, Sec::S1&gt;(
+        gpr&lt;p_gpr_unpack::L1_BUFFER_ADDR,
+            GprTransferSize::Bits32,
+            WrcfgCompletion::Wait&gt;()),
+    set&lt;Thcon[Reg2].Haloize_mode, Sec::S0&gt;(haloize));</code></pre>
+        </article>
+
+        <article class="symbol" id="write-whole-word">
+          <div class="symbol-head"><span class="kind">function</span><h3>write — one prepacked word</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time address, runtime pointer and value
+template &lt;
+    Access A,
+    const Field&amp; Anchor,
+    Sec S,
+    std::uint32_t WordOffset = 0&gt;
+void write(
+    volatile std::uint32_t* tt_reg_ptr cfg,
+    const std::uint32_t value);</code></pre>
+          <p>Replaces one complete 32-bit state-CFG word at <code>Anchor.addr32(S) + WordOffset</code>. <code>Anchor</code> identifies the address only; its field mask and shift are not applied. Use this form for a value that is already packed, such as a generated register union.</p>
+          <p>The caller supplies an already-resolved pointer from <code>ckernel::get_cfg_pointer()</code>. The inline implementation emits the same single MMIO store as a handwritten indexed assignment, without an intermediate descriptor, read, mask, or runtime dispatch.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::MMIO</code>.</li><li><code>Anchor</code> must belong to state CFG.</li><li><code>S</code> must be smaller than <code>Anchor.count</code>.</li><li><code>value</code> must contain every bit that the destination word requires; unrelated bits are not preserved.</li></ul></div>
+          <pre><code>// Mixed path: compile-time address, runtime pointer and prepacked value
+volatile std::uint32_t* tt_reg_ptr cfg = ckernel::get_cfg_pointer();
+write&lt;
+    Access::MMIO,
+    PackCounters::pack_per_xy_plane,
+    Sec::S0&gt;(cfg, pack_counters.val);</code></pre>
+        </article>
+
+        <article class="symbol" id="write-array">
+          <div class="symbol-head"><span class="kind">function</span><h3>write — consecutive array</h3></div>
+          <pre class="signature"><code>// Mixed path: compile-time range, runtime array values
+template &lt;
+    Access A,
+    const Field&amp; Anchor,
+    Sec S,
+    std::uint32_t Count,
+    std::size_t ArrayCount&gt;
+void write(const std::uint32_t (&amp;values)[ArrayCount]);</code></pre>
+          <p>Stores <code>Count</code> complete words at consecutive state-CFG addresses starting at <code>Anchor.addr32(S)</code>.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::MMIO</code>.</li><li><code>Anchor</code> must belong to state CFG.</li><li><code>Count</code> cannot exceed the source array length.</li></ul></div>
+          <pre><code>// Mixed path: compile-time range, runtime array contents
+write&lt;
+    Access::MMIO,
+    Thcon[Reg0].TileDescriptor.Raw,
+    Sec::S0,
+    4&gt;(descriptor_words);</code></pre>
+        </article>
+
+        <article class="symbol" id="write-gpr">
+          <div class="symbol-head"><span class="kind">function · WRCFG / REG2FLOP</span><h3>write — GPR source</h3></div>
+          <pre class="signature"><code>// Compile-time or runtime CFG-policy GPR path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t GprIndex,
+    GprTransferSize Size,
+    WrcfgCompletion Completion&gt;
+void write(
+    const detail::GprOperand&lt;GprIndex, Size, Completion&gt; source);
+
+// Compile-time or runtime common GPR path
+template &lt;
+    Access A,
+    const Field&amp; F,
+    Sec S,
+    std::uint32_t GprIndex&gt;
+void write(const hal::Gpr&lt;GprIndex&gt; source);</code></pre>
+          <p>A 32-bit transfer replaces one complete state word. A 128-bit transfer replaces four consecutive words starting at a four-word-aligned address.</p>
+          <p>The common <code>hal::gpr</code> overload is equivalent to <code>cfg::gpr&lt;Index, Bits32, Wait&gt;()</code>. Use <code>cfg::gpr</code> only when CFG-specific transfer or completion policy is needed.</p>
+          <p><code>Access::TensixCfgUnit</code> emits <code>TTI_WRCFG</code> for a compile-time GPR index or <code>TT_WRCFG</code> for a runtime index. <code>WrcfgCompletion::Wait</code> emits the default spacing NOP because the instruction immediately after WRCFG must not consume the new configuration. <code>Deferred</code> omits that NOP only when the surrounding sequence supplies the required spacing.</p>
+          <p><code>Access::TensixScalarUnit</code> emits <code>TTI_REG2FLOP</code> or <code>TT_REG2FLOP</code>. It accepts only THCON addresses, maps them relative to <code>THCON_CFGREG_BASE_ADDR32</code>, blocks the issuing thread for the Scalar Unit operation, and emits no completion NOP. Prefer it when a GPR-to-THCON transfer should avoid Configuration Unit contention.</p>
+          <div class="constraints"><strong>Constraints</strong><ul><li><code>A</code> must be <code>Access::TensixCfgUnit</code> or <code>Access::TensixScalarUnit</code>.</li><li><code>F</code> must be a state field beginning at bit zero.</li><li>Use a GPR index in <code>[0, 63]</code>.</li><li>For 128-bit REG2FLOP, the HAL requires both source GPR and destination CFG address to be four-word aligned.</li><li>For 128-bit WRCFG, the HAL requires the destination to be four-word aligned; current code does not reject a misaligned source, and hardware clears its low two index bits. Pass an explicitly aligned source.</li></ul></div>
+          <pre><code>// Compile-time path: four-word WRCFG with completion wait
+write&lt;
+    Access::TensixCfgUnit,
+    DestTargetRegCfgPack::Offset,
+    Sec::S0&gt;(
+        gpr&lt;16, GprTransferSize::Bits128&gt;());
+
+// Runtime path: one GPR-to-THCON REG2FLOP
+write&lt;
+    Access::TensixScalarUnit,
+    Thcon[Reg1].L1_Dest_addr,
+    Sec::S0&gt;(
+        hal::gpr(runtime_gpr_index));</code></pre>
+        </article>
+
+        <article class="symbol" id="write-thread-constant-section">
+          <div class="symbol-head"><span class="kind">internal compatibility function</span><h3>write — constant-propagated thread section</h3></div>
+          <pre class="signature"><code>// Compatibility path: compile-time field, constant-propagated section
+template &lt;Access A, const Field&amp; Anchor&gt;
+void write(
+    const std::uint32_t section,
+    const std::uint32_t value);</code></pre>
+          <p>Supports address-modifier setup headers that are defined before the complete CFG HAL is available. SETC16 encodes the destination address as an instruction immediate, so the caller must inline and constant-propagate <code>section</code>. An arbitrary runtime section produces an immediate-constraint compilation error. Normal callers should use the public <code>write&lt;A, F, S&gt;(value)</code> form, which validates <code>S</code> directly.</p>
+          <div class="constraints"><strong>Internal constraints</strong><ul><li><code>A</code> must be <code>Access::TensixCfgUnit</code>.</li><li><code>Anchor</code> must be a thread field beginning at bit zero.</li><li><code>section</code> must constant-propagate and be smaller than <code>Anchor.count</code>. Assert-enabled builds check the range, but this compatibility signature does not provide the typed interface's section diagnostic.</li></ul></div>
+          <pre><code>// Internal address-modifier compatibility path
+write&lt;
+    Access::TensixCfgUnit,
+    AddrMod[SrcA].Incr&gt;(ADDR_MOD_3, packed_addrmod);</code></pre>
+        </article>
+      </section>
+      <section id="batch">
+        <h2>WriteBatch</h2>
+        <div class="symbol-head"><span class="kind">class template</span><h3>WriteBatch&lt;Access&gt;</h3></div>
+        <pre class="signature"><code>template &lt;Access A&gt;
+class WriteBatch
+{
+public:
+    WriteBatch();
+    explicit WriteBatch(volatile std::uint32_t* tt_reg_ptr cfg);
+
+    template &lt;typename First, typename... Rest&gt;
+    void operator()(
+        const First&amp; first,
+        const Rest&amp;... rest) const;
+
+    template &lt;const Field&amp; F, Sec S&gt;
+    void field(const std::uint32_t value) const;
+
+    template &lt;
+        const Field&amp; Anchor,
+        Sec S,
+        std::uint32_t WordOffset = 0&gt;
+    void replace(const std::uint32_t value) const;
+
+    template &lt;
+        const Field&amp; F,
+        Sec S,
+        std::uint32_t Count,
+        std::size_t ArrayCount&gt;
+    void words(const std::uint32_t (&amp;values)[ArrayCount]) const;
+};
+
+// Mixed path: compile-time access, callable and values may be runtime
+template &lt;Access A, typename Configure&gt;
+void write(Configure&amp;&amp; configure);
+
+// Mixed path: compile-time access, runtime MMIO pointer and callable
+template &lt;Access A, typename Configure&gt;
+void write(
+    volatile std::uint32_t* tt_reg_ptr cfg,
+    Configure&amp;&amp; configure);</code></pre>
+        <p>
+          The lambda overload creates a <code>WriteBatch&lt;Access&gt;</code> and passes
+          it to the callable. A RISC batch resolves the current state-bank pointer
+          once. The callable may use ordinary C++ control flow for genuinely
+          runtime-dependent programming.
+        </p>
+        <p>The pointer overload accepts a bank returned by <code>ckernel::get_cfg_pointer()</code>, allowing several batches in one LLK path to reuse the same resolution.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Operation</th></tr></thead>
+            <tbody>
+              <tr><td><code>out(set(...), set(...))</code></td><td>Group field assignments by register file and address, then write each group.</td></tr>
+              <tr><td><code>out(set(...), from_gpr(...), ...)</code></td><td>Group consecutive field-assignment runs and emit ordered Configuration Unit GPR transfers between them. <code>Access::TensixCfgUnit</code> batches only: mixing <code>from_gpr</code> into an MMIO or RISC batch is rejected with <code>static_assert</code>.</td></tr>
+              <tr><td><code>out.field&lt;F, S&gt;(value)</code></td><td>Write one field using the batch access path.</td></tr>
+              <tr><td><code>out.replace&lt;Anchor, S, Offset&gt;(value)</code></td><td>Replace one complete prepacked state word through the resolved MMIO pointer; the anchor's mask and shift are ignored.</td></tr>
+              <tr><td><code>out.words&lt;F, S, Count&gt;(array)</code></td><td>Write consecutive complete words; RISC batches only.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout note"><p>The batch interface introduces no loop or branch by itself. Runtime control flow exists only when the caller writes it in the lambda. Each <code>replace()</code> remains one direct MMIO store: batching distinct physical words unifies the source entry point and pointer resolution, but cannot fuse the hardware stores.</p></div>
+        <pre><code>// Mixed path: compile-time access and fields, runtime control and values
+write&lt;Access::MMIO&gt;(cfg, [&amp;](auto&amp; out) {
+    out.template replace&lt;Thcon[Reg1].Row_start_section_size, Sec::S0&gt;(config.val[0]);
+    out.template replace&lt;Thcon[Reg1].Disable_zero_compress, Sec::S0&gt;(config.val[2]);
+});</code></pre>
+      </section>
+      <section id="recipes">
+        <h2>Common recipes</h2>
+        <p>The examples in this section use <code>namespace cfg = hal::cfg;</code>.</p>
+
+        <h3>Configure a repeated section</h3>
+        <pre><code>// Mixed path: compile-time field and section, runtime value
+cfg::write&lt;
+    cfg::Access::TensixCfgUnit,
+    cfg::Thcon[cfg::Reg0].TileDescriptor.InDataFormat,
+    cfg::Sec::S1&gt;(format);</code></pre>
+
+        <h3>Write fields at distinct addresses</h3>
+        <p>Pass assignments directly. The implementation groups them by register file and resolved physical address.</p>
+        <pre><code>// Mixed path: compile-time fields and sections, runtime values
+cfg::write&lt;cfg::Access::TensixCfgUnit&gt;(
+    cfg::set&lt;
+        cfg::Thcon[cfg::Reg2].Unpack_if_sel_cntx0,
+        cfg::Sec::S0&gt;(0),
+    cfg::set&lt;
+        cfg::Thcon[cfg::Reg5].Dest_cntx0_address,
+        cfg::Sec::S0&gt;(4 * 16));</code></pre>
+        <p>Distinct groups are emitted in first-address-seen order. Split the operation into separate <code>write()</code> calls when a register requires strict programming order.</p>
+
+        <h3>Move a 128-bit block from GPRs</h3>
+        <pre><code>// Compile-time GPR index path
+cfg::write&lt;
+    cfg::Access::TensixCfgUnit,
+    cfg::DestTargetRegCfgPack::Offset,
+    cfg::Sec::S0&gt;(
+        cfg::gpr&lt;
+            p_gpr_pack::DEST_OFFSET_LO,
+            cfg::GprTransferSize::Bits128&gt;());</code></pre>
+        <p>The destination must be four-word aligned. The default completion policy emits a NOP.</p>
+
+        <h3>Move a GPR to THCON through the Scalar Unit</h3>
+        <pre><code>// Compile-time GPR index path
+cfg::write&lt;
+    cfg::Access::TensixScalarUnit,
+    cfg::Thcon[cfg::Reg1].L1_Dest_addr,
+    cfg::Sec::S0&gt;(
+        hal::gpr&lt;p_gpr_pack::OUTPUT_ADDR&gt;());</code></pre>
+        <p>REG2FLOP accepts only THCON destinations. It uses the active CFG state selected by the issuing thread and does not need a completion NOP.</p>
+
+        <h3>Read another thread's private CFG</h3>
+        <pre><code>// Compile-time-selected MMIO path
+const std::uint32_t thread2_state = cfg::read&lt;
+    cfg::Access::MMIO,
+    cfg::CfgStateId::StateID,
+    cfg::Sec::S0,
+    cfg::ThreadTarget::T2&gt;();</code></pre>
+        <p>A BRISC caller must select <code>T0</code>, <code>T1</code>, or <code>T2</code> explicitly. A TRISC caller may use the default <code>Current</code>.</p>
+
+        <h3>Program a runtime-dependent block through one MMIO bank</h3>
+        <pre><code>// Mixed path: compile-time fields, runtime control and values
+cfg::write&lt;cfg::Access::MMIO&gt;([&amp;](auto&amp; out) {
+    out.template words&lt;
+        cfg::Thcon[cfg::Reg0].TileDescriptor.Raw,
+        cfg::Sec::S0,
+        TILE_DESC_SIZE&gt;(tile_descriptor.val);
+
+    if (seed_enabled)
+    {
+        out.template field&lt;cfg::PrngSeed::Seed_Val, cfg::Sec::S0&gt;(seed);
+    }
+});</code></pre>
+      </section>
+      <section id="compile-time-iteration">
+        <h2>Compile-time iteration</h2>
+        <pre class="signature"><code>template &lt;typename Function&gt;
+constexpr void forEach(Function&amp;&amp; function) const;</code></pre>
+        <p>
+          Bounded, homogeneous descriptor collections expose
+          <code>forEach(function)</code>. The call is expanded at compile time;
+          the callback receives an <code>std::integral_constant&lt;std::uint32_t,
+          I&gt;</code> for each valid index. The index can therefore select a
+          generated field used as a non-type template argument and can also
+          index runtime source data.
+        </p>
+        <p><code>Function</code> is invoked once for each valid index. Its argument is an <code>std::integral_constant&lt;std::uint32_t, I&gt;</code>, so it can be used as a generated descriptor index and as an index into runtime data.</p>
+        <pre><code>// Mixed path: compile-time iteration, runtime values
+cfg::write&lt;cfg::Access::MMIO&gt;([&amp;](auto&amp; out) {
+    cfg::Unpacker.forEach([&amp;](auto U) {
+        cfg::Unpacker[U].Cntx.forEach([&amp;](auto C) {
+            out.template field&lt;cfg::Unpacker[U].Cntx[C].Base, cfg::Sec::S0&gt;(base[U][C]);
+        });
+    });
+});</code></pre>
+        <p>
+          Here <code>U</code> and <code>C</code> are compile-time constants,
+          while <code>base[U][C]</code> remains runtime data. Iteration creates
+          the calls; the independent <code>WriteBatch</code> reuses the resolved
+          MMIO state-bank pointer while emitting them.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Collection</th><th>Expanded indices</th></tr></thead>
+            <tbody>
+              <tr><td><code>Unpacker</code></td><td>Unpackers 0 and 1</td></tr>
+              <tr><td><code>Unpacker[U].AddrCtrl</code></td><td>Address-control registers 0 and 1</td></tr>
+              <tr><td><code>Unpacker[U].AddrBase</code></td><td>Address-base registers 0 and 1</td></tr>
+              <tr><td><code>Unpacker[U].Cntx</code></td><td>Eight contexts for unpacker 0; two for unpacker 1</td></tr>
+              <tr><td><code>Packer[0].AddrCtrl</code></td><td>Address-control register sets 0 and 1</td></tr>
+              <tr><td><code>Packer[0].AddrBase</code></td><td>Address-base register sets 0 and 1</td></tr>
+              <tr><td><code>TileRowSetMapping</code> and each selected row</td><td>Four mappings, then sixteen sets</td></tr>
+              <tr><td><code>TileFaceSetMapping</code> and each selected row</td><td>Four mappings, then sixteen sets</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout note"><p><code>forEach</code> is intentionally present only on descriptor types representing a fixed, valid collection. Individual fields, <code>WriteBatch</code>, and conditionally available views such as unpacker-0 blob contexts do not expose it.</p></div>
+      </section>
+      <section id="hardware">
+        <h2>Hardware mapping</h2>
+        <p>The table describes observable access behavior. It does not promise internal helper names or compiler register allocation.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>HAL form</th><th>Conceptual hardware operation</th></tr></thead>
+            <tbody>
+              <tr><td><code>write&lt;TensixCfgUnit, ThreadField, S&gt;(value)</code></td><td><code>SETC16(address, value &lt;&lt; shift)</code>; complete 16-bit replacement.</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit, StateField, S&gt;(value)</code></td><td>RMWCIB for each byte lane touched by the mask.</td></tr>
+              <tr><td><code>write&lt;MMIO, StateField, S&gt;(value)</code></td><td>MMIO store for a complete word; otherwise MMIO read-modify-write.</td></tr>
+              <tr><td><code>write&lt;MMIO, Anchor, S&gt;(cfg, value)</code></td><td>One MMIO store replacing the complete state word; no read, mask, or shift.</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit, Anchor, S&gt;(gpr(...))</code></td><td>WRCFG for one or four complete words, followed by a NOP under the default policy.</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit&gt;(set(...), from_gpr(...), ...)</code></td><td>Grouped RMWCIB/SETC16 runs separated by ordered WRCFG operations; each transfer retains its completion policy.</td></tr>
+              <tr><td><code>write&lt;TensixScalarUnit, ThconAnchor, S&gt;(gpr(...))</code></td><td>REG2FLOP for one or four complete THCON words with no completion NOP.</td></tr>
+              <tr><td><code>read&lt;TensixCfgUnit, Anchor, S&gt;(gpr&lt;I&gt;())</code></td><td>RDCFG of one complete state word.</td></tr>
+              <tr><td><code>read&lt;MMIO, StateField, S&gt;()</code></td><td><code>(MMIO_READ(address) &amp; mask) &gt;&gt; shift</code>.</td></tr>
+              <tr><td><code>read&lt;MMIO, ThreadField, S, Target&gt;()</code></td><td>CREG selector write, one-cycle response wait, CREG data read, mask, and shift.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Same word versus distinct words</h3>
+        <pre><code>// Same physical word: masks and data can be combined.
+write&lt;TensixCfgUnit&gt;(set&lt;FieldA, Sec::S0&gt;(a), set&lt;FieldB, Sec::S0&gt;(b));
+
+// Distinct physical words: grouped automatically, one update per address.
+write&lt;TensixCfgUnit&gt;(
+    set&lt;FieldAtAddressA, Sec::S0&gt;(a),
+    set&lt;FieldAtAddressB, Sec::S0&gt;(b));</code></pre>
+        <p>Fields sharing one byte lane can share one RMWCIB operation. Fields at different addresses cannot be fused by the HAL. Nonadjacent assignments for the same address are composed into one group, and groups follow first-address-seen order.</p>
+        <p>For a heterogeneous call, this grouping restarts after every <code>from_gpr()</code>. Therefore fields on opposite sides of a WRCFG are deliberately not fused, even if they target the same address.</p>
+
+        <h3>Compile-time versus runtime operands</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Form</th><th>Known at compile time</th><th>Runtime overhead from selection</th></tr></thead>
+            <tbody>
+              <tr><td><code>write&lt;TensixCfgUnit, F, S, Value&gt;()</code></td><td>Address, mask, and value</td><td>None</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit, F, S&gt;(value)</code></td><td>Address and mask</td><td>No HAL branch; only data is runtime</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit&gt;(set(...), ...)</code></td><td>Every group address and mask; values from constant <code>set()</code> forms</td><td>Dispatch is compile time per group: all-constant uses TTI, otherwise TT</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit&gt;(set(...), from_gpr(...), ...)</code></td><td>Operation kinds, run boundaries, destinations, masks, and GPR policies</td><td>None; the compiler emits the selected TT/TTI operations directly</td></tr>
+              <tr><td><code>write&lt;MMIO, Anchor, S&gt;(cfg, value)</code></td><td>Address and section</td><td>None; exactly one indexed store of the runtime value</td></tr>
+              <tr><td><code>write&lt;TensixCfgUnit, F, S&gt;(gpr(index))</code></td><td>Destination and transfer policy</td><td>No HAL branch; GPR index is runtime</td></tr>
+              <tr><td><code>write&lt;TensixScalarUnit, F, S&gt;(gpr(index))</code></td><td>THCON destination and transfer size</td><td>No HAL branch; GPR index is runtime</td></tr>
+              <tr><td><code>read&lt;MMIO, ThreadField, S, Target&gt;()</code></td><td>Field and thread bank</td><td>Fixed hardware-response wait only</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="ordering">
+        <h2>Ordering and safety</h2>
+
+        <h3>Grouped assignment order</h3>
+        <p>A direct <code>write(set(...), ...)</code> call is declarative. The HAL composes every assignment with the same register file and address, then emits distinct groups in first-address-seen order. For example, arguments targeting <code>A, B, A</code> produce one composed update for <code>A</code> followed by one update for <code>B</code>. Use separate calls for an observable <code>A → B → A</code> transition.</p>
+        <p>In a heterogeneous <code>write(set(...), from_gpr(...), ...)</code> call, every <code>from_gpr()</code> operation is an ordering barrier. Assignments are grouped only within the consecutive run before or after that barrier, so updates on opposite sides cannot be moved across WRCFG. The GPR transfer's <code>Wait</code> or <code>Deferred</code> policy is preserved exactly.</p>
+        <div class="callout warning">
+          <span class="callout-title">Keep assignment runs visible while writing heterogeneous calls.</span>
+          <pre><code>assignment run [A, B, C]
+GPR transfer X
+assignment run [D, E]
+GPR transfer Y
+assignment run [F]</code></pre>
+          <p>This is how the HAL partitions <code>write(set(A), set(B), set(C), from_gpr(X), set(D), set(E), from_gpr(Y), set(F))</code>. Only assignments inside one displayed run can be grouped by physical word. Do not assume that matching fields on opposite sides of X or Y will fuse, and do not move a field across a GPR transfer merely to improve grouping unless the hardware programming order is known to remain safe.</p>
+        </div>
+        <p>The expressions that produce C++ function arguments are evaluated before entering <code>write()</code>; do not rely on their evaluation order or place ordering-sensitive side effects inside <code>set()</code> value expressions.</p>
+
+        <h3>Active state selection</h3>
+        <p>
+          Each Tensix thread selects its state-CFG bank with
+          <code>CfgStateId::StateID</code>. Tensix CFG instructions use that
+          selection. RISC MMIO uses the bank represented by
+          <code>ckernel::get_cfg_pointer()</code>. Keep hardware and software
+          selections synchronized; use <code>ckernel::flip_cfg_state_id()</code>
+          when changing banks.
+        </p>
+
+        <h3>Safe reconfiguration sequence</h3>
+        <ol class="steps">
+          <li><strong>Identify the consumer.</strong> Determine which EXU observes the field.</li>
+          <li><strong>Quiesce it.</strong> Issue the required <code>STALLWAIT</code> if the EXU may still be active.</li>
+          <li><strong>Choose the path.</strong> Use MMIO for setup, <code>TensixCfgUnit</code> for the normal ordered CFG path, and <code>TensixScalarUnit</code> only for an explicit THCON REG2FLOP transfer.</li>
+          <li><strong>Honor completion.</strong> Leave WRCFG at <code>Wait</code>, or prove that a deferred sequence supplies enough spacing.</li>
+        </ol>
+
+        <div class="callout danger">
+          <span class="callout-title">MMIO is a sideband path.</span>
+          <p>RISC MMIO is not ordered with Tensix instructions already in the pipeline. Do not reconfigure a live EXU through MMIO unless the surrounding sequence proves the update is safe.</p>
+        </div>
+        <div class="callout danger">
+          <span class="callout-title">Serialize RDCFG across threads.</span>
+          <p>The hardware reference documents that same-cycle RDCFG requests from multiple Tensix threads can lose all but one request. Use synchronization or instruction scheduling to ensure that only one thread issues RDCFG in a cycle.</p>
+        </div>
+        <p>The HAL cannot infer an EXU barrier from a field name. The caller owns the correct <code>STALLWAIT</code>.</p>
+      </section>
+      <section id="diagnostics">
+        <h2>Compile-time checks</h2>
+        <p>Every exposed interface whose section is a <code>Sec</code> template argument rejects <code>S &gt;= F.count</code> during compilation. This includes field assignments, direct reads and writes, GPR transfers, array and batch writes, resolved-pointer whole-word writes, and <code>word_addr</code>. Common diagnostics include:</p>
+        <pre><code>write&lt;
+    Access::TensixCfgUnit,
+    AluAccCtrl::Fp32_enabled,
+    Sec::S1&gt;(enable);
+
+// error: static assertion failed:
+// section index out of range for this register</code></pre>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Check</th><th>Reason</th></tr></thead>
+            <tbody>
+              <tr><td>Section is within <code>Field::count</code></td><td>Prevents addressing a nonexistent repeated section.</td></tr>
+              <tr><td>Field fits in one physical word</td><td>Single-value APIs cannot extract or assign a cross-word field.</td></tr>
+              <tr><td>Value fits in field width</td><td>Compile-time values cannot silently truncate.</td></tr>
+              <tr><td>Assignment masks are disjoint within each grouped address</td><td>Two values cannot define the same physical bit.</td></tr>
+              <tr><td>Heterogeneous write destinations and GPR spans are disjoint</td><td>A field update cannot be reordered around or overwritten by a complete-word transfer in the same call.</td></tr>
+              <tr><td>RISC writes target state CFG</td><td>Thread CFG is written through SETC16.</td></tr>
+              <tr><td>WRCFG anchor begins at bit zero</td><td>WRCFG replaces complete words; it is not a field update.</td></tr>
+              <tr><td>128-bit WRCFG destination is four-word aligned</td><td>The HAL rejects an unaligned CFG destination.</td></tr>
+              <tr><td>128-bit WRCFG source should be four-GPR aligned</td><td>Current HAL code does not reject it; hardware clears the low two source-index bits.</td></tr>
+              <tr><td>REG2FLOP targets THCON and uses GPR <code>0..63</code></td><td>The Scalar Unit form cannot address other state-CFG families.</td></tr>
+              <tr><td>128-bit REG2FLOP source and destination are four-word aligned</td><td>The hardware masks both low index bits; the typed API rejects an anchor that would silently move.</td></tr>
+              <tr><td>RDCFG index is compile-time and size is 32-bit</td><td>Matches the supported RDCFG instruction form.</td></tr>
+              <tr><td>BRISC names an explicit thread target</td><td>There is no implicit “current TRISC” bank for BRISC.</td></tr>
+              <tr><td>Thread <code>read_word()</code> offset remains in the selected bank</td><td>Prevents a relative word read from crossing into another flattened CFG region.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="descriptors">
+        <h2>Generated descriptor catalog</h2>
+        <p>
+          The public include exposes generated field families from these headers.
+          Use the <a href="cfg_field_catalog.html"><strong>searchable field catalog</strong></a>
+          to find every field by public C++ entry point, declaration name, or exact
+          source description. The catalog also shows register file, address
+          components, bit position, width, section count, source declaration,
+          and one expandable section-usage description on each repeated
+          descriptor path; all fields below that path inherit the mapping.
+          Each descriptor and field also accepts naming suggestions, which the
+          documentation server persists separately from the generated catalog.
+          Submission requires the write-enabled <code>serve_hal_docs.py</code>
+          server; suggestions are never placed in browser-local storage.
+        </p>
+        <div class="callout note">
+          <span class="callout-title">Looking for a field?</span>
+          <p><a href="cfg_field_catalog.html">Open the complete Blackhole <code>hal::cfg</code> field reference →</a></p>
+        </div>
+        <details open>
+          <summary>Thread CFG — <code>cfg/thread.h</code></summary>
+          <div><p>Per-thread execution controls, CFG-state selection, address modifiers, synchronization, and instruction-side controls. <a href="cfg_field_catalog.html?family=thread">Browse 65 catalog entries →</a></p></div>
+        </details>
+        <details>
+          <summary>ALU — <code>cfg/alu.h</code></summary>
+          <div><p>Math formats, accumulation modes, rounding, fidelity, and ALU operation controls. <a href="cfg_field_catalog.html?family=alu">Browse 43 catalog entries →</a></p></div>
+        </details>
+        <details>
+          <summary>PACK — <code>cfg/pack.h</code></summary>
+          <div><p>Packer address generation, formats, masks, counters, tile layout, and destination configuration. <a href="cfg_field_catalog.html?family=pack">Browse 31 catalog entries →</a></p></div>
+        </details>
+        <details>
+          <summary>UNPACK — <code>cfg/unpack.h</code></summary>
+          <div><p>UNPACK0 and UNPACK1 address generation, source formats, dimensions, strides, and control. <a href="cfg_field_catalog.html?family=unpack">Browse 11 catalog entries →</a></p></div>
+        </details>
+        <details>
+          <summary>THCON — <code>cfg/thcon.h</code></summary>
+          <div><p>Thread-controller contexts for pack and unpack, including base addresses, context selection, and tile descriptors. <a href="cfg_field_catalog.html?family=thcon">Browse 152 catalog entries →</a></p></div>
+        </details>
+        <details>
+          <summary>Global — <code>cfg/global.h</code></summary>
+          <div><p>Global Tensix controls including PRNG seeding, source/destination access, RISC controls, and shared configuration. <a href="cfg_field_catalog.html?family=global">Browse 38 catalog entries →</a></p></div>
+        </details>
+      </section>
+      <section id="sources">
+        <h2>Source files</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+            <tbody>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg.h"><code>hal/cfg.h</code></a></td><td>Single public include.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/access.h"><code>cfg/access.h</code></a></td><td>Public read, write, GPR-transfer, and batching entry points.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/access_types.h"><code>cfg/access_types.h</code></a></td><td>Access, thread-target, GPR-transfer, and WRCFG policies.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/composition.h"><code>cfg/composition.h</code></a></td><td>Public field-assignment and GPR-write descriptors with <code>set</code> and <code>from_gpr</code> builders.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/field.h"><code>cfg/field.h</code></a></td><td>Generated <code>Field</code>, <code>RegisterFile</code>, and <code>Sec</code> definitions.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/composition_traits.h"><code>cfg/detail/composition_traits.h</code></a></td><td>Operation classification, span and mask overlap checks, and field encoding.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/for_each.h"><code>cfg/detail/for_each.h</code></a></td><td>Internal C++17 compile-time index expansion for iterable descriptor collections.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/utils/gpr.h"><code>hal/utils/gpr.h</code></a></td><td>Common compile-time and runtime-indexed GPR identity shared by HAL interfaces.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/gpr_operand.h"><code>cfg/detail/gpr_operand.h</code></a></td><td>CFG transfer-size and completion-policy decoration for common GPR operands.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/mmio_read.h"><code>cfg/detail/mmio_read.h</code></a></td><td>Thread-target resolution and CREG-based thread-CFG reads.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/register_layout.h"><code>cfg/detail/register_layout.h</code></a></td><td>Generated-descriptor-derived state and thread CFG spans.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/thread_access.h"><code>cfg/detail/thread_access.h</code></a></td><td>Dependency-light constant-propagated thread-word compatibility overload.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/detail/write_backend.h"><code>cfg/detail/write_backend.h</code></a></td><td>MMIO/Configuration Unit emission, heterogeneous operation sequencing, array writes, and constant instruction emission.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/cfg/registers.h"><code>cfg/registers.h</code></a></td><td>Aggregate include for generated descriptor families.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/llk_lib/hal/regs.yaml"><code>hal/regs.yaml</code></a></td><td>Register grouping and field descriptions used by the generator.</td></tr>
+              <tr><td><a href="gen_cfg_field_catalog.py"><code>docs/hal/gen_cfg_field_catalog.py</code></a></td><td>Builds the searchable field catalog from every generated descriptor declaration and its exact trailing field comment.</td></tr>
+              <tr><td><a href="cfg_naming_suggestions.json"><code>docs/hal/cfg_naming_suggestions.json</code></a></td><td>Durable, reviewable store for descriptor and field naming suggestions submitted through the catalog.</td></tr>
+              <tr><td><a href="document_edits.json"><code>docs/hal/document_edits.json</code></a></td><td>Durable, reviewable Markdown overrides saved by the page editor.</td></tr>
+              <tr><td><a href="serve_hal_docs.py"><code>docs/hal/serve_hal_docs.py</code></a></td><td>Serves the documentation and provides validated APIs that atomically save naming suggestions and page edits.</td></tr>
+              <tr><td><a href="hal_docs.js"><code>docs/hal/hal_docs.js</code></a></td><td>Adds Markdown editing and preview, durable draft recovery, syntax highlighting, copy controls, collapsible sidebar behavior, and documentation actions.</td></tr>
+              <tr><td><a href="hal_docs.css"><code>docs/hal/hal_docs.css</code></a></td><td>Shared presentation for the page editor, highlighted code blocks, and documentation controls.</td></tr>
+              <tr><td><a href="../../tt_llk_blackhole/instructions/assembly.yaml"><code>tt_llk_blackhole/instructions/assembly.yaml</code></a></td><td>Blackhole instruction fields and local descriptions for SETC16, RMWCIB, WRCFG, RDCFG, and REG2FLOP.</td></tr>
+              <tr><td><a href="https://github.com/tenstorrent/tt-isa-documentation/tree/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor">Pinned Tensix coprocessor ISA reference</a></td><td>Functional and scheduling behavior for the Configuration Unit and Scalar Unit instruction families, including the RDCFG arbitration erratum.</td></tr>
+              <tr><td><code>hw/inc/internal/tt-1xx/blackhole/cfg_defines.h</code></td><td>Silicon addresses, shifts, masks, and register layout.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>
+        Blackhole CFG HAL reference · Generated descriptors define locations; <code>hal/cfg.h</code> defines the public interface.
+      </footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#model">Functional model</a></li>
+        <li><a href="#types">Types and enums</a></li>
+        <li class="sub"><a href="#descriptor-selectors">Descriptor selectors</a></li>
+        <li class="sub"><a href="#descriptor-trees">Descriptor trees</a></li>
+        <li class="sub"><a href="#field">Field</a></li>
+        <li><a href="#api-index">Interface index</a></li>
+        <li><a href="#choose">Choose an operation</a></li>
+        <li><a href="#builders">Builders</a></li>
+        <li><a href="#reads">Read API</a></li>
+        <li><a href="#writes">Write API</a></li>
+        <li><a href="#batch">WriteBatch</a></li>
+        <li><a href="#recipes">Recipes</a></li>
+        <li><a href="#compile-time-iteration">Compile-time iteration</a></li>
+        <li><a href="#hardware">Hardware mapping</a></li>
+        <li><a href="#ordering">Ordering and safety</a></li>
+        <li><a href="#diagnostics">Compile-time checks</a></li>
+        <li><a href="#descriptors">Descriptor catalog</a></li>
+        <li><a href="#sources">Source files</a></li>
+      </ul>
+    </aside>
+  </div>
+</body>
+</html>
