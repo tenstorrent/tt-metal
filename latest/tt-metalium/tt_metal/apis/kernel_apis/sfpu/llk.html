@@ -636,8 +636,8 @@ of the SrcS objects):</p>
 tha Architecture. You may override that default with the <code class="docutils literal notranslate"><span class="pre">mode</span></code>
 function, which optionally specifies a data representation, and an
 optional addr_mode operand. This may be specified on both loads and
-stores.  The following data representations and defaults are
-available:</p>
+stores.  The following data representations and defaults, if
+applicable, are available:</p>
 <blockquote>
 <div>
 <ul class="simple">
@@ -648,8 +648,10 @@ available:</p>
 <li><p>I32 - (vInt, except Wormhole), 32-bit 2’s complement integer</p></li>
 <li><p>U32 - (vUInt), 32-bit unsigned integer</p></li>
 <li><p>U16 - (vUInt16), 16-bit unsigned integer</p></li>
+<li><p>U8 - 8-bit unsigned integer, (Quasar only)</p></li>
 <li><p>SM32 - (vSMag), 32-bit sign-magnitude integer</p></li>
 <li><p>SM16 - (vSMag16), 16-bit sign-magnitude integer</p></li>
+<li><p>SM8 - 8-bit sign-magnitude integer</p></li>
 <li><p>M32 - (vMag), 32-bit magnitude only integer</p></li>
 <li><p>LO16 - low 16 bits</p></li>
 <li><p>HI16 - high 16 bits</p></li>
@@ -660,9 +662,11 @@ available:</p>
 when transfering a <code class="docutils literal notranslate"><span class="pre">vInt</span></code> to or from <code class="docutils literal notranslate"><span class="pre">SM32</span></code>, or tranferring
 <code class="docutils literal notranslate"><span class="pre">vSMag</span></code> to or from <code class="docutils literal notranslate"><span class="pre">I32</span></code> a conversion operation is inserted – on
 Wormhole this is part of the load or store, on other architectures it
-is a separate operation. It is unspecified how 2’s complement’s most
-negative value converts to sign-magnitude.  Not all data
-representations are permitted for all types.</p>
+is a separate operation. On all ISAs, loading or storing SM16 or SM8
+to or from vInt or related types will insert conversion operations.
+It is unspecified how 2’s complement’s most negative value converts to
+sign-magnitude.  Not all data representations are permitted for all
+types.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">LO16</span></code> layout transfers 16 bits to and from the low part of a
 <code class="docutils literal notranslate"><span class="pre">vUInt</span></code> or related type. The <code class="docutils literal notranslate"><span class="pre">HI16</span></code> layout reads 16 bits into the
 high 16 bits of a <code class="docutils literal notranslate"><span class="pre">vUInt</span></code> type, but writes 32 bits, with the two
@@ -990,20 +994,6 @@ deprecated <code class="docutils literal notranslate"><span class="pre">setsgn</
 </div>
 <p>Returns the count of leading (left-most) zeros of ‘’v’’. <code class="docutils literal notranslate"><span class="pre">LZMode</span></code>
 may be <code class="docutils literal notranslate"><span class="pre">All</span></code> or <code class="docutils literal notranslate"><span class="pre">IgnoreSign</span></code> (treats bit 31 as zero).</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">impl_</span><span class="o">::</span><span class="n">FloatInt</span><span class="w"> </span><span class="nf">round</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
-</pre></div>
-</div>
-<p>Round v to nearest integer, ties round to nearest even. This returns a
-tuple that may be implicitly converted to either <code class="docutils literal notranslate"><span class="pre">vFloat</span></code> or
-<code class="docutils literal notranslate"><span class="pre">vInt</span></code>, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both:</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="p">[</span><span class="n">f1</span><span class="p">,</span><span class="w"> </span><span class="n">i1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">round</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">f2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">round</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-<span class="n">vInt</span><span class="w"> </span><span class="n">i2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">round</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-</pre></div>
-</div>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">ldexp</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">scale</span><span class="p">,</span><span class="w"> </span><span class="n">LdexpMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LdexpMode</span><span class="o">::</span><span class="n">Correct</span><span class="p">);</span>
 <span class="n">vFloat</span><span class="w"> </span><span class="nf">ldexp</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">scale</span><span class="p">,</span><span class="w"> </span><span class="n">LdexpMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LdexpMode</span><span class="o">::</span><span class="n">Correct</span><span class="p">);</span>
@@ -1342,7 +1332,7 @@ loads/stores, however, this is brittle and so is not recommended.  Storing a
 vector to memory will result in an error similar to the following:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">ckernels</span><span class="o">/</span><span class="n">sfpi</span><span class="o">/</span><span class="n">include</span><span class="o">/</span><span class="n">sfpi</span><span class="p">.</span><span class="n">h</span><span class="o">:</span><span class="mi">792</span><span class="o">:</span><span class="mi">7</span><span class="o">:</span><span class="w"> </span><span class="n">error</span><span class="o">:</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">write</span><span class="w"> </span><span class="n">sfpu</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">memory</span>
-<span class="w">  </span><span class="mi">792</span><span class="w"> </span><span class="o">|</span><span class="w">     </span><span class="n">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">initialized</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">__builtin_rvtt_sfpassign_lv</span><span class="p">(</span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">in</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">in</span><span class="p">;</span>
+<span class="w">  </span><span class="mi">792</span><span class="w"> </span><span class="o">|</span><span class="w">     </span><span class="n">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">__builtin_rvtt_sfpassign_lv</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
 <span class="w">      </span><span class="o">|</span><span class="w">       </span><span class="o">^</span>
 <span class="o">/</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">ckernels</span><span class="o">/</span><span class="n">sfpi</span><span class="o">/</span><span class="n">include</span><span class="o">/</span><span class="n">sfpi</span><span class="p">.</span><span class="n">h</span><span class="o">:</span><span class="mi">792</span><span class="o">:</span><span class="mi">7</span><span class="o">:</span><span class="w"> </span><span class="n">error</span><span class="o">:</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">write</span><span class="w"> </span><span class="n">sfpu</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">memory</span>
 </pre></div>
