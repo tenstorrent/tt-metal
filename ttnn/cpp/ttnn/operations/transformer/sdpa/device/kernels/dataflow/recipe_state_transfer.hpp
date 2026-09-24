@@ -12,7 +12,6 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     ack.reserve_back(1);
     const auto* words = reinterpret_cast<const volatile uint32_t*>(request.get_read_ptr());
     const bool restore = words[Transfer::Operation] == Transfer::Restore;
-    static_assert(Transfer::page_aligned<fp32, q_tiles, d_tiles>, "Recipe state planes must be whole transfer pages");
     const uint32_t base = words[Transfer::Slot] * (Transfer::pages<fp32, q_tiles, d_tiles> + 1);
     uint32_t page = base + 1;
     for (uint32_t plane = 0; plane < (fp32 ? 3u : 4u); ++plane) {
@@ -21,13 +20,26 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
         // These full-capacity state banks are at their allocation origin at
         // every segment boundary. Dataflow never advances their CB pointers.
         const uint32_t address = CircularBuffer(cb).get_read_ptr();
-        for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
-            if (restore) {
-                noc.async_read(
-                    backing, CoreLocalMem<uint32_t>(address + offset), Transfer::page_bytes, {.page_id = page}, {});
-            } else {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(address + offset), backing, Transfer::page_bytes, {}, {.page_id = page});
+        if constexpr (Transfer::page_aligned<fp32, q_tiles, d_tiles>) {
+            for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
+                if (restore) {
+                    noc.async_read(
+                        backing, CoreLocalMem<uint32_t>(address + offset), Transfer::page_bytes, {.page_id = page}, {});
+                } else {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(address + offset), backing, Transfer::page_bytes, {}, {.page_id = page});
+                }
+            }
+        } else {
+            // Odd Q tile counts: a half-page maxima plane. Move only the plane's bytes of its last page, so a
+            // restore never writes past the plane into the neighbouring CB.
+            for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
+                const uint32_t size = bytes - offset < Transfer::page_bytes ? bytes - offset : Transfer::page_bytes;
+                if (restore) {
+                    noc.async_read(backing, CoreLocalMem<uint32_t>(address + offset), size, {.page_id = page}, {});
+                } else {
+                    noc.async_write(CoreLocalMem<uint32_t>(address + offset), backing, size, {}, {.page_id = page});
+                }
             }
         }
     }
