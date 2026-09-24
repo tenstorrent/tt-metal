@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -462,6 +464,42 @@ TEST_F(RoPETest, ForwardTest) {
 
     // Check that outputs match the expected values
     EXPECT_TRUE(xt::allclose(actual_xq_out_xt, expected_xq_out, 2e-1, 2e-1));
+}
+
+TEST_F(RoPETest, ParamsPreserveTheta) {
+    constexpr float theta = 12345.0F;
+    auto rope_params = ops::build_rope_params(
+        /*sequence_length=*/8,
+        /*head_dim=*/32,
+        theta);
+    EXPECT_FLOAT_EQ(rope_params.theta, theta);
+}
+
+TEST_F(RoPETest, RejectOutOfRangeTokenWindow) {
+    auto rope_params = ops::build_rope_params(
+        /*sequence_length=*/8,
+        /*head_dim=*/32);
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> input_data = xt::ones<float>({1, 1, 5, 32});
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, device));
+
+    EXPECT_NO_THROW(static_cast<void>(ops::rope(input, rope_params, /*token_position=*/3U)));
+    EXPECT_THROW(static_cast<void>(ops::rope(input, rope_params, /*token_position=*/4U)), std::out_of_range);
+    EXPECT_THROW(
+        static_cast<void>(ops::rope(input, rope_params, /*token_position=*/std::numeric_limits<uint32_t>::max())),
+        std::out_of_range);
+
+    xt::xarray<float> oversized_input_data = xt::ones<float>({1, 1, 9, 32});
+    auto oversized_input = autograd::create_tensor(core::from_xtensor(oversized_input_data, device));
+    EXPECT_THROW(static_cast<void>(ops::rope(oversized_input, rope_params, /*token_position=*/0U)), std::out_of_range);
+
+    auto cross_tile_rope_params = ops::build_rope_params(
+        /*sequence_length=*/40,
+        /*head_dim=*/32);
+    EXPECT_THROW(
+        static_cast<void>(ops::rope(oversized_input, cross_tile_rope_params, /*token_position=*/32U)),
+        std::out_of_range);
 }
 
 TEST_F(RoPETest, BackwardTest) {
