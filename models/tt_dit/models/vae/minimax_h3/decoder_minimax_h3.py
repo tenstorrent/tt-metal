@@ -25,9 +25,9 @@ Four easily-missed details, all verified against the pinned reference:
   parameters at all.
 
 RoPE rotates only 48 of each head's 64 lanes and pairs lane *i* with *i + 24*. See
-``rope_minimax_h3.py``: the q/k weight rows are permuted once at load time so a single
-``ttnn.experimental.rotary_embedding_llama`` (standard 32x32 trans_mat) computes exactly
-the reference rotation with no slicing.
+``rope_minimax_h3.py``: the q/k weight rows are permuted once at load time so the RoPE stage
+of ``ttnn.experimental.dit_fused_distributed_rmsnorm`` (standard 32x32 trans_mat) computes
+exactly the reference rotation with no slicing.
 
 The 1792 patches are tile-aligned but 1797 is not, so the suffix is padded out to a full
 tile; attention sees q/k/v at the logical length, so the pad keys never enter a softmax.
@@ -164,6 +164,27 @@ class MiniMaxH3ViTAttention(Module):
             if key in state:
                 state[f"to_out.{suffix}"] = state.pop(key)
 
+    def _norm_rope(self, t: ttnn.Tensor, rope_cos: ttnn.Tensor, rope_sin: ttnn.Tensor) -> ttnn.Tensor:
+        """Per-head RMSNorm + RoPE in one local launch; a tile batch B > 1 folds into the op's [1, B*H, S, Dh]."""
+        batch, heads, seq_len, head_dim = t.shape
+        if batch != 1:
+            t = ttnn.reshape(t, (1, batch * heads, seq_len, head_dim))
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            t,
+            None,
+            self.mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=self.eps,
+            num_heads_per_device=1,
+            per_head_norm=False,
+            transformation_mat=self.rope_trans_mat,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            compute_kernel_config=self.rope_compute_kernel_config,
+        )
+        return ttnn.reshape(out, (batch, heads, seq_len, head_dim)) if batch != 1 else out
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -189,9 +210,8 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        rope_kwargs = dict(compute_kernel_config=self.rope_compute_kernel_config, rms_norm_eps=self.eps)
-        query = ttnn.experimental.rotary_embedding_llama(query, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
-        key = ttnn.experimental.rotary_embedding_llama(key, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
+        query = self._norm_rope(query, rope_cos, rope_sin)
+        key = self._norm_rope(key, rope_cos, rope_sin)
 
         padded = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
         if valid_len is not None and valid_len < seq_len:
