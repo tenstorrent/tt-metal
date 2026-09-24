@@ -91,7 +91,7 @@ void kernel_main() {
     const uint64_t t_end = ex::tt_uva_clock();
     ex::tt_uva_fin();
 
-    // test_d2h_bw.cpp:273 is where the host reads the value
+    // benchmark_d2h_leg.cpp reads these back after the run
     if constexpr (result_addr != 0) {
         volatile tt_l1_ptr uint32_t* const r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_addr);
         r[0] = static_cast<uint32_t>(t_begin);
