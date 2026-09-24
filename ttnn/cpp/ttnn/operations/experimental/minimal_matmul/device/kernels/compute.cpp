@@ -224,6 +224,8 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
 #else
+        // ternary_b_cb is bound UnpackToSrc, so unary_bcast reads it through SrcB, which the
+        // reconfig above sets.
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
