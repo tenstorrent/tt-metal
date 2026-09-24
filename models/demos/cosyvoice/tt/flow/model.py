@@ -173,22 +173,17 @@ class TtMaskedDiffWithXvec:
     def release_trace(self):
         """Drop the CFM solver's cached trace. Safe to call when none is cached.
 
-        The solver keeps its trace across calls so that a repeated mel length replays
-        instead of re-capturing, 1.67x on the solver. That is sound only while nothing
-        else creates device buffers between the capture and the replay: a buffer
-        allocated after the capture can sit where the trace's intermediates live, and
-        the next replay overwrites it. Full synthesis breaks that condition on every
-        utterance -- the vocoder creates per-length state (prepared convolution
-        weights, configuration tensors) the first time it sees a length, and the LLM
-        captures and releases a trace of its own -- so a caller that runs the flow once
-        per utterance releases the trace once the mel is out.
-
-        What it prevents: in a five-language sweep Korean follows Cantonese with the
-        same token count, so it replayed the trace captured for Cantonese, and its
-        vocoder then reused per-length state Cantonese had created after that capture.
-        The device stalled at the first read of the waveform, every time. Releasing
-        costs nothing for a new length, which captures anyway; only a caller repeating
-        one length through full synthesis gives up the replay.
+        The solver keeps its trace so that a repeated mel length replays instead of
+        recapturing (PERF.md Part II §2.2). That is sound only while nothing else creates
+        device buffers between the capture and the replay: a buffer allocated after the
+        capture can sit where the trace's intermediates live, and the next replay
+        overwrites it. Full synthesis breaks that on every utterance -- the vocoder
+        creates per-length state (prepared convolution weights, configuration tensors)
+        the first time it sees a length, and the LLM captures and releases a trace of
+        its own -- so a caller that runs the flow once per utterance releases the trace
+        once the mel is out (`docs/VALIDATION.md`). Releasing costs nothing for a new
+        length, which captures anyway; only a caller repeating one length through full
+        synthesis gives up the replay.
         """
         self.decoder._release()
 

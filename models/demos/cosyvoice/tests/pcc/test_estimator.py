@@ -220,12 +220,10 @@ def test_device_attention_ignores_tile_padding(device, length):
     """The estimator's attention must not depend on what its inputs' tile padding holds.
 
     `ttnn.transformer.scaled_dot_product_attention` masks padded key columns itself, yet
-    when the padding of both k and v holds huge or non-finite values its output is
-    garbage -- PCC ~0, at any length that is not a tile multiple. The estimator's
-    convolutions leave such values in their output padding, and whenever a UNet level's
-    length was 1 mod 32 they reached k and v as NaN: zero-shot ja at 332 tokens
-    (T = 897, then 449 after the downsample) came out with half its mel Inf/NaN. The golden
-    geometry, 282 and 141, never trips it, which is why every other test passed.
+    when the padding of both k and v holds large or non-finite values its output is
+    wrong -- PCC ~0, at any length that is not a tile multiple (`docs/VALIDATION.md`).
+    The golden geometry, 282 and 141, never reaches it, so this test uses 449 and 897,
+    both 1 mod 32, and 450 as a control.
 
     NaN written into the input's padding rows is carried into k and v by the QKV
     projection, which is the model's own path. Only the logical rows are scored.

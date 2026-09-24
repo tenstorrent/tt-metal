@@ -76,12 +76,12 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Zero-shot mode | ✅ | same | *Generation modes* |
 | Cross-lingual mode | ✅ | same | *Generation modes* |
 | Instruct mode | ✅ | same | *Generation modes* |
-| Valid audio, 5 languages | ✅ 20/20 | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
+| Valid audio, 5 languages | ✅ zero-shot and cross-lingual 5/5 · SFT and instruct not re-run on this tree | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
 | Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
 | `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
 | `RTF < 0.5` | ✅ Blackhole · ❌ n300 | checked, with the n300 shortfall held to a recorded band | *End-to-end real-time factor* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
-| WER `< 3.0`, speaker similarity `> 60` | ✅ | `scripts/eval_wer_sim.py`, reference venv | *Speech quality* |
+| WER `< 3.0`, speaker similarity `> 60` | ✅ English WER, both measured modes | `scripts/eval_wer_sim.py`, reference venv; `test_scoring.py` checks its English normaliser | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
 
 ## Stage 2 — basic optimizations
@@ -118,8 +118,8 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* | — |
 | `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
 | `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
-| Streaming inference | ✅ on Blackhole; ❌ content on Wormhole at `e0de3009` (see *Streaming content on Wormhole* under Open defects) | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio) | *Streaming* |
-| Efficient multi-lingual switching | ✅ 5 languages × 4 modes | `demo/sweep.py` | *Speech quality* |
+| Streaming inference | ✅ content and schedule on Blackhole · ❌ content on Wormhole at `e0de3009` · the interleaved stream's audio is wrong at its chunk geometry (*Streaming content on Wormhole* and *Streamed audio at the stream's chunk geometry*, under Open defects) | `test_device_streamed_matches_non_streamed` (content, 120-token chunks), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved tokens and peak) | *Streaming* |
+| Efficient multi-lingual switching | ✅ zero-shot and cross-lingual, 5 languages per sweep · SFT and instruct not re-run on this tree | `demo/sweep.py` | *Speech quality* |
 
 ---
 
@@ -128,7 +128,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 ### `RTF < 0.2` — the floor of this decomposition
 
 Not a tuning shortfall. The flow decoder alone takes a large share of the `0.2` budget
-with fused SDPA and a trace cache, and its cost is 64 transformer blocks × 10 Euler
+with fused SDPA and a replayed trace, and its cost is 64 transformer blocks × 10 Euler
 steps; the Euler count is a model parameter, and lowering it costs accuracy. The LLM's
 share would need the decode step under 1.5 ms. `PERF.md` *End-to-end real-time factor*
 has the figures. The threshold is asserted against a recorded band, so an improvement
@@ -236,6 +236,19 @@ boards, before the carry buffers existed; it has not been re-run since. So how f
 audio scales with utterance length is not measured. A shared cause with the L1_SMALL
 growth below is possible and unverified.
 
+### Streamed audio at the stream's chunk geometry
+
+At the interleaved stream's chunk geometry (conv input length 3457), two of the vocoder's
+convolutions disagree with torch on Blackhole (`p150a`), measured inside a synthesis process:
+`Conv1d(128 → 128, k=11)` with prepared weights scores PCC 0.14, and
+`Conv1d(18 → 256, k=16, stride 8)` scores 0.003 whichever way its weights are prepared. In a
+fresh process both are exact, and what makes them wrong in the model is not established. So the
+audio `synthesize_streaming` emits is not right at that geometry. The interleaved streaming
+tests check the tokens and the peak, which pass; `test_device_streamed_matches_non_streamed`
+feeds 120-token chunks, a different geometry. A comment on
+[tenstorrent/tt-metal#55545](https://github.com/tenstorrent/tt-metal/issues/55545) mentions both
+convolutions as in-model observations; there is no standalone reproducer.
+
 ### L1_SMALL grows with each distinct vocoder geometry
 
 The vocoder keeps prepared `conv_transpose2d` weights in L1_SMALL for each distinct mel
@@ -266,12 +279,6 @@ degenerate one on a capped greedy run. Ruled out: the live trace, and the Wormho
 verified prepared conv weights; at `e0de3009` it fails there (below). It uses the golden's
 own prompt and full token list rather than this case.
 
-### `cross_lingual yue` stops early
-
-It ends at 122 tokens and 2.44 s of audio, against the reference's 387 tokens and
-7.73 s. RAS is stochastic and the model's Cantonese confidence is low, so this may not
-be a defect; a greedy run of the same case would decide it.
-
 ### Dependency advisories — disposition requested
 
 Four advisories against the reference venv's pins are open: three `torch` MEDIUM and one
@@ -285,21 +292,40 @@ being requested.
 
 TTNN warns: *"Allocating device buffers is unsafe due to the existence of an active
 trace. These buffers may be corrupted once a trace is executed."* The tree avoids it in
-five places:
+seven places:
 
 * Streaming. The state `StreamState` carries across chunk seams lives in persistent
   buffers allocated before the AR decode trace is captured, written afterwards only
   with `ttnn.copy`. `synthesize_streaming` pushes one warm-up chunk before `generate`
   captures; any other caller must build and warm its `TtStreamingSynthesizer` before
   capture (`_carry_store`).
-* Batched synthesis. `synthesize_batch` needs `COSYVOICE_CFM_TRACE_CACHE=0` set before
-  the pipeline is built; `TtConditionalCFM` reads it once, in its constructor. With the
-  cache on, the estimator trace cached by an earlier utterance is live when
-  `generate_batch` captures its decode trace, and the device hangs after the warning
-  above. Releasing the cached trace at entry to `synthesize_batch`, or disabling the
-  cache only for the call, hangs the same way: a released trace still makes a later
-  capture unsafe. The cost is one estimator capture per utterance instead of one per
-  distinct mel length, paid only by `synthesize_batch`.
+* The flow's trace between utterances. `tokens_to_mel` (so `synthesize`,
+  `synthesize_batch` and `demo/demo.py --inputs`) releases the CFM estimator trace on
+  both sides of its solve, `synthesize_streaming` once the stream ends, and
+  `demo/sweep.py` after each utterance (`TtMaskedDiffWithXvec.release_trace`). Every
+  utterance pays one estimator capture; a stream keeps its trace across its own chunks.
+  Without the release, the next utterance of the same mel length replays the trace after
+  the vocoder and the LLM have allocated device buffers while it was live (the LLM also
+  captures and releases a trace of its own), and the device stalls at the first read of
+  the waveform. Which buffer the replay corrupts is not established.
+  `test_device_consecutive_utterances_with_one_flow_length` checks two utterances in a
+  row, and `test_device_stream_leaves_no_flow_trace` a stream followed by `synthesize`.
+* Batched synthesis. `test_device_batched_synthesis_agrees_with_one_at_a_time` sets
+  `COSYVOICE_CFM_TRACE_CACHE=0` before the pipeline is built; `TtConditionalCFM` reads it
+  once, in its constructor. With an estimator trace kept from an earlier utterance,
+  `generate_batch`'s decode-trace capture hung the device after the warning above, and so
+  did releasing that trace at entry to `synthesize_batch` or disabling the cache only for
+  the call. With the releases above, no flow trace is live when `generate_batch`
+  captures; whether that makes the variable unnecessary is untested.
+* The vocoder's prepared-weight check. The vocoder checks each prepared conv weight once
+  per `(input length, batch)` geometry, at that geometry's first call, against the op's own
+  preparation, element by element; where they disagree it switches that geometry to the
+  op's own preparation for good, and that path allocates on every call. So the check does
+  not run with a trace live: a `StreamSession` pauses it from construction to close
+  (`TtHiFTGenerator.pause_weight_verification`), because an interleaved stream calls the
+  vocoder between replays of the LLM decode trace. Batch synthesis keeps it, since the LLM
+  and CFM traces are released before the vocoder runs. A geometry already switched stays
+  switched, inside a stream too.
 * The CFM solver. Its traced body is a whole Euler step, so the replay loop allocates
   nothing between replays.
 * Trace lifetime. `generate` releases its decode trace in a `finally`, and
@@ -318,6 +344,20 @@ input with `ttnn.copy` from the output of a dim-0 `ttnn.concat` writes wrong dat
 happens inside the traced body. Ending the traced body with a `ttnn.copy` into a buffer
 allocated before capture has no effect on replay (the solver reads back zeros), so the
 trace owns its output instead (`TtConditionalCFM._capture`).
+
+### `ttnn.transformer.scaled_dot_product_attention` and tile padding
+
+SDPA masks padded key columns itself, but its output is wrong (PCC ~0 against torch)
+when the tile padding of both k and v holds large or non-finite values, at any sequence
+length that is not a tile multiple. The flow estimator's convolutions leave such values
+in their output padding, and when a UNet level's length is 1 mod 32 they reach k and v
+as NaN: about half the mel comes out non-finite and the vocoder rails at its clamp. The
+zero-shot Japanese case at 332 tokens (flow lengths 897 and 449) hits both levels.
+`TtAttention` zero-fills the k/v tile padding with `ttnn.fill_implicit_tile_padding`
+before SDPA whenever the length is not a tile multiple;
+`test_device_attention_ignores_tile_padding` checks it at 449, 450 and 897, and PERF.md
+Part II §2.1 has the cost. Reported upstream as
+[tenstorrent/tt-metal#57608](https://github.com/tenstorrent/tt-metal/issues/57608).
 
 ### `ttnn.conv1d` with prepared weights
 

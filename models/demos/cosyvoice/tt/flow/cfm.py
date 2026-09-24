@@ -86,8 +86,8 @@ class TtConditionalCFM:
         self.n_timesteps = int(os.environ.get("COSYVOICE_FLOW_STEPS", n_timesteps))
         self.t_scheduler = t_scheduler
         self.estimator = TtConditionalDecoder(device, bag.sub("estimator"), dtype=dtype)
-        # Keep the captured trace across utterances of the same mel length: captured
-        # per call, the capture is almost half the stage (PERF.md Part II §2.2).
+        # Keep the captured trace between calls of the same mel length: captured per
+        # call, the capture is almost half the stage (PERF.md Part II §2.2).
         #
         # Reuse needs everything the trace bakes an address for to be refillable in
         # place. `_x_buf` is. `_packed_const` is the utterance's conditioning, so it
@@ -97,8 +97,8 @@ class TtConditionalCFM:
         #
         # One slot, not a dict: each entry pins a trace region allocation plus its
         # buffers, and TTS lengths vary continuously, so an unbounded cache would grow
-        # for the length of a session and hit rarely. `synthesize_batch` needs this off
-        # (`docs/VALIDATION.md`).
+        # for the length of a session and hit rarely. The pipeline releases the trace
+        # after each utterance (`TtMaskedDiffWithXvec.release_trace`).
         self._cache_trace = os.environ.get("COSYVOICE_CFM_TRACE_CACHE", "1") != "0"
         self._trace_key = None
 
