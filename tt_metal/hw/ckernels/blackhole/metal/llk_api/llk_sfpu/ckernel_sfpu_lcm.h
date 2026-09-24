@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_gcd.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -18,15 +20,16 @@ namespace sfpu {
 inline void calculate_sfpu_mul_u16_to_u32_body() {
     TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_UPPER);
     TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, sfpi::SFPMUL24_MOD1_LOWER);
-    TTI_SFPSHFT(23, 0, p_sfpu::LREG4, 1); // SFPSHFT_MOD1_ARG_IMM
+    TTI_SFPSHFT(23, 0, p_sfpu::LREG4, 1);  // SFPSHFT_MOD1_ARG_IMM
     TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
 }
 
 template <int ITERATIONS = 8>
-inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_lcm(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64 rows
-        constexpr uint dst_tile_size = 64;
+        constexpr std::uint32_t dst_tile_size = 64;
 
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);  // a
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);  // b
@@ -69,10 +72,10 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);
         TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
-	// Convert a/gcd(a, b) to int32
+        // Convert a/gcd(a, b) to int32
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
 
-	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
+        // Finally, compute lcm(a, b) = a/gcd(a, b) * b
         calculate_sfpu_mul_u16_to_u32_body();
 
         TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, 3, dst_index_out * dst_tile_size);
@@ -80,14 +83,24 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
     }
 }
 
-inline void calculate_sfpu_lcm_init()
-{
+inline void calculate_sfpu_lcm_init() {
     calculate_sfpu_gcd_init();
 
     // constants for reciprocal calculation
     sfpi::vConstFloatPrgm0 = 48.0f / 17.0f;
     sfpi::vConstFloatPrgm1 = 32.0f / 17.0f;
 }
+
+// Op class for an elementwise LCM of two int32 tiles.
+template <int ITERATIONS = 8>
+struct Lcm : SfpuBinaryOp<Lcm<ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_lcm<ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { calculate_sfpu_lcm_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_div_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -48,5 +51,16 @@ template <bool APPROXIMATION_MODE>
 inline void div_init() {
     sfpu_reciprocal_init<false>();
 }
+
+// Op class for an elementwise division of two int32 tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct DivInt32 : SfpuBinaryOp<DivInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { div_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

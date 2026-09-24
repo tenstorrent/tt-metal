@@ -4,17 +4,19 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-inline void init_fmod(const uint value, const uint recip) {
+inline void init_fmod(const std::uint32_t value, const std::uint32_t recip) {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = Converter::as_float(value);
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
@@ -66,6 +68,16 @@ inline void calculate_fmod() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise fmod by the scalar denominator that init() loads.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Fmod : SfpuUnaryOp<Fmod<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_fmod<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
+        init_fmod<APPROXIMATION_MODE>(value, recip);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

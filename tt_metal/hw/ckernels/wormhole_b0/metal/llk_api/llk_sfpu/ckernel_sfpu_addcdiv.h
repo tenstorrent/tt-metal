@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -47,5 +48,25 @@ template <bool APPROXIMATION_MODE>
 void init_addcdiv() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for elementwise addcdiv: out = in0 + value * in1 / in2.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = 8>
+struct Addcdiv : SfpuTernaryOp<Addcdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out,
+        const std::uint32_t value) {
+        calculate_addcdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { init_addcdiv<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

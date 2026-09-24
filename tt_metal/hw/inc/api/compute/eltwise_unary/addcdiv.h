@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_addcdiv.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -38,23 +38,14 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void addcdiv_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst, uint32_t value) {
-    MATH((SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_addcdiv,
-        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        idst2,
-        odst,
-        VectorMode::RC,
-        value)));
+ALWI void addcdiv_tile(
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst, std::uint32_t value) {
+    MATH((sfpu::Addcdiv<APPROX, is_fp32_dest_acc_en, data_format>::run(idst0, idst1, idst2, odst, value)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void addcdiv_tile_init() { MATH((SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX)))); }
+ALWI void addcdiv_tile_init() { MATH((sfpu::Addcdiv<APPROX>::init())); }
 
 }  // namespace ckernel

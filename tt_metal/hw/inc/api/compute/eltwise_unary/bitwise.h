@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_bitwise.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -28,15 +28,8 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::AND, data_format),
-        idst,
-        VectorMode::RC,
-        param0));
+ALWI void bitwise_and_tile(std::uint32_t idst, std::uint32_t param0) {
+    MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::AND, data_format>::run(idst, param0)));
 }
 
 // clang-format off
@@ -55,15 +48,8 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::OR, data_format),
-        idst,
-        VectorMode::RC,
-        param0));
+ALWI void bitwise_or_tile(std::uint32_t idst, std::uint32_t param0) {
+    MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::OR, data_format>::run(idst, param0)));
 }
 
 // clang-format off
@@ -82,30 +68,23 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::XOR, data_format),
-        idst,
-        VectorMode::RC,
-        param0));
+ALWI void bitwise_xor_tile(std::uint32_t idst, std::uint32_t param0) {
+    MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::XOR, data_format>::run(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_and_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_and)); }
+ALWI void bitwise_and_tile_init() { MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::AND>::init())); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_or)); }
+ALWI void bitwise_or_tile_init() { MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::OR>::init())); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_xor_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_xor)); }
+ALWI void bitwise_xor_tile_init() { MATH((sfpu::UnaryBitwise<APPROX, sfpu::UnaryBitwiseOp::XOR>::init())); }
 
 }  // namespace ckernel
