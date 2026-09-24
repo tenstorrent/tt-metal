@@ -160,6 +160,11 @@ struct ComputeGen2Config {
     // Temporary configs (these will change!)
     ///////////////////////////////////////////
 
+    // Compile the kernel's TRISC0 (unpack) binaries with the RISC-V Vector extension enabled. On
+    // Quasar the vector unit is wired to TRISC0 only; it is needed by LLKs that push data through.
+    // Other TRISC compiles are unchanged.
+    bool enable_trisc0_rvv = false;
+
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
 

@@ -28,7 +28,7 @@ namespace tt::tt_metal {
 struct JitDeviceConfig;
 class Hal;
 
-static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
+static constexpr std::uint32_t CACHE_LINE_ALIGNMENT = 64;
 
 template <typename T>
 using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
@@ -40,7 +40,7 @@ struct JitBuiltStateConfig {
     HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
-    uint32_t dispatch_message_addr = 0;
+    std::uint32_t dispatch_message_addr = 0;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
@@ -56,13 +56,13 @@ class JitBuildEnv {
 public:
     JitBuildEnv();
     void init(
-        uint64_t build_key,
+        std::uint64_t build_key,
         const JitDeviceConfig& config,
         const tt::llrt::RunTimeOptions& rtoptions,
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
-    uint32_t get_max_cbs() const { return max_cbs_; };
+    std::uint32_t get_max_cbs() const { return max_cbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
@@ -71,7 +71,7 @@ public:
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
-    uint64_t get_build_key() const { return build_key_; }
+    std::uint64_t get_build_key() const { return build_key_; }
 
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
@@ -82,7 +82,7 @@ private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
 
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint32_t max_cbs_{};
+    std::uint32_t max_cbs_{};
 
     // Paths
     std::string root_;
@@ -131,9 +131,8 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
-    // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
-    // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
-    bool is_compute_pack_{};
+    bool is_tensix_compute_{};
+    std::uint32_t processor_id_{};
     // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
     // processor does not support it. Appended to a kernel's recipe cflags only when that
     // kernel opted in, so default builds are unchanged.
@@ -150,7 +149,7 @@ protected:
     // Hash of all effective compilation/linking parameters (including HAL-populated flags).
     // Used to detect when build flags change between runs so that stale cached objects
     // are not reused.  Written to a ".build_state" file in the output directory.
-    uint64_t build_state_hash_{};
+    std::uint64_t build_state_hash_{};
 
     // Upper bound for compile objects.
     // Current max obj count is 2 -- very sufficient for now.
