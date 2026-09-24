@@ -58,7 +58,8 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(7);
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t separate_q = get_compile_time_arg_val(9);
-    constexpr auto q_args = TensorAccessorArgs<10>();
+    constexpr uint32_t q_split = get_compile_time_arg_val(10);  // 1, or 2: unit = half the Q heads + (K xor V)
+    constexpr auto q_args = TensorAccessorArgs<11>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
@@ -76,25 +77,31 @@ void kernel_main() {
     CircularBuffer cb(cb_id), cbq(cb_q);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
-    constexpr uint32_t group_q_tiles = q_heads_per_group * q_out_w_tiles;
+    constexpr uint32_t sub_q_heads = q_heads_per_group / q_split;
+    constexpr uint32_t sub_q_tiles = sub_q_heads * q_out_w_tiles;
     constexpr uint32_t group_kv_tiles = heads_per_group * q_out_w_tiles;
     constexpr uint32_t q_batch_stride = num_q_heads * q_out_HtWt;
     constexpr uint32_t kv_batch_stride = num_kv_heads * q_out_HtWt;
 
-    constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
-    constexpr uint32_t kv_tiles = 2 * group_kv_tiles;
+    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
+    constexpr uint32_t kv_tiles = kv_parts * group_kv_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const uint32_t work_unit = work_unit_start + w;
-        const uint32_t block = work_unit / head_groups;
-        const uint32_t group = work_unit - block * head_groups;
+        const uint32_t sub = work_unit % q_split;
+        const uint32_t rest = work_unit / q_split;
+        const uint32_t block = rest / head_groups;
+        const uint32_t group = rest - block * head_groups;
+        const bool has_k = (q_split == 1) || sub == 0;
+        const bool has_v = (q_split == 1) || sub == 1;
         const uint32_t s_tile = block % seq_tiles;
         const uint32_t batch = block / seq_tiles;
-        const uint32_t q_head_start = group * q_heads_per_group;
+        const uint32_t q_head_start = group * q_heads_per_group + sub * sub_q_heads;
         const uint32_t kv_head_start = group * heads_per_group;
 
         // Whole unit at once; offsets mirror the reader's Q | K | V packing.
         if constexpr (separate_q) {
-            cbq.wait_front(group_q_tiles);
+            cbq.wait_front(sub_q_tiles);
             cb.wait_front(kv_tiles);
         } else {
             cb.wait_front(unit_tiles);
@@ -103,7 +110,7 @@ void kernel_main() {
         {
             uint32_t q_read_offset = 0;
             uint32_t row_base = batch * q_batch_stride + q_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
-            for (uint32_t h = 0; h < q_heads_per_group; ++h) {
+            for (uint32_t h = 0; h < sub_q_heads; ++h) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; ++w_dim) {
                     noc.async_write(cbq, sq, q_tile_bytes, {.offset_bytes = q_read_offset}, {.page_id = dst});
@@ -116,7 +123,7 @@ void kernel_main() {
                 l1_read_offset = q_read_offset;
             }
         }
-        {
+        if (has_k) {
             uint32_t row_base = batch * kv_batch_stride + kv_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
             for (uint32_t h = 0; h < heads_per_group; ++h) {
                 uint32_t dst = row_base;
@@ -128,7 +135,7 @@ void kernel_main() {
                 row_base += q_out_HtWt;
             }
         }
-        {
+        if (has_v) {
             uint32_t row_base = batch * kv_batch_stride + kv_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
             for (uint32_t h = 0; h < heads_per_group; ++h) {
                 uint32_t dst = row_base;
@@ -142,7 +149,7 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         if constexpr (separate_q) {
-            cbq.pop_front(group_q_tiles);
+            cbq.pop_front(sub_q_tiles);
             cb.pop_front(kv_tiles);
         } else {
             cb.pop_front(unit_tiles);

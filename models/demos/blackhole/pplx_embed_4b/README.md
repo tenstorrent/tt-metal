@@ -936,6 +936,38 @@ capture here by 42 KB/core, with or without the FF intermediates.
 sync = the rest, to_torch 0.1 — the bs1 number is device time; the 3.4 ms host bubble of an earlier
 profile is gone since the extended trace landed.
 
+### bs>1: what transfers from the BGE-M3 P150 branch, and three probes (2026-09-24)
+
+Reviewed `gtobarTT/bge_m3_p150_optimizations` (25 commits; B1 4.31 → 3.73 ms, B8 23.7 → 11.0,
+B16 39.0 → 20.5, B32 65.7 → 42 ms on a 13×10 p150a — Galaxy chips expose 12×10, as here). The
+batched wins there are: bf8 Q/K/V into the streaming SDPA kernel at LoFi with q256/k512 (already
+ours), the `no_padding` mask skip (no mask here), and moving the QKV output, the Q/K/V heads, the
+matmul outputs and the LayerNorm output into L1. Each L1 placement was tried here with the existing
+`TT_PREFILL_<op>_L1` knobs plus two new ones, same-chip A/B, per-chip logs:
+
+| placement | bs8 | bs16 |
+|---|---|---|
+| QKV out + heads + SDPA out + concat in L1 (also with SDPA k-chunk 256) | trace-capture clash, 42 KB/core short (28 KB with k256) | clash |
+| WO / FF2 outputs in L1 | 122.8 → 122.3 (noise) | — |
+| LayerNorm output in L1 (`TT_PREFILL_LN_L1=1`, new) | 121.5 → 123.2 (+1.4%) | 227.7 → 227.9 |
+| LayerNorm fp32 accumulation off (`QWEN_NORM_FP32_ACC=0`, new) | 123.4 → 122.5 | inside the bs16 band; bs32 434.3 → 439.6; STS-B 0.8161 → 0.8159 |
+
+Nothing lands: BGE-M3 has dim 1024 and 16 heads of 64, so its per-core L1 footprint at B8 is 2.5×
+smaller than ours, and its LayerNorm feeds a 2D-multicast matmul that benefits from an L1 in0;
+ours feeds `minimal_matmul`, which streams in0 from DRAM at full rate. The legacy 2D kernel itself
+(now with the coalesced reader, §37 of the negatives file) was also re-measured against
+`minimal_matmul` at bs8/bs16 shapes and loses by 3–60%; conversely `minimal_matmul` at bs1 loses
+by 53–65% to the legacy 12×8 kernel. Both knobs stay in the tree, default off, for future probes.
+
+**bs16 measurement note.** The shipped bs16 configuration measured 216.8 / 228.7 / 229.1 / 229.4 /
+227.7 / 230.5 ms across today's runs and drifts 217 → 235 ms inside one 10-iteration run as the
+chip warms; a single bs16 A/B cannot resolve less than ≈ 5%.
+
+**Fused heads op, 2-way Q split (`QWEN_HEADSPLIT_Q_SPLIT=2`, default 1).** A unit becomes half the
+group's Q heads plus K *or* V (bs1: 256 units of 12 tiles instead of 128 of 24). Output is
+bit-identical; standalone 48.4 → 44.5 µs at bs1 (−8%), 185.0 → 183.3 at bs8; e2e bs1 17.7 → 17.6
+(noise). Opt-in.
+
 ## 6. Profiling
 
 ```bash
