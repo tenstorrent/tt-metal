@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-23",
+  "last_scan_date": "2026-09-24",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -80,7 +80,11 @@
     "106938183364",
     "35121977266",
     "35824880798",
-    "35887390277"
+    "35887390277",
+    "35919091501",
+    "20839307530",
+    "35970162562",
+    "35962547130"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -119,7 +123,9 @@
     "models-t1-device-perf-tests.yaml",
     "sanity-tests-debug.yaml",
     "pipeline-select-profiler.yaml",
-    "t3000-tests.yaml"
+    "t3000-tests.yaml",
+    "galaxy-profiler-tests.yaml",
+    "t3000-profiler-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -814,11 +820,13 @@
       "category": 6,
       "validation_workflow_dispatched": "runtime-perf-tests",
       "dispatched": "2026-09-23",
-      "status": "open-pr",
-      "reported": false,
-      "nonterminal_reported": false,
-      "note": "PR opened this run: demoted log_test_configuration()'s per-case config dump, the 'Running {}' marker, and 'Test Passed' from log_info to log_debug in test_pgm_dispatch.cpp, matching test_compute_mm.cpp's existing log_debug convention for equivalent per-run config dumps. Dispatched runtime-perf-tests for validation; awaiting run outcome next scan. Validation must re-grep the runtime_perf_pgm_dispatch test-execution job logs (not build-artifact) for the demoted templates (UniqueRTArgs/Test Passed/Subdevice core ranges/Sems/KGs/CommonRTArgs/CBs/Warmup iterations/Kernel size/Iterations/Grid/Running BM_pgm_dispatch) confirming absence at default verbosity."
+      "status": "resolved",
+      "reported": true,
+      "nonterminal_reported": true,
+      "note": "PR #57606 fully resolved: validation run 35919091501 (runtime-perf-tests) completed/success (all 39 checks passed). Re-grepped runtime_perf_pgm_dispatch test-execution job logs (wh_n300_civ2 job 107381022785, bh_p150_perf job 107381022647): 0 occurrences of demoted templates (UniqueRTArgs/Test Passed/Subdevice core ranges/Sems/KGs/CommonRTArgs/CBs/Running BM_pgm_dispatch) in either, while BM_pgm_dispatch benchmark lines and pgm_dispatch_perf kernel JIT-compile invocations are present in both (1938/1896 pgm_dispatch-related lines), confirming the path was exercised not skipped. Outcome commented (/codeowners ping) and PR marked ready for review (2026-09-24).",
+      "pr": 57606,
+      "last_state": "success"
     }
   ],
-  "backlog_cursor": "Phase A this run (2026-09-23): no in-flight validations were pending report (all prior entries already reported/terminal or resolved). Phase B: rotated to runtime-perf-tests.yaml (previously unsampled, not in workflows_sampled list). Sampled run 35887390277 (main, success), jobs 107289669086 (runtime_perf_pgm_dispatch bh_p150_perf), 107289669801 (runtime_perf_pgm_dispatch wh_n300_civ2), 107289670027 (runtime_perf_jit_build wh_n300_civ2). Histogram: info/Test 6048 (100% of sampled logger lines) -- test_pgm_dispatch.cpp's log_test_configuration()/Running/Test Passed per-benchmark-case dump, top templates 437x each across 437+ registered BM_pgm_dispatch cases; info/UMD 8, info/BuildKernels 4, info/Device 2, warning/Always 1 (all negligible). No colon-diagnostic or gha-annotation hits. Residue: 4802 lines, mostly google-benchmark's own tabular throughput/CPU-time output (BM_pgm_dispatch/... rows), not actionable. Opened PR for the info/Test finding (category 6, demote to debug) -- this run's one target. Dispatched runtime-perf-tests for validation on the new branch. Next run: reconcile silencer/demote-pgm-dispatch-config-dump's dispatched runtime-perf-tests validation outcome (re-grep runtime_perf_pgm_dispatch test-execution logs, not build-artifact), then continue rotating through remaining untracked/rarely-sampled workflows (t3000-dispatch-tests.yaml has zero recent runs per API -- deprioritize; consider runtime-perf-profiler-tests.yaml, models-t1-e2e-tests.yaml rotation, or re-check whether PR #51548-adjacent categories have merged, opening headroom)."
+  "backlog_cursor": "Phase A this run (2026-09-24): resolved silencer/demote-pgm-dispatch-config-dump (PR #57606) -- dispatched run 35919091501 (runtime-perf-tests) completed/success (39/39 checks). Re-grepped runtime_perf_pgm_dispatch test-execution logs (jobs 107381022785 wh_n300_civ2, 107381022647 bh_p150_perf): 0 occurrences of demoted templates in either, while BM_pgm_dispatch benchmark lines and pgm_dispatch_perf kernel JIT-compile invocations are present in both, confirming the path was exercised. Outcome commented (/codeowners ping) and PR marked ready for review. Phase B: tried rotating to t3000-profiler-tests.yaml and galaxy-profiler-tests.yaml (both in dispatch allowlist, both unsampled) -- both have zero recent runs on main since Jan 2026 and their job logs return 410 Gone (expired); deprioritize both, they look effectively dead on main. Re-sampled t3000-tests.yaml (fresh run 35962547130, failure) jobs 107515728713/107515729203/107515753074 (t3k_ccl_2d_tests, t3k_tteager_tests, t3k_ttnn_multiprocess_slow_tests -- all individually success). Histogram: info/Metal 138, info/UMD 96, info/Fabric 75, warning/UMD 65, info/Distributed 60 (no new severity classes). Findings: (1) warning/UMD hwloc_set_area_membind()/init_hugepage pair (32x each) -- confirmed via cloned tt-umd submodule (tt_metal/third_party/umd/device/cpuset_lib.cpp:434, chip_helpers/silicon_sysmem_manager.cpp:298) to live entirely in vendored tenstorrent/tt-umd source, not tt-metal-owned; message itself cites tt-umd issue #893 and tt-metal issue #2614 (closed 2024-11-01, tt-rkim: \"No, we can close. This is a UMD thing... We likely will continue seeing this on CI\"). Not auto-fixable per Silencer scope (third-party repo) -- no action taken, not worth reopening #2614 since maintainers already explicitly accepted this as a known UMD-side CI artifact. (2) warning/Metal \"Skipping RISC reset/ethernet routing reset during teardown: Timeout waiting for Ethernet core service remote IO request\" (2x each) -- only observed in the t3k_tt_metal_multiprocess_tests job whose BigMeshDualRankTest2x4 test itself FAILED; this teardown warning is a symptom of that failure/hang, not independent log spam -- deferred, do not silence a warning that is signal for a real failing test. (3) warning/Always \"Unknown motherboard\" (physical_system_discovery.cpp) already has an existing warn-once guard in source (std::unordered_set warned_mobo_names) -- already fixed, no action needed. All other diagnostic/gha-annotation hits (copy_dest_value -Wdeprecated-declarations, Node.js 20 deprecation notice) already tracked (PRs #56360/#56969, ledger entry a3d5e97c1b48). No new safe target found this run; did not open a PR or issue for phase B (per \"when in doubt, do nothing\"). Next run: continue rotating through single-card-profiler-tests.yaml (0 runs currently, recheck later), models-t1-device-perf-tests.yaml, or re-sample sanity-tests.yaml/pr-gate.yaml test-execution steps for fresh compile-warning candidates."
 }
