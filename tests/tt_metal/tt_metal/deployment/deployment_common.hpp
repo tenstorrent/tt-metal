@@ -24,6 +24,7 @@ std::string read_text_file_trimmed(const std::string& path);
 std::string get_ubb_id_str(uint32_t chip_id);
 std::vector<std::string> get_chip_physical_locations();
 uint64_t get_asic_serial_number(uint64_t chip_id);
+std::string get_asic_serial_string(uint64_t chip_id);
 
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))
 #define ROUND_DOWN(x, a) (((x) / (a)) * (a))

@@ -64,11 +64,11 @@ std::string get_ubb_id_str(uint32_t chip_id) {
     tt::umd::ClusterDescriptor& cluster_desc = (*(cluster.get_cluster_desc()));
     auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
     return fmt::format(
-        "UBB: {}, Chip: {}, BDF: {}, SN: asic:0x{:016x}",
+        "UBB: {}, Chip: {}, BDF: {}, SN: {}",
         ubb_id.tray_id,
         ubb_id.asic_id,
         pci_bdf_for_device_id(chip_id),
-        get_asic_serial_number(chip_id));
+        get_asic_serial_string(chip_id));
 }
 
 static std::vector<uint32_t> get_chip_ids() {
@@ -98,4 +98,8 @@ uint64_t get_asic_serial_number(uint64_t chip_id) {
     const std::unordered_map<tt::ChipId, uint64_t>& unique_ids = cluster.get_cluster_desc()->get_chip_unique_ids();
     auto it = unique_ids.find(chip_id);
     return it != unique_ids.end() ? it->second : -1;
+}
+
+std::string get_asic_serial_string(uint64_t chip_id) {
+    return fmt::format("asic:0x{:016x}", get_asic_serial_number(chip_id));
 }
