@@ -461,6 +461,8 @@ def test_mtp_transformer_chunks(
 
     ref_mla = None if skip_pcc else [SparseMLAReference(config, mla_weights, seq_len=TOTAL) for _ in range(NUM_LEVELS)]
 
+    # KV dedup: both caches are striped across SP*TP, exactly like the runner allocates them. The
+    # sparse indexer always dedups, so an SP-only index cache has no TP axis for it to gather over.
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
         hf_config=config,
@@ -468,6 +470,7 @@ def test_mtp_transformer_chunks(
         seq_len=TOTAL,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         num_kvpe_cache_layers=transformer.num_kvpe_cache_layers,
         num_users=1,
     )
@@ -477,6 +480,7 @@ def test_mtp_transformer_chunks(
         seq_len=TOTAL,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         num_kvpe_cache_layers=num_full_indexer_layers(config),
         num_users=1,
         dtype=ttnn.bfloat8_b,

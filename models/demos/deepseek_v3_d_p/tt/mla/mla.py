@@ -692,20 +692,41 @@ class ttMLA:
 
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
-        """Read and decode the logical KVPE cache in natural SP order."""
-        host = ttnn.to_torch(
-            kvpe_cache.storage,
-            mesh_composer=ttnn.create_mesh_composer(
-                mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(2, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        mesh_device.shape[sp_axis],  # concat SP shards
-                        1,  # collapse TP replicas
+        """Read and decode the logical KVPE cache in natural sequence order.
+
+        Which reassembly applies is read off the cache's OWN declared distribution rather than passed in,
+        because that is what the writer and the gathers key on too: init_kvpe_cache stamps a rank-2 dim-2
+        sharding when the rows are striped over every mesh coordinate (KV dedup via tp_axis, or full_mesh
+        -- the same striping by two names) and a rank-1 Replicate otherwise. Under the rank-2 topology the
+        second axis holds DISTINCT rows, so collapsing it as a replica would return seq_len/tp of the cache.
+        """
+        storage = kvpe_cache.storage
+        if len(list(storage.tensor_topology().distribution_shape())) == 2:
+            n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
+            sharded = ttnn.to_torch(
+                storage,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+            )  # [slots, n1, n0 * rows_per_chip, width]
+            rows = sharded.shape[2] // n0
+            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
+            host = torch.cat(
+                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
+                dim=2,
+            )
+        else:
+            host = ttnn.to_torch(
+                storage,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device,
+                    config=ttnn.MeshComposerConfig(
+                        dims=(2, -1),
+                        mesh_shape_override=ttnn.MeshShape(
+                            mesh_device.shape[sp_axis],  # concat SP shards
+                            1,  # collapse TP replicas
+                        ),
                     ),
                 ),
-            ),
-        )
+            )
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:

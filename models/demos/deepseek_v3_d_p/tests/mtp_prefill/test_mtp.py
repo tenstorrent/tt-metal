@@ -186,6 +186,8 @@ def _glm_layer_weights(variant, config, layer_state_dict=None):
 def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
     """``(kvpe_cache, rope_tensors, index_kv_cache)`` for a stack of ``num_cache_slots`` MTP levels."""
     mesh_shape = list(mesh_device.shape)
+    # KV dedup: both caches are striped across SP*TP, exactly like the runner allocates them. The
+    # sparse indexer always dedups, so an SP-only index cache has no TP axis for it to gather over.
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
         hf_config=config,
@@ -193,6 +195,7 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         num_kvpe_cache_layers=num_cache_slots,
     )
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
@@ -204,6 +207,7 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
