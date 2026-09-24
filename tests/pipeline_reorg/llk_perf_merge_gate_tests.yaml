@@ -1,0 +1,52 @@
+# LLK perf in the merge gate: non speed-of-light, L1_TO_L1 only, measure-only.
+# llk-perf-impl sets SPEED_OF_LIGHT and LLK_PERF_RUN_TYPES from its inputs; this
+# list only decides the legs. 15 min is the gate ceiling per leg, so each leg must
+# run well under it: 2 legs per arch keeps both under 15 with margin.
+
+- name: llk_perf_merge_gate_wormhole group 1/2
+  split_group: 1
+  team: llk
+  budget_type: merge_gate
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 2
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_merge_gate_wormhole group 2/2
+  split_group: 2
+  team: llk
+  budget_type: merge_gate
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 2
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_merge_gate_blackhole group 1/2
+  split_group: 1
+  team: llk
+  budget_type: merge_gate
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} 2
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_merge_gate_blackhole group 2/2
+  split_group: 2
+  team: llk
+  budget_type: merge_gate
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} 2
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic

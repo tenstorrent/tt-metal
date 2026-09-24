@@ -30,6 +30,16 @@ on:
         required: false
         default: ""
         type: string
+      tests-yaml:
+        description: "Test list to build the matrix from"
+        required: false
+        default: ./tests/pipeline_reorg/llk_perf_tests.yaml
+        type: string
+      compile-quasar:
+        description: "Also compile the Quasar perf ELFs (off when a caller already does)"
+        required: false
+        default: true
+        type: boolean
       ref:
         description: "Commit to check out and measure (blank = this run's ref)"
         required: false
@@ -67,7 +77,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -110,7 +120,7 @@ jobs:
           sku-config: ./.github/sku_config.yaml
 
   compile-quasar-perf:
-    if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
+    if: ${{ inputs.compile-quasar && (inputs.architecture == 'all' || inputs.architecture == 'quasar') }}
     needs: [build-images]
     uses: ./.github/workflows/build-quasar-perf.yml
     with:

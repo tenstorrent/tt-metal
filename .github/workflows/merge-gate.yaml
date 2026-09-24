@@ -620,6 +620,29 @@ jobs:
           || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
 
+  llk-perf-merge-gate:
+    name: LLK perf (non-SoL, L1_TO_L1)
+    needs: [find-changes]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: all
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
+      compile-quasar: false
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      upload-to-warehouse: false
+    secrets: inherit
+
   # ===========================================================================
   # Team: ttsim
   # test list: ttsim_merge_gate_tests.yaml
