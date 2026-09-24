@@ -430,12 +430,15 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             break;  // nothing fits at this Q, so no larger Q fits either
         }
     }
-    // Cheapest first; ties prefer larger K, then larger Q, then a wider grid.
-    std::stable_sort(candidates.begin(), candidates.end(), [](const RecipeBlocking& a, const RecipeBlocking& b) {
-        return std::make_tuple(a.cost, -static_cast<int64_t>(a.k_chunk_size), -static_cast<int64_t>(a.q_chunk_size),
-                               -static_cast<int64_t>(a.grid.x)) <
-               std::make_tuple(b.cost, -static_cast<int64_t>(b.k_chunk_size), -static_cast<int64_t>(b.q_chunk_size),
-                               -static_cast<int64_t>(b.grid.x));
+    // Cheapest first; ties prefer larger K, then less Q padding, then larger Q, then a wider grid.
+    const uint32_t q_total = p.q_rows + p.joint_q_rows;
+    auto rank = [q_total](const RecipeBlocking& c) {
+        const int64_t q = c.q_chunk_size;
+        const int64_t padding = static_cast<int64_t>(div_up(q_total, c.q_chunk_size)) * q - q_total;
+        return std::make_tuple(c.cost, -static_cast<int64_t>(c.k_chunk_size), padding, -q, -static_cast<int64_t>(c.grid.x));
+    };
+    std::stable_sort(candidates.begin(), candidates.end(), [&](const RecipeBlocking& a, const RecipeBlocking& b) {
+        return rank(a) < rank(b);
     });
     return candidates;
 }
