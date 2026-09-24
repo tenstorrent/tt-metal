@@ -803,6 +803,66 @@ class QwenForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+
+class CohereForCausalLM(Generator):
+    """Command-R / Command-A family (HF model_type "cohere").
+
+    Minimal text-only dense wrapper, same shape as QwenForCausalLM. All
+    Cohere-specific behaviour (parallel decoder block, LayerNorm instead of
+    RMSNorm, LM-head logit_scale 0.0625, tied embeddings) is handled by the
+    model_type=="cohere" family dispatch in model.py / model_config.py (P5a).
+    Canada Quant Labs (org-internal) - bounty tt-metal#49307 track.
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class MistralForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
