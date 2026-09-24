@@ -91,7 +91,7 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
         }
 
         HostRegion& region = HostRegion::storage();
-        uint8_t* const base = region.reserved_base(cfg.cores);
+        uint8_t* const base = region.reserved_base(cfg.reserved_cores != 0 ? cfg.reserved_cores : cfg.cores);
 
         // 1. Both legs first: they allocate their sockets and MAP_FIXED the rings over the
         //    arenas, which must happen before anything pins those pages.
@@ -175,8 +175,10 @@ uint32_t D2H2H2DSocket::poll() {
         }
         ++im.counters.sent;
         if (im.cfg.collect_timing) {
-            im.timing.d2h_issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
-            im.timing.d2h_stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
+            if (im.timing.d2h_issue_cycles.size() < kMaxTimingSamples) {
+                im.timing.d2h_issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
+                im.timing.d2h_stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
+            }
         }
         return true;
     });
@@ -209,6 +211,9 @@ uint32_t D2H2H2DSocket::poll() {
                 for (uint32_t k = 0; k < pages && !im.published[c].empty(); ++k) {
                     const auto d = now - im.published[c].front();
                     im.published[c].pop_front();
+                    if (im.timing.h2d_publish_to_drained_ns.size() >= kMaxTimingSamples) {
+                        continue;
+                    }
                     im.timing.h2d_publish_to_drained_ns.push_back(
                         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
                 }

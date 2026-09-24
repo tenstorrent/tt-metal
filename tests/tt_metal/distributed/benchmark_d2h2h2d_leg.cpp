@@ -40,14 +40,18 @@ constexpr int kDeviceId = 0;
 
 // Both ranks build this identically, which is what keeps them on the same case list.
 const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
-const std::vector<int64_t> kCores = {4};
+const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 // Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
 // full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
-const std::vector<int64_t> kRingPages = {1, 4};
-const std::vector<int64_t> kVolumeMiB = {1024};
-const std::vector<int64_t> kPctSteady = {10};
-const std::vector<int64_t> kVerify = {1};
+const std::vector<int64_t> kRingPages = {1, 4, 8};
+const std::vector<int64_t> kVolumeMiB = {1024, 4096, 20480};
+const std::vector<int64_t> kPctSteady = {0, 10, 25};
+const std::vector<int64_t> kVerify = {0, 1};
 const std::vector<int64_t> kTiming = {1};
+
+// Both ranks build this identically, so the socket reserves for the sweep's largest case and
+// each case provisions only its own prefix -- reserved_base() maps once per process.
+const uint32_t kReservedCores = static_cast<uint32_t>(*std::max_element(kCores.begin(), kCores.end()));
 
 // Pre-registered so a skipped case keeps the CSV shape.
 void init_counters(benchmark::State& state) {
@@ -118,6 +122,7 @@ public:
         cfg.topo = experimental::HostTopology{rank_, ranks_, 1};
         cfg.chip = 0;
         cfg.cores = cores_;
+        cfg.reserved_cores = kReservedCores;
         cfg.grid_width = grid_width_;
         cfg.grid_height = static_cast<uint32_t>(grid.y);
         cfg.payload_bytes = payload_bytes_;
