@@ -18,6 +18,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
     const uint32_t num_C_slices = get_arg(args::num_C_slices);  // this core's C slices, per batch
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);
@@ -41,7 +42,6 @@ void kernel_main() {
     DataflowBuffer C_slice(dfb::C_slice);
     DataflowBuffer C_partials(dfb::C_partials);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
@@ -106,7 +106,7 @@ void kernel_main() {
                                 subblock_N_tiles,
                                 subblock_M_tiles,
                                 K_chunk_tiles);
-                            A_slice_tile += 1;                // next K tile along the A slice row
+                            A_slice_tile += 1;                       // next K tile along the A slice row
                             B_slice_tile += C_slice_N_padded_tiles;  // next K row of the B slice
                         }
                         tile_regs_commit();

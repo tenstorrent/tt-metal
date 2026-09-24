@@ -51,6 +51,9 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 // A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
 // every arch so a Wormhole-legal config never FATALs on Quasar.
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
+// Where the auto K chunk search starts (it walks down through divisors of K_tiles). A tuning point, not a
+// hardware limit: large enough to amortize the partials round trip, small enough that the double-buffered
+// A and B slices stay cheap in L1.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 
 // True when every sized DFB fits the extent cap and their total fits the L1 budget.
@@ -74,7 +77,7 @@ bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
 // is accepted, and the caller's DFB sizing FATALs with the full breakdown.
 template <typename FitsSubblock>
 std::pair<uint32_t, uint32_t> maximize_subblock_size(
-    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles, FitsSubblock&& fits) {
+    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles, const FitsSubblock& fits) {
     std::pair<uint32_t, uint32_t> best{1, 1};
     uint64_t best_volume = 0;
     uint64_t best_padded_area = UINT64_MAX;
