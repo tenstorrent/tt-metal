@@ -4,7 +4,7 @@
 
 """UInt32 column AVG through the public Compute API sfpu_reduce, driven from ttnn.
 
-Repro/guard for tenstorrent/tt-metal#57509 item 4. No ttnn op routes AVG onto the SFPU reduce, so
+Repro/guard for tenstorrent/tt-metal#57509 items 2 (Blackhole) and 4 (Wormhole B0). No ttnn op routes AVG onto the SFPU reduce, so
 this drives sfpu_reduce<PoolType::AVG, DataFormat::UInt32, ReduceDim::REDUCE_COL> from a small
 compute kernel via ttnn.generic_op, with real ttnn.uint32 tensors. perform_int_average() used to
 pick its divide-by-32 arm from the load mode, and UInt32 shares INT32 with signed Int32, so every
