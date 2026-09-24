@@ -11,7 +11,7 @@ import ttnn
 _MAX_PER_CORE_M = 4
 
 
-def prefill_matmul_config(
+def prefill_matmul_program_config(
     hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False, max_per_core_m=_MAX_PER_CORE_M
 ):
     """2D-multicast program config for hidden_states @ weight on a grid_x x grid_y core grid, or None

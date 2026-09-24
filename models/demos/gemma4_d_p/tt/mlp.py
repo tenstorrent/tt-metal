@@ -6,7 +6,7 @@
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_config
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_program_config
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
@@ -81,9 +81,10 @@ class MLP:
             **common,
         )
 
-    def _matmul_kwargs(self, hidden_states, weight, fused_gelu=False):
-        """Explicit blocking with fp32 accumulation for one projection, on the widest column count that
-        splits N evenly, or the core-grid path.
+    def _matmul_configs(self, hidden_states, weight, fused_activation=None):
+        """(program_config, compute_kernel_config) for one projection: explicit blocking with fp32
+        accumulation on the widest column count that splits N evenly, or (None, the default compute
+        config) for the core-grid path.
 
         With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
         the explicit path accumulates in fp32. That halves the output subblock, which only pays off for
@@ -92,16 +93,11 @@ class MLP:
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
-        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if fused_gelu else None
-        program_config = prefill_matmul_config(
-            hidden_states, weight, grid_x, grid.y, gelu, fp32_dest_acc=True, max_per_core_m=2
+        program_config = prefill_matmul_program_config(
+            hidden_states, weight, grid_x, grid.y, fused_activation, fp32_dest_acc=True, max_per_core_m=2
         )
         if program_config is None:
-            return {
-                "core_grid": self.core_grid,
-                "compute_kernel_config": self.compute_kernel_config,
-                **({"activation": "gelu_tanh"} if fused_gelu else {}),
-            }
+            return None, self.compute_kernel_config
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -109,7 +105,22 @@ class MLP:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        return {"program_config": program_config, "compute_kernel_config": compute_kernel_config}
+        return program_config, compute_kernel_config
+
+    def _project(self, hidden_states, weight, memory_config, gelu=False):
+        """hidden_states @ weight, on the explicit config when there is one and the core grid otherwise.
+        With gelu, the GELU is fused either way."""
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None
+        program_config, compute_kernel_config = self._matmul_configs(hidden_states, weight, fused_activation)
+        return ttnn.linear(
+            hidden_states,
+            weight,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            core_grid=None if program_config is not None else self.core_grid,
+            activation="gelu_tanh" if gelu and program_config is None else None,
+            memory_config=memory_config,
+        )
 
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
@@ -117,28 +128,13 @@ class MLP:
         # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
 
-        gate = ttnn.linear(
-            hidden_states,
-            self.gate_proj,
-            memory_config=act_mc,
-            **self._matmul_kwargs(hidden_states, self.gate_proj, fused_gelu=True),
-        )
-        up = ttnn.linear(
-            hidden_states,
-            self.up_proj,
-            memory_config=act_mc,
-            **self._matmul_kwargs(hidden_states, self.up_proj),
-        )
+        gate = self._project(hidden_states, self.gate_proj, act_mc, gelu=True)
+        up = self._project(hidden_states, self.up_proj, act_mc)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
         # Pack output to DRAM ahead of ccl_allreduce.
-        output = ttnn.linear(
-            hidden,
-            self.down_proj,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self._matmul_kwargs(hidden, self.down_proj),
-        )
+        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
