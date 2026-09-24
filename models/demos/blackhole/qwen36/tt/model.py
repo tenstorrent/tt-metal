@@ -623,8 +623,6 @@ class Qwen36Model:
             ccl_kw = dict(dtype=out_dtype)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded and gather:
-            from models.demos.blackhole.qwen36.tt import tp_common as tpc
-
             # ~8 MB/device (B=32, vocab/tp=124160, bf16) puts this in the PREFILL-gather size band, not
             from models.tt_transformers.tt.ccl import tt_all_gather
 

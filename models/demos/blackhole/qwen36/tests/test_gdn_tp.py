@@ -739,6 +739,7 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
 
+
 def _snapshot_layer_state(gdn, mesh_device):
     """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
     comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
@@ -804,7 +805,11 @@ def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, requ
     sd = load_gdn_layer(args.CKPT_DIR, li)
     # The SAME entry point forward_prefill uses (aliased there as _causal_conv1d_fir); it
     # dispatches to the Wormhole ROW_MAJOR-taps fork, so this compares the shipping FIR.
-    from models.demos.blackhole.qwen36.tt.gdn.conv_fir_wh import causal_conv1d_fir_dispatch
+    # conv_fir_wh's dispatch was folded into upstream _causal_conv1d_fir: pad_layout=None resolves
+    # to TILE on Blackhole and ROW_MAJOR on Wormhole, which is what the shim chose.
+    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import (
+        _causal_conv1d_fir as causal_conv1d_fir_dispatch,
+    )
     from models.tt_transformers.tt.ccl import TT_CCL
 
     nd = mesh_device.get_num_devices()
@@ -836,7 +841,8 @@ def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, requ
         weight_taps=gdn.tw["conv_taps"],
         bias_dev=None,
         valid_len=VL,
-        model_args=args,
+        # model_args was the shim's arch selector; upstream resolves it from pad_layout=None
+        # (TILE on Blackhole, ROW_MAJOR on Wormhole), which is the same choice.
     )
     # Shipping signature: the native path takes its carry at T, the FIR at valid_len. That
     # carry difference is KNOWN and is the documented reason for the fallback, so it is

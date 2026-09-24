@@ -450,6 +450,9 @@ def apply_interleaved_mrope(freqs, mrope_section):
 
 
 _ROPE_DEV_TABLES = {}
+# Minimum ROW count (positions) the device RoPE table is built at, and the floor the
+# doubling growth starts from. Not a model dimension -- it is unrelated to args.dim.
+_ROPE_TABLE_MIN_ROWS = 4096
 
 
 def _rope_dev_tables(device, rope_dim, n_rows, theta, full_head_dim=None):
@@ -469,7 +472,7 @@ def _rope_dev_tables(device, rope_dim, n_rows, theta, full_head_dim=None):
     ent = _ROPE_DEV_TABLES.get(key)
     if ent is not None and ent["rows"] >= n_rows:
         return ent["cos"], ent["sin"]
-    rows = max(int(n_rows), 2 * ent["rows"] if ent else 0, 4096)
+    rows = max(int(n_rows), 2 * ent["rows"] if ent else 0, _ROPE_TABLE_MIN_ROWS)
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     freqs = torch.outer(torch.arange(rows).float(), inv_freq)  # [rows, rope_dim/2]
     emb = torch.cat([freqs, freqs], dim=-1)  # [rows, rope_dim]
