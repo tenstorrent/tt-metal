@@ -340,6 +340,7 @@ void bind_sdpa(nb::module_& mod) {
 
 
             output_heads_concat (bool): Defaults to `False`. Write the output directly in the `[b x 1 x s x (nqh*dh)]` layout that `concat_heads` would produce (same tiles, different tile ids), so no concat pass is needed before the output projection. Interleaved output only.
+            pack_gqa_heads (bool): Defaults to `False`. Grouped-query attention: schedule the `nqh / nkh` query heads that share a KV head as one head of `(nqh / nkh) * s` rows (the same memory), so each KV head's K/V is read once for its whole group. Non-causal, no `attn_mask`, tile-aligned unpadded `s`; with `output_heads_concat`, `q_chunk_size` must divide `s`. Output layout is unchanged.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with `output_heads_concat`).
@@ -365,7 +366,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
-        nb::arg("output_heads_concat") = false);
+        nb::arg("output_heads_concat") = false,
+        nb::arg("pack_gqa_heads") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

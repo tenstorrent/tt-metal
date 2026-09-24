@@ -47,7 +47,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
-    bool output_heads_concat) {
+    bool output_heads_concat,
+    bool pack_gqa_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -99,7 +100,8 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
         std::nullopt,  // paged_cache_geometry
-        output_heads_concat);
+        output_heads_concat,
+        pack_gqa_heads);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).

@@ -102,7 +102,12 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-#ifdef OUT_HEADS_CONCAT
+#if defined(OUT_HEADS_CONCAT) && defined(GQA_PACK)
+    // pack_gqa_heads: NQH counts packed heads of GQA_PACK query heads x GQA_PACK_SQT row tiles each; the output
+    // is [B, 1, GQA_PACK_SQT, NQH*GQA_PACK*vDH]. Q chunks never span two query heads (host-validated).
+    const auto out_tile_shape = TensorTileShape(B, 1, GQA_PACK_SQT, NQH * GQA_PACK * vDHt);
+    constexpr uint32_t out_row_stride_tiles = NQH * GQA_PACK * vDHt;
+#elif defined(OUT_HEADS_CONCAT)
     // Output is [B, 1, Sq, NQH*vDH]: head nq's tiles sit at column tiles [nq*vDHt, (nq+1)*vDHt) of each row tile.
     const auto out_tile_shape = TensorTileShape(B, 1, valid_Sqt, NQH * vDHt);
     constexpr uint32_t out_row_stride_tiles = NQH * vDHt;
@@ -238,7 +243,11 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-#ifdef OUT_HEADS_CONCAT
+#if defined(OUT_HEADS_CONCAT) && defined(GQA_PACK)
+            const uint32_t packed_row = write_offset + out_row_start_tile;
+            uint32_t out_tile_id = out_tile_shape.id_of(
+                nb, 0, packed_row % GQA_PACK_SQT, (nq * GQA_PACK + packed_row / GQA_PACK_SQT) * vDHt);
+#elif defined(OUT_HEADS_CONCAT)
             uint32_t out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
 #else
             uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
