@@ -29,9 +29,9 @@ class TtDecoderLayer:
         self.is_moe = w.is_moe
         self.mlp = TtMoE(mesh, cfg, i, w) if w.is_moe else TtSwiGLU(mesh, w.w_gate, w.w_up, w.w_down, name=f"L{i}/mlp")
 
-    def __call__(self, h, start: int, cache: TtKVCache):
+    def __call__(self, h, start: int, cache: TtKVCache, contract_kv=None):
         x = self.attn_norm(h)
-        a = self.attn(x, start, cache)
+        a = self.attn(x, start, cache, contract_kv=contract_kv)
         ttnn.deallocate(x)
         h2 = ttnn.add(h, a)
         ttnn.deallocate(a)
@@ -81,11 +81,12 @@ class TtErnieModel:
         cache: TtKVCache,
         on_layer: Callable[[int, ttnn.Tensor], None] | None = None,
         hidden_in: ttnn.Tensor | None = None,
+        contract_kv=None,
     ) -> ttnn.Tensor:
         """Run one chunk at absolute positions [start, start+len). Returns final-normed hidden [1,1,S,H]."""
         h = self.embed(tokens) if hidden_in is None else hidden_in
         for layer in self.layers:
-            h2 = layer(h, start, cache)
+            h2 = layer(h, start, cache, contract_kv=contract_kv)
             ttnn.deallocate(h)
             h = h2
             if on_layer is not None:
