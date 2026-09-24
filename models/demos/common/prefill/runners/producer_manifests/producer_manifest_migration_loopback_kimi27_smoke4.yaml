@@ -1,0 +1,41 @@
+model:
+  variant: deepseek_v3_d_p
+  # Must equal the runner's PREFILL_NUM_LAYERS: the PCC loop walks range(NUM_LAYERS) and
+  # table.lookup on a layer the runner never published resolves to a default address.
+  num_layers: 4
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 120
+
+workload:
+  num_users: 4
+  chunks: "11"
+  max_requests: 4
+  interleave: round_robin
+  # Layer k's KV depends only on layers 0..k-1, so a truncated stack still scores
+  # against the full-depth golden for the layers it does run.
+  check_pcc: true
+  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+
+migration:
+  issue: true
+  dest_endpoint_id: 1
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done_smoke4.sentinel
+  client_dir: /data/nmilicevic/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+  table_path: /tmp/prefill_kv_chunk_table_smoke4.pb
+  device_map_path: /tmp/prefill_kv_device_map_smoke4.json
+
+env:
+  PREFILL_PCC_GOLDEN_LEN: "56320"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  PREFILL_VERIFY_MIGRATION: "both"
+  PREFILL_SEND_SHUTDOWN: "0"
