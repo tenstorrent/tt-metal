@@ -1,5 +1,7 @@
 name: "(Galaxy) unit tests"
 
+run-name: ":warning: WARNING :warning:: This Pipeline is deprecated, all tests moved to `galaxy-tests.yaml`"
+
 on:
   workflow_dispatch:
     inputs:

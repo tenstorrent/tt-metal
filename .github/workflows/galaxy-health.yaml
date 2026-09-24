@@ -38,7 +38,7 @@ on:
   schedule:
     - cron: "0 */4 * * *" # Runs every 4 hours
 
-run-name: "(Galaxy) Health"
+run-name: ":warning: WARNING :warning:: This Pipeline is deprecated, all tests moved to `galaxy-sanity.yaml`"
 
 permissions:
   packages: write

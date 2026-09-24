@@ -96,7 +96,7 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-run-name: ${{ inputs.description }}
+run-name: ":warning: WARNING :warning:: This Pipeline is deprecated, all tests moved to `galaxy-tests.yaml`"
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
