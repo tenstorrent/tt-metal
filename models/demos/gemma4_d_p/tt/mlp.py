@@ -77,37 +77,43 @@ class MLP:
             **common,
         )
 
-    def _matmul_config(self, hidden_states, weight, fused_activation=None):
-        """Blocking for one projection, on the widest column count that splits N evenly."""
+    def _matmul_kwargs(self, hidden_states, weight, fused_activation=None):
+        """Explicit blocking with fp32 accumulation for one projection, on the widest column count that
+        splits N evenly, or ttnn's default config.
+
+        With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
+        the explicit path accumulates in fp32. That halves the output subblock, which only pays off for
+        short M: at a per-core M of 4 (chunk 8192 at CP8) the default config is as fast, so it is kept.
+        """
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
-        return prefill_matmul_config(hidden_states, weight, grid_x, grid.y, fused_activation)
+        program_config = prefill_matmul_config(
+            hidden_states, weight, grid_x, grid.y, fused_activation, fp32_dest_acc=True, max_per_core_m=2
+        )
+        if program_config is None:
+            return {"compute_kernel_config": self.compute_kernel_config}
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        return {"program_config": program_config, "compute_kernel_config": compute_kernel_config}
 
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
         gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)
-        gate_config = self._matmul_config(hidden_states, self.gate_proj, fused_activation=gelu)
-        gate = ttnn.linear(
-            hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config, program_config=gate_config
-        )
-        if gate_config is None:
+        gate_kwargs = self._matmul_kwargs(hidden_states, self.gate_proj, fused_activation=gelu)
+        gate = ttnn.linear(hidden_states, self.gate_proj, **gate_kwargs)
+        if "program_config" not in gate_kwargs:
             gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
-        up = ttnn.linear(
-            hidden_states,
-            self.up_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=self._matmul_config(hidden_states, self.up_proj),
-        )
+        up = ttnn.linear(hidden_states, self.up_proj, **self._matmul_kwargs(hidden_states, self.up_proj))
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)
         up.deallocate(True)
-        output = ttnn.linear(
-            hidden,
-            self.down_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=self._matmul_config(hidden, self.down_proj),
-        )
+        output = ttnn.linear(hidden, self.down_proj, **self._matmul_kwargs(hidden, self.down_proj))
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
