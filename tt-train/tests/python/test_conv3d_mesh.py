@@ -6,6 +6,9 @@
 
 Kept apart from ``test_conv3d.py``: the module-scoped ``tp_mesh`` fixture keeps the mesh open for the whole module,
 and the single-device tests there open a plain device.
+
+Needs two devices. On a single-device runner ``tp_mesh`` skips this module, so it only counts as coverage on a
+multi-device CI leg run with ``TTML_REQUIRE_TP_MESH=1 -m requires_multi_device``.
 """
 
 import numpy as np
@@ -15,7 +18,7 @@ import torch
 import ttnn
 import ttml
 
-pytestmark = pytest.mark.requires_device
+pytestmark = [pytest.mark.requires_device, pytest.mark.requires_multi_device]
 
 REL_OF_MAX = 1e-2
 ABS_FLOOR = 2e-2
