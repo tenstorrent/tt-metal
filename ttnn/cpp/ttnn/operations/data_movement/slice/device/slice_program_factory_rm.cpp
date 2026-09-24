@@ -536,11 +536,11 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
 }
 
 tt::tt_metal::experimental::ProgramRunArgs SliceRmProgramFactory::override_runtime_arguments(
-    const SliceParams& args,
+    const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    return slice_program_run_args(SliceRmProgramFactory{}, args, tensor_args, output);
+    return slice_row_major_run_args(tensor_args, output);
 }
 
 }  // namespace ttnn::prim

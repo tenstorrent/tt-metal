@@ -18,7 +18,7 @@ while true; do
 
   scan_log_dir "$LOG_DIR"
 
-  printf "  PASS=%d  HANG?=%d  FAIL=%d  RUN=%d  PENDING=%d\n" "$pass" "$hang" "$fail" "$running" "$pending"
+  printf "  PASS=%d  CRASH=%d  HANG?=%d  FAIL=%d  RUN=%d  PENDING=%d\n" "$pass" "$crash" "$hang" "$fail" "$running" "$pending"
   echo "  ─────────────────────────────────────────────────────────────"
   printf '%s\n' "${details[@]}"
 

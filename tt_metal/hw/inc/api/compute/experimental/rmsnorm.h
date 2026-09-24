@@ -99,7 +99,8 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
  * mul_reduce_scalar and add_binary, then acquire DST before calling.
  *
  * ocb programs the packer's face_r_dim for the reduce mask. On return,
- * DST[dst_capacity - 1] contains the scaled sum of products.
+ * DST[dst_capacity - 1] contains scaler * scaler * sum(A * B): the column
+ * and row reductions both apply scaler, so a mean requires 1 / sqrt(width).
  * The reduce pack mask remains configured; call
  * mul_reduce_scalar_uninit() before normal packing.
  */
@@ -133,6 +134,9 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             mul_reduce_scalar_init(icb0, icb1);
         }
         for (uint32_t j = 0; j < count; ++j) {
+            // Products reuse DEST slots across chunks; preserve the running
+            // accumulator while clearing only the next multiplication's tile.
+            MATH((llk_math_rmsnorm_clear_product_tile<dst_capacity, is_fp32_dest_acc_en>(j)));
             UNPACK((llk_unpack_AB(icb0, icb1, input_start + j, input_start + j)));
             MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, MATH_FIDELITY>(j, icb0)));
         }
