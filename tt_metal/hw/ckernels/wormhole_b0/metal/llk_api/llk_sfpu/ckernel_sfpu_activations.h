@@ -8,6 +8,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_relu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -48,5 +49,14 @@ void hardsigmoid_init() {
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
     sfpi::vConstFloatPrgm1 = 0.5f;
 }
+
+// Op class for hardsigmoid: clamp(x / 6 + 0.5, 0, 1).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Hardsigmoid : SfpuUnaryOp<Hardsigmoid<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_activation<APPROXIMATION_MODE, ActivationType::Hardsigmoid, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { hardsigmoid_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

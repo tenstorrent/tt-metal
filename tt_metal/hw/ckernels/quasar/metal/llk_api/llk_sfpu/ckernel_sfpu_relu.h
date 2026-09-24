@@ -12,9 +12,15 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
+// tt-llk's ckernel_sfpu.h includes this file before llk_math_eltwise_unary_sfpu.h has defined
+// SfpuUnaryOp, so declare it for the op classes below; it is complete wherever they are used.
+template <typename Op, trisc::DstTileShape SLOT>
+struct SfpuUnaryOp;
+
 // Calculates RELU for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_sfp_rows_() {
     TTI_SFPLOAD(
@@ -97,6 +103,17 @@ inline void _calculate_lrelu_(const std::uint32_t slope) {
     }
 }
 
+// Op class for leaky relu. Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Lrelu : SfpuUnaryOp<Lrelu<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t slope) {
+        _calculate_lrelu_<ITERATIONS>(slope);
+    }
+};
+
 // Calculates RELU MIN for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_min_sfp_rows_() {
     TTI_SFPLOAD(
@@ -126,6 +143,19 @@ inline void _relu_min_(T threshold) {
                                                                                    // 2 rows)
     }
 }
+
+// Op class for relu_min: max(x, threshold). Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    typename VectorType,
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    typename T = std::uint32_t,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct ReluMin : SfpuUnaryOp<ReluMin<VectorType, APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const T threshold) {
+        _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
+    }
+};
 
 // Calculates RELU MAX for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_max_sfp_rows_() {
@@ -157,6 +187,19 @@ inline void _relu_max_(T threshold) {
                                                                                    // 2 rows)
     }
 }
+
+// Op class for relu_max: max(0, min(x, threshold)). Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    typename VectorType,
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    typename T = std::uint32_t,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct ReluMax : SfpuUnaryOp<ReluMax<VectorType, APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const T threshold) {
+        _relu_max_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

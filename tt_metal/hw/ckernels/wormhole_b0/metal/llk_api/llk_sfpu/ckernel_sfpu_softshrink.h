@@ -8,6 +8,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -25,5 +26,14 @@ inline void calculate_softshrink(std::uint32_t param0) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for softshrink with threshold lambda (param0, fp32 bits).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Softshrink : SfpuUnaryOp<Softshrink<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t param0) {
+        calculate_softshrink<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    static inline __attribute__((always_inline)) void init_op() { softshrink_init(); }
+};
 
 }  // namespace ckernel::sfpu

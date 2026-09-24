@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_gelu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +16,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
+    MATH((sfpu::Gelu<fast_and_approx, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -35,33 +35,28 @@ ALWI void gelu_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void gelu_tile(std::uint32_t idst) {
+    MATH((sfpu::Gelu<fast_and_approx, is_fp32_dest_acc_en>::run(idst)));
 }
 
+// Quasar has no pack-thread SFPU and no gelu_tanh / gelu_derivative kernels.
 #ifndef ARCH_QUASAR
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
+    PACK((sfpu::Gelu<fast_and_approx, is_fp32_dest_acc_en>::init()));
 }
 
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void gelu_tile_pack(std::uint32_t idst) {
+    PACK((sfpu::Gelu<fast_and_approx, is_fp32_dest_acc_en>::run(idst)));
 }
 
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
-ALWI void gelu_tanh_tile_init() {
-    MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
-}
+ALWI void gelu_tanh_tile_init() { MATH((sfpu::GeluTanh<DST_ACCUM_MODE>::init())); }
 
-ALWI void gelu_tanh_tile_init_pack() {
-    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
-}
+ALWI void gelu_tanh_tile_init_pack() { PACK((sfpu::GeluTanh<DST_ACCUM_MODE>::init())); }
 
 // clang-format off
 /**
@@ -79,13 +74,13 @@ ALWI void gelu_tanh_tile_init_pack() {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void gelu_tanh_tile(std::uint32_t idst) {
+    MATH((sfpu::GeluTanh<is_fp32_dest_acc_en>::run(idst)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tanh_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+ALWI void gelu_tanh_tile_pack(std::uint32_t idst) {
+    PACK((sfpu::GeluTanh<is_fp32_dest_acc_en>::run(idst)));
 }
 
 /**
@@ -93,7 +88,7 @@ ALWI void gelu_tanh_tile_pack(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu_derivative, sfpu::gelu_derivative_polynomial_init, (fast_and_approx)));
+    MATH((sfpu::GeluDerivative<fast_and_approx, DST_ACCUM_MODE>::init()));
 }
 
 // clang-format off
@@ -119,14 +114,8 @@ ALWI void gelu_derivative_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_gelu_derivative_polynomial,
-        (fast_and_approx, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC));
+ALWI void gelu_derivative_tile(std::uint32_t idst) {
+    MATH((sfpu::GeluDerivative<fast_and_approx, is_fp32_dest_acc_en>::run(idst)));
 }
 
 #endif

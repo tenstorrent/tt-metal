@@ -4,24 +4,26 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
-    const uint dst_index_in0,  // Index for input (x)
-    const uint dst_index_in1,  // Index for exp(-x)
-    const uint dst_index_out)  // Index for output
+    const std::uint32_t dst_index_in0,  // Index for input (x)
+    const std::uint32_t dst_index_in1,  // Index for exp(-x)
+    const std::uint32_t dst_index_out)  // Index for output
 {
     // logsigmoid(x) = -softplus(-x)
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size_sfpi = 32;
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
         // Read inputs from destination registers
         sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -55,6 +57,15 @@ inline void calculate_logsigmoid(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for logsigmoid(x) from x (in0) and exp(-x) (in1).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Logsigmoid : SfpuBinaryOp<Logsigmoid<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
 
 template <bool APPROXIMATION_MODE>
 void logsigmoid_init() {}

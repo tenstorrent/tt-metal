@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -17,12 +19,16 @@ namespace ckernel::sfpu {
 // polynomial; sin² is even, so no quadrant sign-fix is needed. Valid for |α·x| < 32767·π
 // (≈1.03e5) before convert<vSMag16> saturates.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
-inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint dst_index_beta, uint dst_index_out) {
+inline void calculate_snake_beta(
+    std::uint32_t dst_index_x,
+    std::uint32_t dst_index_alpha,
+    std::uint32_t dst_index_beta,
+    std::uint32_t dst_index_out) {
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "snake_beta supports only Float32 and Float16_b");
 
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     constexpr float one_over_pi = 0.318309886183791f;
     constexpr float pi_f = 3.141592653589793f;
 
@@ -86,5 +92,23 @@ inline void snake_beta_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATE>();
 }
+
+// Op class for snake_beta of x (in0), alpha (in1) and beta (in2). data_format is only needed by run().
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = 8>
+struct SnakeBeta : SfpuTernaryOp<SnakeBeta<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out) {
+        calculate_snake_beta<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { snake_beta_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

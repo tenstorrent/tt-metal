@@ -4,16 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #ifndef ARCH_QUASAR
 #include "ckernel_sfpu_hardtanh.h"
 #endif
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+// Quasar has no hardtanh kernel.
 #ifndef ARCH_QUASAR
 // clang-format off
  /**
@@ -31,36 +32,20 @@ namespace ckernel {
 
  */
 // clang-format on
-ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_hardtanh,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param0,
-        param1));
+ALWI void hardtanh_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    MATH((sfpu::Hardtanh<APPROX>::run(idst, param0, param1)));
 }
 
-ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_hardtanh,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param0,
-        param1));
+ALWI void hardtanh_tile_pack(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    PACK((sfpu::Hardtanh<APPROX>::run(idst, param0, param1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
+ALWI void hardtanh_tile_init() { MATH((sfpu::Hardtanh<APPROX>::init())); }
 
-ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
+ALWI void hardtanh_tile_init_pack() { PACK((sfpu::Hardtanh<APPROX>::init())); }
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

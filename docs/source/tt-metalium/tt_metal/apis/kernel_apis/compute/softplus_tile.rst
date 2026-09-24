@@ -2,4 +2,4 @@ softplus_tile
 =============
 
 .. doxygenfunction:: softplus_tile_init
-.. doxygenfunction:: softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold)
+.. doxygenfunction:: softplus_tile(std::uint32_t idst, std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold)

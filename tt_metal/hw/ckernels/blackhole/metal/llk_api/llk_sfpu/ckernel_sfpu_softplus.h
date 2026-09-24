@@ -11,6 +11,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -171,5 +172,15 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
         sfpi::dst_reg++;
     }
 }
+
+// Op class for softplus with beta, 1 / beta and threshold (fp32 bits).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Softplus : SfpuUnaryOp<Softplus<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t beta, const std::uint32_t beta_reciprocal, const std::uint32_t threshold) {
+        calculate_softplus<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(beta, beta_reciprocal, threshold);
+    }
+    static inline __attribute__((always_inline)) void init_op() { softplus_init(); }
+};
 
 }  // namespace ckernel::sfpu
