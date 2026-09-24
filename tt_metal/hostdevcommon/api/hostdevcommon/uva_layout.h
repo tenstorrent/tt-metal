@@ -26,6 +26,10 @@ constexpr uint32_t kMaxHosts = kMaxCreditPeers;
 // this. rx_slot_offset() has no host dimension, so a second sender collides -- raise together.
 constexpr uint32_t kMaxH2HHostsSupported = 2;
 
+// Per-frame latency samples stop at this many: past it the percentiles have long converged,
+// and a volume run would otherwise grow the vectors -- and realloc them -- while it is timed.
+constexpr uint64_t kMaxTimingSamples = 4ull << 20;
+
 // One line each, so peers RDMA-writing different entries never contend. Absolute counts
 // make a duplicated or reordered credit a no-op, so nothing here needs ordering.
 constexpr uint64_t kCreditLineBytes = 64;
