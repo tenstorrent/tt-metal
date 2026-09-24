@@ -140,8 +140,7 @@ Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run
 The previous demo in this directory measured 32.3 ms at bs=1 and 725 ms at bs=32. STS-B Spearman through the
 batched paths (last token + EOS): 0.819 / 0.810 / 0.808 / 0.807 at bs 1 / 8 / 16 / 32
 (`../pplx_embed_4b/demo/eval_accuracy_batched.py --pool last --eos`). The H200 reference is the pplx-embed-4B
-measurement; the compute is identical. Per-op profiles of the shipped configuration are described in
-`../pplx_embed_4b/doc/PERF_GUIDE.md` §5.
+measurement; the compute is identical.
 
 ## Optimizations enabled
 

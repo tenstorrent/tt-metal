@@ -148,7 +148,9 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 )
             else:
                 fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm(a, b, *consts, sum_dtype=dt, memory_config=mc)
-        elif os.getenv("QWEN_FUSED_ADD_NORM_SPLIT", "0") == "1":  # probe: +5% e2e at bs1, see NEGATIVE_RESULTS 34
+        elif (
+            os.getenv("QWEN_FUSED_ADD_NORM_SPLIT", "0") == "1"
+        ):  # probe: +5% e2e at bs1 (fixed-cost bound), kept opt-in
             # Few rows (bs1: 16 tile-rows): split each row over R cores with a partial-sum exchange.
             grid = x.device().compute_with_storage_grid_size()
             R = pick_split(rows // 32, int(x.padded_shape[-1]) // 32, int(grid.x) * int(grid.y))

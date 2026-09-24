@@ -52,9 +52,6 @@ Device-profiled bs32 (365 ms of kernels at the nominal clock; sustained e2e 446 
 product 13%, fused add+RMSNorm 8%, SDPA 8%, fused heads op 6%. bs1 (16.6 ms of kernels, 509 ops): matmuls
 60%, SwiGLU product 14%, SDPA 11%, fused heads op 10%.
 
-Details: `doc/POSITIVE_RESULTS.md` (every landing with its effect), `doc/NEGATIVE_RESULTS.md` (every rejected
-experiment with numbers), `doc/PERF_GUIDE.md` (how to run, measure and profile).
-
 ## Reproduce
 
 ```bash

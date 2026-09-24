@@ -484,7 +484,7 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # they do not divide (shorter warm-up seq_lens). Opt out: QWEN_LEGACY_BS1_BLOCKS=0.
     # bs1 legacy 2D-multicast matmuls on 12x8 = 96 cores instead of 8x8 = 64. The DRAM width-sharded
     # bfp4 weights live in 8 banks; the 2D factory's per-column bank walk used to hand a column a
-    # whole bank stripe, so any grid wider than 8 columns computed garbage (NEGATIVE_RESULTS §16/§39).
+    # whole bank stripe, so any grid wider than 8 columns computed garbage.
     # With the capped walk every wide grid is bit-identical to 8x8. Standalone, traced, M=512:
     # QKV 67.5 -> 49.8 us, WO 48.7 -> 40.1, FF1/FF3 110.9 -> 79.5 each, FF2 101.8 -> 78.8
     # (about -112 us/layer). per_core_N 7 needs a 2x1 subblock (the derived 1x1 is slower than 8x8).

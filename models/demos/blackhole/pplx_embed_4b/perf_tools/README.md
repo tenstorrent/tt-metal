@@ -1,7 +1,6 @@
 # perf_tools
 
-Scripts behind the numbers in `../doc/POSITIVE_RESULTS.md` and `../doc/NEGATIVE_RESULTS.md`; how to use them is
-in `../doc/PERF_GUIDE.md`. Shell scripts locate the tt-metal checkout from their own path and use
+Scripts behind the numbers in `../PERF.md` and `../README.md`. Shell scripts locate the tt-metal checkout from their own path and use
 `./python_env/bin/python`; every script takes the chip from `TT_VISIBLE_DEVICES` (the scripts that take a
 `<chip>` argument set it themselves).
 

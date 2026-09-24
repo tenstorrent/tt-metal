@@ -11,7 +11,8 @@ memory-placement and kernel optimizations for the
 36-layer Qwen3-4B architecture). This README covers how to run every script,
 what each produces, and the optimizations applied.
 The same stack runs the causal `Qwen/Qwen3-Embedding-4B` checkpoint unchanged
-(`HF_MODEL=Qwen/Qwen3-Embedding-4B`; numbers and instructions in [doc/PERF_GUIDE.md](doc/PERF_GUIDE.md) §9).
+(`HF_MODEL=Qwen/Qwen3-Embedding-4B`; numbers in [PERF.md](PERF.md), instructions in
+[../qwen3_embedding_4b/README.md](../qwen3_embedding_4b/README.md)).
 
 ---
 
@@ -100,8 +101,7 @@ stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Bas
 ### Optimization history
 
 Every landing from the 2026-09-22 baseline to the numbers above, with its mechanism and measured effect, is in
-[PERF.md](PERF.md); the long-form notes per landing are in §5 below, and every rejected experiment with numbers
-is in `doc/NEGATIVE_RESULTS.md`. Most of the early wins were inherited configuration constants that did not fit the
+[PERF.md](PERF.md); the long-form notes per landing are in §5 below. Most of the early wins were inherited configuration constants that did not fit the
 4B shapes; re-check them before reusing this config on another model in the family.
 
 - **L1 path (bs=1, ISL≤512):** activations stay resident in L1, so the residual stream never
@@ -337,10 +337,8 @@ ttnn.close_device(device)
 
 ## 5. Optimizations
 
-Start with `doc/PERF_GUIDE.md` (how to run, measure, profile, and where every knob lives), then
-`doc/POSITIVE_RESULTS.md` (every landed optimization with its measured effect) and `doc/NEGATIVE_RESULTS.md`
-(every rejected experiment, with numbers). The scripts behind the measurements are in `perf_tools/`; the
-sections below carry the long-form notes per landing.
+[PERF.md](PERF.md) summarises every landing with its measured effect. The scripts behind the measurements are
+in `perf_tools/`; the sections below carry the long-form notes per landing.
 
 Applied by default across all workloads (centralized in
 `demo/_common.py`, shared by every demo, the live serving path, and the DP
@@ -467,7 +465,7 @@ no-op. Swept e2e and confirmed flat, so the default stays at 512:
 
 ### L1-resident residual stream at batch — measured, net regression (2026-09-23)
 
-Question (Sankar): per-op, block-sharding is a wash, but keeping activations
+Question: per-op, block-sharding is a wash, but keeping activations
 sharded/L1-resident *across the model* removes DRAM round-trips — does full-model
 latency improve? Measured, same invocation (`TT_VISIBLE_DEVICES=0`), ISL=512,
 10 iterations, best-of.
@@ -590,7 +588,7 @@ default (`QWEN_MM_BLOCK_FF2=16,8,8`, `QWEN_MM_BLOCK_QKV=8,4,8`, `QWEN_MM_BLOCK_W
 A wider fused-kernel sweep then found K_block 20 for bs16 (`4,20,8` / 1×4): 2988 → 2874 µs
 standalone, **232.8 → 228.3 ms e2e (−1.9%)**, now the bs16 default. Larger K steps are slower
 for every *plain* projection at every batch (K10…K40: +2…+20%), so only the fused kernel takes
-it. Full tables: `perf_csv/NEGATIVE_RESULTS.md` §29.
+it.
 
 ### Fused residual add + RMSNorm (bs16+) — landed (2026-09-23)
 
@@ -624,7 +622,7 @@ rows below which the stock ops are kept). A row-split variant for bs1
 partial-sum exchange, 80 cores) beats add + interleaved rms_norm standalone (35 vs 49 µs)
 but loses to the model's block-sharded LN chain e2e (23.2 → 24.4 ms, +5%): at bs1 every op
 is latency-bound and the fused op's fixed cost (~35 µs) exceeds the four stock kernels'.
-Kept as a probe (`QWEN_FUSED_ADD_NORM_SPLIT=1`); `perf_csv/NEGATIVE_RESULTS.md` §34. `QWEN_FUSED_ADD_NORM_VERIFY=1` runs the stock
+Kept as a probe (`QWEN_FUSED_ADD_NORM_SPLIT=1`). `QWEN_FUSED_ADD_NORM_VERIFY=1` runs the stock
 add + norm next to every fused call on the live model tensors and prints the PCCs: at bs16
 all 72 calls of a forward gave sum ≥ 0.99988 and norm ≥ 0.9993 (most 1.0000).
 
@@ -653,8 +651,7 @@ only same-chip comparisons count from here on):
 | bs16 | 67.225  | 239.6 | **239.6** | — | 3.56× |
 | bs32 | 139.150 | 455.1 | **450.6** | **−1.0%** | 3.24× |
 
-Two things tried in the same session that did *not* pay, both recorded in
-`perf_csv/NEGATIVE_RESULTS.md` (§24, §25): widening the bs1 legacy matmul grids
+Two things tried in the same session that did *not* pay: widening the bs1 legacy matmul grids
 (the DRAM width-sharded weights pin the kernel to 8 core columns — 10×8/12×8 return
 inf, and the decode-style DRAM-sharded matmul only supports M == 1 tile), and a
 DST-reuse rewrite of the fused head-split compute plus cos/sin caching (standalone
@@ -818,7 +815,7 @@ replay alike: 451.3 vs 451.5 ms). Every per-op µs and roofline % quoted from th
 profiler in this README is therefore ~20% low for sustained batched runs: compute-bound
 ops scale with AICLK, DRAM-bound ones do not. The chip is power-limited, so lowering
 power per FLOP (fewer active cores on DRAM-bound ops, narrower operands) buys clock as
-well as bytes. E2E numbers are unaffected. Details: `perf_csv/NEGATIVE_RESULTS.md` §30.
+well as bytes. E2E numbers are unaffected.
 
 ### Correction: use DEVICE KERNEL DURATION, not FW DURATION, for op shares (2026-09-23)
 
@@ -951,7 +948,7 @@ profile is gone since the extended trace landed.
 
 ### bs>1: what transfers from the BGE-M3 P150 branch, and three probes (2026-09-24)
 
-Reviewed `gtobarTT/bge_m3_p150_optimizations` (25 commits; B1 4.31 → 3.73 ms, B8 23.7 → 11.0,
+Reviewed a BGE-M3 P150 optimization branch (25 commits; B1 4.31 → 3.73 ms, B8 23.7 → 11.0,
 B16 39.0 → 20.5, B32 65.7 → 42 ms on a 13×10 p150a — Galaxy chips expose 12×10, as here). The
 batched wins there are: bf8 Q/K/V into the streaming SDPA kernel at LoFi with q256/k512 (already
 ours), the `no_padding` mask skip (no mask here), and moving the QKV output, the Q/K/V heads, the
@@ -1051,8 +1048,7 @@ bs8 115.3 / 121.0, bs16 221.0 / 228.2, bs32 425.5 / 451.1 ms.
 
 ### bs1: concat-free SDPA output and the residual stream in the norm's shard layout (2026-09-24)
 
-Two op-count items at bs1, both bit-identical, both from sizing Gio's BGE-M3 items against our profiles
-(`doc/NEGATIVE_RESULTS.md` §50): SDPA now writes `[1, 1, S, H·d]` at bs1 as well (`QWEN_SDPA_CONCAT_OUT_BS1=1`;
+Two op-count items at bs1, both bit-identical: SDPA now writes `[1, 1, S, H·d]` at bs1 as well (`QWEN_SDPA_CONCAT_OUT_BS1=1`;
 standalone SDPA 57.3 → 54.1 µs and the 4.6 µs model-local concat op per layer disappears — the base forward's
 pre-concat reshape is bypassed for that tensor), and the two residual adds per layer write the block-shard
 layout the prefill RMSNorm reads (`QWEN_BS1_RESID_SHARDED=1`, `tt/decoder_fusion.py`), so the
