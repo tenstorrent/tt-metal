@@ -50,6 +50,7 @@ METRIC_NAME_MAP = {
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
     "top1": ("inference_decode", "top1_token_accuracy"),
     "top5": ("inference_decode", "top5_token_accuracy"),
+    "ifeval": ("inference", "ifeval_accuracy"),
     # Vision classifiers. Reported from a plain "inference" step rather than
     # inference_decode, since there is no decode phase to attribute them to.
     "fps": ("inference", "fps"),
@@ -75,6 +76,7 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "prefill_time_to_first_token",
     "top1",
     "top5",
+    "ifeval",
     "fps",
 }
 
@@ -86,12 +88,12 @@ PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 # measurements; otherwise it is a perf (eval) run. This lets us validate only the
 # relevant metric family per run: perf numbers from token-matching runs are teacher-
 # forcing artifacts (not real perf), and eval runs do not measure token accuracy.
-ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
+ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5", "ifeval"}
 ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
-# Vision classifiers report accuracy and throughput from the SAME run, unlike LLMs where
-# a token-matching run and an eval run are separate. So these names do not mark a run as
+# Classifiers and IFEval report accuracy and throughput from the SAME run, unlike
+# separate LLM token-matching and performance runs. These names do not mark a run as
 # accuracy-only -- see _is_accuracy_run.
-VISION_ACCURACY_MEASUREMENT_NAMES = {"top1_accuracy", "top5_accuracy"}
+SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES = {"top1_accuracy", "top5_accuracy", "ifeval_accuracy"}
 
 # Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
 # target metric name. Used to report measured values that have no matching target entry so
@@ -155,10 +157,10 @@ def _is_accuracy_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
 def _is_single_pass_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
     """True for runs that report accuracy and throughput together.
 
-    Vision classifiers measure both in one pass, so the accuracy/perf split that keeps
+    Classifiers and IFEval measure both in one pass, so the accuracy/perf split that keeps
     LLM teacher-forcing numbers away from perf targets must not apply to them.
     """
-    return any(name in VISION_ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
+    return any(name in SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
 
 
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:

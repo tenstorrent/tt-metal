@@ -4,6 +4,7 @@
 
 #include "fold_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,44 +19,18 @@ bool is_fast_path_input(const Tensor& t) {
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
     const Tensor& input_tensor, tt::tt_metal::TensorMemoryLayout layout, uint32_t rows, uint32_t cols) {
+    // COL_MAJOR input now yields column-wise H/W CoreRangeSet (documented via fold COL_MAJOR H/W shrink test).
     auto* device = input_tensor.device();
-    const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t max_cores = grid.x * grid.y;
-    // Inherit input's orientation when available (mirrors generate_transpose_shard_spec); ROW_MAJOR fallback for
-    // non-sharded inputs.
-    const tt::tt_metal::ShardOrientation orientation = input_tensor.shard_spec().has_value()
-                                                           ? input_tensor.shard_spec()->orientation
-                                                           : tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    std::array<uint32_t, 2> shape = {0, 0};
-    CoreRangeSet cores;
-    switch (layout) {
-        case TensorMemoryLayout::HEIGHT_SHARDED: {
-            shape = {tt::div_up(rows, max_cores), cols};
-            cores = tt::tt_metal::num_cores_to_corerangeset(tt::div_up(rows, shape[0]), grid, /*row_wise=*/true);
-            break;
-        }
-        case TensorMemoryLayout::WIDTH_SHARDED: {
-            shape = {rows, tt::div_up(cols, max_cores)};
-            cores = tt::tt_metal::num_cores_to_corerangeset(tt::div_up(cols, shape[1]), grid, /*row_wise=*/true);
-            break;
-        }
-        default: {  // BLOCK_SHARDED
-            // COL_MAJOR flips axis→core mapping (see TensorSpec validation + conv2d_utils::determine_parallel_config):
-            // height splits across grid.x, width across grid.y — asymmetric grids (e.g. bh_p100 11×10) otherwise
-            // overshoot num_shards_along_width vs shard_grid.y for COL_MAJOR.
-            const bool col_major = orientation == tt::tt_metal::ShardOrientation::COL_MAJOR;
-            const uint32_t h_divisor = col_major ? grid.x : grid.y;
-            const uint32_t w_divisor = col_major ? grid.y : grid.x;
-            shape = {tt::div_up(rows, h_divisor), tt::div_up(cols, w_divisor)};
-            const uint32_t n_shards_h = tt::div_up(rows, shape[0]);
-            const uint32_t n_shards_w = tt::div_up(cols, shape[1]);
-            const uint32_t grid_x = col_major ? n_shards_h : n_shards_w;
-            const uint32_t grid_y = col_major ? n_shards_w : n_shards_h;
-            cores = CoreRangeSet(CoreRange({0, 0}, {grid_x - 1, grid_y - 1}));
-            break;
-        }
-    }
-    return tt::tt_metal::ShardSpec(cores, shape, orientation);
+    return common::synthesize_output_shard_spec(
+        device->compute_with_storage_grid_size(),
+        static_cast<uint64_t>(rows),
+        static_cast<uint64_t>(cols),
+        layout,
+        {.is_tile = false,
+         .input_orientation = input_tensor.shard_spec().has_value()
+                                  ? std::optional{input_tensor.shard_spec()->orientation}
+                                  : std::nullopt,
+         .caller_tag = "Fold"});
 }
 
 Fold::program_factory_t Fold::select_program_factory(

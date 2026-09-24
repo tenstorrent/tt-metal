@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
+#include "internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_types.h"
+
+/**
+ * @file
+ * @brief Generated Grendel qsr.s1 tile-NIU ATT register image for temporary
+ * bring-up replay. Never edited by hand; the image test checks it bit-for-bit
+ * against the transcribed configuration.
+ */
+namespace grendel_qsr1_att_program {
+
+// Generated Grendel qsr.s1 tile-NIU ATT image for temporary bring-up. Do not edit the register pairs
+// manually. Source:
+//   tensix/soc/grendelemulation@85858a46159be153bcc222e233ebffd66be88b87
+//   firmware/quasar/smc/qsr1_boot/src/att_firmware_data.c
+//   payload MD5 71d0d0cedd8eb87546e352dff142f19c
+//
+// This is the tile-local NOC image only. The SMU NOC and SMN images are owned by
+// SMC firmware and must not be replayed by a Tensix device firmware.
+
+inline constexpr std::uint32_t GRENDEL_ATT_ENABLE_TABLES_ADDR = 0x02010000u;
+inline constexpr std::uint32_t GRENDEL_ATT_LOOPBACK_EP256_ADDR = 0x02012400u;
+
+inline constexpr noc_att::RegisterWrite GRENDEL_QSR1_TILE_ATT_WRITES[] = {
+    {0x02010000u, 0x00000001u}, {0x02010030u, 0x10401821u}, {0x02010038u, 0x00000000u}, {0x0201003cu, 0x00000010u},
+    {0x02010040u, 0x00000000u}, {0x02010044u, 0x00000000u}, {0x02010048u, 0x0080469eu}, {0x02010050u, 0x00000000u},
+    {0x02010054u, 0x00000012u}, {0x02010058u, 0x00000000u}, {0x0201005cu, 0x00000000u}, {0x02010060u, 0x0100559bu},
+    {0x02010068u, 0x80000000u}, {0x0201006cu, 0x00000012u}, {0x02010070u, 0x00000000u}, {0x02010074u, 0x00000000u},
+    {0x02010078u, 0x018046dfu}, {0x02010080u, 0x00000000u}, {0x02010084u, 0x00000013u}, {0x02010088u, 0x00000000u},
+    {0x0201008cu, 0x00000000u}, {0x02010090u, 0x1200661eu}, {0x02010098u, 0x00000000u}, {0x0201009cu, 0x00000100u},
+    {0x020100a0u, 0x00000000u}, {0x020100a4u, 0x00000000u}, {0x020100a8u, 0x01805866u}, {0x020100b0u, 0x00000000u},
+    {0x020100b4u, 0x00010000u}, {0x020100b8u, 0x00000000u}, {0x020100bcu, 0x00000008u}, {0x020100c0u, 0x00401c31u},
+    {0x020100c8u, 0x00000000u}, {0x020100ccu, 0x00020000u}, {0x020100d0u, 0x00000000u}, {0x020100d4u, 0x00000000u},
+    {0x020100d8u, 0x00401c31u}, {0x020100e0u, 0x00000000u}, {0x020100e4u, 0x00040000u}, {0x020100e8u, 0x00000000u},
+    {0x020100ecu, 0x00000000u}, {0x020100f0u, 0x109c1c31u}, {0x020100f8u, 0x00000000u}, {0x020100fcu, 0x00060000u},
+    {0x02010100u, 0x00000000u}, {0x02010104u, 0x00020000u}, {0x02010138u, 0x160066e1u}, {0x02010140u, 0x00000000u},
+    {0x02010144u, 0x0000001cu}, {0x02010148u, 0x00000000u}, {0x0201014cu, 0x00000000u}, {0x02010150u, 0x170066e1u},
+    {0x02010158u, 0x00000000u}, {0x0201015cu, 0x0000001eu}, {0x02010160u, 0x00000000u}, {0x02010164u, 0x00000000u},
+    {0x02010168u, 0x04000014u}, {0x02010170u, 0x00100000u}, {0x02010174u, 0x00000000u}, {0x02010178u, 0x00000000u},
+    {0x0201017cu, 0x00000000u}, {0x02010180u, 0x140066e1u}, {0x02010188u, 0x00000000u}, {0x0201018cu, 0x00000018u},
+    {0x02010190u, 0x00000000u}, {0x02010194u, 0x00000000u}, {0x02010198u, 0x150066e1u}, {0x020101a0u, 0x00000000u},
+    {0x020101a4u, 0x0000001au}, {0x020101a8u, 0x00000000u}, {0x020101acu, 0x00000000u}, {0x02012400u, 0x00000104u},
+    {0x02012404u, 0x00000105u}, {0x02012408u, 0x00000106u}, {0x0201240cu, 0x00000107u}, {0x02012410u, 0x00000108u},
+    {0x02012414u, 0x00000109u}, {0x02012418u, 0x0000010au}, {0x0201241cu, 0x0000010bu}, {0x02012420u, 0x00000144u},
+    {0x02012424u, 0x00000145u}, {0x02012428u, 0x00000146u}, {0x0201242cu, 0x00000147u}, {0x02012430u, 0x00000148u},
+    {0x02012434u, 0x00000149u}, {0x02012438u, 0x0000014au}, {0x0201243cu, 0x0000014bu}, {0x02012440u, 0x00000184u},
+    {0x02012444u, 0x00000185u}, {0x02012448u, 0x00000186u}, {0x0201244cu, 0x00000187u}, {0x02012450u, 0x00000188u},
+    {0x02012454u, 0x00000189u}, {0x02012458u, 0x0000018au}, {0x0201245cu, 0x0000018bu}, {0x02012460u, 0x000001c4u},
+    {0x02012464u, 0x000001c5u}, {0x02012468u, 0x000001c6u}, {0x0201246cu, 0x000001c7u}, {0x02012470u, 0x000001c8u},
+    {0x02012474u, 0x000001c9u}, {0x02012478u, 0x000001cau}, {0x0201247cu, 0x000001cbu}, {0x02012480u, 0x00000103u},
+    {0x02012484u, 0x00000143u}, {0x02012488u, 0x00000183u}, {0x0201248cu, 0x000001c3u}, {0x02012490u, 0x00000204u},
+    {0x02012494u, 0x00000205u}, {0x02012498u, 0x00000206u}, {0x0201249cu, 0x00000207u}, {0x020124a0u, 0x00000208u},
+    {0x020124a4u, 0x00000209u}, {0x020124a8u, 0x0000020au}, {0x020124acu, 0x0000020bu}, {0x020124b0u, 0x000001ccu},
+    {0x020124b4u, 0x0000018cu}, {0x020124b8u, 0x0000014cu}, {0x020124bcu, 0x0000010cu}, {0x020124c0u, 0x000000cbu},
+    {0x020124c4u, 0x000000cau}, {0x020124c8u, 0x000000c9u}, {0x020124ccu, 0x000000c8u}, {0x020124d0u, 0x000000c7u},
+    {0x020124d4u, 0x000000c6u}, {0x020124d8u, 0x000000c5u}, {0x020124dcu, 0x000000c4u}, {0x020124e0u, 0x0000020cu},
+    {0x020124e4u, 0x000000ccu}, {0x020124e8u, 0x00000203u}, {0x020124ecu, 0x000000c3u}, {0x02012080u, 0x000000cdu},
+    {0x02012084u, 0x000000cdu}, {0x02012088u, 0x0000010du}, {0x0201208cu, 0x0000014du}, {0x02012090u, 0x0000018du},
+    {0x02012094u, 0x000001cdu}, {0x02012098u, 0x000000cdu}, {0x0201209cu, 0x000000cdu}, {0x02012100u, 0x00000246u},
+    {0x02012104u, 0x00000247u}, {0x02012108u, 0x0000024au}, {0x0201210cu, 0x0000024bu}, {0x02012110u, 0x00000089u},
+    {0x02012114u, 0x00000088u}, {0x02012118u, 0x00000085u}, {0x0201211cu, 0x00000084u}, {0x02012180u, 0x00000246u},
+    {0x02012184u, 0x0000024au}, {0x02012188u, 0x00000089u}, {0x0201218cu, 0x00000085u}, {0x020121c0u, 0x00000247u},
+    {0x020121c4u, 0x0000024bu}, {0x020121c8u, 0x00000088u}, {0x020121ccu, 0x00000084u}, {0x02012200u, 0x00000104u},
+    {0x02012204u, 0x00000105u}, {0x02012208u, 0x00000106u}, {0x0201220cu, 0x00000107u}, {0x02012210u, 0x00000108u},
+    {0x02012214u, 0x00000109u}, {0x02012218u, 0x0000010au}, {0x0201221cu, 0x0000010bu}, {0x02012220u, 0x00000144u},
+    {0x02012224u, 0x00000145u}, {0x02012228u, 0x00000146u}, {0x0201222cu, 0x00000147u}, {0x02012230u, 0x00000148u},
+    {0x02012234u, 0x00000149u}, {0x02012238u, 0x0000014au}, {0x0201223cu, 0x0000014bu}, {0x02012240u, 0x00000184u},
+    {0x02012244u, 0x00000185u}, {0x02012248u, 0x00000186u}, {0x0201224cu, 0x00000187u}, {0x02012250u, 0x00000188u},
+    {0x02012254u, 0x00000189u}, {0x02012258u, 0x0000018au}, {0x0201225cu, 0x0000018bu}, {0x02012260u, 0x000001c4u},
+    {0x02012264u, 0x000001c5u}, {0x02012268u, 0x000001c6u}, {0x0201226cu, 0x000001c7u}, {0x02012270u, 0x000001c8u},
+    {0x02012274u, 0x000001c9u}, {0x02012278u, 0x000001cau}, {0x0201227cu, 0x000001cbu},
+};
+
+// Grendel replays these after the common tile image so the topology-derived
+// cross-die delivery coordinates win over the raw address-map entries.
+inline constexpr noc_att::RegisterWrite GRENDEL_QSR1_DELIVERY_OVERRIDES[] = {
+    {0x02012100u, 0x00000246u},
+    {0x02012104u, 0x00000247u},
+    {0x02012108u, 0x0000024au},
+    {0x0201210cu, 0x0000024bu},
+    {0x02012110u, 0x00000089u},
+    {0x02012114u, 0x00000088u},
+    {0x02012118u, 0x00000085u},
+    {0x0201211cu, 0x00000084u},
+    {0x020121c0u, 0x00000247u},
+    {0x020121c4u, 0x0000024bu},
+    {0x020121c8u, 0x00000088u},
+    {0x020121ccu, 0x00000084u},
+    {0x02012400u, 0x00000104u},
+};
+
+inline constexpr noc_att::ProgramImage PROGRAM_IMAGE{
+    .enable_tables_address = GRENDEL_ATT_ENABLE_TABLES_ADDR,
+    .debug_misc_address = NOC_ADDRESS_TRANSLATION_TABLE_A_DEBUG_MISC_REG_ADDR,
+    .local_endpoint_address = GRENDEL_ATT_LOOPBACK_EP256_ADDR,
+    .writes = GRENDEL_QSR1_TILE_ATT_WRITES,
+    .write_count = sizeof(GRENDEL_QSR1_TILE_ATT_WRITES) / sizeof(GRENDEL_QSR1_TILE_ATT_WRITES[0]),
+    .overrides = GRENDEL_QSR1_DELIVERY_OVERRIDES,
+    .override_count = sizeof(GRENDEL_QSR1_DELIVERY_OVERRIDES) / sizeof(GRENDEL_QSR1_DELIVERY_OVERRIDES[0]),
+};
+
+}  // namespace grendel_qsr1_att_program

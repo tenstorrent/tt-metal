@@ -11,13 +11,16 @@
 
 namespace tt::tt_metal {
 
+class MetalContext;
+
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadCoreDataDescriptor {
     void* dst = nullptr;
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
+uint32_t calculate_max_prefetch_data_size_bytes(
+    const MetalContext& metal_ctx, const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 

@@ -213,6 +213,77 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
         )
 
 
+@pytest.mark.parametrize(
+    "weights",
+    [(8, 1, 5), (0, 8, 5), (0, 1, 8)],
+    ids=["free_sender", "noc1_sender", "ordinary"],
+)
+def test_tensor_prefetcher_rejects_invalid_mpfe_weight(device, weights, expect_error):
+    with expect_error(RuntimeError, r"MPFE weights must be in \[0, 7\]"):
+        ttnn.experimental.start_tensor_prefetcher(
+            device,
+            free_sender_mpfe_weight=weights[0],
+            noc1_sender_mpfe_weight=weights[1],
+            ordinary_mpfe_weight=weights[2],
+        )
+
+
+def test_validator_dram_sender_static_mpfe_restart(device):
+    """Run two complete 0/1/5 lifetimes; shutdown must leave the next start clean."""
+    K, N, dtype, recv_per_bank, num_layers = 448, 1792, ttnn.bfloat16, 1, 1
+    tt_weight, _, gcb, _, _, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank, num_layers
+    )
+
+    for _ in range(2):
+        ttnn.experimental.start_tensor_prefetcher(
+            device,
+            free_sender_mpfe_weight=0,
+            noc1_sender_mpfe_weight=1,
+            ordinary_mpfe_weight=5,
+        )
+        try:
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+            ttnn.experimental.test_dram_prefetcher_validator(
+                device,
+                tt_weight,
+                num_layers=num_layers,
+                print_stride=max(1, ring_size // 4),
+                global_cb=gcb,
+            )
+        finally:
+            ttnn.experimental.stop_tensor_prefetcher(device)
+            ttnn.synchronize_device(device)
+
+
+def test_validator_dram_sender_dynamic_mpfe(device):
+    """Validate one dynamic 5/5/5 idle -> 0/1/5 active request."""
+    K, N, dtype, recv_per_bank, num_layers = 448, 1792, ttnn.bfloat16, 1, 1
+    tt_weight, _, gcb, _, _, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank, num_layers
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(
+        device,
+        free_sender_mpfe_weight=0,
+        noc1_sender_mpfe_weight=1,
+        ordinary_mpfe_weight=5,
+        dynamic_mpfe_weighting=True,
+    )
+    try:
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(device)
+        ttnn.synchronize_device(device)
+
+
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat16, 1)])
 def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per_bank):
     """Two DRAM-sender GCBs share one prefetcher; interleave Queue(A) → Queue(B) → Queue(A)

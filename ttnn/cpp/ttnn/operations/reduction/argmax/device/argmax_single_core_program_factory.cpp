@@ -4,16 +4,20 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
+#include <string>
+#include <utility>
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const MeshTensor& input, const MeshTensor& output, bool keepdim, bool reduce_all) {
@@ -45,12 +49,15 @@ static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     }
 }
 
-static std::vector<uint32_t> get_ctime_args_single_core(
+// Named compile-time arguments for the selected reader.
+//
+// The argument names are the reader kernels' own variable names, so a reader reads each one as
+// `get_arg(args::<name>)`. The ROW_MAJOR and TILE readers take different argument sets, matching
+// the branch that selects the kernel source.
+static KernelSpec::CompileTimeArgs get_ctime_args_single_core(
     const MeshTensor& input,
     uint32_t src_page_size,
     uint32_t dst_page_size,
-    uint32_t src_cb_index,
-    uint32_t dst_cb_index,
     bool keepdim,
     bool reduce_all,
     bool tile_reader_omit_reduce_all_keepdim) {
@@ -65,14 +72,12 @@ static std::vector<uint32_t> get_ctime_args_single_core(
             const uint32_t outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
             return {
-                src_cb_index,
-                dst_cb_index,
-                src_page_size,
-                dst_page_size,
-                outer_dim_units,
-                inner_dim_units,
-                red_dim_units,
-                static_cast<uint32_t>(reduce_all),
+                {"src_page_size", src_page_size},
+                {"dst_page_size", dst_page_size},
+                {"outer_dim_units", outer_dim_units},
+                {"inner_dim_units", inner_dim_units},
+                {"red_dim_units", red_dim_units},
+                {"reduce_all", static_cast<uint32_t>(reduce_all)},
             };
         }
         case Layout::TILE: {
@@ -85,23 +90,24 @@ static std::vector<uint32_t> get_ctime_args_single_core(
             const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
             const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
 
-            std::vector<uint32_t> cta = {
-                src_cb_index,
-                dst_cb_index,
-                src_page_size,
-                dst_page_size,
-                tile_height,
-                tile_width,
-                h_tiles,
-                w_tiles,
-                h_logical,
-                w_logical,
-                outer_dim_units,
+            KernelSpec::CompileTimeArgs cta = {
+                {"src_page_size", src_page_size},
+                // Neither TILE reader reads dst_page_size: both derive the write size from
+                // output_page_elements instead. Emitted anyway so the two reader families keep a
+                // single argument builder, exactly as the pre-Metal-2.0 factory did.
+                {"dst_page_size", dst_page_size},
+                {"tile_height", tile_height},
+                {"tile_width", tile_width},
+                {"input_height", h_tiles},
+                {"input_width", w_tiles},
+                {"logical_height", h_logical},
+                {"logical_width", w_logical},
+                {"outer_dim_size", outer_dim_units},
             };
             // Width-reduction reader uses reduce_all/keepdim; height-reduction reader does not.
             if (!tile_reader_omit_reduce_all_keepdim) {
-                cta.push_back(static_cast<uint32_t>(reduce_all));
-                cta.push_back(static_cast<uint32_t>(keepdim));
+                cta.emplace("reduce_all", static_cast<uint32_t>(reduce_all));
+                cta.emplace("keepdim", static_cast<uint32_t>(keepdim));
             }
             return cta;
         }
@@ -113,20 +119,23 @@ static std::vector<uint32_t> get_ctime_args_single_core(
     }
 }
 
-ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_program_artifacts(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    ProgramDescriptor desc;
     const tt::tt_metal::IDevice* device = &output.mutable_device();
     const bool reduce_all = not dim.has_value();
 
-    // Circular buffers
-    const auto src_cb_index = tt::CBIndex::c_0;
-    const auto dst_cb_index = tt::CBIndex::c_1;
+    // Resource names. Declared function-locally: both argmax factories share a unity-build
+    // translation unit, and namespace-scope `const` objects would collide by name there.
+    const KernelSpecName READER{"reader"};
+    const DFBSpecName SRC{"src"};
+    const ScratchpadSpecName DST{"dst"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
     const auto grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_units = 1;  // single-core
@@ -138,30 +147,21 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
         "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
 
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
 
-    // Create input CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = src_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src_cb_index),
-            .data_format = input_data_format,
-            .page_size = src_page_size,
-        }}},
-    });
+    // Input DFB: one entry holding a whole input page.
+    DataflowBufferSpec dfb_src{
+        .unique_id = SRC,
+        .entry_size = src_page_size,
+        .num_entries = 1,
+        .data_format_metadata = input_data_format,
+    };
 
-    // Create output CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = dst_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(dst_cb_index),
-            .data_format = output_data_format,
-            .page_size = dst_page_size,
-        }}},
-    });
+    // Output scratchpad: private working memory holding a whole output page.
+    ScratchpadSpec scratch_dst{
+        .unique_id = DST,
+        .size_per_node = dst_page_size,
+    };
 
     const int32_t rank_i = static_cast<int32_t>(input.logical_shape().size());
     const int32_t nd = dim.has_value() ? (dim.value() < 0 ? dim.value() + rank_i : dim.value()) : -1;
@@ -169,22 +169,14 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
 
     // Compile-time args
     const bool tile_reader_omit_reduce_all_keepdim = input.layout() == Layout::TILE && dim_is_h;
-    std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
-        input,
-        src_page_size,
-        dst_page_size,
-        src_cb_index,
-        dst_cb_index,
-        keepdim,
-        reduce_all,
-        tile_reader_omit_reduce_all_keepdim);
-
-    tt::tt_metal::TensorAccessorArgs(input).append_to(ctime_args);
-    tt::tt_metal::TensorAccessorArgs(output).append_to(ctime_args);
+    KernelSpec::CompileTimeArgs ctime_args = get_ctime_args_single_core(
+        input, src_page_size, dst_page_size, keepdim, reduce_all, tile_reader_omit_reduce_all_keepdim);
 
     std::string kernel_path;
     if (input.layout() == Layout::ROW_MAJOR) {
-        kernel_path = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp";
+        // The Metal 2.0 fork; the legacy source beside it still serves a ProgramDescriptor
+        // consumer that cannot supply named bindings.
+        kernel_path = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_metal2.cpp";
     } else {
         // TILE: reduction on H (rank-2) uses the height reader
         kernel_path = dim_is_h
@@ -192,22 +184,57 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
                           : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
     }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(ctime_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // This reader is the only accessor of both src and dst: it fills and drains each through a raw
+    // pointer and makes no FIFO calls. dst is private scratch, so it is a Scratchpad. src is a
+    // DataflowBuffer because the kernel reads its data format via get_dataformat(dfb::src), which a
+    // Scratchpad does not carry. With a single accessor, src is bound as both producer and consumer.
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kernel_path,
+        .dfb_bindings =
+            {
+                DFBBinding{.dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{.dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = DST, .accessor_name = "dst"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+            },
+        .compile_time_args = std::move(ctime_args),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    // Runtime args
-    const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
-    for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(core, {input, output});
-    }
+    ProgramSpec spec{
+        .name = "argmax_single_core",
+        .kernels = {std::move(reader)},
+        .dataflow_buffers = {std::move(dfb_src)},
+        .scratchpads = {std::move(scratch_dst)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{.name = "main", .kernels = {READER}, .target_nodes = all_cores},
+            },
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
+    // The reader declares no runtime or common runtime arguments — the two tensor base addresses
+    // it used to read as runtime args now arrive through its tensor bindings — so it needs no
+    // KernelRunArgs entry.
+    ProgramRunArgs run_args;
+    run_args.tensor_args = {
+        {INPUT, input},
+        {OUTPUT, output},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

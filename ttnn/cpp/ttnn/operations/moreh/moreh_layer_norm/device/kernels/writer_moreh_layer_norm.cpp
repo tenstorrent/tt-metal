@@ -109,8 +109,8 @@ void kernel_main() {
     constexpr bool rstd_has_value = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
     constexpr auto output_args = TensorAccessorArgs<3>();
-    constexpr auto mean_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
+    constexpr auto mean_args = TensorAccessorArgs<decltype(output_args)::next_compile_time_args_offset()>();
+    constexpr auto rstd_args = TensorAccessorArgs<decltype(mean_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_output = tt::CBIndex::c_16;
     constexpr uint32_t cb_id_mean = tt::CBIndex::c_17;

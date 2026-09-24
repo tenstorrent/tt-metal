@@ -32,6 +32,9 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
+
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, num_bev_queue, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
@@ -40,11 +43,12 @@ PRINT_DETAILED_COMPARISON_FLAG = False
         ("nuscenes_base", 1, 50, 50, 2, 0.999, 0.02, 0.11, 0.3),  # NuScenes base model - 50x50 BEV grid
         ("nuscenes_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
-        ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
         ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
+        # Off: TSA reads only embed_dims/num_heads/num_points, identical here to
+        # nuscenes_base, and takes its grid from bev_h/bev_w -- same workload.
+        # ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_temporal_self_attention_forward(
     device,
@@ -131,6 +135,7 @@ def test_temporal_self_attention_forward(
         num_points=num_points,
         num_bev_queue=num_bev_queue,
         batch_first=True,
+        spatial_shapes=bev_spatial_shapes,
     )
 
     # --------------------------------------------------------------------------- #
@@ -151,10 +156,6 @@ def test_temporal_self_attention_forward(
     tt_model_output = tt_model(
         query=tt_current_bev,
         reference_points=tt_reference_points_2d,
-        spatial_shapes=bev_spatial_shapes,
-        level_start_index=level_start_index,
-        bev_h=bev_h,
-        bev_w=bev_w,
     )
 
     # --------------------------------------------------------------------------- #

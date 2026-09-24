@@ -551,10 +551,14 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
     const uint32_t ending_range) {
     std::vector<uint32_t> runtime_args = physical_core_coords;
     runtime_args.push_back(input_addr);
-    auto& num_output_pages_for_this_call = runtime_args.emplace_back(0);
+    // Placeholder written via index after the loop; a reference into `runtime_args` here would
+    // dangle once subsequent push_back()s reallocate the vector (heap-use-after-free).
+    const size_t num_output_pages_idx = runtime_args.size();
+    runtime_args.push_back(0);
     runtime_args.push_back(ending_range - starting_range);
     runtime_args.push_back(output_page_offset);
 
+    uint32_t num_output_pages_for_this_call = 0;
     for (uint32_t block_id = starting_range; block_id < ending_range; block_id++) {
         const auto& block = compressed_stride_vector[block_id];
 
@@ -584,6 +588,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
         }
         num_output_pages_for_this_call += pages_in_base_pattern * block.num_repeats;
     }
+    runtime_args[num_output_pages_idx] = num_output_pages_for_this_call;
     return runtime_args;
 }
 

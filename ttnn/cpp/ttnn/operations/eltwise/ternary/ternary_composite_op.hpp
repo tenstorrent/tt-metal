@@ -20,8 +20,20 @@
 namespace ttnn {
 
 namespace operations::ternary {
-Tensor _addcmul(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
-Tensor _addcdiv(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _addcmul(
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    float,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
+Tensor _addcdiv(
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    float,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 Tensor _lerp(
     const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 Tensor _lerp_overload(
@@ -29,7 +41,9 @@ Tensor _lerp_overload(
 
 }  // namespace operations::ternary
 
-Tensor mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor mac(const Tensor&, float, float, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, float, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, float, float, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn

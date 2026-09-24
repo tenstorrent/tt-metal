@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@ bool is_supported_dtype(DataType dtype) {
            dtype == DataType::BFLOAT4_B;
 }
 
-// The gelu_bw device operation expects interleaved, tile-layout, on-device tensors.
 void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
     TT_FATAL(
         is_supported_dtype(tensor.dtype()),
@@ -37,7 +36,7 @@ void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
         "GELU_BW operation requires {} to be allocated in a buffer on the device. Buffer is null.",
         name);
 
-    TT_FATAL(!tensor.is_sharded(), "GELU_BW operation does not support sharded {}.", name);
+    TT_FATAL(!tensor.is_sharded(), "GELU_BW operation does not support sharded {} tensor.", name);
 
     TT_FATAL(
         tensor.layout() == Layout::TILE,
@@ -64,6 +63,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
     if (output_datatype == DataType::INVALID) {
         output_datatype = input_tensor.dtype();
     }
+
     TT_FATAL(
         is_supported_dtype(input_tensor.dtype()),
         "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). Input data "
@@ -71,12 +71,14 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.dtype()));
 
     validate_tensor_contract(grad_output_tensor, "Grad output");
+
     TT_FATAL(
         grad_output_tensor.logical_shape() == input_tensor.logical_shape(),
-        "GELU_BW operation requires grad_output and input to have the same shape. Grad output shape: {}, Input shape: "
-        "{}",
+        "GELU_BW operation requires grad_output and input to have the same logical shape. grad_output logical shape: "
+        "{}, input logical shape: {}",
         grad_output_tensor.logical_shape(),
         input_tensor.logical_shape());
+
     TT_FATAL(
         grad_output_tensor.device() == input_tensor.device(),
         "GELU_BW operation requires grad_output and input to be on the same device.");
@@ -121,6 +123,13 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         "memory layout: `{}`",
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
+    TT_FATAL(
+        grad_output_tensor.dtype() == input_tensor.dtype(),
+        "GELU_BW operation requires grad_output and input data types to match. grad_output data type: {}, input data "
+        "type: {}",
+        static_cast<int>(grad_output_tensor.dtype()),
+        static_cast<int>(input_tensor.dtype()));
+
     if (preallocated_input_grad.has_value()) {
         const auto& preallocated = preallocated_input_grad.value();
         validate_tensor_contract(preallocated, "Preallocated input grad");
@@ -131,6 +140,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
             "Input shape: {}, Preallocated output shape: {}",
             input_tensor.logical_shape(),
             preallocated.logical_shape());
+
         TT_FATAL(
             preallocated.device() == input_tensor.device(),
             "GELU_BW operation requires the preallocated input grad tensor to be on the same device as input.");
@@ -165,19 +175,25 @@ Tensor GeluBwDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-Tensor launch_gelu_bw(
+}  // namespace ttnn::operations::unary_backward::gelu_bw
+
+namespace ttnn::prim {
+
+Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
-    bool approximate,
+    operations::unary::GeluVariant variant,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    auto operation_attributes = GeluBwDeviceOperation::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate};
-    auto tensor_args = GeluBwDeviceOperation::tensor_args_t{
+    using OperationType = ttnn::operations::unary_backward::gelu_bw::GeluBwDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .variant = variant};
+    auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output};
 
-    return ttnn::device_operation::launch<GeluBwDeviceOperation>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::unary_backward::gelu_bw
+}  // namespace ttnn::prim

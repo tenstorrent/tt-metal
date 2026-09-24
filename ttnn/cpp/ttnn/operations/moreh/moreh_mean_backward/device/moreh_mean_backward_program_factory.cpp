@@ -220,7 +220,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
         return KernelSpec{
             .unique_id = unique_id,
             .source = std::filesystem::path{COMPUTE_KERNEL_PATH},
-            .compiler_options = {.defines = compute_defines},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{

@@ -12,7 +12,7 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. This module owns the text-tower constants shared by MLA, KDA, MoE, and FFN consumers.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -30,6 +30,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -38,6 +41,15 @@ class KimiK3Config:
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
+    # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
+    # is known: 24576 (this package's usual value) starves MLA chunked attention of circular
+    # buffers as soon as there is a second chunk to attend over. There is no AttnRes floor any
+    # more -- #54834's fix made the sealed set allocate one persistent semaphore set up front, and
+    # tests/attn_res/model/test_l1_small_footprint.py asserts 0 B/bank at every sealed depth with
+    # l1_small_size 1152. 4096 is therefore inherited, not measured: peers run 768 (Kimi-K2.7,
+    # Mistral-4) and 1216 (GLM-5.x). Re-bisect before trusting it.
+    L1_SMALL_SIZE = 4096
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
@@ -49,19 +61,29 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
+    # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
+    # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
+    # gives the band back. Measured under SituGlu, the activation these experts actually run.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
     # TtMoEGateConfig as both the default per-chip depth and a ceiling on any explicit sp_dim.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
-    # Gate-test device-mode scores bar, relaxing the shared 0.93; see #52569. 896 experts under sigmoid
-    # near-tie the 16th and 17th scores often enough that device precision swaps a pick, and the
-    # spread across Blackhole Galaxies (0.886 - 0.952) straddles the shared bar.
-    GATE_SCORES_PCC_DEVICE = 0.87
     # Upstream KimiSparseMoeBlock builds ONE KimiMLP for the shared expert, not num_shared_experts of
     # them: shared_experts.gate_proj.weight is [6144, 7168].
     SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 896 experts, top-16 floors at
+    # 0.9989 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.988
 
     # Model architecture
     NUM_LAYERS = 93
@@ -93,21 +115,27 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
+    KDA_USE_FULL_RANK_GATE = True
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
 
     LATENT_MOE_USE_NORM = True
-    # The routed experts run the checkpoint's SiTU-GLU on device (#51351). Spelled as a string
-    # because this config is torch-only; ROUTED_EXPERT_ACTIVATION_BY_NAME maps it onto the kernel
-    # enum. Routed only: the shared expert and the dense FFN have no SiTU kernel and stay on SiLU.
+    # All three FFN sites run the checkpoint's SiTU-GLU on device: routed experts (#51351), and the
+    # shared expert / layer-0 dense FFN (#53625). Spelled as strings because this config is
+    # torch-only -- ROUTED_EXPERT_ACTIVATION_BY_NAME maps the routed one onto the fused kernel's
+    # enum, while the other two are consumed as-is by TtSharedExpert / TtFfn, which compose SiTU
+    # from Python-level ttnn ops (there is no fused kernel at 6144 / 33792 wide).
     ROUTED_EXPERT_ACTIVATION = "situ"
-    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in.
+    SHARED_EXPERT_ACTIVATION = "situ"
+    DENSE_FFN_ACTIVATION = "situ"
+    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
+    # sites read these directly, so all three activations stay on one pair of betas.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -194,9 +222,38 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        # The checkpoint says "situ", but consumers of this field index ACT2FN with it, which has
-        # no "situ" entry. The routed expert selects SiTU through RoutedExpertActivation instead.
-        hidden_act="silu",
+        # What the checkpoint actually uses, so a consumer that reads only this field still builds
+        # the right model. Reading it means branching on "situ" rather than indexing ACT2FN, which
+        # has no such entry -- KimiMLP, KimiBlockSparseMLP and the tests' _build_act_fn all do.
+        # ACT2FN is deliberately left unmutated: it is shared with every other model here.
+        hidden_act="situ",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """The HF JSON-shaped fields `KDAConfig` consumes, built from the pinned Kimi-K3 constants.
+
+    Kimi-K3's own config.json cannot be loaded here: its `model_type` is `kimi_linear` and the
+    checkpoint's remote code raises ImportError without `fla-core`. So the KDA half of the config is
+    assembled from the constants above rather than parsed.
+    """
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())

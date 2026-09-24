@@ -19,7 +19,6 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
-#include "ttnn/device.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -393,12 +392,12 @@ Tensor div(
 }
 
 Tensor div_no_nan(
-    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
     float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
     if (value_f == 0) {
-        return ttnn::zeros_like(input_a);
+        return ttnn::zeros_like(input_a, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
-    return q::multiply(input_a, (1.0f / value_f));
+    return q::multiply(input_a, (1.0f / value_f), std::nullopt, output_mem_config);
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -411,16 +410,15 @@ Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optio
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor prelu(
-    const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& output_mem_config) {
     float weight_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, weight);
-    return ttnn::prelu_sfpu(input, weight_f);
+    return ttnn::prelu_sfpu(input, weight_f, output_mem_config);
 }
 
 Tensor prelu(
-    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
     float scalar_weight = weight[0];
-    return ttnn::prelu_sfpu(input, scalar_weight);
+    return ttnn::prelu_sfpu(input, scalar_weight, output_mem_config);
 }
 
 Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -551,7 +549,7 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -585,7 +583,9 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     a_slim = ttnn::operations::experimental::quasar::to_layout(a_slim, ttnn::TILE_LAYOUT);
     b_slim = ttnn::operations::experimental::quasar::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
-    auto* device = ttnn::GetDefaultDevice();
+    // Take the device from the operand that is already on one, not from the process-wide default
+    // device: that default is a raw pointer nothing clears when the device it names is closed.
+    auto* device = a_slim.device() != nullptr ? a_slim.device() : b_slim.device();
     if (device != nullptr) {
         if (a_slim.storage_type() != ttnn::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);
@@ -595,17 +595,17 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         }
     }
 
-    return ttnn::matmul(a_slim, b_slim);
+    return ttnn::matmul(a_slim, b_slim, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
 }
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
-        return ttnn::full_like(input_a, coeffs[0]);
+        return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = q::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = q::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = q::multiply(input_a, result, std::nullopt, output_mem_config);
     }
