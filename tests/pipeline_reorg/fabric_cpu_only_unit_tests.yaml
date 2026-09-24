@@ -80,7 +80,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc16
   skus:
     cpu_medium:
-      timeout: 20
+      timeout: 45  # MEASUREMENT (was 20) — temp branch only
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -91,7 +91,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 45
+      timeout: 90  # MEASUREMENT (was 45) — temp branch only
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -102,7 +102,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      timeout: 35
+      timeout: 75  # MEASUREMENT (was 35) — temp branch only
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -135,7 +135,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
   skus:
     cpu_medium:
-      timeout: 56
+      timeout: 110  # MEASUREMENT (was 56) — temp branch only
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
