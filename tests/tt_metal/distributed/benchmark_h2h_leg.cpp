@@ -43,6 +43,11 @@ void init_counters(benchmark::State& state) {
     state.counters["throughput_gbps"] = 0;
     state.counters["frames"] = 0;
     state.counters["bad_frames"] = 0;
+    // How well the loop keeps the window occupied: a flush costs the same whether it covers
+    // one frame or thirty-two, so posts_per_flush is what sets throughput.
+    state.counters["posts_per_flush"] = 0;
+    state.counters["starved_pass_pct"] = 0;
+    state.counters["flush_pct"] = 0;
     set_latency_counters(state, LatencySummary{}, 0);
     set_latency_counters(state, LatencySummary{}, 0, "oneway_");
 }
@@ -262,6 +267,9 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
         double window_us = 0.0;
         uint64_t bad = 0;
         std::vector<double> rt_us;
+        uint64_t passes = 0;    // outer iterations, i.e. flushes
+        uint64_t starved = 0;   // passes that posted nothing: the window was gated shut
+        double flush_us = 0.0;
 
         if (rank_ == 0) {
             // Rank 0 times: the credit closes each frame on the clock that opened it.
@@ -276,6 +284,8 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
             auto deadline = std::chrono::steady_clock::now() + kStall;
 
             while (credited < total && ok) {
+                ++passes;
+                const uint32_t posted_before = posted;
                 while (posted < total && posted - credited < window_) {
                     const uint32_t s = posted % window_;
                     // A credit says the TARGET has the frame, not that this Rput retired.
@@ -304,11 +314,16 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
                 }
                 // The peer's own flush completes ITS outbound credits, never our puts, so
                 // without this the credit we then wait on is for frames that never arrived.
+                if (posted == posted_before) {
+                    ++starved;
+                }
+                const auto tf = std::chrono::steady_clock::now();
                 if (const std::string e = win_->flush(peer_); !e.empty()) {
                     err = "rank 0: " + e;
                     ok = false;
                     break;
                 }
+                flush_us += us_since(tf);
 
                 const uint64_t seen = __atomic_load_n(credit, __ATOMIC_ACQUIRE);
                 while (credited < seen && credited < total) {
@@ -390,6 +405,13 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
         }
         state.counters["frames"] = static_cast<double>(total);
         state.counters["bad_frames"] = static_cast<double>(bad);
+        if (passes != 0) {
+            state.counters["posts_per_flush"] = static_cast<double>(total) / static_cast<double>(passes);
+            state.counters["starved_pass_pct"] = 100.0 * static_cast<double>(starved) / static_cast<double>(passes);
+        }
+        if (window_us > 0.0) {
+            state.counters["flush_pct"] = 100.0 * flush_us / window_us;
+        }
         if (window_us > 0.0) {
             const double gb = static_cast<double>(measured) * payload_bytes_ / 1e9;
             state.counters["throughput_gbps"] = gb / (window_us / 1e6);
