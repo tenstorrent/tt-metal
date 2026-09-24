@@ -1430,6 +1430,9 @@ static void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             const uint32_t matmul_inner = actual_sbw;
             const uint32_t drain_subblocks = kt_num_full_subblocks;
+            // Group 0 is short only when the whole chunk is one single-row group (a one-tile
+            // BF16 chunk); cb_qkt_im then holds one row, not qktv_h.
+            constexpr uint32_t first_h = last_group == 0 ? last_h : qktv_h;
 
             // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
             // time. The PACK->UNPACK barrier after it makes those in-place pack writes visible to
@@ -1458,7 +1461,7 @@ static void sdpa_inner_loop_step(
                     }
 
                     if (kt_sub == 0) {
-                        CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                        CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles - (qktv_h - first_h) * KT_stride);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * vDHt);
                     }
 #ifdef SDPA_RECIPE_FP32
@@ -1482,7 +1485,7 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
 #ifdef SDPA_RECIPE_FP32
@@ -1508,7 +1511,7 @@ static void sdpa_inner_loop_step(
                                 v_subblock * qktv_subblock_w + group_pv_offset,
 #endif
                                 qktv_subblock_w,
-                                qktv_h,
+                                first_h,
                                 matmul_inner,
                                 KT_stride,
                                 /*skip_pack_configure=*/true);
