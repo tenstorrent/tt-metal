@@ -146,7 +146,20 @@ void py_module(nb::module_& m) {
                const ttml::ops::Conv3dDims& padding,
                const ttml::ops::Conv3dDims& dilation,
                uint32_t groups,
-               const std::string& padding_mode) -> autograd::TensorPtr {
+               const std::string& padding_mode,
+               std::optional<ttml::ops::Conv3dPreparedWeight> prepared) -> autograd::TensorPtr {
+                if (prepared.has_value()) {
+                    return ttml::ops::conv3d(
+                        input,
+                        weight,
+                        bias.value_or(nullptr),
+                        prepared.value(),
+                        stride,
+                        padding,
+                        dilation,
+                        groups,
+                        padding_mode);
+                }
                 return ttml::ops::conv3d(
                     input, weight, bias.value_or(nullptr), stride, padding, dilation, groups, padding_mode);
             },
@@ -158,6 +171,8 @@ void py_module(nb::module_& m) {
             nb::arg("dilation") = ttml::ops::Conv3dDims{1, 1, 1},
             nb::arg("groups") = 1U,
             nb::arg("padding_mode") = "zeros",
+            nb::kw_only(),
+            nb::arg("prepared") = nb::none(),
             "3D convolution with autograd for input, weight and optional bias.\n"
             "input:  [N, D, H, W, C_in] channels-last (not PyTorch's NCDHW); float, on device. Float tensors are\n"
             "        read at autograd's bf16 precision, so float32 parameters are computed in bf16.\n"
@@ -169,7 +184,10 @@ void py_module(nb::module_& m) {
             "effective kernel; padding_mode must be \"zeros\".\n"
             "Per-group C_in and C_out are zero padded to 32 on device and sliced back. groups > 1 runs one dense\n"
             "convolution per group (groups launches plus a channel slice and concat each) so the prepared weight\n"
-            "stays at the grouped size.");
+            "stays at the grouped size.\n"
+            "prepared (keyword-only): caller-prepared weights from prepare_conv3d_weight. `weight` is still the\n"
+            "autograd parameter that receives the weight gradient; the prepared forms must match its shape and\n"
+            "groups.");
 
         auto py_prepared =
             static_cast<nb::class_<ttml::ops::Conv3dPreparedWeight>>(py_conv.attr("Conv3dPreparedWeight"));
@@ -189,32 +207,6 @@ void py_module(nb::module_& m) {
             "forward form [kD*kH*kW*C_in_pad, C_out_pad] (TILE) and, unless with_transposed=False, the flipped and\n"
             "transposed form used for the input gradient. Valid only while the weight's values do not change;\n"
             "pass the result to conv3d(..., prepared=...).");
-
-        py_conv.def(
-            "conv3d",
-            [](const autograd::TensorPtr& input,
-               const autograd::TensorPtr& weight,
-               std::optional<autograd::TensorPtr> bias,
-               const ttml::ops::Conv3dPreparedWeight& prepared,
-               const ttml::ops::Conv3dDims& stride,
-               const ttml::ops::Conv3dDims& padding,
-               const ttml::ops::Conv3dDims& dilation,
-               uint32_t groups,
-               const std::string& padding_mode) -> autograd::TensorPtr {
-                return ttml::ops::conv3d(
-                    input, weight, bias.value_or(nullptr), prepared, stride, padding, dilation, groups, padding_mode);
-            },
-            nb::arg("input"),
-            nb::arg("weight"),
-            nb::arg("bias"),
-            nb::arg("prepared"),
-            nb::arg("stride") = ttml::ops::Conv3dDims{1, 1, 1},
-            nb::arg("padding") = ttml::ops::Conv3dDims{0, 0, 0},
-            nb::arg("dilation") = ttml::ops::Conv3dDims{1, 1, 1},
-            nb::arg("groups") = 1U,
-            nb::arg("padding_mode") = "zeros",
-            "conv3d with caller-prepared weights (see prepare_conv3d_weight). `weight` is still the autograd\n"
-            "parameter that receives the weight gradient; the prepared forms must match its shape and groups.");
     }
 
     {
