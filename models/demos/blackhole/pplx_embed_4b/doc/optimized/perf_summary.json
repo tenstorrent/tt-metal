@@ -253,5 +253,29 @@
       "fixed512_batch1_after": 0.8133,
       "bs1_bucketed_eval_accuracy_tt": 0.8161
     }
+  },
+  "bs1_heads_op_compute_v3_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of the resident heads-op constants",
+    "heads_op_us_in_model": {
+      "v1": 41.7,
+      "v3": 28.7
+    },
+    "compute_binary_kb": {
+      "v1": 24.4,
+      "v3": 21.6
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "v1": 16.474,
+      "v3": 16.135
+    },
+    "cold_best_ms": {
+      "v1": 16.45,
+      "v3": 16.0
+    },
+    "sustained_median_it15_29_ms": {
+      "v1": 16.55,
+      "v3": 16.15
+    },
+    "note": "bit-identical to v1; cold/sustained are the mean of two sustained_run.sh rounds per arm"
   }
 }
