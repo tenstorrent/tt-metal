@@ -81,6 +81,8 @@ namespace ckernel::sfpu
 template <typename Op, ckernel::trisc::DstTileShape SLOT = ckernel::trisc::DstTileShape::Tile32x32>
 struct SfpuUnaryOp : SfpuOpBase<Op>
 {
+    static_assert(_llk_math_eltwise_sfpu_slot_faces_c_<SLOT>() > 0, "SFPU op classes need a Dest slot at least 32x16");
+
     /**
      * @brief Run Op on the whole Dest slot (a full 32x32 tile in the default slot).
      *
