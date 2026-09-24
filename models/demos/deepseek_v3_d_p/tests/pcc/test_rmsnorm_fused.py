@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -78,7 +79,12 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_d
     ]
     # Hold outputs until the whole mixed sequence is enqueued. This catches stale
     # stats, missed semaphore resets and cache-hit weight-address mistakes.
-    outputs = [norms[i % 2](xs[i % 2]) for i in range(16)]
+    outputs = [norms[0](xs[0])]
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Fused RMSNorm first invocation completed")
+    outputs.extend(norms[i % 2](xs[i % 2]) for i in range(1, 16))
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Fused RMSNorm mixed-input reuse completed")
     ccl = norms[0].tt_ccl
     assert norms[1].tt_ccl is ccl
     assert len(ccl.fused_rmsnorm_resources) == 1
