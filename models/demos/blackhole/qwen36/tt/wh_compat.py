@@ -62,12 +62,18 @@ Blackhole behaviour is bit-for-bit unchanged and only Wormhole takes the new pat
 """
 import inspect
 
+import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops as _shared_ops
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq as _shared_seq
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _shared
+import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.chunk_seq_wh import chunk_gated_delta_rule_seq_dispatch
 
 _FLAG = "_qwen36_wh_compat_applied"
+
+# Largest [B,H,K,V] state tensor this model will keep L1-resident on Wormhole. Mirrors
+# recurrent_decode_wh._OUTER_L1_BUDGET_BYTES, which gates the same tensor on the fork side.
+_STATE_L1_BUDGET_BYTES = 8 << 20
 
 # chunk_seq_wh.py is a verbatim copy of this upstream function with one dtype change. If
 # upstream edits it, the copy is stale -- fail loudly, not run old kernels.
@@ -122,6 +128,73 @@ def apply():
     # --- 2. chunk-seq kernel wrapper: bf16 output relayout on Wormhole -------------------- #
     # The adapter calls this as a module global, so rebinding it here takes effect.
     _shared_seq.chunk_gated_delta_rule_seq = chunk_gated_delta_rule_seq_dispatch
+
+    # --- 3. decode state write: DRAM for the [B,H,K,V] tensors that do not fit L1 --------- #
+    # recurrent_gated_delta_rule_decode_ttnn calls this as a module global, so rebinding takes
+    # effect for the upstream decode leg (the one the WH fork hands B=32 back to).
+    _orig_fused_decay_and_write = _shared_ops.fused_decay_and_write_ttnn
+
+    def _fused_decay_and_write(h, k_t, delta, decay_t, beta_t, device=None, apply_decay=True):
+        """Wormhole: place the [B,H,K,V] state-write intermediates in DRAM when they miss L1.
+
+        Upstream keeps every one of them in L1 -- "Decode opt: keep state-write operands in L1
+        (tiny at B=1)" -- and there are FOUR of that shape: the k(x)delta outer product, its beta
+        scaling, the decayed h, and the sum. At B=1 each is 512 KB and L1 is the right call.
+
+        At B=32 with the fp32 state each is [32,8,128,128] = 16,777,216 B. Wormhole interleaves
+        over 64 banks, so that is 262,144 B/bank against the 1,368,864 B a bank has -- and with the
+        model resident only ~186 KB/bank is free, so the very first one dies with
+
+            Out of Memory: Not enough space to allocate 16777216 B L1 buffer across 64 banks
+
+        This is the decode leg the WH fork deliberately declines (wh_decode_fork_applies), so
+        before this override B=32 decode had nowhere to go: the fork refused it for exactly this
+        reason and upstream then tried to do it in L1 anyway.
+
+        Blackhole spreads the same tensor over 80 banks of a larger L1 and never trips this, so it
+        keeps the upstream function untouched.
+
+        ONLY the memory configs change. The op sequence, dtypes and compute config are upstream's,
+        so the result is bit-identical -- DRAM vs L1 is placement, not arithmetic.
+        """
+        if is_blackhole():
+            return _orig_fused_decay_and_write(
+                h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=apply_decay
+            )
+
+        B, H, K, V = h.shape[0], h.shape[1], h.shape[2], h.shape[3]
+        _itemsize = 4 if h.dtype == ttnn.float32 else 2
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        # `big` is where every [B,H,K,V] tensor goes; the [B,H,1,1] and [B,H,K,1] operands are
+        # orders of magnitude smaller and stay in L1 as upstream has them.
+        big = _L1 if B * H * K * V * _itemsize <= _STATE_L1_BUDGET_BYTES else ttnn.DRAM_MEMORY_CONFIG
+
+        decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=_L1)
+        beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=_L1)
+        k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=_L1)
+        d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=_L1)
+        k_col = ttnn.to_memory_config(k_col, _L1)
+        d_row = ttnn.to_memory_config(d_row, _L1)
+
+        matmul_compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        outer = ttnn.matmul(
+            k_col,
+            d_row,
+            memory_config=big,
+            compute_kernel_config=matmul_compute_cfg,
+            program_config=None,
+        )
+        outer = ttnn.multiply(outer, beta_expanded, memory_config=big)
+        if apply_decay:
+            h = ttnn.multiply(h, decay, memory_config=big)
+        return ttnn.add(h, outer, memory_config=big)
+
+    _shared_ops.fused_decay_and_write_ttnn = _fused_decay_and_write
 
     setattr(_shared, _FLAG, True)
 
