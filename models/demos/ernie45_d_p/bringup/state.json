@@ -129,11 +129,27 @@
   "status": "PASS"
  },
  "P1.6": {
+  "duration_s": 3692.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:39:54"
+   }
+  ],
+  "last_run": "2026-09-24T20:39:54",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.6.log",
+  "metrics": {
+   "book_top5_acc_last_chunk": 0.7524906992912292,
+   "cpu_seconds": 3679.1,
+   "golden_chunks": 11,
+   "golden_layers": 28
+  },
+  "rc": 0,
   "started": "2026-09-24T19:38:22",
-  "status": "RUNNING"
+  "status": "PASS"
  },
  "P2.1": {
-  "duration_s": 10.9,
+  "duration_s": 17.4,
   "history": [
    {
     "status": "PASS",
@@ -142,9 +158,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T19:25:36"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:16:02"
    }
   ],
-  "last_run": "2026-09-24T19:25:36",
+  "last_run": "2026-09-24T20:16:02",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.1.log",
   "metrics": {
    "dram_banks": 8,
@@ -155,17 +175,22 @@
    "worker_grid": "11x10"
   },
   "rc": 0,
+  "started": "2026-09-24T20:15:45",
   "status": "PASS"
  },
  "P2.10": {
-  "duration_s": 31.3,
+  "duration_s": 36.8,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:45:45"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:19:29"
    }
   ],
-  "last_run": "2026-09-24T19:45:45",
+  "last_run": "2026-09-24T20:19:29",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.10.log",
   "metrics": {
    "pcc_block_L00_c0": 0.9999787894225245,
@@ -182,23 +207,27 @@
    "pcc_kv_v_L27": 0.9999882890275964
   },
   "rc": 0,
-  "started": "2026-09-24T19:45:14",
+  "started": "2026-09-24T20:18:52",
   "status": "PASS"
  },
  "P2.11": {
-  "duration_s": 187.5,
+  "duration_s": 87.6,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:49:47"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:21:01"
    }
   ],
-  "last_run": "2026-09-24T19:49:47",
+  "last_run": "2026-09-24T20:21:01",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.11.log",
   "metrics": {
-   "chunk_seconds_c00": 0.85,
-   "chunk_seconds_c01": 0.908,
-   "model_load_s": 156.6,
+   "chunk_seconds_c00": 0.841,
+   "chunk_seconds_c01": 0.946,
+   "model_load_s": 55.7,
    "pcc_final_hidden": 0.9983360176305144,
    "pcc_kv_k_L00": 0.9999928346765833,
    "pcc_kv_k_L01": 0.9999888419939288,
@@ -290,23 +319,27 @@
    "top5_overlap": 1.0
   },
   "rc": 0,
-  "started": "2026-09-24T19:46:39",
+  "started": "2026-09-24T20:19:33",
   "status": "PASS"
  },
  "P2.12": {
-  "duration_s": 138.3,
+  "duration_s": 102.2,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:52:48"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:22:43"
    }
   ],
-  "last_run": "2026-09-24T19:52:48",
+  "last_run": "2026-09-24T20:22:43",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.12.log",
   "metrics": {
-   "chunk_seconds_c00": 34.578,
-   "chunk_seconds_c01": 5.724,
-   "model_load_s": 57.4,
+   "chunk_seconds_c00": 2.014,
+   "chunk_seconds_c01": 2.512,
+   "model_load_s": 57.5,
    "pcc_final_hidden": 0.9987487045700872,
    "pcc_kv_k_L00": 0.9999925265821579,
    "pcc_kv_k_L01": 0.9999883962559828,
@@ -398,29 +431,144 @@
    "top5_overlap": 1.0
   },
   "rc": 0,
-  "started": "2026-09-24T19:50:29",
+  "started": "2026-09-24T20:21:01",
+  "status": "PASS"
+ },
+ "P2.15": {
+  "duration_s": 169.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:57:18"
+   }
+  ],
+  "last_run": "2026-09-24T19:57:18",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.15.log",
+  "metrics": {
+   "contract_checks_failed": 0,
+   "pcc_kv_contract_k_L00": 0.9999681899620647,
+   "pcc_kv_contract_k_L01": 0.9999671739666237,
+   "pcc_kv_contract_k_L02": 0.9999430991331111,
+   "pcc_kv_contract_k_L03": 0.9999361572045342,
+   "pcc_kv_contract_k_L04": 0.999923560118268,
+   "pcc_kv_contract_k_L05": 0.999918368890995,
+   "pcc_kv_contract_k_L06": 0.99991634007596,
+   "pcc_kv_contract_k_L07": 0.9999237444315259,
+   "pcc_kv_contract_k_L08": 0.9999215147395953,
+   "pcc_kv_contract_k_L09": 0.999916059619865,
+   "pcc_kv_contract_k_L10": 0.9999078855209554,
+   "pcc_kv_contract_k_L11": 0.9998712542168142,
+   "pcc_kv_contract_k_L12": 0.9998388498464328,
+   "pcc_kv_contract_k_L13": 0.9997816642230052,
+   "pcc_kv_contract_k_L14": 0.9997325890179415,
+   "pcc_kv_contract_k_L15": 0.9997383823860888,
+   "pcc_kv_contract_k_L16": 0.9996039220746512,
+   "pcc_kv_contract_k_L17": 0.9997072701909595,
+   "pcc_kv_contract_k_L18": 0.9996578706411617,
+   "pcc_kv_contract_k_L19": 0.9995009524781844,
+   "pcc_kv_contract_k_L20": 0.9995373871450042,
+   "pcc_kv_contract_k_L21": 0.9996442738934368,
+   "pcc_kv_contract_k_L22": 0.9995879871664543,
+   "pcc_kv_contract_k_L23": 0.9996185153389185,
+   "pcc_kv_contract_k_L24": 0.9995163322729297,
+   "pcc_kv_contract_k_L25": 0.9995659637460999,
+   "pcc_kv_contract_k_L26": 0.9995935445415431,
+   "pcc_kv_contract_k_L27": 0.9995681997918606,
+   "pcc_kv_contract_min": 0.9978762761242155,
+   "pcc_kv_contract_v_L00": 0.9999372714519709,
+   "pcc_kv_contract_v_L01": 0.9999360661590185,
+   "pcc_kv_contract_v_L02": 0.9992268646796517,
+   "pcc_kv_contract_v_L03": 0.9993226911857924,
+   "pcc_kv_contract_v_L04": 0.9996233689178806,
+   "pcc_kv_contract_v_L05": 0.9979062339468039,
+   "pcc_kv_contract_v_L06": 0.9990193152036954,
+   "pcc_kv_contract_v_L07": 0.9997583558341862,
+   "pcc_kv_contract_v_L08": 0.9992182889590837,
+   "pcc_kv_contract_v_L09": 0.9996995339424419,
+   "pcc_kv_contract_v_L10": 0.9994530294894732,
+   "pcc_kv_contract_v_L11": 0.9993838171076206,
+   "pcc_kv_contract_v_L12": 0.9991513651027635,
+   "pcc_kv_contract_v_L13": 0.999151588640563,
+   "pcc_kv_contract_v_L14": 0.9990880245939613,
+   "pcc_kv_contract_v_L15": 0.9989397251006389,
+   "pcc_kv_contract_v_L16": 0.9991738816136504,
+   "pcc_kv_contract_v_L17": 0.9989123388347199,
+   "pcc_kv_contract_v_L18": 0.9990992230106037,
+   "pcc_kv_contract_v_L19": 0.9987828402172293,
+   "pcc_kv_contract_v_L20": 0.99831569604431,
+   "pcc_kv_contract_v_L21": 0.9989475525080627,
+   "pcc_kv_contract_v_L22": 0.999063114905544,
+   "pcc_kv_contract_v_L23": 0.9986015219744875,
+   "pcc_kv_contract_v_L24": 0.9990710633559355,
+   "pcc_kv_contract_v_L25": 0.9990528801573819,
+   "pcc_kv_contract_v_L26": 0.9983855038693232,
+   "pcc_kv_contract_v_L27": 0.9978762761242155
+  },
+  "rc": 0,
+  "started": "2026-09-24T19:54:29",
+  "status": "PASS"
+ },
+ "P2.16": {
+  "duration_s": 95.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:02:45"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:06:44"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:10:49"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-24T20:11:39"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:13:45"
+   }
+  ],
+  "last_run": "2026-09-24T20:13:45",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.16.log",
+  "metrics": {
+   "engine_checks_failed": 0,
+   "pcc_kv_independent_min": 0.9978762761242155,
+   "pcc_producer_kv_k": 0.9995009525506677,
+   "pcc_producer_kv_v": 0.9978762766975731,
+   "producer_vs_independent_pcc_gap": 5.733575836330829e-10
+  },
+  "rc": 0,
+  "started": "2026-09-24T20:12:09",
   "status": "PASS"
  },
  "P2.2": {
-  "duration_s": 1.7,
+  "duration_s": 2.1,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:34:46"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:16:04"
    }
   ],
-  "last_run": "2026-09-24T19:34:46",
+  "last_run": "2026-09-24T20:16:04",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.2.log",
   "metrics": {
    "per_chip_total_gb": 11.42,
    "plan_fits_dram": 1
   },
   "rc": 0,
-  "started": "2026-09-24T19:34:44",
+  "started": "2026-09-24T20:16:02",
   "status": "PASS"
  },
  "P2.3": {
-  "duration_s": 17.7,
+  "duration_s": 19.4,
   "history": [
    {
     "status": "PASS",
@@ -429,9 +577,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T19:35:57"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:16:24"
    }
   ],
-  "last_run": "2026-09-24T19:35:57",
+  "last_run": "2026-09-24T20:16:24",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.3.log",
   "metrics": {
    "pcc_attn_norm_L00": 0.9999984432664203,
@@ -443,36 +595,44 @@
    "pcc_final_norm": 0.9999958697900421
   },
   "rc": 0,
-  "started": "2026-09-24T19:35:39",
+  "started": "2026-09-24T20:16:05",
   "status": "PASS"
  },
  "P2.4": {
-  "duration_s": 17.0,
+  "duration_s": 16.8,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:36:23"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:16:41"
    }
   ],
-  "last_run": "2026-09-24T19:36:23",
+  "last_run": "2026-09-24T20:16:41",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.4.log",
   "metrics": {
    "pcc_embed_c0": 1.000000000000026,
    "pcc_embed_c1": 0.9999999999999573
   },
   "rc": 0,
-  "started": "2026-09-24T19:36:06",
+  "started": "2026-09-24T20:16:24",
   "status": "PASS"
  },
  "P2.5": {
-  "duration_s": 19.0,
+  "duration_s": 16.5,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:37:04"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:16:58"
    }
   ],
-  "last_run": "2026-09-24T19:37:04",
+  "last_run": "2026-09-24T20:16:58",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.5.log",
   "metrics": {
    "pcc_rope_k_c0": 0.9999943904597018,
@@ -481,11 +641,11 @@
    "pcc_rope_q_c1": 0.9999936513098661
   },
   "rc": 0,
-  "started": "2026-09-24T19:36:45",
+  "started": "2026-09-24T20:16:41",
   "status": "PASS"
  },
  "P2.6": {
-  "duration_s": 16.5,
+  "duration_s": 23.9,
   "history": [
    {
     "status": "FAIL",
@@ -494,9 +654,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T19:38:16"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:17:25"
    }
   ],
-  "last_run": "2026-09-24T19:38:16",
+  "last_run": "2026-09-24T20:17:25",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.6.log",
   "metrics": {
    "pcc_attn_out_L00_c0": 0.9999877335145246,
@@ -513,18 +677,22 @@
    "pcc_kv_v_L27": 0.999990102468934
   },
   "rc": 0,
-  "started": "2026-09-24T19:38:00",
+  "started": "2026-09-24T20:17:01",
   "status": "PASS"
  },
  "P2.7": {
-  "duration_s": 24.0,
+  "duration_s": 23.6,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:39:03"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:17:49"
    }
   ],
-  "last_run": "2026-09-24T19:39:03",
+  "last_run": "2026-09-24T20:17:49",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.7.log",
   "metrics": {
    "pcc_dense_L00": 0.9999933370719214,
@@ -532,11 +700,11 @@
    "pcc_shared_L27": 0.9999838681044786
   },
   "rc": 0,
-  "started": "2026-09-24T19:38:39",
+  "started": "2026-09-24T20:17:25",
   "status": "PASS"
  },
  "P2.8": {
-  "duration_s": 24.9,
+  "duration_s": 24.1,
   "history": [
    {
     "status": "FAIL",
@@ -545,9 +713,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T19:40:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:18:13"
    }
   ],
-  "last_run": "2026-09-24T19:40:10",
+  "last_run": "2026-09-24T20:18:13",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.8.log",
   "metrics": {
    "pcc_topk_w_L01": 0.9998897271702554,
@@ -561,11 +733,11 @@
    "topk_set_match_frac_L27": 0.999267578125
   },
   "rc": 0,
-  "started": "2026-09-24T19:39:45",
+  "started": "2026-09-24T20:17:49",
   "status": "PASS"
  },
  "P2.9": {
-  "duration_s": 37.5,
+  "duration_s": 38.9,
   "history": [
    {
     "status": "FAIL",
@@ -586,9 +758,13 @@
    {
     "status": "PASS",
     "t": "2026-09-24T19:44:22"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:18:52"
    }
   ],
-  "last_run": "2026-09-24T19:44:22",
+  "last_run": "2026-09-24T20:18:52",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.9.log",
   "metrics": {
    "pcc_moe_L01_c0": 0.999995313778326,
@@ -599,7 +775,7 @@
    "pcc_moe_L27_c1": 0.9999675390497618
   },
   "rc": 0,
-  "started": "2026-09-24T19:43:44",
+  "started": "2026-09-24T20:18:13",
   "status": "PASS"
  }
 }
