@@ -138,7 +138,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
              {"aligned_page_size", aligned_page_size},
              {"size_of_valid_data_in_last_page_in_row", size_of_valid_data_in_last_page_in_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "pad_value", "start_page_id", "n_block_reps"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** writer
@@ -155,7 +156,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** compute
