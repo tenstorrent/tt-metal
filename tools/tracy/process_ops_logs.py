@@ -644,6 +644,13 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+def _host_replayed_trace(trace_replays: Optional[TraceReplayDict], device_id: int, trace_id: int) -> bool:
+    """True if the host log holds a TT_METAL_TRACE_REPLAY marker for this trace on this device."""
+    if not trace_replays:
+        return False
+    return trace_id in trace_replays.get(device_id, {})
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
@@ -684,16 +691,29 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            if not candidates and host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+            if (
+                not candidates
+                and host_trace_id is not None
+                and host_trace_id not in replayed_trace_ids
+                and not _host_replayed_trace(trace_replays, device_id, host_trace_id)
+            ):
                 # The host captured this trace but never replayed it (e.g. a prefill-only demo
                 # that records the decode trace up front), so the device produced no data for
-                # any of its ops. Drop them instead of failing the whole report.
+                # any of its ops. Both sources agree: no REPLAY marker from the host and no rows
+                # from the device. Leave these ops without device data instead of failing the
+                # whole report. A trace that the host did replay keeps the assert below, so a
+                # device report that lost every row of a replayed trace is still an error.
                 dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
                 continue
 
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
                 f"for device {device_id} (trace_id={host_trace_id})"
+                + (
+                    "; the host replayed this trace, so the device report should have rows for it"
+                    if host_trace_id is not None and host_trace_id not in replayed_trace_ids
+                    else ""
+                )
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
@@ -721,8 +741,9 @@ def _enrich_ops_from_perf_csv(
 
         for dropped_trace_id, dropped_count in sorted(dropped_ops_by_trace.items()):
             logger.warning(
-                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed; "
-                f"dropping its {dropped_count} host ops, which have no device data in {PROFILER_CPP_DEVICE_PERF_REPORT}"
+                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
+                f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
+                f"device data and appear in the report as host-only rows"
             )
 
         host_ops_by_device[device_id] = enriched_ops
