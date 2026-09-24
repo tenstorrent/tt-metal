@@ -68,7 +68,10 @@ def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
 
 
 def git_commit(task: dict, verdict: str, summary: str) -> str | None:
-    paths = [str(BRINGUP.parent)]
+    # Stage only this task's footprint so concurrent work never leaks into a gate commit.
+    rel = lambda p: str(Path(p).relative_to(REPO)) if Path(p).is_absolute() else p  # noqa: E731
+    paths = [rel(STATE), rel(M.RESULTS_DIR / f"{task['id']}.json"), rel(BRINGUP / "BREADCRUMBS.md")]
+    paths += [p for p in task.get("paths", []) if (REPO / p).exists()]
     subprocess.run(["git", "add", "-A", *paths], cwd=REPO, check=True)
     if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO).returncode == 0:
         return None
