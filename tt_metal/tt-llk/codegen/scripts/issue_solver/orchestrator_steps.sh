@@ -951,6 +951,32 @@ PY
     rj message --message "Verify route: ${ROUTE}; sealed ${manifest_count} requirement(s) as ${manifest_id}"
     echo "$out"
     echo "VERIFY_ROUTE=$ROUTE MANIFEST_ID=$manifest_id ATTEMPT_ID=$manifest_attempt REQUIREMENTS=$manifest_count"
+
+    # Run the sealed executor here rather than asking the orchestrator to call
+    # it. The playbooks did instruct that call and the run logged no attempt at
+    # it at all -- the third instruction in this pipeline measured as not
+    # followed, after the anti-sleep rule and the read-batching rule. Sealing is
+    # the right moment: it has just happened, no tester has been spawned, and
+    # this step is reached on every route. Exit 20 leaves the existing tester
+    # route untouched, so a fallback costs nothing.
+    if [ "$(rj-get-functional-executor 2>/dev/null)" = "sealed-llk-v1" ]; then
+        execute_step_run_sealed_functional
+        local sealed_rc=$?
+        echo "SEALED_FUNCTIONAL_RC=$sealed_rc"
+    fi
+}
+
+# run.json is the authority for the opt-in; state.json never carries it.
+rj-get-functional-executor() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    print(json.loads((Path(sys.argv[1]) / "run.json").read_text()).get("functional_executor") or "")
+except (OSError, ValueError):
+    print("")
+PY
 }
 
 # ===========================================================================
