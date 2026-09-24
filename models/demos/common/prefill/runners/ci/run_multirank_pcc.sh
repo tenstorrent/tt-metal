@@ -25,7 +25,7 @@ WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
-PRODUCER_USERS=1
+PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 # Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.

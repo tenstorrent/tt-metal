@@ -695,7 +695,10 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
         if not 0 <= slot_id < config.num_slots or real_len > config.max_sequence_length:
             raise ValueError(f"Llama GQA request exceeds config {config_id} slot or sequence capacity")
 
-    # HF stores the rotary half split; the Llama device cache stores adjacent Meta pairs.
+    from models.demos.common.prefill.runners.trace_utils import golden_key_frame
+
+    # HF uses a half split; Meta goldens already have the device's adjacent-pair order.
+    key_frame = golden_key_frame(trace_dir)
     half = head_dim // 2
     perm = torch.tensor([half * (index % 2) + index // 2 for index in range(head_dim)], dtype=torch.long)
     read_len = math.ceil(real_len / _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
@@ -715,7 +718,9 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
         )[:, :real_len]
 
         with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as handle:
-            golden = [handle.get_tensor(f"{kind}_cache_layer_{layer}").float() for kind in ("key", "value")]
+            golden = [
+                handle.get_slice(f"{kind}_cache_layer_{layer}")[:, :, :real_len, :].float() for kind in ("key", "value")
+            ]
         for tensor in golden:
             if (
                 tensor.ndim != 4
@@ -724,7 +729,9 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
                 or tensor.shape[3] != head_dim
             ):
                 raise ValueError(f"layer {layer}: golden GQA cache must have shape [1,{n_kv},>={real_len},{head_dim}]")
-        g_k = golden[0][0, :, :real_len, :][..., perm]
+        g_k = golden[0][0, :, :real_len, :]
+        if key_frame == "hf":
+            g_k = g_k[..., perm]
         g_v = golden[1][0, :, :real_len, :]
         if any(not torch.isfinite(tensor).all() for tensor in (g_k, g_v, dev_k, dev_v)):
             raise ValueError(f"layer {layer}: GQA cache comparison contains nonfinite values")

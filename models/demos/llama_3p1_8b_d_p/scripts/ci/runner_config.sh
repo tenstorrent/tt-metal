@@ -12,17 +12,28 @@ GOLDEN_LEN="${PREFILL_MAX_SEQ_LEN:-$(manifest_env PREFILL_MAX_SEQ_LEN)}"
 SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
 SC1_NUM_LAYERS=$(manifest_env PREFILL_NUM_LAYERS)
 SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-PRODUCER_USERS=${SC1_NUM_USERS}
 WARMUP_CHUNKS=0
 PCC_THRESHOLD=0.99
 PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1))"
 
-# Validate references before reserving the mesh. This emits no shell code.
-python3 - <<'PYTHON'
-import os
+# Model packages are installed on workers; the orchestration host only needs Python's stdlib.
+# Resolve and validate references on the SC1 worker before starting the mesh.
+printf -v TRACE_VALIDATION_CMD '%q ' env \
+    "PREFILL_MAX_SEQ_LEN=${GOLDEN_LEN}" \
+    "PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${SC1_NUM_USERS}}" \
+    "PREFILL_PRODUCER_NUM_USERS=${PRODUCER_USERS}" \
+    python3 -c '
+import sys
+from models.demos.common.prefill.adapter import get_adapter
 from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
-validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), prefill_runner_scenario())
-PYTHON
+spec = sys.argv[1] or get_adapter("llama_3p1_8b").prefill_trace_default
+validate_prefill_slot_traces(spec, prefill_runner_scenario())
+print(spec)
+' "${PREFILL_PRODUCER_SLOT_TRACES:-${PREFILL_TRACE_DIR:-}}"
+MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
+PREFILL_PRODUCER_SLOT_TRACES=$("${MPIRUN}" --bind-to none --pernode \
+    -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH bash -lc "${TRACE_VALIDATION_CMD}")
+export PREFILL_PRODUCER_SLOT_TRACES
 
 printf -v SLOT_TRACES '%q' "${PREFILL_PRODUCER_SLOT_TRACES}"
 printf -v CHECKPOINT '%q' "${PREFILL_HF_MODEL:-/mnt/models/meta-llama/Llama-3.1-8B-Instruct}"

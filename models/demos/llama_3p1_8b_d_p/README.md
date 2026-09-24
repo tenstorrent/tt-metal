@@ -116,5 +116,5 @@ from a run of the branch being reviewed.
 
 ## Common prefill runner
 
-See the [runner acceptance guide](docs/prefill-runner.md) for the two-slot 2K
-producer/runner tests, source KV address-table contract, and SC1 CI command.
+See the [runner acceptance guide](docs/prefill-runner.md) for producer/runner
+tests, the source KV address-table contract, and the SC1 CI command.

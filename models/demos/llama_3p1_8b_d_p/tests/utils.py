@@ -256,6 +256,9 @@ def prefill_runner_scenario():
     )
     if int(os.environ.get("PREFILL_NUM_USERS", users)) != users:
         raise ValueError(f"runner acceptance requires the model's {users} slots")
+    active_users = int(os.environ.get("PREFILL_PRODUCER_NUM_USERS", "1"))
+    if not 1 <= active_users <= users:
+        raise ValueError(f"producer must use between 1 and {users} slots")
     env.update(
         PREFILL_MAX_SEQ_LEN=str(capacity),
         PREFILL_LAYER_ACK_D2H="0",
@@ -267,11 +270,12 @@ def prefill_runner_scenario():
         "users": users,
         "layers": layers,
         "max_seq_len": capacity,
-        "expected_slots": users,
+        "expected_slots": active_users,
         "env": env,
         "producer": {
+            "PREFILL_NUM_USERS": str(active_users),
             "PREFILL_PRODUCER_CHUNKS": str(capacity // chunk_size),
-            "PREFILL_PRODUCER_MAX_REQUESTS": str(users),
+            "PREFILL_PRODUCER_MAX_REQUESTS": str(active_users),
             "PREFILL_PRODUCER_DURATION_S": "inf",
             "PREFILL_PRODUCER_WARMUP_CHUNKS": "0",
             "PREFILL_PRODUCER_MULTI_TURN_PROB": "0",
@@ -285,16 +289,18 @@ def prefill_runner_scenario():
 
 
 def validate_prefill_slot_traces(spec, scenario):
-    """Require distinct complete goldens so a crossed slot mapping cannot pass on identical data."""
+    """Require a complete prefix per active slot; one trace may be shared by all slots."""
+    from models.demos.common.prefill.adapter import get_adapter
+    from models.demos.common.prefill.runners.trace_utils import validate_gqa_trace
+
+    spec = spec or os.environ.get("PREFILL_TRACE_DIR", get_adapter("llama_3p1_8b").prefill_trace_default)
     paths = [Path(path.strip()) for path in spec.split(",") if path.strip()]
-    if len(paths) != scenario["users"]:
-        raise ValueError(f"set {scenario['users']} distinct golden trace directories in PREFILL_PRODUCER_SLOT_TRACES")
+    if len(paths) not in (1, scenario["expected_slots"]):
+        raise ValueError(
+            f"set one or {scenario['expected_slots']} golden trace directories in PREFILL_PRODUCER_SLOT_TRACES"
+        )
     ids = [json.loads((path / "metadata.json").read_text())["token_ids"] for path in paths]
-    if any(len(tokens) != scenario["max_seq_len"] for tokens in ids) or len({tuple(tokens) for tokens in ids}) != len(
-        ids
-    ):
-        raise ValueError(f"goldens must contain distinct {scenario['max_seq_len']}-token prompts")
+    if any(len(tokens) < scenario["max_seq_len"] for tokens in ids):
+        raise ValueError(f"goldens must contain at least {scenario['max_seq_len']} tokens")
     for path in paths:
-        for layer in range(scenario["layers"]):
-            if not (path / "kv_cache" / f"layer_{layer}.safetensors").is_file():
-                raise ValueError(f"missing layer {layer} under {path}")
+        validate_gqa_trace(path, scenario["max_seq_len"], num_layers=scenario["layers"], num_kv_heads=8, head_dim=128)

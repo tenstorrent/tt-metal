@@ -170,8 +170,8 @@ SCENARIOS = {
 if os.environ.get("PREFILL_MODEL") == "llama_3p1_8b":
     from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
 
-    SCENARIOS = {"llama31_two_slots": prefill_runner_scenario()}
-    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31_two_slots"])
+    SCENARIOS = {"llama31": prefill_runner_scenario()}
+    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31"])
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
@@ -496,13 +496,16 @@ def test_producer_runner_pcc(scenario, tmp_path):
     if "prompt_file" in sc:
         model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
         trace_env["PREFILL_MODEL"] = model
-        reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
-        if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
-            trace_dir = reuse_dir
-        else:
-            trace_dir = str(tmp_path / "prompt_trace")
-            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
-        trace_env["PREFILL_TRACE_DIR"] = trace_dir
+        from models.demos.common.prefill.runners.trace_utils import ensure_trace
+
+        output = tmp_path / "prompt_trace"
+
+        def generate():
+            _generate_prompt_trace(str(output), sc["isl"], sc["prompt_file"], model)
+            return output
+
+        trace_dir = ensure_trace(os.environ.get("PREFILL_REUSE_TRACE_DIR") or output, sc["isl"], generate)
+        trace_env["PREFILL_TRACE_DIR"] = str(trace_dir)
     with _running_runner(scenario, sc, **trace_env) as runner_stream:
         env = _scenario_env(sc, PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"])
         producer_stream = _ChildStream("producer", prod_log)

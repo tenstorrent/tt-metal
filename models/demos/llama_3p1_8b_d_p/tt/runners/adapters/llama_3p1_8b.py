@@ -42,7 +42,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # PREFILL_HF_MODEL overrides, and when it does it supplies both config and weights.
     hf_model_default = "models/tt_transformers/model_params/Llama-3.1-8B-Instruct"
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
-    prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
+    prefill_trace_default = "/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L"
     default_gate_mode = "DEVICE_FP32"  # dense model — no gate; the engine reads this unconditionally
 
     # --- test metadata ---
