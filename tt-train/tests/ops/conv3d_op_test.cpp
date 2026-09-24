@@ -796,3 +796,66 @@ TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
     EXPECT_THROW(ttml::ops::conv3d(input, weight, zeros(ttnn::Shape({1U, c.C_out + 1U}))), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, weight, zeros(ttnn::Shape({c.C_out, 1U}))), std::invalid_argument);
 }
+
+// Every public entry point rejects host, deallocated and non-float tensors before they reach ttnn.
+TEST_F(Conv3dOpTest, RejectsHostDeallocatedAndMistypedTensors) {
+    const Conv3dCase c;
+    const auto [D, H, W] = c.in_size;
+    const auto [kD, kH, kW] = c.kernel;
+    const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
+    const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
+    const ttnn::Shape bias_shape({1U, 1U, 1U, c.C_out});
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const auto zeros_value = [](const ttnn::Shape& shape) {
+        return make_device_tensor(std::vector<float>(shape.volume(), 0.F), shape, ttnn::Layout::ROW_MAJOR);
+    };
+    const auto wrap = [](const ttnn::Tensor& value) { return ttml::autograd::create_tensor(value); };
+    // Copies share the buffer, so each deallocated tensor is built fresh.
+    const auto freed_value = [&](const ttnn::Shape& shape) {
+        auto value = zeros_value(shape);
+        value.deallocate();
+        return value;
+    };
+    const auto u32_value = [&](const ttnn::Shape& shape, ttnn::Layout layout) {
+        return ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>(shape.volume(), 0U), shape, device, layout);
+    };
+
+    auto input = wrap(zeros_value(input_shape));
+    auto weight = wrap(zeros_value(weight_shape));
+    auto bias = wrap(zeros_value(bias_shape));
+    EXPECT_NO_THROW(ttml::ops::conv3d(input, weight, bias));
+
+    EXPECT_THROW(ttml::ops::conv3d(wrap(input->get_value().cpu()), weight, bias), std::invalid_argument);
+    EXPECT_THROW(ttml::ops::conv3d(input, wrap(weight->get_value().cpu()), bias), std::invalid_argument);
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, wrap(bias->get_value().cpu())), std::invalid_argument);
+
+    EXPECT_THROW(ttml::ops::conv3d(wrap(freed_value(input_shape)), weight, bias), std::invalid_argument);
+    EXPECT_THROW(ttml::ops::conv3d(input, wrap(freed_value(weight_shape)), bias), std::invalid_argument);
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, wrap(freed_value(bias_shape))), std::invalid_argument);
+
+    EXPECT_THROW(
+        ttml::ops::conv3d(input, weight, wrap(u32_value(bias_shape, ttnn::Layout::ROW_MAJOR))), std::invalid_argument);
+
+    EXPECT_THROW(ttml::ops::prepare_conv3d_weight(weight->get_value().cpu()), std::invalid_argument);
+    EXPECT_THROW(ttml::ops::prepare_conv3d_weight(freed_value(weight_shape)), std::invalid_argument);
+    EXPECT_THROW(
+        ttml::ops::prepare_conv3d_weight(u32_value(weight_shape, ttnn::Layout::ROW_MAJOR)), std::invalid_argument);
+
+    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value());
+    EXPECT_NO_THROW(ttml::ops::conv3d(input, weight, bias, prepared));
+    const ttnn::Shape form_shape = prepared.forward[0].logical_shape();
+
+    auto host_form = prepared;
+    host_form.forward[0] = prepared.forward[0].cpu();
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, host_form), std::invalid_argument);
+
+    auto freed_form = ttml::ops::prepare_conv3d_weight(weight->get_value());
+    freed_form.transposed[0].deallocate();
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, freed_form), std::invalid_argument);
+
+    auto mistyped_form = prepared;
+    mistyped_form.forward[0] = u32_value(form_shape, ttnn::Layout::TILE);
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, mistyped_form), std::invalid_argument);
+}
