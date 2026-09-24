@@ -82,7 +82,7 @@
 # rounded at pack rather than truncated in Dest first, and a step budget is what makes it
 # visible at all (atol=0.05 is ~6 bf16 steps). No headroom, deliberately: these are exact
 # by construction, so any movement is real signal.
-Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -142,6 +142,8 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
+
+
 # ── Derived from the accuracy sweep ───────────────────────────────────────
 #
 # Derived from the sweep parquet by the budget emitter, not written by hand.
@@ -156,7 +158,7 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
 # Regenerate wholesale rather than editing a row: the trailing comment is the
 # measurement, and a number changed without it is a guess.
 
-Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 6}  # max 5 ULP
@@ -215,7 +217,9 @@ Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 3}  # max 2 ULP, wormhole, 2026-09-21
 
 
-Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -272,7 +276,9 @@ Asinh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
-Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -330,13 +336,15 @@ Atanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 4}  # max 3 ULP, wormhole, 2026-09-21
 
 
-Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
-  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
+
+
+Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
-  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
-  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 16129 ULP, budget would be 17742 > 6-step ceiling
-  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, budget would be 17742 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
   - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
@@ -392,7 +400,9 @@ Ceil:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1007 ULP, budget would be 1108 > 51-step ceiling
@@ -450,7 +460,9 @@ Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 10}  # max 9 ULP, wormhole, 2026-09-21
 
 
-Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 48600 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48501 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 6}  # max 5 ULP
@@ -508,7 +520,9 @@ Cos:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1007 ULP, budget would be 1108 > 51-step ceiling
@@ -566,6 +580,8 @@ Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 10}  # max 9 ULP, wormhole, 2026-09-21
 
 
+
+
 Erfinv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 14703 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 14703 ULP, block-quantized, so tolerance
@@ -595,7 +611,7 @@ Erfinv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 202
   - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 30522, near_zero_atol: 0.000536}  # max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead; floor measured at dynamic range 1.83; holds while the judged tile's range stays above 0.729 (2.5x narrower)
 
 
-Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 32377 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 32377 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 32377 ULP, block-quantized, so tolerance
@@ -653,7 +669,9 @@ Exp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 416429}  # max 378571 ULP, wormhole, 2026-09-21
 
 
-Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32257 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32257 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 854 ULP, budget would be 940 > 51-step ceiling
@@ -706,6 +724,8 @@ Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
+
+
 # ── Exact and predicate unary ops ───────────────────────────────────────────
 #
 # Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
@@ -721,7 +741,7 @@ Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
 # (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
 # format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
 
-Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP
   - {in: Bfp8_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
@@ -774,7 +794,7 @@ Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive 
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
@@ -836,11 +856,13 @@ Floor:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
+
+
 # frac(x) = x - floor(x) cancels near an integer, and the smaller the result the more of
 # the output mantissa the remaining error occupies. Float16 keeps 10 of those bits where
 # Float16_b keeps 7, and at 384 measured steps a budget would be looser than the
 # tolerance it replaces (the usable ceiling there is 51), so fp16 stays on tolerance.
-Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -896,6 +918,8 @@ Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
 
 
 Gelu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
@@ -975,7 +999,7 @@ GeluAppx:
 # -- Unary approximations that stay on tolerance -----------------------------
 # Both are past the ceiling on every float column, by three orders of magnitude on
 # Float32. They are approximations, and the tolerance is the tighter bound.
-GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13219 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13219 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1007 ULP, budget would be 1108 > 51-step ceiling
@@ -1009,7 +1033,9 @@ GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 6}  # max 5 ULP, wormhole, 2026-09-21
 
 
-Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 5 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 5 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 6}  # max 5 ULP
@@ -1066,14 +1092,36 @@ Hardsigmoid:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 564}  # max 512 ULP, wormhole, 2026-09-21
 
 
-Heaviside:
+
+
+Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16001 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16001 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 14336 ULP, budget would be 15770 > 51-step ceiling
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 14336 ULP, budget would be 15770 > 51-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 16001 ULP, budget would be 17602 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 16001 ULP, budget would be 17602 > 6-step ceiling
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 14336 ULP, budget would be 15770 > 51-step ceiling
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {metric: tolerance}       # exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b, 2026-09-18
+
+
 
 
 # Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so fp16
 # was never measured for it -- and Square measured 1 step on bf16 against 4 on fp16, so
 # fp16 is not safely interpolated from bf16.
-Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -1100,6 +1148,8 @@ Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
 
 
 # The five is_* predicates write 1.0/0.0, so an exact result is the only correct one.
@@ -1157,7 +1207,7 @@ Isposinf:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16944 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16944 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 49}  # max 44 ULP
@@ -1214,7 +1264,9 @@ Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
-Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1023 ULP, budget would be 1126 > 51-step ceiling
@@ -1268,6 +1320,8 @@ Log1p:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
+
+
 LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1281,7 +1335,7 @@ LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -1341,7 +1395,9 @@ Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
@@ -1417,8 +1473,10 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
+
+
 # Same ~7-mantissa-bit shape as Acosh: 65536 steps on Float32, one step on bf16.
-ReciprocalCompat:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+ReciprocalCompat:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 391 ULP, block-quantized, so tolerance
@@ -1465,9 +1523,11 @@ ReciprocalCompat:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wor
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 26841}  # max 24400 ULP, wormhole, 2026-09-21
 
 
+
+
 # Relu/Frac follow the Abs/Neg shape: exact on Float32, one step of output rounding on
 # the 16-bit formats.
-ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 992 ULP, budget would be 1092 > 51-step ceiling
@@ -1525,16 +1585,25 @@ ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 20
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
-  - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 16417 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Bfp8_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
-  - {in: Float16, out: Bfp8_b, metric: tolerance}  # max 16417 ULP, block-quantized, so tolerance
-  - {in: Float16, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Float16, out: Float16_b, max_ulp: 2}  # max 1 ULP
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 16417 ULP, block-quantized, so tolerance
-  - {in: Float16_b, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
+ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
   - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
@@ -1580,7 +1649,9 @@ ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 20
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Rsqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Rsqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 24193 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 24193 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 24193 ULP, block-quantized, so tolerance
@@ -1655,6 +1726,8 @@ Rsqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+
+
 
 
 SfpuAddTopRow:
@@ -2132,9 +2205,27 @@ SigmoidAppx:
 # where -0.0 == 0 makes it 0.5. One such lane costs ~1.05e9 steps on Float32, so a
 # 0-ULP budget would fail a test that is behaving as specified. Recorded here as
 # tolerance on purpose -- do not "close the gap" by enrolling them.
-Sign:
+Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 16129 ULP, budget would be 17742 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, budget would be 17742 > 6-step ceiling
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {metric: tolerance}       # exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b, 2026-09-18
-Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 16129 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, metric: tolerance}  # max 15360 ULP, budget would be 16896 > 51-step ceiling
   - {in: Bfp8_b, out: Float16_b, metric: tolerance}  # max 16129 ULP, budget would be 17742 > 6-step ceiling
@@ -2154,7 +2245,9 @@ Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustiv
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3982 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3982 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1007 ULP, budget would be 1108 > 51-step ceiling
@@ -2211,7 +2304,9 @@ Silu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 4}  # max 3 ULP, wormhole, 2026-09-21
 
 
-Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 48531 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 48538 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
@@ -2269,19 +2364,21 @@ Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-0
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
-Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
-  - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
+
+
+Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, approx: "No", dest: "No", metric: tolerance}  # max 2472 ULP, budget would be 2720 > 51-step ceiling
   - {in: Bfp8_b, out: Float16, approx: "No", dest: "Yes", metric: tolerance}  # max 512 ULP, budget would be 564 > 51-step ceiling
   - {in: Bfp8_b, out: Float16, approx: "Yes", dest: "No", metric: tolerance}  # max 2471 ULP, budget would be 2719 > 51-step ceiling
   - {in: Bfp8_b, out: Float16, approx: "Yes", dest: "Yes", metric: tolerance}  # max 512 ULP, budget would be 564 > 51-step ceiling
-  - {in: Bfp8_b, out: Float16_b, approx: "No", dest: "No", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
-  - {in: Bfp8_b, out: Float16_b, approx: "No", dest: "Yes", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
-  - {in: Bfp8_b, out: Float16_b, approx: "Yes", dest: "No", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
-  - {in: Bfp8_b, out: Float16_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Bfp8_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp8_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float16, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
   - {in: Float16, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 1 ULP, block-quantized, so tolerance
   - {in: Float16, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
@@ -2343,13 +2440,13 @@ Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
-SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
-  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 7990 ULP, block-quantized, so tolerance
+SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 163 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 163 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 2472 ULP, budget would be 2720 > 51-step ceiling
   - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget would be 564 > 51-step ceiling
-  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
-  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 7990 ULP, budget would be 8789 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 163 ULP, budget would be 180 > 6-step ceiling
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 162 ULP, budget would be 179 > 6-step ceiling
   - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18303 ULP, block-quantized, so tolerance
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 1 ULP, block-quantized, so tolerance
   - {in: Float16, out: Float16, dest: "No", max_ulp: 2}  # max 1 ULP
@@ -2368,6 +2465,8 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 97}  # max 88 ULP, wormhole, 2026-09-21
 
 
+
+
 # One multiply, and one open question. x*x has rounding slack the sign-bit ops do not:
 # the golden rounds in float64, the hardware in the datapath, and ties can differ.
 # Float32 is NOT enrolled, and the measurement is why -- 65536 steps at dest_acc=No is
@@ -2375,7 +2474,7 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
 # differently; 32768 at dest_acc=Yes has no such explanation, the product agreeing to
 # only ~8 mantissa bits. Attributing either is its own change, so it is recorded, not
 # blessed.
-Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32505 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32505 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 992 ULP, budget would be 1092 > 51-step ceiling
@@ -2384,15 +2483,15 @@ Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 202
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18177 ULP, block-quantized, so tolerance
   - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 18177 ULP, block-quantized, so tolerance
-  - {in: Float16, out: Float16, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 1024 ULP, budget would be 1127 > 51-step ceiling
   - {in: Float16, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget would be 564 > 51-step ceiling
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 127 ULP, budget would be 140 > 6-step ceiling
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
   - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # max 12929 ULP, budget would be 14222 > 6-step ceiling
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32509 ULP, block-quantized, so tolerance
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32509 ULP, block-quantized, so tolerance
   - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, budget would be 1109 > 51-step ceiling
   - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, budget would be 564 > 51-step ceiling
-  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {max_ulp: 4}  # wh: Float16 max 4 ULP, 40 variants, 2026-09-16
   - {out: Float16_b, max_ulp: 1}  # wh: max 1 ULP, 40 variants, 2026-09-16
@@ -2436,7 +2535,9 @@ Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 202
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 387 ULP, block-quantized, so tolerance
@@ -2503,7 +2604,9 @@ Tanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Bfp8_b, out: Float32, approx: "Yes", metric: tolerance}  # max 655360 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 819200, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
 
 
-Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 6083 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 6081 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1005 ULP, budget would be 1106 > 51-step ceiling
@@ -2551,16 +2654,27 @@ Tanhshrink:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 11}  # max 10 ULP, wormhole, 2026-09-21
 
 
-Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
-  - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 16545 ULP, block-quantized, so tolerance
-  - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Bfp8_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
-  - {in: Float16, out: Bfp8_b, metric: tolerance}  # max 16545 ULP, block-quantized, so tolerance
-  - {in: Float16, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Float16, out: Float16_b, max_ulp: 2}  # max 1 ULP
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 16545 ULP, block-quantized, so tolerance
-  - {in: Float16_b, out: Float16, max_ulp: 0}  # max 0 ULP
-  - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
+
+
+Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
   - {out: Float16, max_ulp: 0}
@@ -2606,7 +2720,9 @@ Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaus
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
 
-Trunc:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22, except where a row says otherwise
+
+
+Trunc:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP
