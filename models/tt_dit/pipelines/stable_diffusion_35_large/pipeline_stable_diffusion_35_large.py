@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import os
 import torch
 import tqdm
 from diffusers.image_processor import VaeImageProcessor
@@ -40,6 +41,14 @@ TILE_SIZE = 32
 _VAE_SCALE_FACTOR = 8
 
 _DEFAULT_CHECKPOINT = "stabilityai/stable-diffusion-3.5-large"
+
+
+def _vae_fold() -> bool:
+    """SD35_VAE_FOLD=1: run VAE preprocessing + decoder + uint8 conversion as one trace.
+
+    Read at call time so a host process can set it per worker after import.
+    """
+    return os.environ.get("SD35_VAE_FOLD", "0") == "1"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
     # 4-chip (single 4-chip cfg-submesh): cfg is disabled (factor 1) because the
@@ -427,19 +436,29 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         )
 
     def _decode_latents(self, tt_latents: ttnn.Tensor, *, traced: bool) -> list[Image.Image]:
-        ttnn.synchronize_device(self.vae_device)
+        if not (_vae_fold() and len(self.submesh_devices) == 1):
+            # single submesh + fused VAE trace: the device queue orders DiT -> VAE, no barrier needed
+            ttnn.synchronize_device(self.vae_device)
 
         tt_latents = self.ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
             tt_latents, dim=2, mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis
         )
 
         if self._vae_spatial:
-            images_u8 = self._vae.decode_device(
-                tt_latents,
-                height=self._height // _VAE_SCALE_FACTOR,
-                width=self._width // _VAE_SCALE_FACTOR,
-                traced=traced,
-            )
+            if _vae_fold() and len(self.submesh_devices) == 1:
+                images_u8 = self._vae.decode_device_fused(
+                    tt_latents,
+                    height=self._height // _VAE_SCALE_FACTOR,
+                    width=self._width // _VAE_SCALE_FACTOR,
+                    traced=traced,
+                )
+            else:
+                images_u8 = self._vae.decode_device(
+                    tt_latents,
+                    height=self._height // _VAE_SCALE_FACTOR,
+                    width=self._width // _VAE_SCALE_FACTOR,
+                    traced=traced,
+                )
             return [Image.fromarray(image.numpy()) for image in images_u8]
 
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
