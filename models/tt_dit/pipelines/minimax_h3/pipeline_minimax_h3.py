@@ -59,7 +59,7 @@ from loguru import logger
 from PIL import Image, ImageOps
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
@@ -315,6 +315,24 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
 }
 
 
+def _presets_for_this_arch() -> tuple[str, dict[tuple[int, ...], dict]]:
+    """`(architecture name, preset table)` for the silicon `ttnn` was opened on.
+
+    Matched exactly: Blackhole and Wormhole B0 are the two architectures MiniMax-H3 has been measured
+    on. Anything else (Quasar, a future part) is rejected here instead of falling through to one of
+    the tables, whose settings are tuned to that silicon's DRAM size and fabric.
+    """
+    if is_blackhole():
+        return "Blackhole", _PRESETS_BH
+    if is_wormhole_b0():
+        return "Wormhole", _PRESETS_WH
+    msg = (
+        f"MiniMax-H3 has mesh presets for Blackhole and Wormhole B0 only; this device reports "
+        f"architecture {ttnn.get_arch_name()!r}."
+    )
+    raise NotImplementedError(msg)
+
+
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
     """The measured defaults for this mesh shape on this architecture, or `{}` when unlisted and
     `required` is False.
@@ -322,18 +340,19 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
     Keyed on architecture as well as shape, following `pipelines/flux1/pipeline_flux1.py`: a Wormhole
     and a Blackhole Galaxy are both `(4, 8)`, and the residency that fits 32 GB/chip does not fit 12,
     so a shape lookup alone would hand Wormhole a Blackhole-sized config and OOM in the first matmul.
+    Only those two architectures are matched; any other raises `NotImplementedError` rather than
+    inheriting one of their configs, whose link count, residency and FSDP settings are measured for
+    that silicon and are not safe defaults elsewhere.
 
     An unlisted shape is only an error when something is left to the preset to fill in; a caller that
     passes every parallel setting explicitly is running an untuned shape deliberately.
     """
     shape = tuple(mesh_shape)
-    blackhole = is_blackhole()
-    presets = _PRESETS_BH if blackhole else _PRESETS_WH
+    arch, presets = _presets_for_this_arch()
     preset = presets.get(shape)
     if preset is None:
         if not required:
             return {}
-        arch = "Blackhole" if blackhole else "Wormhole"
         known = ", ".join(str(s) for s in presets)
         msg = (
             f"no MiniMax-H3 preset for mesh shape {shape} on {arch}; known {arch} shapes are {known}. "
