@@ -275,6 +275,22 @@ def _patch_model_args(
     model_args.is_llama_vision = lambda: False
 
 
+def _gemma4_position_ids(kwargs):
+    """The per-slot patch position ids for a multimodal prefill batch.
+
+    The HF ``Gemma4Processor`` emits ``image_position_ids``; upstream vLLM's
+    ``Gemma4MultiModalProcessor`` renames that field to ``pixel_position_ids``
+    before it reaches the model runner, and the plugin forwards multimodal
+    fields under their vLLM names. Accept either so the demo path (HF names)
+    and the served path (vLLM names) share one prefill.
+    """
+    for key in ("pixel_position_ids", "image_position_ids"):
+        value = kwargs.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _gemma4_has_vision_weights(state_dict) -> bool:
     """True when the checkpoint ships a ``model.vision_tower.*`` sub-tree."""
     return any(k.startswith("model.vision_tower.") for k in state_dict.keys())
@@ -867,7 +883,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         output_logits = torch.zeros(batch_size, 1, vocab_size, dtype=torch.float32)
 
         pixel_values = kwargs.get("pixel_values")
-        image_position_ids = kwargs.get("image_position_ids")
+        image_position_ids = _gemma4_position_ids(kwargs)
         # Normalize to per-slot lists (None for text-only slots).
         pv_per_user = list(pixel_values) if pixel_values is not None else [None] * batch_size
         ip_per_user = list(image_position_ids) if image_position_ids is not None else [None] * batch_size
@@ -2072,11 +2088,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # on-device merge path (``_prefill_multimodal_batch``). The per-layer
         # page-table routing above is reused so hybrid KV layers stay correct.
         # Text-only batches fall through to the inherited batched text prefill.
-        if (
-            self.is_multimodal
-            and kwargs.get("pixel_values") is not None
-            and kwargs.get("image_position_ids") is not None
-        ):
+        if self.is_multimodal and kwargs.get("pixel_values") is not None and _gemma4_position_ids(kwargs) is not None:
             mm_t0 = time.perf_counter()
             out = self._prefill_multimodal_batch(
                 tokens,
