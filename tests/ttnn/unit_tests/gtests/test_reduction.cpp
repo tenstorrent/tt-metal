@@ -64,30 +64,36 @@ ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
 }
 }  // namespace
 
-TEST(ReduceHostPlanner, FidelitySelectsBlackholeAdditiveCrossover) {
+TEST(ReduceHostPlanner, FidelitySelectsArchitectureAdditiveCrossover) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     using Algorithm = compute_kernel_lib::ReduceAlgorithm;
     using Policy = compute_kernel_lib::ReduceInputPolicy;
     struct Crossover {
+        tt::ARCH arch;
         MathFidelity fidelity;
         std::array<uint32_t, 3> tiles;  // W, H, HW
     };
-    // Sustained >1% library-add wins from the Blackhole sweep, including the dense row sweeps.
+    // Sustained >1% library-add wins from the Blackhole and Wormhole sweeps.
     const std::array cases{
-        Crossover{MathFidelity::LoFi, {64, 32, 16}},
-        Crossover{MathFidelity::HiFi2, {30, 16, 8}},
-        Crossover{MathFidelity::HiFi3, {16, 8, 8}},
-        Crossover{MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::LoFi, {64, 32, 16}},
+        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi2, {30, 16, 8}},
+        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi3, {16, 8, 8}},
+        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::LoFi, {14, 52, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi2, {14, 52, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi3, {14, 12, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi4, {14, 7, 5}},
     };
     const std::array dims{ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW};
-    for (const auto& [fidelity, cutoffs] : cases) {
+    for (const auto& [arch, fidelity, cutoffs] : cases) {
         for (const bool fp32 : {false, true}) {
-            const ReduceHardwareConfig hardware{tt::ARCH::BLACKHOLE, fp32, false, fidelity};
+            const ReduceHardwareConfig hardware{arch, fp32, false, fidelity};
             for (size_t d = 0; d < dims.size(); ++d) {
                 for (const uint32_t tiles : {cutoffs[d] - 1, cutoffs[d], cutoffs[d] + 1}) {
                     SCOPED_TRACE(
-                        ::testing::Message() << fidelity << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
+                        ::testing::Message() << "arch=" << static_cast<int>(arch) << " fidelity=" << fidelity
+                                             << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
                     auto block = ReduceBlockSpec::tiled(
                         dims[d] == ReduceOpDim::H ? tiles * 32 : 32,
                         dims[d] == ReduceOpDim::H ? 32 : tiles * 32,
@@ -121,42 +127,13 @@ TEST(ReduceHostPlanner, FidelitySelectsBlackholeAdditiveCrossover) {
     }
 }
 
-TEST(ReduceHostPlanner, BlackholeCutoffsDoNotChangeWormholeSelection) {
-    using namespace tt::tt_metal;
-    using namespace ttnn::kernel_lib::host;
-    for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi2, MathFidelity::HiFi3, MathFidelity::HiFi4}) {
-        const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, true, false, fidelity};
-        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
-            const uint32_t cutoff = dim == ReduceOpDim::W ? 4 : 8;
-            for (const auto tiles : {cutoff - 1, cutoff}) {
-                const auto block = ReduceBlockSpec::tiled(
-                    dim == ReduceOpDim::H ? tiles * 32 : 32,
-                    dim == ReduceOpDim::H ? 32 : tiles * 32,
-                    DataType::BFLOAT16,
-                    DataType::FLOAT32);
-                EXPECT_EQ(
-                    make_reduce_plan(
-                        block,
-                        ReduceOpMath::SUM,
-                        dim,
-                        ReduceFp32Mode::Fast,
-                        hardware,
-                        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop)
-                        .algorithm,
-                    tiles >= cutoff ? compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
-                                    : compute_kernel_lib::ReduceAlgorithm::ReduceTile);
-            }
-        }
-    }
-}
-
 TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
-            const auto block = ReduceBlockSpec::tiled(9 * 32, 10 * 32, dtype, DataType::FLOAT32);
+            const auto block = ReduceBlockSpec::tiled(9 * 32, 14 * 32, dtype, DataType::FLOAT32);
             for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(
                     block,
@@ -313,9 +290,9 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
+    auto block = ReduceBlockSpec::tiled(32, 512, DataType::BFLOAT16, DataType::FLOAT32);
     block.allow_empty_auxiliary = true;
-    block.resident_input_tiles = 8;
+    block.resident_input_tiles = 16;
     block.resident_output_tiles = 1;
     const auto full = make_reduce_plan(
         block,
@@ -340,7 +317,7 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
     auto invalid = native;
     invalid.auxiliary_tiles.clear();
     EXPECT_ANY_THROW(ReduceCallArgs(invalid, {0, no_cb_id, 16}));
-    block.logical_w = 255;
+    block.logical_w = 511;
     const auto partial = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -351,8 +328,8 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     ASSERT_EQ(partial.auxiliary_tiles.size(), 2U);
     EXPECT_ANY_THROW(ReduceCallArgs(partial, {0, no_cb_id, 16}));
-    block.logical_w = 256;
-    block.tail = ReduceTailConfig{{17, 255, 1}};
+    block.logical_w = 512;
+    block.tail = ReduceTailConfig{{17, 511, 1}};
     const auto tail = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -485,11 +462,11 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
-    block.resident_input_tiles = 128;
+    auto block = ReduceBlockSpec::tiled(256, 512, DataType::BFLOAT16, DataType::FLOAT32, 2);
+    block.resident_input_tiles = 256;
     block.resident_output_tiles = 16;
     block.allow_empty_auxiliary = true;
-    block.tail = ReduceTailConfig{{64, 128, 1}};
+    block.tail = ReduceTailConfig{{64, 448, 1}};
     const auto native = make_reduce_plan(
         block,
         ReduceOpMath::MAX,
@@ -508,9 +485,9 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     EXPECT_EQ(add.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
-    EXPECT_EQ(add.reduce_factor, 256U);
+    EXPECT_EQ(add.reduce_factor, 512U);
     ASSERT_NE(add.tail_plan, nullptr);
-    EXPECT_EQ(add.tail_plan->reduce_factor, 128U);
+    EXPECT_EQ(add.tail_plan->reduce_factor, 448U);
     ASSERT_EQ(add.auxiliary_tiles.size(), 1U);
     EXPECT_EQ(add.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Zero);
     EXPECT_EQ(add.total_owned_l1_bytes, tt::tile_size(tt::DataFormat::Float16_b));
@@ -625,7 +602,7 @@ TEST(ReduceHostPlanner, AccumulatedScalarSettingsMustAgree) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     const ReduceCallConfig full{
-        ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32),
+        ReduceBlockSpec::tiled(32, 288, DataType::BFLOAT16, DataType::FLOAT32),
         ReduceOpMath::AVG,
         ReduceOpDim::W,
         std::nullopt,
@@ -634,7 +611,7 @@ TEST(ReduceHostPlanner, AccumulatedScalarSettingsMustAgree) {
     auto partial = full;
     partial.block = ReduceBlockSpec::tiled(32, 135, DataType::BFLOAT16, DataType::FLOAT32);
     const auto automatic = make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16}, hardware);
-    EXPECT_EQ(automatic.calls.back().plan.reduce_factor, 256U + 135U);
+    EXPECT_EQ(automatic.calls.back().plan.reduce_factor, 288U + 135U);
     partial.scalar = 1.0F / 1024;
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16}, hardware));
     auto explicit_full = full;
@@ -922,7 +899,8 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedBoundedPackets) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
-        auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
+        auto block =
+            ReduceBlockSpec::tiled(256, dim == ReduceOpDim::W ? 448 : 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
         block.tail = ReduceTailConfig{{135, 135, 2}};
         block.resident_output_tiles = 16;
         const auto plan = make_reduce_plan(

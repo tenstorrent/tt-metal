@@ -106,17 +106,23 @@ class ReduceCase:
             return None if self.scalar == 1.0 else self.scalar / (self.reduced_elements * self.calls)
         return self.scalar
 
-    @property
-    def expected_algorithm(self) -> str:
+    def expected_algorithm(self, arch) -> str:
+        # The helper matrix uses the hardware config's default HiFi4 fidelity.
+        cutoffs = {
+            ttnn.device.Arch.BLACKHOLE: (10, 4, 4),
+            ttnn.device.Arch.WORMHOLE_B0: (14, 7, 5),
+        }.get(arch, (4, 8, 8))
+        cutoff = cutoffs[DIMS.index(self.dim)]
         reduced_tiles = self.cols if self.dim == "REDUCE_ROW" else self.rows
         if self.dim == "REDUCE_SCALAR":
             reduced_tiles = self.rows * self.cols
         additive = (
-            self.pool in ("SUM", "AVG")
+            "QUASAR" not in str(arch).upper()
+            and self.pool in ("SUM", "AVG")
             and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
             and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile")
-            and reduced_tiles * self.calls >= (4 if self.dim == "REDUCE_ROW" else 8)
+            and reduced_tiles * self.calls >= cutoff
         )
         return "ACCUMULATE_VIA_ADD" if additive else "REDUCE_TILE"
 
@@ -551,11 +557,11 @@ def _make_plan(
             dst_full_sync_en=False,
         ),
     )
-    _assert_plan(case, plan, input_cb_ids)
+    _assert_plan(case, plan, input_cb_ids, device.arch())
     return plan
 
 
-def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
+def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
     assert len(plan) == plan.call_count == len(plan.calls) == case.calls
     assert plan.auxiliary.cb_id == (CB_SCALER if plan.auxiliary.tiles else _PLANNER.NO_CB_ID)
     assert plan.auxiliary.tiles or case.allow_empty_auxiliary
@@ -580,7 +586,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
     if case.partial_elements and case.pool in ("SUM", "AVG"):
         expected_partial = (
             _PLANNER.ReducePartialMode.MASK
-            if case.expected_algorithm == "ACCUMULATE_VIA_ADD"
+            if case.expected_algorithm(arch) == "ACCUMULATE_VIA_ADD"
             else _PLANNER.ReducePartialMode.SCALER
         )
     elif case.partial_elements and case.pool == "MAX":
@@ -591,7 +597,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
         assert call.auxiliary_cb_id == (CB_SCALER if call.plan.auxiliary_tiles else _PLANNER.NO_CB_ID)
         expected_policy = _INPUT_POLICY[case.input_mode]
         assert call.plan.input_policy == expected_policy
-        assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm]
+        assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm(arch)]
         assert call.plan.partial_mode == expected_partial
         assert call.plan.Ht == case.rows
         assert call.plan.Wt == case.cols
@@ -1545,12 +1551,13 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
 @pytest.mark.parametrize("full_runtime_suffix", [(), (123, 456)])
 def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset, full_runtime_suffix):
     """One call binds physical CBs for an additive full path and a masked native tail."""
+    full_width = 14 * TILE  # Meets the HiFi4 additive cutoff on both WH and BH.
     block = _PLANNER.ReduceBlockSpec(
         32,
-        320,
+        full_width,
         ttnn.bfloat16,
         ttnn.float32,
-        resident_input_tiles=10,
+        resident_input_tiles=14,
         resident_output_tiles=1,
         allow_empty_auxiliary=True,
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
@@ -1586,9 +1593,9 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
         if not use_tail:
             # Full work must neither require nor interpret words after its zero marker.
             runtime_args += list(full_runtime_suffix)
-        width = 17 if use_tail else 320
+        width = 17 if use_tail else full_width
         values = (torch.arange(32 * width).reshape(32, width) % 7 - 3).to(torch.bfloat16)
-        physical = torch.full((32, 320), 128, dtype=torch.bfloat16)
+        physical = torch.full((32, full_width), 128, dtype=torch.bfloat16)
         physical[:, :width] = values
         source = ttnn.from_torch(
             physical,

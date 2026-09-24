@@ -36,10 +36,33 @@ only the forced algorithm to `ACCUMULATE_VIA_ADD`. The recorded measurements are
 in `generated/test_reports/reduce-accumulate-20260923T083557Z/` (`crossovers.json`,
 `library-comparison/`, `dense-hifi4-complete/`, `dense-hifi2-row-complete/`). These
 local artifacts are not required by the planner. This one-output microbenchmark
-does not establish optimal cutoffs for every fused workload or dtype. Other
-architectures retain the previous W=4, H/HW=8 policy because this sweep did not
-measure them. Pass the actual compute kernel fidelity in `ReduceHardwareConfig`;
+does not establish optimal cutoffs for every fused workload or dtype.
+Pass the actual compute kernel fidelity in `ReduceHardwareConfig`;
 its compatibility default is HiFi4, matching Metal's compute config default.
+
+## Current library planner cutoffs (Wormhole B0, 2026-09-24)
+
+| Math fidelity | Row / W | Column / H | Scalar / HW |
+|---|---:|---:|---:|
+| LoFi | 14 | 52 | 14 |
+| HiFi2 | 14 | 52 | 8 |
+| HiFi3 | 14 | 12 | 6 |
+| HiFi4 | 14 | 7 | 5 |
+
+Measured on commit `05ddaab1f25`, Wormhole B0 N300, using the same forced library
+algorithms, BF16 L1 input, FP32 output, both DEST modes, and 200 reductions per
+kernel. Coarse and dense sweeps retained five trials per variant; boundary
+confirmation retained fifteen. These conservative cutoffs require a >1% additive
+win in both DEST modes across every measured run median at the cutoff and all
+larger tested tile counts. The sweep covered 1–64 tiles, with dense sampling
+around each crossover.
+
+The local report, raw measurements, and reproduction script are under
+`reports/reduce-wormhole-cutoffs-20260924T092155Z/` (`report.html`,
+`measurements.csv`, `crossovers.json`, `sweep.py`). These artifacts are not required
+by the planner. As with Blackhole, the cutoffs characterize this one-output
+microbenchmark, not every fused workload. Unmeasured architectures retain the
+previous W=4, H/HW=8 policy.
 
 The historical Wormhole timings and the example's hand-written dispatch below
 describe the original experiment, not the current planner policy.
