@@ -429,15 +429,18 @@ def test_reciprocal_flushes_to_zero(device, low, high):
 
 def test_reciprocal_zero_and_nonfinite(device):
     """Signed zero divides the way torch does; two of the non-finite inputs do
-    not.
+    not. The device and torch results are as follows:
 
-    The device carries the sign of zero into the infinity it returns, which
-    makes this the one place in the op where -0 and +0 are distinguishable.
-    1/+inf is +0 on both sides, but the remaining two diverge: 1/-inf comes
-    back as +0 where torch gives -0, and NaN comes back as 0 instead of
-    propagating. Both are pinned as the device's behavior rather than endorsed
-    as correct, and they are why the sweeps above stay inside the finite
-    normals.
+        input    | torch (IEEE 754) | device (actual)
+        ---------+------------------+----------------
+        +0       | +inf             | +inf            ✓
+        -0       | -inf             | -inf            ✓
+        +inf     | +0               | +0              ✓
+        -inf     | -0               | +0              ✗ sign lost
+        NaN      | NaN              | +0              ✗ not propagated
+
+    The last two are pinned as the device's current behavior rather than
+    endorsed as correct.
     """
     special = [0.0, -0.0, float("inf"), float("-inf"), float("nan")]
     input_tensor = torch.ones(32, 32, dtype=torch.bfloat16)
@@ -549,7 +552,10 @@ def test_exp_allclose(device):
     """exp underflow region (-89, -87) allclose check.
 
     The ULP sweep in test_exp_ops covers (-87.0, 88.5); this extends into the
-    underflow tail where exp(x) -> 0 and checks allclose tolerances there.
+    underflow tail where exp(x) approaches the smallest normals. 1020 of 1024
+    bf16 values here are bit-exact; the remaining 4 are flushed to zero by the
+    device (golden ~1e-38, device 0). atol is set just above the largest
+    flushed golden value.
     """
     input_tensor = generate_bfloat16_bits_in_range(-89, -87)
 
@@ -561,14 +567,17 @@ def test_exp_allclose(device):
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_allclose(expected_result=golden, actual_result=result, atol=1e-3, rtol=1e-2)
+    assert_allclose(expected_result=golden, actual_result=result, atol=1.1e-38, rtol=0)
 
 
 def test_exp2_allclose(device):
     """exp2 underflow region (-127, -126) allclose check.
 
     The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
-    underflow tail where exp2(x) -> 0 and checks allclose tolerances there.
+    underflow tail where exp2(x) approaches the smallest normals. 1022 of 1024
+    bf16 values here are bit-exact; the remaining 2 are flushed to zero by the
+    device (golden ~8.4e-39, device 0). atol is set just above the largest
+    flushed golden value.
     """
     input_tensor = generate_bfloat16_bits_in_range(-127, -126)
 
@@ -580,23 +589,24 @@ def test_exp2_allclose(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_allclose(actual_result=result, expected_result=golden, atol=1e-3, rtol=1e-2)
+    assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
 
 
 @pytest.mark.parametrize(
     "low, high, expected_atol, expected_rtol",
     [
-        (-1.6 * 10**38, -0.28515625, 0.001, 0.004),
-        (-0.28515625, 0.69140625, 0.004, 0.02),
-        (0.69140625, 88.5, 0.001, 0.01),
+        (-1.6 * 10**38, -0.28515625, 0, 0),
+        (-0.28515625, 0.69140625, 0, 0),
+        (0.69140625, 88.5, 0, 0),
     ],
 )
 def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
-    """expm1 cancellation-band and extended-range allclose check.
+    """expm1 sub-range allclose check.
 
-    The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test verifies
-    allclose bounds over three subdomains that extend the negative tail to
-    -1.6e38 and split the wider range by tolerance requirements.
+    The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test extends the
+    negative tail to -1.6e38 and verifies allclose over three subdomains. All
+    three are bit-exact on device (17408 + 32768 + 1024 = 51200 values, zero
+    mismatches), so atol = rtol = 0.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 

@@ -301,17 +301,18 @@ def test_celu_op(device, alpha):
 @pytest.mark.parametrize(
     "ttnn_op, low, high, expected_atol, expected_rtol",
     [
-        (ttnn.elu, -0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
-        (ttnn.elu, -88.0, 1.6 * 10**38, 0.0, 0.0),
-        (ttnn.celu, -1.6 * 10**38, -0.28515625, 0.001, 0.004),
-        (ttnn.celu, -0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
-        (ttnn.celu, 1.1663108012064884e-38, 1.6 * 10**38, 1e-6, 1e-6),
+        (ttnn.elu, -88.0, -0.28515625, 0, 0),
+        (ttnn.elu, -0.28515625, 1.1663108012064884e-38, 0, 0),
+        (ttnn.elu, 1.1663108012064884e-38, 1.6 * 10**38, 0, 0),
+        (ttnn.celu, -1.6 * 10**38, -0.28515625, 0, 0),
+        (ttnn.celu, -0.28515625, 1.1663108012064884e-38, 0, 0),
+        (ttnn.celu, 1.1663108012064884e-38, 1.6 * 10**38, 0, 0),
     ],
 )
 def test_elu_celu_allclose(ttnn_op, low, high, expected_atol, expected_rtol, device):
     """Allclose check for elu/celu over sub-ranges, including the narrow
     cancellation band near 0 that the ULP sweep in test_elu_op/test_celu_op
-    excludes."""
+    excludes. All six sub-ranges are bit-exact on device (atol = rtol = 0)."""
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
     golden_function = ttnn.get_golden_function(ttnn_op)

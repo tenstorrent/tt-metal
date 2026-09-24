@@ -735,8 +735,8 @@ def test_xielu_op(device, alpha_p, alpha_n):
 
 @pytest.mark.parametrize(
     "beta, threshold_val",
-    [(1.0, 20.0), (0.5, 20.0), (2.0, 10.0), (1.0, 5.0)],
-    ids=["default", "beta_half", "beta2", "low_threshold"],
+    [(1.0, 20.0), (0.5, 20.0), (2.0, 10.0), (1.0, 5.0), (-1.0, 20.0), (1.0, -20.0)],
+    ids=["default", "beta_half", "beta2", "low_threshold", "beta_neg", "threshold_neg"],
 )
 def test_softplus_op(device, beta, threshold_val):
     """softplus(x) = (1/beta) * log(1 + exp(beta*x)), replaced by the linear
@@ -755,6 +755,24 @@ def test_softplus_op(device, beta, threshold_val):
     finite = torch.isfinite(golden) & torch.isfinite(result)
     _assert_excluded_region(~finite, "softplus non-finite", max_fraction=0.05)
     assert_with_pcc(golden[finite], result[finite], pcc=0.999)
+
+
+def test_softplus_beta_zero(device):
+    """softplus with beta=0 produces +inf for every element (log1p(exp(0))/0).
+
+    The golden is entirely non-finite, verify that the device also returns +inf everywhere.
+    """
+    input_tensor = _exhaustive_bf16_4d()
+
+    tt_in = to_tt_tensor(input_tensor, device)
+    golden_function = ttnn.get_golden_function(ttnn.softplus)
+    golden = golden_function(input_tensor, beta=0.0, threshold=20.0, device=device)
+
+    tt_result = ttnn.softplus(tt_in, beta=0.0, threshold=20.0)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.isinf(golden).all(), "golden must be all +inf for beta=0"
+    _assert_nonfinite_agreement(golden, result, "softplus(beta=0)")
 
 
 @pytest.mark.parametrize("eps", [None, 1e-6, 0.1, 0.5, 0.9], ids=["none", "tiny", "small", "half", "gt_half"])
