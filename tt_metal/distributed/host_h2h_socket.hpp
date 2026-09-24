@@ -60,6 +60,9 @@ public:
     uint64_t credit_total(uint32_t core) const;
 
     std::string barrier();
+
+    // LOCAL ONLY: a per-frame failure drops the frame with nothing telling the peer, so poll
+    // these before any device wait -- tt_uva_sync() parks on a count that will never advance.
     bool failed() const;
     std::string first_error() const;
     std::string describe() const;
