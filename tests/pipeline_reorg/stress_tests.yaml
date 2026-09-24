@@ -26,9 +26,6 @@
 
 - name: t3k_trace_stress_tests
   id: t3k-trace-stress
-  # Moved from t3k_integration_tests.yaml. The T3K integration impl sourced this
-  # script before every cmd; the stress impl runs cmd as written, thus the source is
-  # explicit here.
   cmd: |
     source tests/scripts/t3000/run_t3000_integration_tests.sh
     run_t3000_trace_stress_tests
@@ -41,8 +38,6 @@
 
 - name: ttnn nightly sdpa stress tests
   id: ttnn-sdpa-stress
-  # Moved from ops_unit_tests.yaml (category sdpa). The ops impl set
-  # TT_MM_THROTTLE_PERF=5 on Wormhole; it is set here in cmd instead.
   cmd: |
     export TT_MM_THROTTLE_PERF=5
     pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
@@ -59,8 +54,6 @@
 
 - name: ttnn nightly sdpa stress tests (blackhole)
   id: ttnn-sdpa-stress-bh
-  # Same tests on Blackhole. The ops impl gave bh_p150b_civ2 TT_MM_THROTTLE_PERF=0
-  # and TT_GH_CI_INFRA=1, and no HF_HUB_CACHE.
   cmd: |
     export TT_MM_THROTTLE_PERF=0 TT_GH_CI_INFRA=1
     pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
