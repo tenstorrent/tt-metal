@@ -105,11 +105,11 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~90 s. 113 tests.
+# host tier: no device, no silicon, ~90 s. 117 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent. 37 device tests here, 14 more in perf below;
-# the host tier lives in tests/pcc/ and runs here too, so this collects 150.
+# device tier: needs /dev/tenstorrent. 54 device tests here, 14 more in perf below;
+# the host tier lives in tests/pcc/ and runs here too, so this collects 171.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
 # performance -- every numeric threshold is asserted, not printed; see
@@ -208,6 +208,11 @@ encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — stays on host by desi
 of the four are ONNX blobs, and none is on the critical path for this port.
 `prepare_inputs.py` writes a flat `.npz` the device side loads without importing
 CosyVoice or `onnxruntime` — the same split `export_weights.py` draws.
+
+Between the three stages only token IDs cross the host. Inside the LLM stage, every
+generated token makes one round trip: the logits are read back to the host, the RAS
+sampler picks the token there, and that token's embedding row is uploaded for the next
+decode step. PERF.md Part II §1.6 measures that tail and why sampling stays on the host.
 
 <details>
 <summary>Each stage in detail</summary>
