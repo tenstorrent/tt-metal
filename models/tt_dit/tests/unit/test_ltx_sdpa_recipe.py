@@ -3,7 +3,7 @@
 """Host-only: LTX-2 opt-in SDPA recipe wiring (SD3.5 recipe tests: test_sd35_sdpa_recipe.py).
 
 LTXAttention instances are built with object.__new__ (no mesh device); only the small config /
-kwargs helpers and the call-time mask rejection are exercised.
+kwargs helpers and the call-time mask handling are exercised.
 """
 
 import pytest
@@ -88,15 +88,12 @@ def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():
     assert attention._sdpa_kwargs() == {"precision": ttnn.SDPAPrecision.LOW_PRECISION, "inputs_prepared": True}
 
 
-def test_recipe_rejects_masked_attention_at_call_time():
+def test_recipe_non_key_length_masks_pass_through():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
-    # A mask without its logical key length can't be turned into a K/V slice.
-    with pytest.raises(ValueError, match="unmasked"):
-        attention.forward(spatial_1BND=None, N=0, attn_mask=object())
-    # Cross-attention masks are never key-length masks here.
+    # A mask without its logical key length (or any cross-attention mask) goes to the recipe as attn_mask.
+    assert attention._recipe_mask_kv_len(object(), None) is None
     attention.is_self = False
-    with pytest.raises(ValueError, match="unmasked"):
-        attention.forward(spatial_1BND=None, N=0, attn_mask=object(), attn_kv_len=200)
+    assert attention._recipe_mask_kv_len(object(), 200) is None
 
 
 def test_recipe_key_length_mask_becomes_slice_length():

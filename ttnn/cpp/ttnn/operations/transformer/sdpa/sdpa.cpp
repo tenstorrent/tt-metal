@@ -55,13 +55,21 @@ ttnn::Tensor scaled_dot_product_attention(
         namespace numeric = operations::transformer::sdpa::detail;
         TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
         TT_FATAL(
-            !is_causal && !attn_mask && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
+            !is_causal && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
                 windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor,
-            "Named SDPA recipes currently support dense noncausal, unmasked attention only");
+            "Named SDPA recipes currently support dense noncausal attention with an optional additive attn_mask only");
         TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
-        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config);
+        // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
+        // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
+        std::optional<ttnn::Tensor> recipe_mask = attn_mask;
+        if (attn_mask) {
+            const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
+            recipe_mask = ttnn::multiply(*attn_mask, 1.0f / recipe_scale);
+        }
+        return numeric::run_recipe(
+            input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config, recipe_mask);
     }
     TT_FATAL(!inputs_prepared, "inputs_prepared is meaningful only with an explicit LOW_PRECISION recipe");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE

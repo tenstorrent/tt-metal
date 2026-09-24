@@ -238,10 +238,14 @@ static void check_recipe_l1_fit(
         available);
 }
 
+// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
+constexpr uint8_t kRecipeMaskCb = 15;
+
 static std::vector<Tensor> run_recipe_segments(
     const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
-    const std::optional<SDPAProgramConfig>& program_config) {
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask = std::nullopt) {
     const auto& [q, k, v] = segments.front();
     std::vector<Tensor> io;
     for (const auto& segment : segments) {
@@ -284,6 +288,34 @@ static std::vector<Tensor> run_recipe_segments(
             "SDPA input types do not match the selected recipe");
         q_length += sq.padded_shape()[2];
         k_length += sk.padded_shape()[2];
+    }
+    if (attn_mask) {
+        const auto& mask = *attn_mask;
+        TT_FATAL(segments.size() == 1, "SDPA recipe masks are supported on the dense (non-joint) path only");
+        TT_FATAL(mask.storage_type() == StorageType::DEVICE, "SDPA recipe attn_mask must be on device");
+        TT_FATAL(mask.device() == q.device(), "SDPA recipe attn_mask must be on the same device as Q");
+        TT_FATAL(mask.layout() == Layout::TILE, "SDPA recipe attn_mask must be tilized");
+        TT_FATAL(mask.tensor_spec().tile() == Tile({32, 32}), "SDPA recipe attn_mask requires 32x32 tiles");
+        TT_FATAL(
+            mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
+        TT_FATAL(
+            mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
+                mask.dtype() == DataType::BFLOAT4_B,
+            "SDPA recipe attn_mask must be BF16, BFP8 or BFP4");
+        const auto& ms = mask.logical_shape();
+        TT_FATAL(ms.rank() == 4, "SDPA recipe attn_mask must be rank four");
+        TT_FATAL(
+            (ms[0] == 1 || ms[0] == qs[0]) && (ms[1] == 1 || ms[1] == qs[1]) && ms[2] == qs[2] &&
+                ms[3] == k.logical_shape()[2],
+            "SDPA recipe attn_mask must be [1|B, 1|H, Sq, Sk], got {} for Q {} and K {}",
+            ms,
+            qs,
+            k.logical_shape());
+        const auto& mp = mask.padded_shape();
+        TT_FATAL(
+            mp[0] == ms[0] && mp[1] == ms[1] && mp[2] == ((ms[2] + 31) / 32) * 32 &&
+                mp[3] == ((ms[3] + 31) / 32) * 32,
+            "SDPA recipe attn_mask only supports minimal tile padding");
     }
     const uint32_t joint_q_rows = segments.size() == 2 ? segments[1][0].logical_shape()[2] : 0;
     const uint32_t joint_k_rows = segments.size() == 2 ? segments[1][1].logical_shape()[2] : 0;
@@ -328,6 +360,24 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const auto& output = outputs.front();
     auto program = recipe_compute_program(policy, grid, k_chunks, q_tiles, k_tiles, d_tiles);
+    if (attn_mask) {
+        // One Q chunk x K chunk of mask tiles: the reader streams it one Q tile row at a time and
+        // compute pops one QK row group at a time, so group reads never wrap mid-chunk.
+        const auto mask_format = datatype_to_dataformat_converter(attn_mask->dtype());
+        const uint32_t mask_page = attn_mask->buffer()->page_size();
+        program.cbs.push_back(CBDescriptor{
+            .total_size = q_tiles * k_tiles * mask_page,
+            .core_ranges = grid,
+            .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
+        auto& defines = program.kernels.front().defines;
+        defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        const bool already = std::any_of(
+            defines.begin(), defines.end(), [](const auto& d) { return d.first == "SDPA_RECIPE_SIZE_OPTIMIZED"; });
+        if (policy.recurrent_state == RecurrentState::CompensatedBF16 && !already) {
+            // The mask apply pushes paired BF16 builds past the kernel config buffer at -O2.
+            defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
+        }
+    }
     check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
     if (k_length % k_chunk != 0 || k.logical_shape()[2] % 32 != 0 || joint_k_rows % 32 != 0) {
         program.kernels.front().defines.emplace_back(
@@ -363,6 +413,17 @@ static std::vector<Tensor> run_recipe_segments(
     }
     for (const auto& tensor : io) {
         TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
+    }
+    if (attn_mask) {
+        const auto& ms = attn_mask->logical_shape();
+        reader.defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_Q_TILES", std::to_string((ms[2] + 31) / 32));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_K_TILES", std::to_string((ms[3] + 31) / 32));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_HEADS", std::to_string(qs[1]));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_BATCH", ms[0] == 1 ? "1" : "0");
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_HEADS", ms[1] == 1 ? "1" : "0");
+        TensorAccessorArgs(attn_mask->buffer()).append_to(reader.compile_time_args);
     }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_recipe.cpp",
@@ -404,6 +465,9 @@ static std::vector<Tensor> run_recipe_segments(
                 next_count});
         writer.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), offset, count});
+        if (attn_mask) {
+            reader.runtime_args.back().second.push_back(attn_mask->buffer()->address());
+        }
         if (segments.size() == 2) {
             for (const auto& tensor : segments[1]) {
                 reader.runtime_args.back().second.push_back(tensor.buffer()->address());
@@ -413,6 +477,9 @@ static std::vector<Tensor> run_recipe_segments(
         compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{count});
     }
     program.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    if (attn_mask) {
+        io.push_back(*attn_mask);
+    }
     io.insert(io.end(), outputs.begin(), outputs.end());
     ttnn::generic_op(io, program);
     return outputs;
@@ -423,8 +490,9 @@ Tensor run_recipe(
     const Tensor& k,
     const Tensor& v,
     const PrecisionPolicy& policy,
-    const std::optional<SDPAProgramConfig>& program_config) {
-    return run_recipe_segments({{q, k, v}}, policy, program_config).front();
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask) {
+    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask).front();
 }
 
 std::tuple<Tensor, Tensor> run_joint_recipe(

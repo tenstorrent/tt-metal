@@ -3,7 +3,7 @@
 """Host-only: Ideogram4 (D256) opt-in SDPA recipe wiring.
 
 Ideogram4TransformerBlock instances are built with object.__new__ (no mesh device); only the small
-program-config / kwargs helpers and the call-time mask rejection are exercised.
+program-config / kwargs helpers and the call-time masked dispatch are exercised.
 """
 
 import pytest
@@ -79,21 +79,45 @@ def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():
         assert block._sdpa_kwargs() == {"precision": precision, "inputs_prepared": prepared}
 
 
-def test_recipe_rejects_segment_mask_at_call_time(monkeypatch):
-    # Stub everything before the SDPA dispatch; the recipe must raise before any SDPA/CCL call.
+def test_recipe_segment_mask_uses_dense_recipe_with_mask(monkeypatch):
+    # Stub everything before the SDPA dispatch; a masked recipe call must reach the dense recipe SDPA
+    # with attn_mask (never the unmasked ring recipe), gathering K/V first under SP.
     block = _bare_block(ttnn.SDPAPrecision.ACCURATE)
     block.n_local_heads = 1
+    block.sp_axis = 1
     block._all_gather_hidden = lambda t: t
     block.qkv = lambda x, **_: (x, x, x)
     block.norm_q = block.norm_k = lambda t, **_: t
+    block.o = lambda t, **_: t
+    gathered = []
+
+    class _Ccl:
+        def all_gather_persistent_buffer(self, t, **_):
+            gathered.append(t)
+            return t
+
+    block.ccl_manager = _Ccl()
     monkeypatch.setattr(ttnn, "unsqueeze", lambda t, _dim: t)
     monkeypatch.setattr(ttnn.experimental, "nlp_create_qkv_heads", lambda t, **_: (t, None, None))
-    for name in ("scaled_dot_product_attention", "ring_joint_scaled_dot_product_attention"):
-        monkeypatch.setattr(ttnn.transformer, name, lambda *a, **k: pytest.fail("SDPA called with a mask"))
+    monkeypatch.setattr(ttnn.transformer, "concatenate_heads", lambda t: t)
+    monkeypatch.setattr(
+        ttnn.transformer, "ring_joint_scaled_dot_product_attention", lambda *a, **k: pytest.fail("ring with a mask")
+    )
+    calls = []
+
+    def dense(q, k, v, **kwargs):
+        calls.append(kwargs)
+        return q
+
+    monkeypatch.setattr(ttnn.transformer, "scaled_dot_product_attention", dense)
+    mask = object()
     for sp_factor in (1, 2):
         block.sp_factor = sp_factor
-        with pytest.raises(ValueError, match="unmasked"):
-            block._attention(object(), cos=None, sin=None, attn_mask=object(), spatial_sequence_length=512)
+        gathered.clear()
+        block._attention(object(), cos=None, sin=None, attn_mask=mask, spatial_sequence_length=512)
+        assert calls[-1]["attn_mask"] is mask
+        assert calls[-1]["precision"] == ttnn.SDPAPrecision.ACCURATE
+        assert len(gathered) == (2 if sp_factor > 1 else 0)
 
 
 def test_d256_recipes_accepted_by_model_validation():

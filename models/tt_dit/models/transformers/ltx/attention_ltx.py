@@ -20,7 +20,6 @@ from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.sdpa_recipe import (
     prepare_recipe_inputs,
     recipe_program_config,
-    reject_mask,
     sdpa_kwargs,
     validate_recipe_args,
 )
@@ -95,11 +94,12 @@ class LTXAttention(Module):
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         """``sdpa_precision``/``sdpa_kv_dtype`` opt this attention into a named SDPA recipe
-        (Blackhole, D64/D128/D256, unmasked noncausal; see models/tt_dit/utils/sdpa_recipe.py). ``None``
+        (Blackhole, D64/D128/D256, noncausal; see models/tt_dit/utils/sdpa_recipe.py). ``None``
         keeps the legacy SDPA configuration exactly. In LTX-2 the transformer block passes them to every
         attention: the D128 video self/text attentions and the D64 audio self/text, A2V and V2A
         attentions. The padded audio self-attn's key-column mask is replaced under a recipe by slicing
-        K/V to the logical key length (``forward(attn_kv_len=...)``); any other mask is rejected."""
+        K/V to the logical key length (``forward(attn_kv_len=...)``); any other mask is passed to the recipe
+        as ``attn_mask``."""
         super().__init__()
 
         assert dim % num_heads == 0
@@ -657,14 +657,15 @@ class LTXAttention(Module):
     def _recipe_mask_kv_len(self, attn_mask, attn_kv_len: int | None) -> int | None:
         """Under a recipe, the logical key length that replaces a key-column padding mask.
 
-        Recipes are unmasked only. The one LTX-2 mask (padded audio self-attn, built by
-        ``build_audio_masks``) only bars keys ``>= audio_N_real``, so a recipe slices K/V to that length
-        instead; the caller must state it via ``attn_kv_len`` since it can't be read off the mask. Any
-        other mask (no ``attn_kv_len``, or a cross-attention mask) is rejected. ``None`` = no slicing."""
+        The one LTX-2 mask (padded audio self-attn, built by ``build_audio_masks``) only bars keys
+        ``>= audio_N_real``, so a recipe slices K/V to that length instead (same result, less work); the
+        caller must state it via ``attn_kv_len`` since it can't be read off the mask. Any other mask (no
+        ``attn_kv_len``, or a cross-attention mask) goes to the recipe as ``attn_mask``. ``None`` = no
+        slicing."""
         if self.sdpa_precision is None or attn_mask is None:
             return None
         if attn_kv_len is None or not self.is_self:
-            reject_mask(self.sdpa_precision, attn_mask, model="LTX-2")
+            return None
         if attn_kv_len <= 0:
             raise ValueError(f"LTX-2: attn_kv_len must be positive (got {attn_kv_len})")
         return attn_kv_len
@@ -704,7 +705,7 @@ class LTXAttention(Module):
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
         in A2V/V2A cross-attention. ``attn_kv_len`` is the logical key length of a key-column
         ``attn_mask`` (padded audio self-attn); only a recipe uses it (it slices K/V instead of masking)."""
-        # Named recipes are unmasked only: a key-length mask becomes a K/V slice, other masks raise.
+        # Under a recipe a key-length mask becomes a K/V slice; other masks go to the recipe SDPA.
         recipe_kv_len = self._recipe_mask_kv_len(attn_mask, attn_kv_len)
         if rope_cos is not None:
             assert rope_sin is not None
@@ -907,8 +908,8 @@ class LTXAttention(Module):
                     v_full,
                     attn_mask=attn_mask,
                     is_causal=False,
-                    program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self._gathered_program_config(q_BHNE.shape[2]),
+                    **self._sdpa_kwargs(),
                 )
             elif recipe_kv_len is not None:
                 # Recipe on the padded audio self-attn (SP=1): drop the padded keys, run unmasked.
