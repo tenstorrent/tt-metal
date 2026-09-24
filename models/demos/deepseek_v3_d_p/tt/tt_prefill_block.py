@@ -276,6 +276,7 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -310,13 +311,10 @@ class TtPrefillBlock(LightweightModule):
             f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
         )
 
-        # Eager execution and trace capture select the same norm operator.
-        use_fused_rmsnorm = (
-            getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
-            and is_blackhole()
-            and is_chunked
-            and TtDistributedRmsNorm.supports_fused_prefill(mesh_device, emb_dim, tp_axis, seq_len)
-        )
+        # A caller can enable fusion for any model or override its default.
+        # Eager execution and trace capture use the same operator; the op validates shapes.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
 
         # --- Attention norm ---
         use_glm52_l1_attn_norm = (

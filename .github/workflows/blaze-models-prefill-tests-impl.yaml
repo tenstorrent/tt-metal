@@ -175,9 +175,6 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      # Provision this path on each worker; Kimi's cache cannot fit in the
-      # container writable layer. The setup check reports measured capacity.
-      TT_KIMI_PREFILL_CACHE_DIR: ${{ vars.KIMI_PREFILL_CACHE_DIR || '/scratch' }}
       # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
       # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
@@ -205,17 +202,6 @@ jobs:
           hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
           triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
           hang-report-test-id: "tests/pipeline_reorg/blaze_models_prefill_tests.py::${{ matrix.test-group.name }}"
-
-      - name: Validate Kimi cache storage on workers
-        if: ${{ contains(matrix.test-group.cmd, 'run_kimi_prefill_ci.py') }}
-        timeout-minutes: 5
-        working-directory: /home/user/tt-metal
-        env:
-          TT_KIMI_PREFILL_TTNN_CACHE: /mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-        run: |
-          mpirun --bind-to none --pernode --tag-output \
-            -x TT_KIMI_PREFILL_CACHE_DIR -x TT_KIMI_PREFILL_TTNN_CACHE \
-            python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py --check-cache
 
       - name: Configure TorusXY fabric profile
         if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}

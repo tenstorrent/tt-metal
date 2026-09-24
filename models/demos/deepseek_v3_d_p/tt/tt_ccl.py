@@ -167,9 +167,8 @@ class TT_CCL:
 
         # Shared across sequential norm layers. Semaphore and stats scratch must
         # alternate together to absorb inter-device skew at collective completion.
-        # A model uses one guarded geometry and link count, so sequential layers
-        # share one entry (two semaphore/stats pairs). Supporting variable configs
-        # requires an explicit lifetime policy; in-flight resources cannot be evicted.
+        # Sequential layers with the same geometry share two semaphore/stats pairs.
+        # Keep resources alive until mesh teardown: traces may still reference them.
         self.fused_rmsnorm_resources: dict[tuple, dict] = {}
 
         # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.

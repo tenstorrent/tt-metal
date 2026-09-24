@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi prefill RMSNorm: all mesh shards and repeated shared-resource reuse."""
+"""Distributed prefill RMSNorm: all mesh shards and repeated shared-resource reuse."""
 
 import pytest
 import torch
@@ -35,15 +35,22 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
+@pytest.mark.parametrize(
+    "seq_len,emb_dim,output_memcfg",
+    [
+        pytest.param(5120, 7168, ttnn.DRAM_MEMORY_CONFIG, id="kimi"),
+        pytest.param(1024, 6144, ttnn.L1_MEMORY_CONFIG, id="glm-width-short-sequence-l1"),
+    ],
+)
+def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_dim, output_memcfg, expect_error):
     assert_requested_tp_wrap_was_realized(mesh_device)
     clear_tt_ccl_cache()
     torch.manual_seed(50932)
     inputs = [
-        torch.randn(1, 1, 5120, 7168).to(torch.bfloat16),
-        (torch.randn(1, 1, 5120, 7168) + 20).to(torch.bfloat16),
+        torch.randn(1, 1, seq_len, emb_dim).to(torch.bfloat16),
+        (torch.randn(1, 1, seq_len, emb_dim) + 20).to(torch.bfloat16),
     ]
-    weights = [(torch.randn(7168) * 0.2 + 1).to(torch.bfloat16) for _ in inputs]
+    weights = [(torch.randn(emb_dim) * 0.2 + 1).to(torch.bfloat16) for _ in inputs]
     xs = [
         ttnn.from_torch(
             x,
@@ -58,13 +65,14 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
     norms = [
         TtDistributedRmsNorm(
             mesh_device,
-            emb_dim=7168,
+            emb_dim=emb_dim,
             epsilon=1e-5,
             torch_weight=weight,
             cluster_axis=1,
             num_links=2,
             topology=topology,
             use_fused=True,
+            output_memcfg=output_memcfg,
         )
         for weight in weights
     ]
@@ -90,13 +98,14 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
     unfused_norms = [
         TtDistributedRmsNorm(
             mesh_device,
-            emb_dim=7168,
+            emb_dim=emb_dim,
             epsilon=1e-5,
             torch_weight=weight,
             cluster_axis=1,
             num_links=2,
             topology=topology,
             use_fused=False,
+            output_memcfg=output_memcfg,
         )
         for weight in weights
     ]
@@ -109,6 +118,7 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
         for i, output in enumerate(outputs):
             x = inputs[i % 2].float()
             reference = x * torch.rsqrt(x.square().mean(-1, keepdim=True) + 1e-5) * weights[i % 2].float()
+            assert output.memory_config() == output_memcfg
             actual = ttnn.to_torch(output, mesh_composer=composer).float()
             assert actual.shape == reference.shape
             assert torch.isfinite(actual).all()
@@ -153,5 +163,20 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
         ttnn.deallocate(trace_input)
         assert len(ccl.fused_rmsnorm_resources) == 1
         assert next(iter(ccl.fused_rmsnorm_resources.values())) is resources
+        # A requested fused path must raise in the op rather than silently falling
+        # back when the input width no longer matches the initialized affine weight.
+        bad_x = ttnn.from_torch(
+            inputs[0][..., :-128].contiguous(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(8, 4), dims=(2, 3)),
+        )
+        try:
+            with expect_error(RuntimeError, "Weight last dim"):
+                norms[0](bad_x)
+        finally:
+            ttnn.deallocate(bad_x)
     finally:
         clear_tt_ccl_cache()

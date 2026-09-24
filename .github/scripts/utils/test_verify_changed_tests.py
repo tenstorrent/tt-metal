@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-import importlib.util
-import io
 import json
 import os
 import subprocess
 import sys
 import textwrap
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -841,47 +838,56 @@ def test_codeowners_team_only_path_yields_no_individuals(repo: Repo):
 
 
 def run_reviews(repo: Repo, reviews: list):
-    """Invoke the gate directly with review data stubbed at the API boundary."""
-    spec = importlib.util.spec_from_file_location("gate", SCRIPT)
-    gate = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gate)
+    """Invoke the gate with the reviews API stubbed by a local http server."""
+    import http.server, json as _json, threading
 
-    argv = [
-        "--base",
-        repo.base,
-        "--sku-config",
-        ".github/sku_config.yaml",
-        "--review-skus",
-        DEFAULT_REVIEW_SKUS,
-        "--non-matrix-files",
-        DEFAULT_NON_MATRIX,
-        "--codeowners",
-        ".github/CODEOWNERS",
-        "--unsupported-files",
-        "sample_vllm_tests.yaml",
-        "--matrix-dir",
-        "empty",
-        "--repo",
-        "o/r",
-        "--pr",
-        "1",
-        "--output",
-        "result.json",
-    ]
+    payload = _json.dumps(reviews).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    shim = repo.root / "shim.py"
+    shim.write_text(
+        "import runpy, sys, urllib.request\n"
+        "_orig = urllib.request.Request\n"
+        "def _patched(url, *a, **k):\n"
+        f"    return _orig('http://127.0.0.1:{port}/reviews', *a, **k)\n"
+        "urllib.request.Request = _patched\n"
+        f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
+        f"            '--review-skus', {DEFAULT_REVIEW_SKUS!r}, '--non-matrix-files', {DEFAULT_NON_MATRIX!r},\n"
+        f"            '--codeowners', '.github/CODEOWNERS', '--unsupported-files', 'sample_vllm_tests.yaml',\n"
+        "            '--matrix-dir', 'empty', '--repo', 'o/r', '--pr', '1',\n"
+        "            '--output', 'result.json']\n"
+        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
+    )
     (repo.root / "empty").mkdir(exist_ok=True)
     (repo.root / "empty/placeholder.json").write_text("[]")
     step_output = repo.root / "step-output"
     step_output.write_text("")
-    stdout, stderr = io.StringIO(), io.StringIO()
-    with pytest.MonkeyPatch.context() as patch, redirect_stdout(stdout), redirect_stderr(stderr):
-        patch.chdir(repo.root)
-        patch.setenv("GITHUB_OUTPUT", str(step_output))
-        patch.setattr(gate, "fetch_reviews", lambda *_: reviews)
-        code = gate.main(argv)
+    result = subprocess.run(
+        [sys.executable, str(shim)],
+        cwd=repo.root,
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, GITHUB_OUTPUT=str(step_output)),
+    )
+    server.shutdown()
     outputs = dict(
         line.split("=", 1) for line in step_output.read_text().splitlines() if "=" in line and not line.startswith(" ")
     )
-    return code, stdout.getvalue(), stderr.getvalue(), outputs
+    return result.returncode, result.stdout, result.stderr, outputs
 
 
 def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):

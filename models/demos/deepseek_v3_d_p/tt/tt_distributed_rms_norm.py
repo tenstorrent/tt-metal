@@ -52,19 +52,6 @@ class TtDistributedRmsNorm(LightweightModule):
           mesh_mapper dims=(None, 2)
     """
 
-    FUSED_PREFILL_SEQ_LEN = 5120
-    FUSED_PREFILL_EMB_DIM = 7168
-
-    @classmethod
-    def supports_fused_prefill(cls, mesh_device, emb_dim, cluster_axis, seq_len):
-        """Restrict fusion to the measured Kimi SP8/TP4 prefill geometry."""
-        return (
-            tuple(mesh_device.shape) == (8, 4)
-            and cluster_axis == 1
-            and emb_dim == cls.FUSED_PREFILL_EMB_DIM
-            and seq_len == cls.FUSED_PREFILL_SEQ_LEN
-        )
-
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if norm weight cache files exist."""
@@ -185,6 +172,7 @@ class TtDistributedRmsNorm(LightweightModule):
             sharded_progcfg: Optional sharded program config for layernorm
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
             output_memcfg: Optional memory config for the normalized output
+            use_fused: Use the fused distributed op; unsupported tensor shapes raise in the op.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -204,14 +192,6 @@ class TtDistributedRmsNorm(LightweightModule):
         self.cache_name_prefix = cache_name_prefix
         self._gathered_stats = None
         self._use_fused = False
-        self._fused_input_shape = None
-        if self.supports_fused_prefill(mesh_device, emb_dim, cluster_axis, self.FUSED_PREFILL_SEQ_LEN):
-            self._fused_input_shape = (
-                1,
-                1,
-                self.FUSED_PREFILL_SEQ_LEN // mesh_device.shape[0],
-                emb_dim // mesh_device.shape[cluster_axis],
-            )
         self.fused_weight = None
         self.tt_ccl = None
 
@@ -238,6 +218,8 @@ class TtDistributedRmsNorm(LightweightModule):
             self.weight = self._create_random_sharded_weight()
 
         if use_fused:
+            assert sharded_progcfg is None, "Fused RMSNorm does not accept a sharded program config"
+            assert stats_memcfg in (None, ttnn.DRAM_MEMORY_CONFIG), "Fused RMSNorm uses DRAM stats"
             # Preserve the existing on-disk weight cache. Convert once at model
             # setup; the fused operator broadcasts a tiled row of affine weights.
             local_width = self.emb_dim // self.mesh_device.shape[self.cluster_axis]
@@ -308,32 +290,7 @@ class TtDistributedRmsNorm(LightweightModule):
             x = ttnn.to_memory_config(x, memory_config=self.input_memcfg)
             logger.debug("Moved input to specified memory config")
 
-        # TP=1: the cluster axis has length 1, so every device already holds the full hidden dim and
-        # there is nothing to distribute. Take the plain fused op. This is not just an optimisation --
-        # BOTH gathers below abort on a singleton axis rather than degenerating to a copy
-        # (all_gather: "num_devices > 1, got 1"; high_bw_all_gather: "selects a singleton mesh axis"),
-        # so which one you hit only depends on whether the tensor's topology supports the high-bw
-        # path. Verified bit-identical to the TP>1 path's output on an (8,1) stage submesh.
-        if self.mesh_device.shape[self.cluster_axis] == 1:
-            return ttnn.rms_norm(
-                x,
-                epsilon=self.epsilon,
-                weight=self.weight,
-                program_config=self.sharded_progcfg,
-                memory_config=self.output_memcfg,
-            )
-
-        # Initially enable only the measured Kimi prefill geometry; other shapes
-        # and sharded/L1 configurations retain the existing implementation.
-        if (
-            self.use_fused
-            and tuple(x.shape) == self._fused_input_shape
-            and x.dtype == ttnn.bfloat16
-            and x.layout == ttnn.TILE_LAYOUT
-            and x.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-            and self.output_memcfg in (None, ttnn.DRAM_MEMORY_CONFIG)
-            and self.sharded_progcfg is None
-        ):
+        if self.use_fused:
             semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
                 x, self.fused_weight, self.cluster_axis, self.num_links
             )
@@ -347,8 +304,23 @@ class TtDistributedRmsNorm(LightweightModule):
                 weight=self.fused_weight,
                 persistent_output_buffer=stats,
                 num_preferred_links=self.num_links,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=x.dtype,
+                memory_config=self.output_memcfg or ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # TP=1: the cluster axis has length 1, so every device already holds the full hidden dim and
+        # there is nothing to distribute. Take the plain fused op. This is not just an optimisation --
+        # BOTH gathers below abort on a singleton axis rather than degenerating to a copy
+        # (all_gather: "num_devices > 1, got 1"; high_bw_all_gather: "selects a singleton mesh axis"),
+        # so which one you hit only depends on whether the tensor's topology supports the high-bw
+        # path. Verified bit-identical to the TP>1 path's output on an (8,1) stage submesh.
+        if self.mesh_device.shape[self.cluster_axis] == 1:
+            return ttnn.rms_norm(
+                x,
+                epsilon=self.epsilon,
+                weight=self.weight,
+                program_config=self.sharded_progcfg,
+                memory_config=self.output_memcfg,
             )
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)

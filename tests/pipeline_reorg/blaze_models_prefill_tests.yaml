@@ -156,7 +156,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T) fused RMSNorm accuracy and trace replay 5k"
+- name: "Distributed fused RMSNorm accuracy and trace replay"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -295,10 +295,8 @@
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
-  # end (build once, forward 10x) and checks per-chunk timing bands. Golden accuracy is tested separately.
+  # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
-  # Requires a provisioned worker-local cache volume (KIMI_PREFILL_CACHE_DIR in CI,
-  # default /scratch); setup checks measured cache size plus 10 GiB headroom.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -311,19 +309,18 @@
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    export TT_KIMI_PREFILL_CACHE_DIR="${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}"
-    mpirun --bind-to none --pernode --tag-output -x TT_KIMI_PREFILL_CACHE_DIR bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py --cache-dir "${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}" -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer, kimi_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
-      # September 17: the full ten_iters command, including local cache staging/cleanup, took 18m52s.
-      # Keep the 36-minute budget; staging is included, not charged to workflow setup.
+      # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 36 min is ~5.5x
+      # headroom. The (team, sku) time budget is a SUM and the traced twin needs room too.
       timeout: 36
       tier: 2
       release_ready: false
@@ -340,10 +337,8 @@
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
-  # end (build once, forward 10x) and checks per-chunk timing bands. Golden accuracy is tested separately.
+  # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
-  # Requires a provisioned worker-local cache volume (KIMI_PREFILL_CACHE_DIR in CI,
-  # default /scratch); setup checks measured cache size plus 10 GiB headroom.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -355,19 +350,18 @@
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    export TT_KIMI_PREFILL_CACHE_DIR="${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}"
-    mpirun --bind-to none --pernode --tag-output -x TT_KIMI_PREFILL_CACHE_DIR bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py --cache-dir "${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}" -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
-      # September 17: the full ten_iters command, including local cache staging/cleanup, took 19m57s.
-      # Keep the 36-minute budget; staging is included, not charged to workflow setup.
+      # Measured 4.0 min at two_iters; ten_iters adds ~8x10.6s -> ~5.5 min. Trace replay is faster per
+      # chunk than eager dispatch, so this needs no more than its untraced twin.
       timeout: 36
       tier: 2
       release_ready: false
