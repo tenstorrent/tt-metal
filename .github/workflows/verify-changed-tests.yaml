@@ -3,8 +3,10 @@ name: "Verify changed tests"
 # Gate for tests/pipeline_reorg edits. A PR that touches a test entry cannot enter
 # the merge queue until that specific entry has run green
 #
-# All logic lives in .github/scripts/utils/verify_changed_tests.py. This file only
-# wires it up, plus the two policy lists below.
+# All logic lives in the tenstorrent/tt-metal/.github/actions/verify-changed-tests
+# action, pinned to @main so a PR branch always runs the current gate rather than
+# whatever copy (or lack of one) sits at its own head. This file only wires it up,
+# plus the two policy lists below.
 #
 # merge_group runs `scope` only. The hardware legs already ran on the PR head;
 # re-firing them in the queue would spend the same scarce hardware twice. The
@@ -139,15 +141,17 @@ jobs:
 
       - name: Scope the changed tests, narrow the matrix, enforce owner review
         id: gate
+        # Pinned to @main: a PR branch runs the current gate, not whatever
+        # copy (or lack of one) happens to sit at its own head.
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/utils/verify_changed_tests.py \
-            --event "${{ github.event_name }}" \
-            --base "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
-            --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
-            --output scope.json
+        with:
+          event: ${{ github.event_name }}
+          base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.pull_request.number }}
+          output: scope.json
 
       - name: Summarise
         if: ${{ !cancelled() }}
