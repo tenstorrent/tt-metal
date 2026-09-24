@@ -3,7 +3,7 @@
 #   LOCAL_CREGS  -
 #   PC_MODIFYING -
 #   COMPUTE      -
-#   COMMON_CREGS -
+#   COMMON_CREGS - ???? Jel se ovo koristi? Nema ga us assembler.cpp
 #
 #
 # Functional Coverage:
@@ -591,7 +591,8 @@ MOVD2A:
         description: Dest address spec
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                  {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
       - name: instr_mod
         field_type: DEC
         start_bit: 12
@@ -641,7 +642,8 @@ MOVD2B:
         description: Dest address spec
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                  {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
       - name: transpose
         field_type: BIN
         start_bit: 11
@@ -807,6 +809,9 @@ ZEROSRC:
             bins: [ {name: "zero_out_source_A",       value: "0x1"},
                     {name: "zero_out_source_B",       value: "0x2"},
                     {name: "zero_out_source_A_and_B", value: "0x3"} ]
+        # NOTE: In contiguous addressing mode the two physical banks form one logical
+        #       bank that math reads across, so a ZEROSRC clears BOTH banks regardless of
+        #       the bank_mask setting below.
         - name: bank_mask
           field_type: DEC
           start_bit: 2
@@ -859,8 +864,9 @@ MOVA2D:
         size: 11
         description: Dest address spec
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x1FF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                  {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
       - name: instr_mod
         field_type: DEC
         start_bit: 12
@@ -910,7 +916,8 @@ MOVB2D:
         description: Dest address spec
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                  {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
       - name: bcast_datum0
         field_type: BIN
         start_bit: 11
@@ -1077,8 +1084,8 @@ MVMULDI:
           size: 8
           description: Dest address spec
           fcov_point_bin_interval:
-            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7F"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
         - name: addr_mode
           field_type: BIN
           start_bit: 8
@@ -1141,7 +1148,8 @@ MVMUL:
           description: Dest address spec
           fcov_point_bin_interval:
             bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                    {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
         - name: addr_mode
           field_type: BIN
           start_bit: 14
@@ -1186,7 +1194,8 @@ ELWMUL:
           description: Dest address spec
           fcov_point_bin_interval:
             bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                    {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
         - name: addr_mode
           field_type: BIN
           start_bit: 14
@@ -1243,7 +1252,7 @@ ELWSUB:
     src_mask: 0x3
     instrn_type: COMPUTE
     arguments: *ELW_ARGS
-    description: "Elementwise subtract operation (A-B). NOTE: Src zero flags must be disabled for this instruction to work correctly."
+    description: "Elementwise subtract operation (A-B)."
 #ELWADDDI (dest[7:0], addr_mod[2:0], srcb_addr[3:0], srca_addr[3:0],  ins_mod[1:0], /*dest_accum[0]=0*/, clear_dvalid[1:0], switch_state_id) //24-bit
 ELWADDDI:
     op_binary: 0x31
@@ -1259,8 +1268,8 @@ ELWADDDI:
           size: 8
           description: Dest address spec
           fcov_point_bin_interval:
-            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                    {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7F"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
         - name: addr_mode
           field_type: BIN
           start_bit: 8
@@ -1320,7 +1329,7 @@ ELWSUBDI:
     src_mask: 0x3
     fcov:
     arguments: *ELWDI_ARGS
-    description: "ELWSUB with direct indexed srca and srcb. NOTE: Src zero flags must be disabled for this instruction to work correctly."
+    description: "ELWSUB with direct indexed srca and srcb."
 
 GMPOOL:
     op_binary: 0x33
@@ -1337,7 +1346,8 @@ GMPOOL:
         description: Dest address spec
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]},
+                  {name: "bank1_16b", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
       - name: rsvd
         field_type: DEC
         start_bit: 14
@@ -1685,9 +1695,14 @@ INCRWC:
           size: 8
           description: Increment value to apply to dest counter
           fcov_point_bin_interval:
+            # 8-bit field (max 0xFF), but these bins were written for a 10-bit field
+            # (0x3FF): mid ran to 0x3FE and max started at 0x3FF. On top of that the max
+            # bin was MALFORMED -- interval ["0xFFF","0x3FF"] has lo > hi, an empty range,
+            # so it could not be hit even on a 10-bit field. Rewritten as the same
+            # min/mid/max shape scaled to 8 bits.
             bins: [ {name: "min", slice: "1",    interval: ["0x0","0x0"]},
-                    {name: "mid", slice: "1022", interval: ["0x1","0x3FE"]},
-                    {name: "max", slice: "1",    interval: ["0xFFF","0x3FF"]} ]
+                    {name: "mid", slice: "0x100", interval: ["0x1","0xFE"]},
+                    {name: "max", slice: "1",    interval: ["0xFF","0xFF"]} ]
         - name: rwc_b
           field_type: DEC
           start_bit: 8
@@ -4626,7 +4641,6 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
                 0 - UNP_CLR_SRC (clear srcA or srcB when unpack is done)
                 1 - UNP_NOP (inject cycle delay between back to back unpack)
                 2 - UNP_NOP_SETDAVLID (NOP in all respects except for setting Dvalid of Src Reg);
-                    This will set the implied format for src regs with the value in the cfg reg UNPACKER<0/1>_REG0_OUT_DATA_FORMAT
           fcov_point_bin_interval:
             bins: [ {name: "val", slice: "1",  interval: ["0x0","0x3"]} ]
         - name: Src_ClrVal_Ctrl
@@ -4694,7 +4708,7 @@ SETGPR:
           field_type: DEC
           start_bit: 0
           size: 7
-          description: "GPR index in 16b quants"
+          description: "GPR index in 16b quants. Selects the 16-bit GPR quantity to write; the index is always expressed in 16-bit units regardless of mode."
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x7F","0x7F"]} ]
@@ -4702,18 +4716,24 @@ SETGPR:
           field_type: BIN
           start_bit: 7
           size: 1
-          description: "Sets registers from signals routed into TDMA block rather than from payload immediate value specified in Payload_SigSel."
+          description: "Payload source select. 0: write the 16-bit immediate value held in Payload_SigSel. 1: write from signals routed into the TDMA block, selected by Payload_SigSel."
           fcov_point_bool:
         - name: Payload_SigSel
           field_type: DEC
           start_bit: 8
           size: 14
           fcov_point_bin_interval:
+            # 14-bit field (max 0x3FFF). The top bin had one extra F (0x3FFFF, an 18-bit
+            # value), placing it above the field where it could never be hit.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x2"]},
-                    {name: "top", slice: "0x1000000",     interval: ["0x3FFFF","0x3FFFF"]}]
+                    {name: "top", slice: "0x1000000",     interval: ["0x3FFF","0x3FFF"]}]
           description: >
-              SetSignalsMode == 0 : Immediate payload to set into selected register.
-              SetSignalsMode == 1 : Payload selector
+              SetSignalsMode == 0 (immediate mode) : 16-bit immediate value written to the
+              16-bit GPR quant selected by GPR_Index16b. The immediate occupies bits [23:8],
+              so Payload_SigSelSize does not apply and only 16-bit writes are supported in this
+              mode.
+              SetSignalsMode == 1 (signals mode) : payload selector for signals routed into the
+              TDMA block; the write width is given by Payload_SigSelSize.
                                     0 : Max Exponent from Packer[0]
                                     1 : Min Exponent from Packer[0]
                                     2 : Max Exponent from Packer[1]
@@ -4722,10 +4742,15 @@ SETGPR:
           field_type: DEC
           start_bit: 22
           size: 2
-          description: "Payload size in SetSignals mode. 0 - 16-bit, 1 - 32-bit, 2 - 128-bit"
+          description: >
+              Write width, only valid when SetSignalsMode == 1 : 0 - 16-bit, 1 - 32-bit,
+              2 - 128-bit. In immediate mode (SetSignalsMode == 0) these two bits are the
+              most-significant bits of the 16-bit immediate value; only 16-bit immediate writes
+              are supported. 32-bit and 128-bit immediate writes have no application because the
+              immediate operand cannot supply more than 16 bits of data.
           fcov_point_bin_interval:
             bins: [ {name: "val", slice: "1",  interval: ["0x0","0x3"]} ]
-    description: "Set GPR file register with 16b immediate value provided with instruction or with routed signals from TDMA via indirect side-effects"
+    description: "Set a GPR file register. In immediate mode (SetSignalsMode == 0) a 16-bit immediate value from the instruction is written to the selected 16-bit GPR quant (16-bit writes only). In signals mode (SetSignalsMode == 1) the register is written from signals routed into the TDMA block, with 16/32/128-bit width selected by Payload_SigSelSize."
 
 
 LOADIND:
@@ -4783,8 +4808,14 @@ LOADIND:
               uint16_t *GPR_16 = reinterpret_cast<uint16_t *>(GPR);
               final_l1_addr = GPR[Addr_GPR_Index] + GPR_16[OffsetIndex]
           fcov_point_bin_interval:
+            # 8-bit field, but per the description above it indexes GPR_16 -- 16b halfwords
+            # over N_GPR=64 32b registers, i.e. 128 halfwords -- so only 0x00-0x7F address a
+            # real GPR. The old top bin at 0xFF was architecturally unreachable and was
+            # P10-waived on exactly that reasoning. Sampling the true top of the usable
+            # range (0x7F) turns a permanent waiver into a live, coverable target, and
+            # matches the sibling STOREIND.OffsetIndex.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0xFF","0xFF"]} ]
+                    {name: "top", slice: "1",  interval: ["0x7F","0x7F"]} ]
         - name: SizeSel
           field_type: DEC
           start_bit: 22
@@ -5245,8 +5276,12 @@ ATINCGET:
           start_bit: 14
           size: 9
           fcov_point_bin_interval:
+            # The architecturally used range is WrapVal[4:0] per the description below, so
+            # the top of the meaningful range is 0x1F, not 0xF. The old top bin stopped a
+            # bit short and left the upper half of the used range unsampled. Deliberately
+            # NOT 0x1FF: bits [8:5] of this 9-bit field are not used by the wrap.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
+                    {name: "top", slice: "1",  interval: ["0x1F","0x1F"]} ]
           description: "Wrap the targeted address value at 1 << WrapVal[4:0]"
     description: "Atomic increment and get - will read value in targeted memory location and return it to GPR and post-increment it atomically with the value pointed by Data_GPR_Index field"
 
@@ -5378,16 +5413,19 @@ ATCAS:
           start_bit: 14
           size: 4
           fcov_point_bin_interval:
+            # 4-bit field (max 0xF). The top bin said 0x3F -- a 6-bit maximum -- so it sat
+            # above the field and could never be hit. Endpoint sampling of 0x0 and 0xF.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+                    {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
           description: "Compare value provided as an immediate (4 bits)"
         - name: SwapVal
           field_type: DEC
           start_bit: 18
           size: 4
           fcov_point_bin_interval:
+            # 4-bit field (max 0xF); same 0x3F over-range as CmpVal above.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+                    {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
           description: "Swap value provided as an immediate (4 bits)"
     description: >
         Atomic compare-and-swap operation. Compares the value at the specified memory location with the provided compare value. If they match,
@@ -5431,8 +5469,12 @@ STOREIND:
           start_bit: 14
           size: 7
           fcov_point_bin_interval:
+            # 7-bit field (max 0x7F) but the top bin sampled 0x3F, so the upper half of the
+            # index range was never sampled. The sibling LOADIND.OffsetIndex (size 8) does
+            # top out at its own maximum, 0xFF -- these two describe the same operand, so
+            # STOREIND stopping at 0x3F is an inconsistency, not an architectural limit.
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+                    {name: "top", slice: "1",  interval: ["0x7F","0x7F"]} ]
           description: "Offset address register index - in 16b values
                         Value of 0 indicates no offset addition"
         - name: MemSel
@@ -6014,8 +6056,8 @@ SFPCAST:
           Instruction Modifier
             0x0: int32 -> fp32 (nearest even)
             0x1: int32 -> fp32 (stochastically)
-            0x2: int322s-> Sign Mag
-            0x3: int sign mag -> int32 2s
+            0x2: int sign mag -> int32 2s
+            0x3: int322s-> Sign Mag
             0x4: fp32 -> int32 (nearest even)
             0x5: fp32 -> int32 (stochastically)
         fcov_point_bins:
@@ -7424,7 +7466,7 @@ SFPSHFT2:
         description: lreg dest and src_b index
         fcov_point_bin_interval:
           bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+                  {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
 
       - name: lreg_c
         field_type: DEC
@@ -7433,7 +7475,7 @@ SFPSHFT2:
         description: lreg src_c index
         fcov_point_bin_interval:
           bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+                  {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
 
       - name: imm12_math
         field_type: DEC
@@ -7638,10 +7680,24 @@ RDCFG:
           size: 8
           field_type: DEC
           description: "gpr address to write config data to (32-bit aligned)"
-          # fixme: What's the valid range on this?  Should we split into GprAddressed and a reserved fld?
+          # The fixme that used to sit here ("What's the valid range on this?") is now
+          # ANSWERED, from the RTL: only gpraddress[5:0] is decoded. tt_cfg_exu.sv:366 uses
+          # gpraddress[2 +: REGFILE_ADDR_WIDTH] to select the regfile row and
+          # gpraddress[1:0] to select the 32-bit word within the 128-bit row; with
+          # REGFILE_ADDR_WIDTH=4 / REGFILE_NUM_WORDS=16 / REGFILE_DATA_WIDTH=128
+          # (tt_gpr_file.sv:26) that is 16 rows x 4 words = the 64 GPRs. Bits [7:6] are not
+          # decoded, so any value >= 0x40 addresses nothing.
+          #
+          # History: these bins were originally 16-bit-shaped (0x0-0x7FFF / 0x8000-0xFFFF),
+          # copied from the size-16 CfgReg field above, so top_half sat above the field and
+          # was P10-waived as unreachable. !2753 corrected the arithmetic to an 8-bit
+          # half-split and un-waived it -- but that was wrong: correcting the arithmetic does
+          # not make the values reachable, because the field is 8 bits wide while only 6 are
+          # decoded. Now specified over the range the hardware actually decodes, so both bins
+          # are reachable and no waiver is needed.
           fcov_point_bin_interval:
-            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+            bins: [ {name: "bot_half", slice: "0x40",  interval: ["0x0","0x1F"]},
+                    {name: "top_half", slice: "0x40",  interval: ["0x20","0x3F"]} ]
 
 RMWCIB0:
   description: "Read-Modify-Write on Byte 0 of the cfg register, only updating the bits set in mask"
@@ -7824,9 +7880,16 @@ CFGSHIFTMASK:
         field_type: DEC
         description: "configuration register address to write data to (32-bit aligned)"
         # fixme: should this really be 8-bits?
+        # The bins below were 16-bit-shaped (0x0-0x7FFF / 0x8000-0xFFFF) on this size-8
+        # field, so top_half sat entirely above the field maximum of 0xFF and could never be
+        # hit. Corrected to an 8-bit half-split, matching the RMWCIB0 CfgRegAddr spec. Note
+        # this block is the &CFGSHIFTMASK anchor, so the fix also covers
+        # CFGSHIFTMASK_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE. The fixme above
+        # questions whether the SIZE should be 8 at all and is deliberately left open --
+        # this change only makes the bins consistent with the size as declared.
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+          bins: [ {name: "bot_half", slice: "0x100",  interval: ["0x0","0x7F"]},
+                  {name: "top_half", slice: "0x100",  interval: ["0x80","0xFF"]} ]
 
   description: >
     This instruction performs a mask and a shift on a 'CFG scratch register'
@@ -7971,8 +8034,8 @@ MOP:
                       9-bit Inner loop count for math/packer if non-zero value. Also lower 6-bits (bits[5:0]) of Outer loop count of math/packer if non-zero value - {Outer_loop_count[5:0], Inner_loop_count[8:0]}"
         fcov_point_bin_interval:
           bins: [ {name: "bot",      slice: "0x00001",  interval: ["0x0","0x0"]},
-                  {name: "bot_half", slice: "0x10000",  interval: ["0x1","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+                  {name: "bot_half", slice: "0x10000",  interval: ["0x1","0x3FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x4000","0x7FFF"]} ]
       - name: loop_count
         start_bit: 15
         size: 7
@@ -7980,8 +8043,8 @@ MOP:
         description: "(loop count - 1) for unpacker loop MOP operation; \n
                       upper 4-bits (bits[9:6]) of Outer loop count for math/packer loop MOP operation if non-zero value"
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x3F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x40","0x7F"]} ]
         # FIXME: implement more complex bins as per description
       - name: done
         start_bit: 22
@@ -8013,8 +8076,10 @@ MOP_CFG:
         field_type: HEX
         description: High 24-bit zmask for unpacker loop
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+          # slice must exceed the interval span, else the generator shards each
+          # half into 0x10000-wide sub-bins (128 of them for a 24-bit field).
+          bins: [ {name: "bot_half", slice: "0x1000000",  interval: ["0x0","0x7FFFFF"]},
+                  {name: "top_half", slice: "0x1000000",  interval: ["0x800000","0xFFFFFF"]} ]
 
 
 REPLAY:

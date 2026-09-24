@@ -34,6 +34,12 @@ enum class PoolType : std::uint8_t
     MAX,
 };
 
+enum class GatherCompressModeSelect : std::uint8_t
+{
+    GATHER   = 0,
+    COMPRESS = 1,
+};
+
 enum class DataCopyType : std::uint8_t
 {
     A2D,
