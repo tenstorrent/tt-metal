@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 
 import torch
 
@@ -76,12 +77,23 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        adaln_tables: bool = False,
     ) -> None:
         super().__init__()
 
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
+        # `adaln_tables`: the AdaLN projection weights (520 MB per block in bf16, 130 MB per device at
+        # TP=4) stay in host memory. Once per request, `build_request_modulation` stages them onto the
+        # device, projects every step's `temb` in one matmul and keeps only the resulting
+        # [steps * slots * MODALITY_NUM, 6 * hidden_local] table; `forward` then slices its step's rows
+        # instead of projecting. The per-step tables it gathers from are built exactly as before
+        # (interleaved copies, `1 +` folded into the scales), so nothing downstream changes.
+        self.adaln_tables = adaln_tables
+        self.adaln_joint: ttnn.Tensor | None = None
+        self.adaln_rows_per_step = 0
+        self.adaln_step: int | None = None
 
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -139,8 +151,10 @@ class MiniMaxH3TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
+            # Host-resident weights are staged whole per device, so they are never FSDP-sharded.
+            fsdp_mesh_axis=None if adaln_tables else fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            on_host=adaln_tables,
         )
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -211,6 +225,16 @@ class MiniMaxH3TransformerBlock(Module):
         same `temb`, so rounding applied before the activation biases every block's modulation
         identically at every sampling step and accumulates over the denoising trajectory.
         """
+        projected, rows = self._project_modulation(temb)
+        return self._tables_from_projection(projected, rows)
+
+    def _project_modulation(self, temb: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
+        """`adaln_proj(silu(temb))` folded to one row per (timestep, modality).
+
+        Returns the ROW_MAJOR `[1, 1, num_timesteps * MODALITY_NUM, 6 * hidden_local]` bfloat16 tensor
+        and its row count. Under `adaln_tables` the projection weights are host-resident and the caller
+        stages them (see `build_request_modulation`).
+        """
         num_timesteps = temb.shape[2]
         # silu at temb's precision, then cast to the projection's dtype -- the reference's
         # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
@@ -228,6 +252,10 @@ class MiniMaxH3TransformerBlock(Module):
         rows = num_timesteps * MODALITY_NUM
         projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
         projected = ttnn.reshape(projected, (1, 1, rows, NUM_MODULATION_PARAMS * self.hidden_local))
+        return projected, rows
+
+    def _tables_from_projection(self, projected: ttnn.Tensor, rows: int) -> list[ttnn.Tensor]:
+        """The six gather tables from a ROW_MAJOR `[1, 1, rows, 6 * hidden_local]` projection."""
         # Interleaved copies of every row (see ADALN_TABLE_COPIES), done once here on the tiny joint
         # table rather than once per parameter below.
         projected = ttnn.repeat_interleave(projected, ADALN_TABLE_COPIES, dim=2)
@@ -246,6 +274,49 @@ class MiniMaxH3TransformerBlock(Module):
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             tables.append(ttnn.reshape(table, (rows, self.hidden_local)))
         return tables
+
+    # ------------------------------------------------------------------ per-request modulation (adaln_tables)
+
+    def build_request_modulation(self, temb_all_steps: ttnn.Tensor, rows_per_step: int) -> None:
+        """Project every step of one request at once and keep only the table.
+
+        `temb_all_steps` is `[1, 1, num_steps * slots, time_embed_dim]` float32, the per-step `temb`s
+        concatenated in step order; `rows_per_step` is `slots * MODALITY_NUM`. The projection weights are
+        staged onto the device only for this call.
+        """
+        if not self.adaln_tables:
+            raise RuntimeError("build_request_modulation needs a block built with adaln_tables=True")
+        self.release_request_modulation()
+        params = [self.adaln_proj.weight] + ([self.adaln_proj.bias] if self.adaln_proj.bias is not None else [])
+        with ExitStack() as staged:
+            for param in params:
+                staged.enter_context(param.staged_on_device())
+            projected, rows = self._project_modulation(temb_all_steps)
+        if rows % rows_per_step:
+            raise ValueError(f"{rows} projected rows are not a multiple of {rows_per_step} rows per step")
+        self.adaln_joint = projected
+        self.adaln_rows_per_step = rows_per_step
+        self.adaln_step = None
+
+    def release_request_modulation(self) -> None:
+        if self.adaln_joint is not None:
+            ttnn.deallocate(self.adaln_joint)
+            self.adaln_joint = None
+        self.adaln_step = None
+
+    def _step_tables(self) -> list[ttnn.Tensor]:
+        """This step's six gather tables, sliced from the request table (see `build_request_modulation`)."""
+        if self.adaln_step is None:
+            raise RuntimeError("adaln_step is unset; the transformer sets it before each forward")
+        rows = self.adaln_rows_per_step
+        start = self.adaln_step * rows
+        if start + rows > self.adaln_joint.shape[2]:
+            raise ValueError(
+                f"step {self.adaln_step} is outside the request table's {self.adaln_joint.shape[2] // rows} steps"
+            )
+        width = self.adaln_joint.shape[3]
+        step_rows = ttnn.slice(self.adaln_joint, [0, 0, start, 0], [1, 1, start + rows, width])
+        return self._tables_from_projection(step_rows, rows)
 
     @staticmethod
     def spread_adaln_indices(indices: ttnn.Tensor, spread: ttnn.Tensor | None = None) -> ttnn.Tensor:
@@ -287,7 +358,12 @@ class MiniMaxH3TransformerBlock(Module):
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        if self.adaln_tables:
+            if self.adaln_joint is None:
+                raise RuntimeError("adaln_tables block has no request table; call build_request_modulation first")
+            tables = self._step_tables()
+        else:
+            tables = self._modulation_tables(temb)
 
         # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
