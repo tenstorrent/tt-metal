@@ -649,7 +649,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     uint32_t compute_NC = use_width_sharding ? NC : 1;
 
     // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); every other MIN
-    // (bfloat8_b, fast-mode fp32, Quasar bf16) uses -MAX(-x) in reduce_h_neg.
+    // (bfloat8_b, fast-mode fp32) uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

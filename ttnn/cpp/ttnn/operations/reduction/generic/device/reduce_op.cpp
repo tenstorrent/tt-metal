@@ -214,14 +214,13 @@ Tensor reduce(
     // MIN selects rather than accumulates, and bf16 reaches SrcA untruncated, so this path does not
     // take the fp32 accuracy or fp32_dest_acc_en gates.
     const bool use_sfpu_bf16_min = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
-                                   reduce_math == tt::tt_metal::ReduceOpMath::MIN && arch != tt::ARCH::QUASAR &&
-                                   !negate;
+                                   reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
 
     const bool use_sfpu_reduce =
         use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min || use_sfpu_bf16_min;
 
     // The FPU has no MIN primitive, so remaining MIN lowers to -MAX(-x) via the fused negate kernels:
-    // bfloat8_b, fast-mode fp32, and bf16 on Quasar. Accurate fp32 MIN and bf16 MIN drive the LLK MIN
+    // bfloat8_b and fast-mode fp32. Accurate fp32 MIN and bf16 MIN drive the LLK MIN
     // reduce directly (like Int32 MIN) and must skip that lowering.
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
         !use_sfpu_fp32_min && !use_sfpu_bf16_min) {
@@ -299,8 +298,8 @@ Tensor reduce(
         // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
         // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
         // MAX/MIN must not use this path: the MIN still lowered to -MAX(-x) (bfloat8_b, fast-mode
-        // fp32, Quasar bf16) produces wrong results with an FP32 intermediate on the fused-negate W
-        // step (issue #40854). They also gain no precision from FP32 since they select, not
+        // fp32) produces wrong results with an FP32 intermediate on the fused-negate W step (issue
+        // #40854). They also gain no precision from FP32 since they select, not
         // accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 =

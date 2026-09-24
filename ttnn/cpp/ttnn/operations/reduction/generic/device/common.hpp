@@ -67,7 +67,7 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
 // bf16 min pool); it takes no `use_sfpu_reduce` opt-in. Float32 opts in only when the host
 // requests the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU
 // preserves full fp32. mean arrives as SUM (the host lowers it to SUM + a 1/N post-mul). Remaining
-// float MIN — bfloat8_b, fast-mode fp32, and bf16 on Quasar — arrives as MAX with negate=true via
+// float MIN — bfloat8_b and fast-mode fp32 — arrives as MAX with negate=true via
 // -MAX(-x), so only accurate fp32 MIN and bf16 MIN reach here as MIN.
 inline bool use_sfpu_reduce_path(
     tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {

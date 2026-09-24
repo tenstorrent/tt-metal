@@ -98,10 +98,8 @@ template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
         sfpu_reduce_sum_fold_init<format>();
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
     } else if constexpr (pool_type == PoolType::MIN) {
         sfpu_reduce_min_fold_init<format>();
-#endif
     } else {
         sfpu_reduce_max_fold_init<format>();
     }
@@ -118,10 +116,8 @@ ALWI void sfpu_copy_and_fold(
         copy_tile(input_cb_id, tile_idx, work_dst);
         if constexpr (pool_type == PoolType::SUM) {
             sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
         } else if constexpr (pool_type == PoolType::MIN) {
             sfpu_reduce_min_fold_tile<format>(dst_idx, work_dst, dst_idx);
-#endif
         } else {
             sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
         }
@@ -314,12 +310,10 @@ ALWI void reduce(
     static_assert(
         reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
         "Int32 AVG (mean) is not supported");
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, on REDUCE_ROW/COL. The FPU has no min "
-        "pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
-#endif
+        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
+        "The FPU has no min pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
@@ -548,17 +542,8 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
-#else
-                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
-                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
-                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
-                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
-                    // rather than silently drop the finalize.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -672,18 +657,12 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
-#else
-                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
-                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk
