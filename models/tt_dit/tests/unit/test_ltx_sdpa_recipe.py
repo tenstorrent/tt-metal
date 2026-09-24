@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: LTX-2 opt-in SDPA recipe wiring, plus the SD3.5 / Ideogram4 recipe rejections.
+"""Host-only: LTX-2 opt-in SDPA recipe wiring (SD3.5 recipe tests: test_sd35_sdpa_recipe.py).
 
 LTXAttention instances are built with object.__new__ (no mesh device); only the small config /
 kwargs helpers and the call-time mask rejection are exercised.
@@ -10,8 +10,6 @@ import pytest
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
-from models.tt_dit.models.transformers.transformer_ideogram4 import Ideogram4Transformer
-from models.tt_dit.models.transformers.transformer_sd35 import SD35Transformer2DModel
 from models.tt_dit.utils.sdpa_recipe import validate_recipe_args
 
 GRID = ttnn.CoreCoord(12, 10)
@@ -29,8 +27,11 @@ def _bare_attention(precision=None):
     attention.sdpa_precision = precision
     attention.sdpa_kv_dtype = ttnn.bfloat16
     attention.sdpa_compute_kernel_config = "legacy"
+    attention.is_self = True
     attention.sdpa_program_config = _pc(256, 256)
     attention.ring_sdpa_program_config = _pc(128, 512, WORKER_GRID)
+    # V2A ring cross config (BH 2x4 tuned Q64; see LTXAttention.cross_ring_sdpa_q_chunk_map).
+    attention.cross_ring_sdpa_program_config = _pc(64, 512, WORKER_GRID)
     # Tuned BH 4x8 ring chunks keyed by N (see LTXAttention.ring_sdpa_chunk_by_n).
     attention._ring_pc_by_n = {9728: _pc(96, 256, WORKER_GRID), 38912: _pc(192, 512, WORKER_GRID)}
     # Tuned BH video text / A2V cross chunks (see LTXAttention.sdpa_chunk_by_shape).
@@ -89,18 +90,61 @@ def test_sdpa_kwargs_legacy_read_at_call_time_and_recipe_replaces_it():
 
 def test_recipe_rejects_masked_attention_at_call_time():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
+    # A mask without its logical key length can't be turned into a K/V slice.
     with pytest.raises(ValueError, match="unmasked"):
         attention.forward(spatial_1BND=None, N=0, attn_mask=object())
+    # Cross-attention masks are never key-length masks here.
+    attention.is_self = False
+    with pytest.raises(ValueError, match="unmasked"):
+        attention.forward(spatial_1BND=None, N=0, attn_mask=object(), attn_kv_len=200)
 
 
-def test_ltx_head_dims_video_accepted_audio_rejected():
+def test_recipe_key_length_mask_becomes_slice_length():
+    attention = _bare_attention(ttnn.SDPAPrecision.FAST)
+    assert attention._recipe_mask_kv_len(object(), 200) == 200
+    assert attention._recipe_mask_kv_len(None, 200) is None  # unpadded audio: no slicing
+    with pytest.raises(ValueError, match="positive"):
+        attention._recipe_mask_kv_len(object(), 0)
+    # Legacy ignores attn_kv_len entirely (the mask is passed to SDPA as before).
+    legacy = _bare_attention()
+    assert legacy._recipe_mask_kv_len(object(), 200) is None
+    assert legacy._recipe_mask_kv_len(object(), None) is None
+
+
+def test_v2a_ring_cross_and_gathered_audio_configs():
+    legacy = _bare_attention()
+    assert legacy._cross_ring_program_config(64) is legacy.cross_ring_sdpa_program_config
+    assert legacy._gathered_program_config(128) is legacy.sdpa_program_config
+
+    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
+    # Tiny per-device audio Q (32/64 rows): Q128 with a Q tail, not the Q256 fallback.
+    assert _chunks(attention._cross_ring_program_config(32)) == (128, 512)
+    assert _chunks(attention._cross_ring_program_config(64)) == (128, 512)
+    assert _chunks(attention._cross_ring_program_config(160)) == (192, 512)  # even tiles
+    assert _chunks(attention._cross_ring_program_config(4096)) == (256, 512)
+    pc = attention._cross_ring_program_config(32)
+    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
+    attention.cross_ring_sdpa_program_config = _pc(64, 128, WORKER_GRID)
+    assert _chunks(attention._cross_ring_program_config(64)) == (128, 512)  # K128 unsupported -> K512
+
+    assert _chunks(attention._gathered_program_config(128)) == (128, 256)
+    assert _chunks(attention._gathered_program_config(1024)) == (256, 256)
+    assert LTXAttention._recipe_small_q_chunk(320, 200) == 256
+
+
+def test_ltx_head_dims_video_and_audio_accepted():
     # Video attention is 4096 / 32 heads = D128; audio (and audio<->video cross) is 2048 / 32 = D64.
-    kv = validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=4096 // 32, model="LTX-2")
-    assert kv == ttnn.bfloat16
-    with pytest.raises(ValueError, match="D128"):
-        validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=2048 // 32, model="LTX-2")
-    with pytest.raises(ValueError, match="D128"):
-        validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=128, model="LTX-2", is_blackhole=False)
+    for head_dim in (4096 // 32, 2048 // 32):
+        kv = validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=head_dim, model="LTX-2")
+        assert kv == ttnn.bfloat16
+    assert (
+        validate_recipe_args(ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b, head_dim=64, model="LTX-2")
+        == ttnn.bfloat8_b
+    )
+    with pytest.raises(ValueError, match="head_dim"):
+        validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=96, model="LTX-2")
+    with pytest.raises(ValueError, match="Blackhole"):
+        validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, None, head_dim=64, model="LTX-2", is_blackhole=False)
 
 
 def test_ltx_low_precision_kv_dtype_validation():
@@ -110,20 +154,3 @@ def test_ltx_low_precision_kv_dtype_validation():
         validate_recipe_args(ttnn.SDPAPrecision.ACCURATE, ttnn.bfloat8_b, head_dim=128, model="LTX-2")
     with pytest.raises(ValueError, match="LOW_PRECISION"):
         validate_recipe_args(None, ttnn.bfloat4_b, head_dim=128, model="LTX-2")
-
-
-@pytest.mark.parametrize(
-    "validate, head_dim",
-    [(SD35Transformer2DModel.validate_sdpa_recipe, 64), (Ideogram4Transformer.validate_sdpa_recipe, 256)],
-    ids=["sd35_d64", "ideogram4_d256"],
-)
-def test_unwired_models_reject_recipes(validate, head_dim):
-    validate(None, None, head_dim=head_dim)  # legacy: no-op
-    for precision in (ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.LOW_PRECISION):
-        with pytest.raises(ValueError):
-            validate(precision, None, head_dim=head_dim)
-    # Even a D128 config of these models is rejected: the recipe is not wired there.
-    with pytest.raises(ValueError, match="not wired"):
-        validate(ttnn.SDPAPrecision.ACCURATE, None, head_dim=128)
-    with pytest.raises(ValueError, match="LOW_PRECISION"):
-        validate(None, ttnn.bfloat8_b, head_dim=head_dim)

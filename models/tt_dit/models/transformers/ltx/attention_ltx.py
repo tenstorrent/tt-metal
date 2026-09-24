@@ -95,10 +95,11 @@ class LTXAttention(Module):
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         """``sdpa_precision``/``sdpa_kv_dtype`` opt this attention into a named SDPA recipe
-        (Blackhole, D128, unmasked only; see models/tt_dit/utils/sdpa_recipe.py). ``None`` keeps the
-        legacy SDPA configuration exactly. In LTX-2 the transformer block only passes them to the
-        D128 video attentions (video self-attn and video<->text cross-attn); the D64 audio self/text
-        attentions and the audio<->video cross-attentions are always built without a recipe."""
+        (Blackhole, D64/D128/D256, unmasked noncausal; see models/tt_dit/utils/sdpa_recipe.py). ``None``
+        keeps the legacy SDPA configuration exactly. In LTX-2 the transformer block passes them to every
+        attention: the D128 video self/text attentions and the D64 audio self/text, A2V and V2A
+        attentions. The padded audio self-attn's key-column mask is replaced under a recipe by slicing
+        K/V to the logical key length (``forward(attn_kv_len=...)``); any other mask is rejected."""
         super().__init__()
 
         assert dim % num_heads == 0
@@ -621,6 +622,67 @@ class LTXAttention(Module):
             return program_config
         return recipe_program_config(program_config)
 
+    @staticmethod
+    def _recipe_small_q_chunk(q_chunk: int, q_len: int) -> int:
+        """Cap a recipe Q chunk for a short per-device Q: min(q_chunk, max(128, roundup(q_len, 64))).
+
+        Keeps an even tile count (valid for ring SDPA too) and avoids a Q256 chunk that is mostly tail
+        padding when the Q shard is tiny (e.g. V2A audio Q of 32/64 rows per device)."""
+        return min(q_chunk, max(128, -(-q_len // 64) * 64))
+
+    def _gathered_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
+        """Padded audio self-attn with gathered K/V (SP>1): legacy config, or the recipe config
+        with the Q chunk capped for the short local Q shard."""
+        if self.sdpa_precision is None:
+            return self.sdpa_program_config
+        pc = recipe_program_config(self.sdpa_program_config)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+            q_chunk_size=self._recipe_small_q_chunk(pc.q_chunk_size, q_len),
+            k_chunk_size=pc.k_chunk_size,
+        )
+
+    def _cross_ring_program_config(self, q_len: int) -> ttnn.SDPAProgramConfig:
+        """V2A ring cross (is_cross) SDPA config: the tuned per-mesh config, or the ring recipe config
+        (even Q tiles) with Q capped for the tiny per-device audio Q shard."""
+        if self.sdpa_precision is None:
+            return self.cross_ring_sdpa_program_config
+        pc = recipe_program_config(self.cross_ring_sdpa_program_config, ring=True)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+            q_chunk_size=self._recipe_small_q_chunk(pc.q_chunk_size, q_len),
+            k_chunk_size=pc.k_chunk_size,
+        )
+
+    def _recipe_mask_kv_len(self, attn_mask, attn_kv_len: int | None) -> int | None:
+        """Under a recipe, the logical key length that replaces a key-column padding mask.
+
+        Recipes are unmasked only. The one LTX-2 mask (padded audio self-attn, built by
+        ``build_audio_masks``) only bars keys ``>= audio_N_real``, so a recipe slices K/V to that length
+        instead; the caller must state it via ``attn_kv_len`` since it can't be read off the mask. Any
+        other mask (no ``attn_kv_len``, or a cross-attention mask) is rejected. ``None`` = no slicing."""
+        if self.sdpa_precision is None or attn_mask is None:
+            return None
+        if attn_kv_len is None or not self.is_self:
+            reject_mask(self.sdpa_precision, attn_mask, model="LTX-2")
+        if attn_kv_len <= 0:
+            raise ValueError(f"LTX-2: attn_kv_len must be positive (got {attn_kv_len})")
+        return attn_kv_len
+
+    @staticmethod
+    def _slice_kv(k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, kv_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Keep the first ``kv_len`` keys/values (the unpadded audio tokens)."""
+        n = k_BHNE.shape[2]
+        if kv_len > n:
+            raise ValueError(f"LTX-2: attn_kv_len={kv_len} exceeds the key length {n}")
+        if kv_len == n:
+            return k_BHNE, v_BHNE
+        b, h, _, d = k_BHNE.shape
+        return (
+            ttnn.slice(k_BHNE, [0, 0, 0, 0], [b, h, kv_len, d]),
+            ttnn.slice(v_BHNE, [0, 0, 0, 0], [b, h, kv_len, d]),
+        )
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -637,11 +699,13 @@ class LTXAttention(Module):
         skip_qk: bool = False,
         kv_replicated: bool = False,
         kv_logical_n: int | None = None,
+        attn_kv_len: int | None = None,
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
-        in A2V/V2A cross-attention."""
-        # Named recipes are unmasked only; masked paths (e.g. masked audio self-attn) stay legacy-only.
-        reject_mask(self.sdpa_precision, attn_mask, model="LTX-2")
+        in A2V/V2A cross-attention. ``attn_kv_len`` is the logical key length of a key-column
+        ``attn_mask`` (padded audio self-attn); only a recipe uses it (it slices K/V instead of masking)."""
+        # Named recipes are unmasked only: a key-length mask becomes a K/V slice, other masks raise.
+        recipe_kv_len = self._recipe_mask_kv_len(attn_mask, attn_kv_len)
         if rope_cos is not None:
             assert rope_sin is not None
             assert trans_mat is not None, "INTERLEAVED RoPE requires trans_mat (load-time Q/K permute assumes it)"
@@ -776,9 +840,6 @@ class LTXAttention(Module):
             v_BHNE = maybe_cast_activation(v_BHNE, sdpa_input_dtype)
             dummy_joint = maybe_cast_activation(dummy_joint, sdpa_input_dtype)
 
-        if use_ring_cross and self.sdpa_precision is not None and not skip_qk:
-            # Only the D64 V2A attention takes this path, and it is always built without a recipe.
-            raise ValueError("LTX-2: named SDPA recipes are not wired for the ring cross-attention (V2A) path")
         if not skip_qk:
             # LOW_PRECISION: after norm/RoPE, before the SDPA call (which fuses the ring K/V gather).
             q_BHNE, k_BHNE, v_BHNE = prepare_recipe_inputs(
@@ -821,6 +882,20 @@ class LTXAttention(Module):
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                     use_column_major_ccl=True,
                 )
+            elif sp_factor > 1 and recipe_kv_len is not None:
+                # Recipe on the padded audio self-attn: gather K/V, drop the padded keys, run unmasked.
+                sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+                k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
+                v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
+                k_full, v_full = self._slice_kv(k_full, v_full, recipe_kv_len)
+                spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
+                    q_BHNE,
+                    k_full,
+                    v_full,
+                    is_causal=False,
+                    program_config=self._gathered_program_config(q_BHNE.shape[2]),
+                    **self._sdpa_kwargs(),
+                )
             elif sp_factor > 1:
                 # Masked audio self-attn: gather K/V, keep Q sharded; gather+local SDPA beats ring-joint here.
                 sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -834,6 +909,17 @@ class LTXAttention(Module):
                     is_causal=False,
                     program_config=self.sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
+                )
+            elif recipe_kv_len is not None:
+                # Recipe on the padded audio self-attn (SP=1): drop the padded keys, run unmasked.
+                k_BHNE, v_BHNE = self._slice_kv(k_BHNE, v_BHNE, recipe_kv_len)
+                spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    is_causal=False,
+                    program_config=self._dense_program_config(),
+                    **self._sdpa_kwargs(),
                 )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
@@ -865,8 +951,8 @@ class LTXAttention(Module):
                 joint_strategy="rear",
                 logical_n=kv_logical_n,
                 is_cross=True,
-                program_config=self.cross_ring_sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self._cross_ring_program_config(q_BHNE.shape[2]),
+                **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
