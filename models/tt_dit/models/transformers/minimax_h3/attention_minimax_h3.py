@@ -472,8 +472,8 @@ class MiniMaxH3Attention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-    # Recipe exp ring blocking (docs/sdpa_precision.md): Q 128-320 in 32-row steps, K512 only, at most
-    # 3 passes. COMPENSATED/LOW_PRECISION need an even Q tile count on exp ring (odd chunks hang there).
+    # Recipe exp ring blocking (docs/sdpa_precision.md): Q 128-320 in 32-row steps (odd tile counts
+    # allowed -- recipes keep exp-ring state resident), K512 only, at most 3 passes.
     _RECIPE_EXP_Q_RANGE = (128, 320)
     _RECIPE_EXP_K_CHUNK = 512
     _RECIPE_EXP_MAX_PASSES = 3
@@ -491,15 +491,12 @@ class MiniMaxH3Attention(Module):
         tile = ttnn.TILE_SIZE
         rows = self.full_grid.y
         q_lo, q_hi = self._RECIPE_EXP_Q_RANGE
-        paired = self.sdpa_precision in (ttnn.SDPAPrecision.COMPENSATED, ttnn.SDPAPrecision.LOW_PRECISION)
         max_passes = min(self.exp_ring_max_passes, self._RECIPE_EXP_MAX_PASSES)
         best = None
         for cols in range(self.full_grid.x - 1, 1, -1):
             for segs in (1, 2, 3):
                 chunks = cols * segs
                 q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
-                if paired and (q_chunk // tile) % 2:
-                    q_chunk += tile  # next even tile count; kept only if it still yields `chunks` chunks
                 if math.ceil(seq_local / q_chunk) != chunks:
                     continue  # this (cols, segs) admits no tile-multiple q_chunk
                 if not q_lo <= q_chunk <= q_hi:

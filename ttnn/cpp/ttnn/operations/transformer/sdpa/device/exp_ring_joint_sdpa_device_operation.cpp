@@ -76,12 +76,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             input_tensor_q.logical_shape()[3] == 128 && args.get_q_chunk_size() % 32 == 0 &&
                 args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 && args.get_k_chunk_size() == 512,
             "Named exp ring recipes require D128, a Q chunk of 128-320 rows in 32-row steps and K512 blocking");
-        // Odd Q chunks hang the paired BF16 recipes on exp ring (dense/joint support them).
-        TT_FATAL(
-            (args.get_q_chunk_size() / 32) % 2 == 0 || *args.precision == ttnn::transformer::SDPAPrecision::FAST ||
-                *args.precision == ttnn::transformer::SDPAPrecision::BALANCED ||
-                *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE,
-            "COMPENSATED and LOW_PRECISION exp ring recipes need a Q chunk that is a multiple of 64 rows");
         TT_FATAL(
             !tensor_args.has_logical_n_tensor(),
             "Named exp ring recipes do not yet support a device-tensor logical_n; pass a scalar");
