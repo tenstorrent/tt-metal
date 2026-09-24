@@ -91,6 +91,8 @@ struct H2HSocket::Impl {
     bool broken = false;
     std::string err;
 
+    // One-way: agree() decides bring-up together, but a frame has no such channel -- the
+    // credit words are absolute counts with no value spare for a poison marker.
     void fail(const std::string& what) {
         broken = true;
         if (err.empty()) {
