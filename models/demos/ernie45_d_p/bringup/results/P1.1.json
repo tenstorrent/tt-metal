@@ -1,0 +1,17 @@
+{
+ "metrics": {
+  "missing_weights": {
+   "t": "2026-09-24T19:25:20",
+   "value": 0
+  },
+  "num_weights": {
+   "t": "2026-09-24T19:25:20",
+   "value": 5465
+  },
+  "unused_tensors": {
+   "t": "2026-09-24T19:25:20",
+   "value": 12
+  }
+ },
+ "task": "P1.1"
+}

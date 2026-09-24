@@ -1,0 +1,234 @@
+# ERNIE-4.5-21B-A3B chunked prefill bring-up: task graph with success gates.
+#
+# Each task:
+#   id / title / phase      identity (phase: P1 = CPU reference, P2 = Tenstorrent bring-up)
+#   deps                    tasks that must be PASS before this one may run
+#   gate.cmd                shell command run from the repo root; must exit 0
+#   gate.metrics            glob -> "<op> <value>" thresholds checked against
+#                           bringup/results/<id>.json (written via bringup/metrics.record).
+#                           Every glob must match >= 1 recorded metric, and every match must pass.
+#   artifacts               files the task must leave behind (checked for existence)
+#   notes                   what "done" means, in words
+#
+# Drive with:  python models/demos/ernie45_d_p/bringup/gate.py <id> [--commit]
+# Status lives in bringup/state.json (written only by gate.py). Narrative in BREADCRUMBS.md.
+
+model: baidu/ERNIE-4.5-21B-A3B-PT
+target: chunked prefill 55k@5k (11 x 5120 = 56320 tokens) on 4x Blackhole p150b, bf16
+
+tasks:
+  # ------------------------------------------------------------------ P1: CPU reference
+  - id: P1.1
+    title: Download checkpoint, write standalone torch reference
+    phase: P1
+    deps: []
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/check_checkpoint.py
+      metrics:
+        num_weights: ">= 1"
+        missing_weights: "== 0"
+    artifacts: [models/demos/ernie45_d_p/reference/ernie_ref.py]
+    notes: All tensors the reference needs exist in the checkpoint with the expected shapes.
+
+  - id: P1.2
+    title: Reference matches HF transformers (oracle), fp32, 512 tokens
+    phase: P1
+    deps: [P1.1]
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/check_vs_hf.py --seq 512
+      metrics:
+        pcc_logits: ">= 0.9999"
+        pcc_hidden_L*: ">= 0.9999"
+        top1_match_frac: ">= 0.99"
+    notes: Independent reference agrees with HF Ernie4_5_MoeForCausalLM per layer and on logits.
+
+  - id: P1.3
+    title: Chunked prefill == full prefill on CPU (2k->2k vs 4096 one-shot)
+    phase: P1
+    deps: [P1.2]
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/check_chunked.py --seq 4096 --chunk 2048
+      metrics:
+        pcc_hidden: ">= 0.99999"
+        pcc_kv_k: ">= 0.99999"
+        pcc_kv_v: ">= 0.99999"
+    notes: Validates the chunk/offset/RoPE/mask logic of the reference itself.
+
+  - id: P1.4
+    title: Golden dump 2k->2k (4096 tokens, book text), full per-layer intermediates
+    phase: P1
+    deps: [P1.3]
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/generate_golden.py --seq 4096 --chunk 2048 --full-dumps
+      metrics:
+        golden_layers: "== 28"
+        golden_chunks: "== 2"
+    artifacts: [generated/ernie45_d_p/golden/s4096_c2048/manifest.json]
+
+  - id: P1.5
+    title: Golden dump 8k->8k (16384 tokens), full per-layer intermediates
+    phase: P1
+    deps: [P1.4]
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/generate_golden.py --seq 16384 --chunk 8192 --full-dumps
+      metrics:
+        golden_layers: "== 28"
+        golden_chunks: "== 2"
+    artifacts: [generated/ernie45_d_p/golden/s16384_c8192/manifest.json]
+
+  - id: P1.6
+    title: Golden dump 55k@5k (56320 tokens), KV cache + last-chunk per-layer + logits
+    phase: P1
+    deps: [P1.4]
+    gate:
+      cmd: python models/demos/ernie45_d_p/reference/generate_golden.py --seq 56320 --chunk 5120
+      metrics:
+        golden_layers: "== 28"
+        golden_chunks: "== 11"
+    artifacts: [generated/ernie45_d_p/golden/s56320_c5120/manifest.json]
+    notes: Long CPU run (hours). Also serves option (b) -- 50k prefix KV is a slice of this cache.
+
+  # ------------------------------------------------------------------ P2: Tenstorrent bring-up
+  - id: P2.1
+    title: Box survey - open 1x4 mesh, CCL smoke (all_gather / reduce_scatter / all_reduce)
+    phase: P2
+    deps: []
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/unit/test_mesh_smoke.py
+      metrics:
+        num_devices: "== 4"
+        pcc_*: ">= 0.9999"
+
+  - id: P2.2
+    title: Sharding plan (TP4 attention, EP4 experts, TP shared/dense MLP)
+    phase: P2
+    deps: [P2.1]
+    gate:
+      cmd: python models/demos/ernie45_d_p/bringup/check_plan.py
+      metrics:
+        plan_fits_dram: "== 1"
+    artifacts: [models/demos/ernie45_d_p/SHARDING.md]
+
+  - id: P2.3
+    title: RMSNorm on device
+    phase: P2
+    deps: [P2.2, P1.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_rms_norm.py
+      metrics: {pcc_*: ">= 0.999"}
+
+  - id: P2.4
+    title: Embedding on device (vocab-sharded or replicated)
+    phase: P2
+    deps: [P2.2, P1.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_embedding.py
+      metrics: {pcc_*: ">= 0.9999"}
+
+  - id: P2.5
+    title: Interleaved RoPE with chunk position offset
+    phase: P2
+    deps: [P2.2, P1.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_rope.py
+      metrics: {pcc_*: ">= 0.999"}
+
+  - id: P2.6
+    title: Attention (QKV, RoPE, chunked causal SDPA, KV write, O proj) 2k->2k
+    phase: P2
+    deps: [P2.3, P2.5]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_attention.py
+      metrics:
+        pcc_attn_out_*: ">= 0.99"
+        pcc_kv_*: ">= 0.99"
+
+  - id: P2.7
+    title: Dense SwiGLU MLP (layer 0) and shared experts
+    phase: P2
+    deps: [P2.2, P1.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_mlp.py
+      metrics: {pcc_*: ">= 0.99"}
+
+  - id: P2.8
+    title: MoE router (softmax, bias-corrected top-6, renorm)
+    phase: P2
+    deps: [P2.2, P1.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_router.py
+      metrics:
+        topk_set_match_frac_*: ">= 0.97"
+        pcc_topk_w_*: ">= 0.99"
+
+  - id: P2.9
+    title: MoE block (router + EP4 routed experts + shared experts)
+    phase: P2
+    deps: [P2.7, P2.8]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_moe.py
+      metrics: {pcc_*: ">= 0.99"}
+
+  - id: P2.10
+    title: Decoder blocks (layer 0 dense + a MoE layer), 2k->2k chunked
+    phase: P2
+    deps: [P2.6, P2.9]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/pcc/test_decoder.py
+      metrics:
+        pcc_block_*: ">= 0.98"
+        pcc_kv_*: ">= 0.97"
+
+  - id: P2.11
+    title: Full model 28 layers 2k->2k (per-layer PCC trail, KV, final hidden, top-5)
+    phase: P2
+    deps: [P2.10, P2.4]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_model_chunked.py -k s4096
+      metrics:
+        pcc_final_hidden: ">= 0.97"
+        pcc_kv_min: ">= 0.97"
+        top5_overlap: ">= 0.9"
+
+  - id: P2.12
+    title: Full model 8k->8k
+    phase: P2
+    deps: [P2.11, P1.5]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_model_chunked.py -k s16384
+      metrics:
+        pcc_final_hidden: ">= 0.97"
+        pcc_kv_min: ">= 0.97"
+        top5_overlap: ">= 0.9"
+
+  - id: P2.13
+    title: "(b) 50k prefix KV loaded from golden, prefill last chunk 50k->55k on device"
+    phase: P2
+    deps: [P2.12, P1.6]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_model_chunked.py -k lastchunk
+      metrics:
+        pcc_final_hidden: ">= 0.97"
+        pcc_kv_min: ">= 0.97"
+        top5_overlap: ">= 0.9"
+
+  - id: P2.14
+    title: "(a) E2E chunked prefill 55k@5k (11 chunks) on device"
+    phase: P2
+    deps: [P2.13]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_model_chunked.py -k s56320
+      metrics:
+        pcc_final_hidden: ">= 0.97"
+        pcc_kv_min: ">= 0.97"
+        top5_overlap: ">= 0.9"
+
+  - id: P2.15
+    title: KV-cache export in the prefill-server contract layout (adapter)
+    phase: P2
+    deps: [P2.14]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_kv_contract.py
+      metrics:
+        pcc_kv_contract_min: ">= 0.97"
+        contract_checks_failed: "== 0"
