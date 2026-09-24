@@ -1127,6 +1127,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
+        // The devices must be closed while their context still exists. An uninitialized mesh (the parent built by
+        // create_unit_meshes) skips the reset above.
+        scoped_devices_.reset();
         MetalContext::destroy_instance(false, context_id_);
         destroy_metal_context_instance_on_close_ = false;
     }

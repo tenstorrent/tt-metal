@@ -554,6 +554,13 @@ TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
         EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
     }
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    // The parent mesh owns the context. Its devices must be closed before the context is destroyed; a failure
+    // there is caught in ~ScopedDevices and only logged.
+    testing::internal::CaptureStdout();
+    meshes.clear();
+    const std::string teardown_log = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
 }
 
 // Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
