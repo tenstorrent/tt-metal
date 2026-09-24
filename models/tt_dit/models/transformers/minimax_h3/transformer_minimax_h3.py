@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 
 import ttnn
@@ -17,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import ADALN_TABLE_COPIES, MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import ADALN_TABLE_COPIES, MODALITY_NUM, MiniMaxH3TransformerBlock
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -192,12 +194,19 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        adaln_tables: bool = False,
     ) -> None:
         super().__init__()
 
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
+        # `adaln_tables`: keep the blocks' AdaLN projection weights on host and project each request's
+        # whole timestep schedule once (`prepare_request_modulation`), so `forward` only slices the
+        # step's rows. Saves 130 MB per device per block at TP=4 of DRAM residency and one matmul per
+        # block per step; costs one weight upload per block per request. Untraced only: the block loop
+        # reads a per-step slice, which a captured trace could not follow.
+        self.adaln_tables = adaln_tables
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
@@ -282,6 +291,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    adaln_tables=adaln_tables,
                 )
                 for _ in range(num_layers)
             ]
@@ -336,6 +346,40 @@ class MiniMaxH3Transformer3DModel(Module):
         prefix = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=2)
         self._static_source_state.update(prefix, traced=traced)
 
+    # ------------------------------------------------------------------ per-request modulation (adaln_tables)
+
+    def prepare_request_modulation(self, step_levels: Sequence[torch.Tensor]) -> None:
+        """Build every block's request table from the schedule's per-step slot levels (`adaln_tables` only).
+
+        `step_levels[i]` is the `[num_slots]` float32 noise level per AdaLN slot at denoise step `i`, exactly
+        what `forward` receives as `timestep` for that step. `temb` is computed per step, at the same row count
+        `forward` uses, and concatenated: the time embedder's fp32 matmul is not row-count invariant and the
+        modulation must match the per-step path. The projection itself is row-independent.
+        """
+        if not self.adaln_tables:
+            raise RuntimeError("prepare_request_modulation needs a transformer built with adaln_tables=True")
+        if not step_levels:
+            raise ValueError("step_levels is empty")
+        num_slots = int(step_levels[0].numel())
+        tembs = []
+        for levels in step_levels:
+            if int(levels.numel()) != num_slots:
+                raise ValueError("every step must carry the same number of AdaLN slots")
+            # Replicated float32, as the pipeline's per-step `timestep` state tensor is built.
+            timestep = from_torch(levels.reshape(1, 1, num_slots, 1), device=self.mesh_device, dtype=ttnn.float32)
+            # Row-major for the concat: the per-step `temb` has `num_slots` rows, not a tile's worth.
+            tembs.append(ttnn.to_layout(self.time_embedder(self.time_proj(timestep)), ttnn.ROW_MAJOR_LAYOUT))
+        temb_all = ttnn.to_layout(ttnn.concat(tembs, dim=2) if len(tembs) > 1 else tembs[0], ttnn.TILE_LAYOUT)
+        for block in self.transformer_blocks:
+            block.build_request_modulation(temb_all, rows_per_step=num_slots * MODALITY_NUM)
+        for t in tembs:
+            ttnn.deallocate(t)
+        ttnn.deallocate(temb_all)
+
+    def release_request_modulation(self) -> None:
+        for block in self.transformer_blocks:
+            block.release_request_modulation()
+
     def forward(
         self,
         *,
@@ -352,9 +396,12 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: ttnn.Tensor,
         pad_to: int,
         traced: bool = False,
+        adaln_step: int | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
+        Under `adaln_tables`, `prepare_request_modulation` must have run for this request and `adaln_step`
+        is the 0-based denoise step whose rows of the request table the blocks gather from.
 
         video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. Target rows only.
         audio_1BAC: [1, 1, A_cap, audio_in_channels], replicated on SP and TP. Target rows only.
@@ -416,6 +463,14 @@ class MiniMaxH3Transformer3DModel(Module):
         ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
+
+        if self.adaln_tables:
+            if traced:
+                raise RuntimeError("adaln_tables selects a per-step table slice and cannot run under a trace")
+            if adaln_step is None:
+                raise ValueError("adaln_tables needs adaln_step: the 0-based denoise step of this forward")
+            for block in self.transformer_blocks:
+                block.adaln_step = adaln_step
 
         hidden = self.run_blocks(
             hidden,

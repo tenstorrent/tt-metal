@@ -151,6 +151,7 @@ AUDIO_SHIFT = 3.0
 
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
+_ADALN_TABLES_ENV = "MINIMAX_H3_ADALN_TABLES"
 _DEFAULT_AUDIO_T_FACTOR = 8
 
 
@@ -303,7 +304,10 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    # `coresident` off: at 12 GB/chip the DiT alone fills DRAM. `dit_fsdp` on: unsharded, only 5 s fits.
+    # `coresident` off: at 12 GB/chip the DiT alone fills DRAM. `dit_fsdp` on: unsharded, the DiT does not
+    # load at all with its adaLN projections resident, and with them on host (`adaln_tables`, the Wormhole
+    # default whenever the DiT is unsharded) only TP=8 / SP=4 has room for 15 s -- see
+    # models/minimax_h3_wormhole/README.md.
     (4, 8): {
         "tp_axis": 0,
         "sp_axis": 1,
@@ -436,6 +440,7 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         dit_fsdp: bool | None = None,
+        adaln_tables: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -575,6 +580,23 @@ class MiniMaxH3Pipeline:
         env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
         if env_dit_fsdp is not None:
             self.dit_fsdp = env_dit_fsdp not in ("0", "false", "False")
+        # AdaLN projection weights off device, one request-wide table instead (see
+        # `MiniMaxH3Transformer3DModel.adaln_tables`). Wormhole only: on 12 GB/chip the unsharded DiT does
+        # not load with them resident (matmul weights 796 MiB/bank + adaLN projections 541 at TP=4), so it
+        # defaults on whenever the DiT is unsharded there; Blackhole's 32 GB never needs it and keeps the
+        # verified resident path. MINIMAX_H3_ADALN_TABLES=0/1 overrides the default, within the arch gate.
+        wormhole = not is_blackhole()
+        self.adaln_tables = (wormhole and not self.dit_fsdp) if adaln_tables is None else adaln_tables
+        env_adaln_tables = os.environ.get(_ADALN_TABLES_ENV)
+        if env_adaln_tables is not None:
+            self.adaln_tables = env_adaln_tables not in ("0", "false", "False")
+        if self.adaln_tables and not wormhole:
+            logger.warning(
+                f"adaln_tables is a Wormhole-only mode ({_ADALN_TABLES_ENV}); ignoring it on this architecture"
+            )
+            self.adaln_tables = False
+        if self.adaln_tables and self.trace_denoise:
+            raise ValueError("adaln_tables cannot run under trace_denoise: the blocks slice a per-step table")
         self.last_seq_len: SeqLen | None = None
 
         self._host_log("building the Qwen3-VL text encoder")
@@ -636,6 +658,7 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         dit_fsdp: bool | None = None,
+        adaln_tables: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -672,6 +695,7 @@ class MiniMaxH3Pipeline:
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
             dit_fsdp=dit_fsdp,
+            adaln_tables=adaln_tables,
             trace_denoise=trace_denoise,
             bucket_denoise=bucket_denoise,
             bucket_ladder=bucket_ladder,
@@ -1199,6 +1223,11 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ denoiser
 
     def _dit_weight_mode(self) -> str:
+        # The mode names the cache: `adaln_tables` with FSDP leaves the adaLN projections unsharded, unlike
+        # `resident_adaln_fsdp`, so it needs its own; without FSDP the tensors are identical to
+        # `resident_adaln` (only their residency differs) and the cache is shared.
+        if self.adaln_tables and self.dit_fsdp:
+            return "adaln_tables_fsdp"
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1207,7 +1236,8 @@ class MiniMaxH3Pipeline:
         weight_mode = self._dit_weight_mode()
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
-            f"TP={self.tp_factor}/SP={self.sp_factor} ({weight_mode})"
+            f"TP={self.tp_factor}/SP={self.sp_factor} ({weight_mode}"
+            f"{', adaLN projections on host, per-request tables' if self.adaln_tables else ''})"
         )
         return MiniMaxH3Transformer3DModel(
             **config,
@@ -1215,6 +1245,7 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
+            adaln_tables=self.adaln_tables,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -2418,6 +2449,26 @@ class MiniMaxH3Pipeline:
             device=self.mesh_device,
         )
 
+        # Every step's slot levels are fixed by the two schedules before the loop starts, which is what lets
+        # `adaln_tables` project the whole request at once; the loop below reads the same list.
+        step_levels = []
+        for i, t in enumerate(timesteps):
+            level_kwargs = {
+                "video_timestep": float(t),
+                "audio_timestep": float(audio_timesteps[i]),
+            }
+            if "condition_video" in slot_roles:
+                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
+            if "condition_audio" in slot_roles:
+                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+            step_levels.append(slot_levels(slot_roles, **level_kwargs))
+        t_adaln = 0.0
+        if self.adaln_tables:
+            t_adaln = time.time()
+            transformer.prepare_request_modulation(step_levels)
+            ttnn.synchronize_device(self.mesh_device)
+            t_adaln = time.time() - t_adaln
+
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         if _is_host_rank():
@@ -2432,15 +2483,7 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            level_kwargs = {
-                "video_timestep": float(t),
-                "audio_timestep": float(audio_timesteps[i]),
-            }
-            if "condition_video" in slot_roles:
-                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-            if "condition_audio" in slot_roles:
-                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            levels = slot_levels(slot_roles, **level_kwargs)
+            levels = step_levels[i]
             self._tt_timestep.update(
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
@@ -2459,6 +2502,7 @@ class MiniMaxH3Pipeline:
                 logical_n=self._tt_logical_n.value,
                 pad_to=rung,
                 traced=traced,
+                adaln_step=i if self.adaln_tables else None,
             )
 
             ttnn.synchronize_device(self.mesh_device)
@@ -2475,10 +2519,13 @@ class MiniMaxH3Pipeline:
                 t_steady += t_step
             on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
+        if self.adaln_tables:
+            transformer.release_request_modulation()
         state.warm = True
         steady_steps = max(len(timesteps) - 1, 1)
         self._log(
-            f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
+            f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s"
+            f"{f', adaLN tables {t_adaln:.1f}s' if self.adaln_tables else ''}) | "
             f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
         )

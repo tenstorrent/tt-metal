@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
@@ -477,6 +478,26 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
+
+    @contextmanager
+    def staged_on_device(self) -> Iterator[None]:
+        """For an `on_host` parameter, make `data` a temporary device copy for the duration of the block.
+
+        The copy is written to the parameter's own device and memory config and freed on exit, after
+        which `data` is the host tensor again. A device-resident parameter passes through unchanged, so
+        callers need not special-case the two placements.
+        """
+        if not self.on_host:
+            yield
+            return
+        host = self.data
+        staged = ttnn.to_device(host, self.device, memory_config=self.memory_config)
+        self._data = staged
+        try:
+            yield
+        finally:
+            self._data = host
+            ttnn.deallocate(staged)
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
