@@ -4,6 +4,8 @@
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
 #include <deque>
+#include <functional>
+#include <string>
 #include <vector>
 
 #include <fmt/format.h>
@@ -16,20 +18,26 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// Every field both hosts must lay out identically, mixed so a differing one changes the sum.
+// Every field both hosts must lay out identically, rendered once so the hash they agree on
+// and the message a mismatch prints can never describe different fields.
 // Not region_bytes: each host pins its own prefix, and the bound on it is checked locally.
-uint64_t geometry_fingerprint(const H2HSocket::Config& cfg) {
-    uint64_t h = 1469598103934665603ull;
-    for (const uint64_t v :
-         {static_cast<uint64_t>(cfg.cores),
-          static_cast<uint64_t>(cfg.page_bytes),
-          static_cast<uint64_t>(cfg.ring_pages),
-          static_cast<uint64_t>(cfg.rx_data_offset),
-          static_cast<uint64_t>(cfg.topo.num),
-          static_cast<uint64_t>(cfg.topo.chips_per_host)}) {
-        h = (h ^ v) * 1099511628211ull;
-    }
-    return h;
+std::string geometry_text(const H2HSocket::Config& cfg) {
+    // Delimited rather than run together: "1" then "23" and "12" then "3" would otherwise
+    // render alike, which is the one way a text encoding of a tuple stops being injective.
+    return fmt::format(
+        "cores {}, page {} B, ring {}, rx_data_offset {}, hosts {}, chips_per_host {}",
+        cfg.cores,
+        cfg.page_bytes,
+        cfg.ring_pages,
+        cfg.rx_data_offset,
+        cfg.topo.num,
+        cfg.topo.chips_per_host);
+}
+
+// Hashed as text, so neither padding nor byte order reaches std::hash. agree_value compares
+// this across processes, which holds while both hosts run one build of one standard library.
+std::size_t geometry_fingerprint(const H2HSocket::Config& cfg) {
+    return std::hash<std::string>{}(geometry_text(cfg));
 }
 
 // A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
@@ -225,14 +233,11 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     // window: a peer that provisioned fewer cores or a different ring faults on the first put.
     if (!RdmaWindow::agree_value(geometry_fingerprint(cfg), err)) {
         if (err.empty()) {
+            // The same text the fingerprint hashed, so the message cannot name other fields.
             err = fmt::format(
-                "H2HSocket: the peer's layout differs from this host's (cores {}, page {} B, ring {}, "
-                "rx_data_offset {}, chips_per_host {}); both hosts must provision identically",
-                cfg.cores,
-                cfg.page_bytes,
-                cfg.ring_pages,
-                cfg.rx_data_offset,
-                cfg.topo.chips_per_host);
+                "H2HSocket: the peer's layout differs from this host's ({}); both hosts must provision "
+                "identically",
+                geometry_text(cfg));
         }
         return nullptr;
     }
