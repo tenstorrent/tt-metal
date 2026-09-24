@@ -69,6 +69,15 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
         head_dim <= 128 || operation_attributes.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+    if (operation_attributes.rms_norm_eps.has_value()) {
+        TT_FATAL(
+            !operation_attributes.is_decode_mode && !input_tensor.is_sharded(),
+            "rms_norm_eps (fused q/k RMS) is supported for the interleaved prefill path only");
+        TT_FATAL(
+            input_tensor.dtype() == DataType::BFLOAT16,
+            "rms_norm_eps (fused q/k RMS) needs a bfloat16 input, got {}",
+            input_tensor.dtype());
+    }
 
     TT_FATAL(
         input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() &&
@@ -238,7 +247,8 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<float> rms_norm_eps) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -254,7 +264,8 @@ ttnn::Tensor rotary_embedding_llama(
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
         .output_mem_config = memory_config.value_or(default_memory_config),
-        .compute_kernel_config = kernel_config_val};
+        .compute_kernel_config = kernel_config_val,
+        .rms_norm_eps = rms_norm_eps};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 

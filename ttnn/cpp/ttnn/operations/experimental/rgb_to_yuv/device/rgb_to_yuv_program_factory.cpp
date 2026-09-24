@@ -102,6 +102,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     constexpr uint32_t cb_scratch = 9;
     // 12 resident scalar CBs (Y, Cb, Cr) x (wr, wg, wb, off), generated once.
     constexpr uint32_t cb_scalar_base = 10;  // 10..21
+    constexpr uint32_t cb_rowbuf = 22;       // wide rows: the writer's row staging
 
     // --- Circular buffers ----------------------------------------------------
     // Row-major channel input CBs (reader -> compute): 4 pages for UV corners.
@@ -147,6 +148,16 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
+    // Wide rows: the writer stages a unit's two Y rows (or one UV row) in L1 and writes each row once.
+    const bool wide_rows = op_attrs.wide_rows;
+    const uint32_t row_bytes_y = W * T;
+    const uint32_t row_bytes_uv = W2 * T;
+    if (wide_rows) {
+        const uint32_t rowpage = ((row_bytes_y + 63) / 64) * 64;
+        auto cfg = CircularBufferConfig(2 * rowpage, {{cb_rowbuf, u8_fmt}}).set_page_size(cb_rowbuf, rowpage);
+        CreateCircularBuffer(program, all_cores, cfg);
+    }
+
     // --- Compile-time args ---------------------------------------------------
     std::vector<uint32_t> reader_ct_args = {
         cb_R_rm,
@@ -187,6 +198,10 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         W2,
         y_tiles,
         uv_tiles,
+        wide_rows ? 1u : 0u,
+        cb_rowbuf,
+        row_bytes_y,
+        row_bytes_uv,
     };
     TensorAccessorArgs(*y_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*u_buf).append_to(writer_ct_args);

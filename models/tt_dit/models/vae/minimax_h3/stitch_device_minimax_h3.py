@@ -43,6 +43,7 @@ class DeviceTileStitcher:
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
         self.mesh_device = mesh_device
         self._ramps: dict[tuple, ttnn.Tensor] = {}
+        self._tile: int | None = None
 
     def _ramp(self, plane: tuple[int, int], rank: int, dim: int) -> ttnn.Tensor:
         """`weight_a = 1 - i/extent` along `dim`, over the trailing `plane = (H, W)`.
@@ -68,6 +69,7 @@ class DeviceTileStitcher:
         is captured, so a ramp built here keeps its address for good. One built later, mid-request,
         lands where a replay writes and its seam band comes back as garbage on every later decode.
         """
+        self._tile = tile
         for extent in extents:
             self._ramp((extent, tile), 5, 3)
             self._ramp((tile, extent), 5, 4)
@@ -91,7 +93,10 @@ class DeviceTileStitcher:
         axis = dim % rank
         blend_extent = min(a.shape[axis], b.shape[axis], blend_extent)
 
-        tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        # An operand the extent covers whole is used as is; slicing it would only copy it.
+        tail_a = (
+            a if blend_extent == a.shape[axis] else self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        )
         head_b = self._slice(b, axis, 0, blend_extent)
         weight_a = self._ramp((head_b.shape[-2], head_b.shape[-1]), rank, axis)
         blended = ttnn.add(head_b, ttnn.multiply(ttnn.subtract(tail_a, head_b), weight_a))
@@ -127,6 +132,102 @@ class DeviceTileStitcher:
                 result_row.append(tile)
             result_rows.append(ttnn.concat(result_row, dim=-1))
         return ttnn.concat(result_rows, dim=-2)
+
+
+class StripTileStitcher(DeviceTileStitcher):
+    """`stitch` split along the mesh, so no device blends canvas it never reads back: gather a tile column, H-blend
+    and trim, keep this device's rows; gather those row strips, W-blend and trim, keep its columns. Same bits out."""
+
+    # Both stages work off the gathered stacks (tile index in dim 0): each blend operand and kept run is sliced once and
+    # each column or row concatenated once, instead of copying tiles out, blending and trimming the result again.
+
+    @staticmethod
+    def _sub(stack: ttnn.Tensor, index: int, dim: int, start: int, stop: int) -> ttnn.Tensor:
+        """Entry `index` of a stacked tensor (dim 0), sliced to `[start, stop)` along `dim`."""
+        rank = len(stack.shape)
+        dim = dim % rank
+        starts = [0] * rank
+        stops = list(stack.shape)
+        starts[0], stops[0] = index, index + 1
+        starts[dim], stops[dim] = start, stop
+        return ttnn.slice(stack, starts, stops)
+
+    @staticmethod
+    def _corner(stack: ttnn.Tensor, index: int, rows: int, cols: int) -> ttnn.Tensor:
+        """Entry `index`: the top `rows` rows of the last `cols` columns."""
+        rank = len(stack.shape)
+        starts = [0] * rank
+        stops = list(stack.shape)
+        starts[0], stops[0] = index, index + 1
+        starts[-1] = stack.shape[-1] - cols
+        stops[-2] = rows
+        return ttnn.slice(stack, starts, stops)
+
+    def _blend_pieces(
+        self, a: ttnn.Tensor, a_index: int, b: ttnn.Tensor, b_index: int, extent: int, axis: int, keep: int
+    ) -> list[ttnn.Tensor]:
+        """Pieces of `blend(a[a_index], b[b_index])` along `axis` with `b` kept to `keep`: the blended overlap, then b's
+        `[extent, keep)` run as its own slice; same operands and ops as `blend`, with no concat and no trim."""
+        axis = axis % len(b.shape)
+        extent = min(a.shape[axis], b.shape[axis], extent)
+        tail_a = self._sub(a, a_index, axis, a.shape[axis] - extent, a.shape[axis])
+        head_b = self._sub(b, b_index, axis, 0, extent)
+        pieces = [ttnn.add(head_b, ttnn.multiply(ttnn.subtract(tail_a, head_b), self._bound_ramp(head_b, axis)))]
+        if keep > extent:
+            pieces.append(self._sub(b, b_index, axis, extent, keep))
+        return pieces
+
+    def _bound_ramp(self, head_b: ttnn.Tensor, axis: int) -> ttnn.Tensor:
+        """`head_b`'s ramp from the set `bind_ramps` made. A row strip is `canvas_h / mesh_rows` tall, which the
+        strip stitch's grid-fits-mesh condition keeps at or below one tile, so its W ramp is the bound tile-tall
+        one cut to height: a cut per blend, freed with it, never a new resident ramp after trace capture."""
+        rank = len(head_b.shape)
+        height, width = head_b.shape[-2], head_b.shape[-1]
+        if axis != rank - 1 or height == self._tile:
+            return self._ramp((height, width), rank, axis)
+        assert (
+            self._tile is not None and height < self._tile
+        ), f"row strip of {height} rows; ramps bound at {self._tile}"
+        return self._slice(self._ramp((self._tile, width), rank, axis), -2, 0, height)
+
+    def column(
+        self, column: ttnn.Tensor, rows: int, height_overlaps: list[int], edge_width: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """H-blend one gathered tile column (entries `0..rows`) and trim as `stitch` would; returns `(strip, edge)`.
+        `strip` is the column at canvas height. `edge` is the last `edge_width` columns of the ORIGINAL tiles at those
+        rows: the next column's W-blend reads it in place of `strip`, as `stitch` blends against `row[j - 1]`, never
+        the blended tile. `None` when `edge_width` is 0 (single-column grid, no W seam)."""
+        height = column.shape[-2]
+        pieces, edges = [], []
+        for i in range(rows):
+            keep = height - (height_overlaps[i] if i < rows - 1 else 0)
+            if i == 0:
+                pieces.append(self._sub(column, 0, -2, 0, keep))
+            else:
+                pieces.extend(self._blend_pieces(column, i - 1, column, i, height_overlaps[i - 1], -2, keep))
+            if edge_width:
+                edges.append(self._corner(column, i, rows=keep, cols=edge_width))
+        strip = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=-2)
+        if not edges:
+            return strip, None
+        return strip, edges[0] if len(edges) == 1 else ttnn.concat(edges, dim=-2)
+
+    def row(
+        self, strips: ttnn.Tensor, edges: ttnn.Tensor | None, first: int, cols: int, width_overlaps: list[int]
+    ) -> ttnn.Tensor:
+        """W-blend gathered row strips `first..first+cols` left to right and trim as `stitch` would; `edges` holds the
+        matching un-blended edge strips (same indices), and the blend of column j reads `edges[first + j - 1]`."""
+        width = strips.shape[-1]
+        pieces = []
+        for j in range(cols):
+            keep = width - (width_overlaps[j] if j < cols - 1 else 0)
+            if j == 0:
+                pieces.append(self._sub(strips, first, -1, 0, keep))
+            else:
+                pieces.extend(
+                    self._blend_pieces(edges, first + j - 1, strips, first + j, width_overlaps[j - 1], -1, keep)
+                )
+        return pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=-1)
 
 
 class NeighborTileBlender:

@@ -475,7 +475,7 @@ class MiniMaxH3Pipeline:
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
-        vae_stitch_exchange: str = "gather",
+        vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
         audio_trace: bool | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
@@ -493,7 +493,9 @@ class MiniMaxH3Pipeline:
         self.lora_strength = 1.0 if lora_strength is None else float(lora_strength)
         self._lora_entries = None
         self._lora_report = None
-        # Diagnostic VAE knobs (accepted for parity with the timing tests; base defaults match).
+        # How a device-stitched wave shares tiles: `"strips"` (default, falls back to `"gather"` where the grid does not fit
+        # the mesh), `"gather"` or `"neighbor"`; see `MiniMaxH3Vae`. `vae_profile` serializes the decode's phases so they
+        # are separable, which inflates the stage -- diagnostics only, never a measurement configuration.
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
         # Populated per generation by `_denoise_and_decode`; read by the timing tests' table.
@@ -723,6 +725,8 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            stitch_exchange=self.vae_stitch_exchange,
+            profile=self.vae_profile,
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
@@ -767,7 +771,7 @@ class MiniMaxH3Pipeline:
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
-        vae_stitch_exchange: str = "gather",
+        vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
         audio_trace: bool | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
