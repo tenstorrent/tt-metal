@@ -83,7 +83,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    llk::san::thread_init();
+    SAN_HOOK(thread_init());
     RecordPerfCounters();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG

@@ -552,9 +552,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     if (!rank_mapping.full_mesh) {
         rank_mapping = {};
     }
+    // Linear here is a full-mesh open path; the neighbour checks below adapt to it.
     TT_FATAL(
-        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring,
-        "full-mesh ring-attention all-gather requires Ring topology");
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring ||
+            topology == ttnn::ccl::Topology::Linear,
+        "full-mesh ring-attention all-gather requires Ring or Linear topology");
     TT_FATAL(
         !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
                                     rank_mapping.mesh_rows * rank_mapping.mesh_cols == ring_size),
@@ -601,13 +603,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_index,
             target_device_coord,
             rank_from_coordinate);
-        const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
-                                        ? rank_mapping.mesh_rows
-                                        : rank_mapping.mesh_cols;
-        TT_FATAL(
-            lane_count % 2 == 0,
-            "full-mesh ring-attention snake closure requires an even lane count, got {}",
-            lane_count);
+        // An even lane count is what lets the walk return to rank 0; an open path never does.
+        const bool closed = topology == ttnn::ccl::Topology::Ring;
+        if (closed) {
+            const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
+                                            ? rank_mapping.mesh_rows
+                                            : rank_mapping.mesh_cols;
+            TT_FATAL(
+                lane_count % 2 == 0,
+                "full-mesh ring-attention snake closure requires an even lane count, got {}",
+                lane_count);
+        }
 
         const auto coordinate_for_rank = [&](uint32_t transport_rank) {
             return MeshCoordinate(
@@ -616,20 +622,37 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 ttnn::ccl::snake_ring::coordinate_col(
                     transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation));
         };
-        const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
-        const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
-        TT_FATAL(
-            forward_device_coord.has_value() && *forward_device_coord == expected_forward,
-            "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_forward,
-            forward_device_coord);
-        TT_FATAL(
-            backward_device_coord.has_value() && *backward_device_coord == expected_backward,
-            "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_backward,
-            backward_device_coord);
+        // On an open path the end ranks are dead in one direction, exactly as on an axis line.
+        if (closed || ring_index + 1 < ring_size) {
+            const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
+            TT_FATAL(
+                forward_device_coord.has_value() && *forward_device_coord == expected_forward,
+                "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_forward,
+                forward_device_coord);
+        } else {
+            TT_FATAL(
+                !forward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a forward neighbor, got {}",
+                ring_index,
+                forward_device_coord);
+        }
+        if (closed || ring_index > 0) {
+            const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
+            TT_FATAL(
+                backward_device_coord.has_value() && *backward_device_coord == expected_backward,
+                "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_backward,
+                backward_device_coord);
+        } else {
+            TT_FATAL(
+                !backward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a backward neighbor, got {}",
+                ring_index,
+                backward_device_coord);
+        }
     }
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
@@ -794,10 +817,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // The host value is a structural placeholder for the indexed gather. On the
     // trace-safe path the reader derives the actual cache slot from slot_id.
-    TT_FATAL(
-        slot_id.has_value() == kv_actual_isl.has_value(),
-        "Ring attention metadata requires slot_id and kv_actual_isl tensors together");
-    const bool has_metadata = slot_id.has_value();
+    // Extent and slot are SEPARATE options, not one flag. main tied them together
+    // (slot_id.has_value() == kv_actual_isl.has_value()), but the indexer's kv_deduped path passes the
+    // extent while deliberately dropping the slot: _tp_replicate_index_kbuf hands the op a rebuilt
+    // BATCH-1 slab with no slot to select. So the implication is one-directional -- a slot needs an
+    // extent, an extent does not need a slot.
+    const bool has_slot_metadata = slot_id.has_value();
+    const bool has_metadata = kv_actual_isl.has_value();
+    TT_FATAL(!has_slot_metadata || has_metadata, "slot metadata requires KV-extent metadata");
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -856,6 +883,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
             kPrefetchPackets,                                   // kPrefetchPackets
+            // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
+            // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
+            static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -869,7 +899,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
         }
         if (has_metadata) {
-            tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(args);
+            // The slot accessor block must exist whenever the metadata block does -- one reader binary
+            // serves both -- but the slot itself is optional (kv_deduped gathers a BATCH-1 slab). Fall
+            // back to an input buffer's accessor so the compile-time layout is fixed; the reader only
+            // consults it under has_slot_metadata.
+            tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->buffer() : input_tensor[0].buffer())
+                .append_to(args);
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
         }
         return args;
@@ -1075,9 +1110,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const auto emit_worker_runtime_args = [&](const WorkerPlacement& placement, bool is_forward) {
         const auto tensor_descriptor_args = build_tensor_descriptor_args(placement);
         const uint32_t sem_index =
-            is_forward
-                ? ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx
-                : ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx;
+            is_forward ? ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx
+                       : ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx;
         const auto& direction_signaler_cores = is_forward ? forward_signaler_cores : backward_signaler_cores;
         const uint32_t worker_signaler_index = signaler_index(direction_signaler_cores, placement.core);
 
@@ -1094,7 +1128,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_args.push_back(output_tensor[input_idx].buffer());
         }
         if (has_metadata) {
-            reader_args.push_back(slot_id->buffer());
+            // Slot is optional even when the extent is present (kv_deduped gathers a BATCH-1 slab), so
+            // push a placeholder rather than dereferencing an empty optional. The layout stays 5 words
+            // wide either way; the reader ignores word 0 unless has_slot_metadata.
+            if (has_slot_metadata) {
+                reader_args.push_back(slot_id->buffer());
+            } else {
+                reader_args.push_back(0u);
+            }
             reader_args.push_back(kv_actual_isl->buffer());
             reader_args.push_back(chunk_local_tiles);
             reader_args.push_back(kv_cache_num_layers);

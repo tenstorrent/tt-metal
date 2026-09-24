@@ -34,9 +34,11 @@ from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
     RecordRequest,
+    STORE_DIR_MODE_WORLD,
     _ensure_date_dir,
     _read_optional,
     build_record,
+    date_dir_mode_for_root,
     leftover_namespace,
     main,
     parse_gsd_hostnames,
@@ -64,6 +66,15 @@ def _assert_shared_dir_mode(testcase: unittest.TestCase, path: Path) -> None:
     testcase.assertTrue(mode & stat.S_ISVTX)
     if sys.platform.startswith("linux"):
         testcase.assertTrue(mode & stat.S_ISGID)
+
+
+def _assert_world_date_dir_mode(testcase: unittest.TestCase, path: Path) -> None:
+    """Sticky world-writable date dir for a world-writable store root."""
+    mode = path.stat().st_mode
+    testcase.assertEqual(mode & stat.S_IRWXU, stat.S_IRWXU)
+    testcase.assertEqual(mode & stat.S_IRWXG, stat.S_IRWXG)
+    testcase.assertEqual(mode & stat.S_IRWXO, stat.S_IRWXO)
+    testcase.assertTrue(mode & stat.S_ISVTX)
 
 
 def _run(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -588,6 +599,70 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             _assert_shared_dir_mode(self, date_dir)
 
+    def test_world_writable_store_root_uses_sticky_1777(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.chmod(root, 0o777)
+            self.assertEqual(date_dir_mode_for_root(root.stat().st_mode), STORE_DIR_MODE_WORLD)
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                tmp,
+            ]
+            rc, out, err = _run(argv)
+            self.assertEqual(rc, 0, err)
+            date_dir = root / "2026-08-19"
+            self.assertTrue(date_dir.is_dir())
+            _assert_world_date_dir_mode(self, date_dir)
+
+    def test_existing_world_writable_date_dir_is_not_tightened(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Group-only store root would normally prefer 03770, but an
+            # already-open date dir must stay world-writable.
+            date_dir = Path(tmp) / "2026-08-19"
+            date_dir.mkdir()
+            os.chmod(date_dir, STORE_DIR_MODE_WORLD)
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                tmp,
+            ]
+            rc, out, err = _run(argv)
+            self.assertEqual(rc, 0, err)
+            _assert_world_date_dir_mode(self, date_dir)
+
+    def test_world_mode_date_dir_skips_group_mismatch_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.chmod(root, 0o777)
+            stderr = io.StringIO()
+            with patch("report_cluster_health.os.fchown", side_effect=PermissionError) as fchown, redirect_stderr(
+                stderr
+            ):
+                date_dir_fd = _ensure_date_dir(root, "2026-08-19")
+            os.close(date_dir_fd)
+            fchown.assert_not_called()
+            self.assertNotIn("date directory group does not match store root group", stderr.getvalue())
+            _assert_world_date_dir_mode(self, root / "2026-08-19")
+
     def test_date_dir_is_assigned_store_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_gid = Path(tmp).stat().st_gid
@@ -619,11 +694,12 @@ class TestStoreWrite(unittest.TestCase):
             root = Path(tmp)
             root_stat = root.stat()
             stderr = io.StringIO()
+            mismatched = SimpleNamespace(st_gid=root_stat.st_gid + 1, st_mode=root_stat.st_mode)
             with (
                 patch("report_cluster_health.os.fchown", side_effect=PermissionError),
                 patch(
                     "report_cluster_health.os.fstat",
-                    side_effect=[root_stat, SimpleNamespace(st_gid=root_stat.st_gid + 1)],
+                    side_effect=[root_stat, mismatched, mismatched],
                 ),
                 redirect_stderr(stderr),
             ):

@@ -236,7 +236,7 @@ def test_trig_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ def test_trig_ops_out_ftz(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,7 +319,7 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ def test_reciprocal(device):
     result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
     golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +395,20 @@ def test_square(device):
     result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
     golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_square_matches_mul_bit_exact(device):
+    # ttnn.square(x) and ttnn.mul(x, x) both narrow the same fp32 product to bfloat16;
+    # mul_binary_tile already rounds to nearest-even, so square must match it bit for bit
+    # instead of truncating (was biased toward zero on every inexact lane).
+    input_tensor = generate_bfloat16_bits_in_range(-1e19, 1e19)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    square_result = ttnn.to_torch(ttnn.square(tt_in))
+    mul_result = ttnn.to_torch(ttnn.mul(tt_in, tt_in))
+
+    assert_equal(mul_result, square_result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -420,7 +433,7 @@ def test_cbrt(device):
     tt_result = ttnn.cbrt(tt_in)
     result = ttnn.to_torch(tt_result).to(torch.bfloat16)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,7 +463,7 @@ def test_exp_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +491,7 @@ def test_digamma_multigammaln(device, ttnn_op, low, high, ulp):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, ulp)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -531,4 +544,4 @@ def test_bessel_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)

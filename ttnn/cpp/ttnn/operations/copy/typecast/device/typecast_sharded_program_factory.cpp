@@ -39,8 +39,8 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat act_df = cb_dataformat_for(input.dtype());
+    tt::DataFormat out_df = cb_dataformat_for(output.dtype());
 
     uint32_t input_tile_size = tt::tile_size(act_df);
     uint32_t output_tile_size = tt::tile_size(out_df);
@@ -157,20 +157,6 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    KernelSpec::CompilerOptions::Defines unary_defines;
-    unary_defines.emplace(
-        "TYPECAST_LLK_INIT",
-        fmt::format(
-            "typecast_tile_init<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-    unary_defines.emplace(
-        "TYPECAST_LLK",
-        fmt::format(
-            "typecast_tile<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-
     // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision and left
     // every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
     ComputeUnpackModes unpack_modes;
@@ -194,22 +180,38 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
-        .compiler_options = {.defines = std::move(unary_defines), .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         // The output DFB has no other toucher — no writer kernel drains it, the borrowed output
         // buffer *is* the result — so compute binds it as both PRODUCER and CONSUMER (self-loop).
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"per_core_block_cnt", 1u}, {"per_core_block_dim", num_tile_per_core}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-            .bfp_pack_precision_mode =
-                args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
-            .enable_32_bit_dest = args.fp32_dest_acc_en,
-            .unpack_modes = std::move(unpack_modes),
-        }},
+        .compile_time_args =
+            {{"per_core_block_cnt", 1u},
+             {"per_core_block_dim", num_tile_per_core},
+             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+        // Quasar (Gen2) rejects a ComputeGen1Config; emit the Gen2 equivalent there (no bfp_pack_precision_mode
+        // on Gen2 — MXFP replaces BFP). WH/BH keep the byte-identical legacy Gen1 config.
+        .hw_config = [&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{
+                    .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+                    .enable_32_bit_dest = args.fp32_dest_acc_en,
+                    .unpack_modes = std::move(unpack_modes),
+                };
+            }
+            return ComputeGen1Config{
+                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+                .bfp_pack_precision_mode =
+                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+                .enable_32_bit_dest = args.fp32_dest_acc_en,
+                .unpack_modes = std::move(unpack_modes),
+            };
+        }(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

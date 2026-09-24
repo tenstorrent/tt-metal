@@ -30,6 +30,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
     core/reports.cpp
+    core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
     core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
     core/tensor/flatbuffer/overlapped_tensor_flatbuffer.cpp
@@ -82,9 +83,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -103,7 +101,6 @@ set(TTNN_SRC_PYBIND
     core/distributed/distributed_nanobind.cpp
     core/graph/graph_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
@@ -119,6 +116,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
+    cpp/ttnn-nanobind/prefetcher_pipe.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
@@ -165,6 +163,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/compute/transpose_wh_metal2.cpp
     cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp

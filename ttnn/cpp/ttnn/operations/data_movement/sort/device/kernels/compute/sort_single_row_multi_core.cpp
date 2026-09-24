@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
@@ -23,10 +24,9 @@ void kernel_main() {
     constexpr uint32_t number_of_available_cores = get_arg(args::number_of_available_cores);
     constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
     constexpr bool descending = get_arg(args::descending);
-    constexpr bool stable =
-        get_arg(args::stable);  // TODO: In the future change LLK to have the option or add additional step with
-                                // checking values and indexes after the sorting
-                                // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    // Comparator-stable network: on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order.
+    constexpr bool stable = get_arg(args::stable);
     constexpr uint32_t log2Wt = get_arg(args::log2Wt);
 
     // The ROW_MAJOR buffers exist only in the ROW_MAJOR configuration, so the layout gate arrives as
@@ -68,6 +68,8 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 #endif
+
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(descending);
 
     for (uint32_t h = 0; h < Ht; h++) {
         const bool ascending = !descending;
@@ -161,11 +163,27 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last substage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                if constexpr (stable) {
+                                    if (stage == 1) {
+                                        ckernel::topk_canonicalize_negzero_values(0);
+                                    }
+                                }
+                                ckernel::topk_local_sort<
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::topk_merge<
+                                    /*idir=*/false,
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order

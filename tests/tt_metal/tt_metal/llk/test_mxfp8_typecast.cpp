@@ -185,7 +185,7 @@ static vector<uint32_t> run_mxfp8_typecast(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);

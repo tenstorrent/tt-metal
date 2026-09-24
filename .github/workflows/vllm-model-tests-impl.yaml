@@ -68,17 +68,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          # No tier arg: vLLM Model Tests run every entry at one cadence, so the
-          # budget is summed across all SKU entries under the plain models.vllm key.
-          # (The per-entry `tier` field is classification metadata, not a filter.)
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "vllm"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -391,6 +380,17 @@ jobs:
               fi
               ;;
           esac
+
+          # Per-entry environment, space-separated KEY=VALUE pairs, exported after
+          # the per-model case block so an entry can override it.
+          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
+            for _kv in ${{ matrix.test-group.extra-env }}; do
+              case "$_kv" in
+                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
+                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
+              esac
+            done
+          fi
 
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS

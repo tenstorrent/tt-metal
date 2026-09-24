@@ -781,12 +781,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     spec.kernels.push_back(std::move(compute_kernel));
 
     // ---- Work units ----
-    // Compute + readers run on all_cores.  (Width-sharded uses one homogeneous topology; the weights
-    // reader is gated per-core by the is_active RTA rather than by node placement, mirroring legacy.)
+    // Placement must follow the legacy split, NOT the bounding box (#51270 item 3). On a non-rectangular
+    // width-sharded grid (e.g. 12 cores whose bbox is 16) the extra bbox nodes have no activation producer
+    // and no weights RTAs, so running compute/weights there hangs (compute blocks in wait_front) or fails
+    // to build (missing weights RTAs). Only the activation reader may cover the bbox — it early-returns on
+    // this_core_id >= num_mcast_cores. So: ACT on the bbox, WEIGHTS + COMPUTE on the real shard grid.
     spec.work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu",
-        .kernels = {KERNEL_ACT, KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .name = "wu_act",
+        .kernels = {KERNEL_ACT},
         .target_nodes = all_reader_cores_set,
+    });
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu_compute",
+        .kernels = {KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .target_nodes = all_cores,
     });
 
     // ============================================================================

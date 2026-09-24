@@ -4,14 +4,21 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace tt::umd {
-class TlbWindow;
+class IoWindow;
 }
+
+namespace tt::tt_metal::experimental::detail {
+struct D2HSocketTryReadAccess;
+}  // namespace tt::tt_metal::experimental::detail
 
 namespace tt::tt_metal::distributed {
 
@@ -41,7 +48,13 @@ struct HDSocketConnectorState;
  * - Device kernel writes data and calls `socket_push_pages()` + `socket_notify_receiver()`
  * - Host calls `read()` which waits for data, copies it, and acknowledges consumption
  *
-
+ * Thread safety:
+ * - The FIFO is single-producer/single-consumer: one device producer writes data and one
+ *   host consumer reads and acknowledges it.
+ * - A D2HSocket instance is not internally synchronized. Calls on the same instance
+ *   must not overlap across host threads unless the caller provides external synchronization.
+ * - A descriptor attaches another handle to the same FIFO; it does not create an independent
+ *   channel. At most one host process may actively read through the owner/connector handles.
  *
  * Usage:
  * @code
@@ -99,11 +112,15 @@ public:
      * Used by callers that own their sender core's L1 layout (e.g. the real-time
      * profiler, which carves its config out of dispatch L1 on the reserved
      * profiler tensix). The region must be at least
-     * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
+     * D2HSocket::required_config_buffer_size(l1_alignment) bytes, L1-aligned, and live for
      * the lifetime of the socket.
+     *
+     * For any sender_core_type but TENSIX, `sender_core.core_coord` is the core's
+     * physical NoC coordinate (such cores have no logical grid).
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
+        HalProgrammableCoreType sender_core_type = HalProgrammableCoreType::TENSIX;
     };
 
     /**
@@ -114,7 +131,7 @@ public:
      * socket's configuration buffer should use this to size that region (or
      * static_assert their own constant against it).
      */
-    static uint32_t required_config_buffer_size();
+    static uint32_t required_config_buffer_size(uint32_t l1_alignment);
 
     /**
      * @brief Constructs a D2HSocket using a caller-provided config buffer address.
@@ -143,8 +160,8 @@ public:
      *                     coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
-     *                              Must be L1-aligned, at least required_config_buffer_size()
-     *                              bytes, and within the L2CPU's static TLB window.
+     *                              Must be L1-aligned, at least required_config_buffer_size(l1_alignment)
+     *                              bytes, and within the L2CPU's IoWindow.
      */
     D2HSocket(
         MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
@@ -277,6 +294,12 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief Consumes `num_pages` from the read position; with `notify_sender`, also returns their space to the
+     *        device. read() is a copy followed by pop().
+     */
+    void pop(uint32_t num_pages, bool notify_sender = true);
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
@@ -295,6 +318,19 @@ public:
      * @throws TT_FATAL if page_size has not been set.
      */
     uint32_t pages_available();
+
+    /**
+     * @brief The device's bytes_sent word as it stands now: a monotonic 32-bit count of every byte it has pushed.
+     *        Safe to call from any thread.
+     */
+    uint32_t bytes_sent() const;
+
+    /**
+     * @brief The FIFO's data region in host memory, for a reader that decodes pages in place instead of read():
+     *        byte N of the stream lives at offset N mod fifo_size. Only the pinned, cache-coherent backing supports
+     *        this; the hugepage fallback fatals.
+     */
+    std::span<std::byte> host_fifo() const;
 
     /**
      * @brief Discards any currently-available pages WITHOUT reading the data
@@ -359,12 +395,19 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
         const PinnedBufferInfo& bytes_sent_info) const;
-    void init_sender_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    void init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+    CoreCoord sender_virtual_core(const MeshDevice& mesh_device, ChipId device_id) const;
 
     void wait_for_bytes(uint32_t num_bytes);
+    void read_available(void* data, uint32_t num_bytes, bool notify_sender);
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
+
+    // Non-blocking read. Returns false if the FIFO does not currently contain `num_pages`.
+    // Accessible only via tt::tt_metal::experimental::detail::try_read.
+    bool try_read_impl(void* data, uint32_t num_pages, bool notify_sender);
+
+    friend struct tt::tt_metal::experimental::detail::D2HSocketTryReadAccess;
 
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
@@ -382,9 +425,10 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
+    HalProgrammableCoreType sender_core_type_ = HalProgrammableCoreType::TENSIX;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
-    tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
+    std::unique_ptr<tt::umd::IoWindow> sender_core_window_;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;

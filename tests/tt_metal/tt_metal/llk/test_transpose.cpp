@@ -14,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <map>
 #include <memory>
 #include <string>
@@ -42,10 +43,6 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "single_core_compute_runners.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -165,7 +162,6 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
 }
 
 void run_single_core_transpose(distributed::MeshDevice& mesh_device, const TransposeConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
@@ -313,12 +309,6 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& program_run = workload.get_programs().at(device_range);
-
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -336,7 +326,7 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
         {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Fixed seed so each test produces a repeatable input vector across runs.
     constexpr std::uint32_t kRandomSeed = 0x1234;
@@ -362,8 +352,7 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     }
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src_vec);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
@@ -457,7 +446,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTransposeIdFreeGolden) {
     auto src = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/100, /*seed=*/0x1234, /*offset=*/0.0f);
     auto result = unit_tests::llk::single_core::run_unary(
-        *this->devices_.at(0),
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::Float16_b,
         src,

@@ -35,7 +35,7 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
@@ -125,7 +125,9 @@ void kernel_main() {
     DataflowBuffer dfb_x(dfb_x_id);
 #endif
 #else
-    constexpr auto dfb_x_id = dfb_in_id;
+    // Under RMSNORM without a fused pre-add, the `#ifndef RMSNORM` block below (the only place
+    // this branch's dfb_x_id is otherwise read) is compiled out, so dfb_x_id is set but never used.
+    constexpr auto dfb_x_id [[maybe_unused]] = dfb_in_id;
     DataflowBuffer& dfb_x = dfb_in;
 #endif
 
@@ -179,6 +181,12 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(dfb_in_id, dfb_inb_id);
         pack_reconfig_data_format(dfb_x_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_x_id);
+#endif
         add_init(dfb_in_id, dfb_inb_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             // In/inb come from the reader and need to be
@@ -217,6 +225,12 @@ void kernel_main() {
 #ifdef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_in_id);
         pack_reconfig_data_format(dfb_xmm2_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_xmm2_id);
+#endif
 #endif
 #endif
 
@@ -228,7 +242,7 @@ void kernel_main() {
 
         // x - E[x]
         reconfig_data_format(dfb_x_id, dfb_ex_id);
-        dfb_xmm.reserve_back(total_buffer_size);
+        dfb_xmm.reserve_back(static_cast<uint16_t>(total_buffer_size));
         sub_bcast_cols_init(dfb_x_id, dfb_ex_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             tile_regs_acquire();
@@ -237,7 +251,7 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            dfb_x.pop_front(block.full_block_size());
+            dfb_x.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
             tile_regs_wait();
             for (auto i : block.local()) {
@@ -245,7 +259,7 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_xmm.push_back(block.full_block_size());
+            dfb_xmm.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
         dfb_ex.pop_front(1);
 
@@ -260,7 +274,7 @@ void kernel_main() {
         mul_init(dfb_xmm_id, dfb_xmm_id);
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
-            dfb_xmm.wait_front(block.start() + block.size());
+            dfb_xmm.wait_front(static_cast<uint16_t>(block.start() + block.size()));
 #else
             dfb_xmm.wait_front(block.start() + block.full_block_size());
 #endif
@@ -271,7 +285,7 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            dfb_xmm2.reserve_back(block.full_block_size());
+            dfb_xmm2.reserve_back(static_cast<uint16_t>(block.full_block_size()));
 
             tile_regs_wait();
             for (auto i : block.local()) {
@@ -279,7 +293,7 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_xmm2.push_back(block.full_block_size());
+            dfb_xmm2.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
@@ -305,6 +319,12 @@ void kernel_main() {
 
         dfb_ex2pe.reserve_back(1);
         pack_reconfig_data_format(dfb_ex2pe_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_ex2pe_id);
+#endif
 
         tile_regs_wait();
         pack_tile(dst0, dfb_ex2pe_id);
@@ -318,10 +338,22 @@ void kernel_main() {
             reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
 #if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
             pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+            // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+            // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+            // hw_startup output ring and this DFB is never written (all-zero output).
+            pack_init(dfb_out_id);
+#endif
 #else
             pack_reconfig_data_format(dfb_fusion_id);
+#ifdef ARCH_QUASAR
+            // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+            // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+            // hw_startup output ring and this DFB is never written (all-zero output).
+            pack_init(dfb_fusion_id);
 #endif
-            dfb_im_or_out.reserve_back(block.full_block_size());
+#endif
+            dfb_im_or_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             // Restore SrcA to the deviation buffer's format after the previous iteration's
             // gamma/beta step left it on the streaming intermediate. With neither gamma nor beta
             // there is no such step to undo.
@@ -352,8 +384,8 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_im_or_out.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            dfb_im_or_out.push_back(static_cast<uint16_t>(
+                block.full_block_size()));  // if no gamma/beta are provided, this will be passed on to the writer
 
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
 #if defined RMSNORM and not defined FUSE_PRE_ADD
@@ -365,6 +397,12 @@ void kernel_main() {
             {
 #ifndef FUSE_BETA
                 pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+                // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+                // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+                // hw_startup output ring and this DFB is never written (all-zero output).
+                pack_init(dfb_out_id);
+#endif
 #endif
                 reconfig_data_format_srcb(dfb_ex2pe_id, dfb_gamma_id);
                 // gamma's product goes to the streaming intermediate when beta still has to be
@@ -414,6 +452,12 @@ void kernel_main() {
 #ifdef FUSE_BETA
             {
                 pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+                // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+                // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+                // hw_startup output ring and this DFB is never written (all-zero output).
+                pack_init(dfb_out_id);
+#endif
 #ifdef FUSE_GAMMA
                 reconfig_data_format_srcb(dfb_gamma_id, dfb_beta_id);
 #else
@@ -451,7 +495,7 @@ void kernel_main() {
 #endif
         }
         dfb_ex2pe.pop_front(1);
-        dfb_xmm.pop_front(total_buffer_size);
+        dfb_xmm.pop_front(static_cast<uint16_t>(total_buffer_size));
 
 #ifdef UNTILIZE_OUT
         constexpr auto dfb_out_rm_id = dfb::out_rm;

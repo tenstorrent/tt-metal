@@ -2,24 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "nlp_concat_heads_decode_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "nlp_concat_heads_decode_program_factory.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::create_program_artifacts(
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
     const NlpConcatHeadsDecodeInputs& tensor_args,
     Tensor& output) {
     const auto& input_tensor = tensor_args.input;
-    ProgramDescriptor desc;
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
@@ -27,9 +30,9 @@ ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descriptor(
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -42,19 +45,23 @@ ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descriptor(
     auto in_shard_spec = input_tensor.shard_spec().value();
     auto in_cores = in_shard_spec.grid;
 
-    uint32_t q_output_cb_index = CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = q_num_tiles * single_tile_size,
-        .core_ranges = q_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(q_output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-        .buffer = output.buffer(),
-    });
+    // Program-scope resource names (function-local: this op's two factories share a
+    // translation unit under unity builds, so no anonymous-namespace constants).
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName Q_OUT{"q_out"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
 
-    Buffer* in_buffer = input_tensor.buffer();
+    // The output-resident DFB: borrowed from the output tensor's L1 shard memory
+    // (the backing address resolves at runtime from the OUTPUT tensor argument).
+    DataflowBufferSpec q_out_dfb{
+        .unique_id = Q_OUT,
+        .entry_size = single_tile_size,
+        .num_entries = q_num_tiles,
+        .data_format_metadata = data_format,
+        .borrowed_from = OUTPUT,
+    };
 
     // cores to read and write to output
     uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -66,50 +73,77 @@ ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descriptor(
     auto in_core_grid = in_cores.bounding_box();
     uint32_t in_num_cores_x = in_core_grid.end_coord.x + 1, in_num_cores_y = in_core_grid.end_coord.y + 1;
 
-    std::vector<uint32_t> noc_x_coords;
-    noc_x_coords.reserve(in_num_cores_x);
+    // NoC coordinate tables for the input shard grid, x block then y block; these ride the
+    // kernels' runtime varargs (the kernel indexes them with a data-driven cursor).
+    std::vector<uint32_t> noc_coords;
+    noc_coords.reserve(in_num_cores_x + in_num_cores_y);
     for (uint32_t x = 0; x < in_num_cores_x; ++x) {
-        noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
+        noc_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
     }
-    std::vector<uint32_t> noc_y_coords;
-    noc_y_coords.reserve(in_num_cores_y);
     for (uint32_t y = 0; y < in_num_cores_y; ++y) {
-        noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
+        noc_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
     }
 
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
     // a tile respectively)
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)element_size,
-        (std::uint32_t)sub_tile_line_bytes,
-        q_output_cb_index,
-        head_size,
-        batch,
-        head_tiles,
-        1,  // read the first phase
-        in_num_cores_x,
-        in_num_cores_y};
+    KernelSpec::CompileTimeArgs reader_compile_time_args{
+        {"element_size", element_size},
+        {"subtile_line_bytes", sub_tile_line_bytes},
+        {"head_size", head_size},
+        {"batch", batch},
+        {"head_size_num_tiles", head_tiles},
+        {"phases_to_read", 1},  // read the first phase
+        {"num_x", in_num_cores_x},
+        {"num_y", in_num_cores_y},
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_concat_heads_decode.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = q_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec::CompileTimeArgs writer_compile_time_args = reader_compile_time_args;
+    writer_compile_time_args["phases_to_read"] = 2;  // read the second phase
 
-    std::vector<uint32_t> writer_compile_time_args = reader_compile_time_args;
-    writer_compile_time_args[6] = 2;  // read the second phase
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+            "reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
+        // Both instances of the kernel only raw-write the output-resident DFB (no FIFO ops);
+        // the PRODUCER/CONSUMER split between them is cosmetic 1P+1C to satisfy the validator.
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = Q_OUT,
+            .accessor_name = "q_out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "input",
+        }},
+        .compile_time_args = std::move(reader_compile_time_args),
+        .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
+        .hw_config = create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_concat_heads_decode.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = q_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+            "reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = Q_OUT,
+            .accessor_name = "q_out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "input",
+        }},
+        .compile_time_args = std::move(writer_compile_time_args),
+        .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
+        .hw_config = create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
+    };
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         // Each output core i corresponds to head index i. Within the input shard, that head lives in
@@ -124,21 +158,38 @@ ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descriptor(
             head_tile_idx * head_size;
 
         const auto& core = cores[i];
-        KernelDescriptor::RTArgList rt_args;
-        rt_args.reserve(2 + in_num_cores_x + in_num_cores_y);
-        rt_args.push_back(in_tile_offset_by_batch);
-        rt_args.push_back(in_buffer);
-        rt_args.append(noc_x_coords);
-        rt_args.append(noc_y_coords);
-
-        reader_desc.emplace_runtime_args(core, rt_args);
-        writer_desc.emplace_runtime_args(core, rt_args);
+        // Reader and writer instances receive identical per-core values; only the phase CTA differs.
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"in_tile_offset_by_head", in_tile_offset_by_batch}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"in_tile_offset_by_head", in_tile_offset_by_batch}});
+        reader_run_args.advanced_options.runtime_varargs[core] = noc_coords;
+        writer_run_args.advanced_options.runtime_varargs[core] = noc_coords;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramSpec spec{
+        .name = "nlp_concat_heads_decode",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {std::move(q_out_dfb)},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
+             // OUTPUT is borrow-only: no kernel binds it, but the Q_OUT DFB borrows its memory.
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, WRITER},
+            .target_nodes = q_cores,
+        }},
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {{INPUT, input_mesh_tensor}, {OUTPUT, output_mesh_tensor}};
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim

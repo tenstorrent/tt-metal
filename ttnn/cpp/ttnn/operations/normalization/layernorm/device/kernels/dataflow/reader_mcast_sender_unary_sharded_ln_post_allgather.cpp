@@ -50,23 +50,23 @@ void kernel_main() {
         noc.async_write_barrier();
     };
 
-    const auto& global_reduce_sender = [&](DataflowBuffer& dfb_ex_obj, DataflowBuffer& dfb_ex_global_obj_inner)
-                                           __attribute__((always_inline)) {
-                                               uint32_t l1_read_addr_ex_global = dfb_ex_global_obj_inner.get_read_ptr();
-                                               noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                                                   dfb_ex_obj,
-                                                   mcast_ep,
-                                                   stats_tiles * num_tiles_per_worker_bytes,
-                                                   num_blocks,
-                                                   {},
-                                                   {.noc_x_start = mcast_dest_noc_start_x,
-                                                    .noc_y_start = mcast_dest_noc_start_y,
-                                                    .noc_x_end = mcast_dest_noc_end_x,
-                                                    .noc_y_end = mcast_dest_noc_end_y,
-                                                    .addr = l1_read_addr_ex_global},
-                                                   false);
-                                               noc.async_write_barrier();
-                                           };
+    const auto& global_reduce_sender = [&](DataflowBuffer& dfb_ex_obj,
+                                           DataflowBuffer& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
+        const uint32_t l1_read_addr_ex_global = dfb_ex_global_obj_inner.get_read_ptr();
+        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+            dfb_ex_obj,
+            mcast_ep,
+            stats_tiles * num_tiles_per_worker_bytes,
+            num_blocks,
+            {},
+            {.noc_x_start = mcast_dest_noc_start_x,
+             .noc_y_start = mcast_dest_noc_start_y,
+             .noc_x_end = mcast_dest_noc_end_x,
+             .noc_y_end = mcast_dest_noc_end_y,
+             .addr = l1_read_addr_ex_global},
+            false);
+        noc.async_write_barrier();
+    };
 
     dfb_stats_reduced_obj.wait_front(stats_tiles * block_h);
     dfb_ex_global_obj.reserve_back(stats_tiles * block_h);

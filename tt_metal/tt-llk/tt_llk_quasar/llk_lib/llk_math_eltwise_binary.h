@@ -43,7 +43,7 @@ inline std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
 // Direct Indexing Method
 //----------------------
 /**
- * @brief Build the encoded direct-indexing FPU instruction (ELWADDDI/ELWSUBDI/ELWMULDI) for the given binary op type.
+ * @brief Emit the direct-indexing FPU instruction (ELWADDDI/ELWSUBDI/ELWMULDI) for the given binary op type.
  *
  * Direct indexing passes explicit SrcA/SrcB/Dest addresses instead of relying on address-mod increments.
  *
@@ -55,10 +55,9 @@ inline std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
  * @param SRCA_ADDR: SrcA read address
  * @param ADDR_MOD: Address-mod slot used by the instruction
  * @param DST_ADDR: Destination write address
- * @return Encoded TT instruction word.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE>
-inline std::uint32_t eltwise_di_binary_func(
+inline void eltwise_di_binary_func(
     std::uint8_t CLR_SRC,
     std::uint8_t EN_DST_ACCUM,
     std::uint8_t SRCB_BROADCAST_TYPE,
@@ -70,15 +69,15 @@ inline std::uint32_t eltwise_di_binary_func(
     std::uint8_t INSTR_MOD = ((SRCB_BROADCAST_TYPE << 0) | (EN_DST_ACCUM << 2));
     if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWADD)
     {
-        return TT_ELWADDDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWADDDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
     else if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWSUB)
     {
-        return TT_ELWSUBDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWSUBDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
     else
     {
-        return TT_ELWMULDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWMULDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
 }
 
@@ -143,9 +142,10 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDE
 inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
-    const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS));
-    constexpr std::uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
-    constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    // One ELW instruction covers ELTWISE_MATH_ROWS rows, so a tile with fewer rows than that still needs one.
+    const std::uint32_t REPLAY_BUF_LEN     = ((total_num_rows_per_tile + ELTWISE_MATH_ROWS - 1) >> rows_log2(ELTWISE_MATH_ROWS));
+    constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr bool high_fidelity           = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
 

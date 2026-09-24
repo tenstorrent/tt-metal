@@ -55,8 +55,11 @@
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
+// Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
+// so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
+// both a multiple of 2 KB or DMs land on different sets.
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
-#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 9)
+#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 10)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)
@@ -262,7 +265,40 @@
     (MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE + MEM_ROUTING_TABLE_PADDING)
 #define MEM_DISPATCH_PACKET_HEADER_POOL_BASE \
     (MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
-#define MEM_DISPATCH_MAP_END (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+
+// Dispatch-engine bases for the three semaphore side-regions above, whose sizes they share.
+#define MEM_DISPATCH_SEM_REGIONS_BASE (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_DISPATCH_NOC_CAS_RET_BASE ((MEM_DISPATCH_SEM_REGIONS_BASE + 63) & ~63)
+#define MEM_DISPATCH_NOC_SEM_LOCK_BASE (MEM_DISPATCH_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
+#define MEM_DISPATCH_DM_CACHED_SEM_BASE (MEM_DISPATCH_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
+#define MEM_DISPATCH_SEM_REGIONS_END (MEM_DISPATCH_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
+#if (MEM_DISPATCH_DM_CACHED_SEM_BASE % 64 != 0)
+#error "Dispatch cached semaphore pool must start on a 64B cache line"
+#endif
+
+// Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
+// period: otherwise the kernel config ring and kernel text land on different sets.
+#define MEM_DISPATCH_MAP_END \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_SEM_REGIONS_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+
+// Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+#define MEM_SEM_CAS_RET_BASE MEM_DISPATCH_NOC_CAS_RET_BASE
+#define MEM_SEM_LOCK_BASE MEM_DISPATCH_NOC_SEM_LOCK_BASE
+#define MEM_SEM_CACHED_POOL_BASE MEM_DISPATCH_DM_CACHED_SEM_BASE
+#else
+#define MEM_SEM_CAS_RET_BASE MEM_NOC_CAS_RET_BASE
+#define MEM_SEM_LOCK_BASE MEM_NOC_SEM_LOCK_BASE
+#define MEM_SEM_CACHED_POOL_BASE MEM_DM_CACHED_SEM_BASE
+#endif
+#define MEM_SEM_CAS_RET_SIZE MEM_NOC_CAS_RET_SIZE
+#define MEM_SEM_LOCK_SIZE MEM_NOC_SEM_LOCK_SIZE
+#define MEM_SEM_CACHED_POOL_ROW MEM_DM_CACHED_SEM_ROW
+#define MEM_SEM_CACHED_POOL_SIZE MEM_DM_CACHED_SEM_SIZE
+
+// Span covering all three regions above, for the boot-time zeroing that treats them as one block.
+#define MEM_SEM_REGIONS_BASE MEM_SEM_CAS_RET_BASE
+#define MEM_SEM_REGIONS_SIZE (MEM_SEM_CACHED_POOL_BASE + MEM_SEM_CACHED_POOL_SIZE - MEM_SEM_CAS_RET_BASE)
 
 // Only DM0 needs an init-local staging area on a dispatch engine. RTA/semaphore kernel config overlays its start.
 #define MEM_DISPATCH_KERNEL_CONFIG_SIZE (2 * 1024)

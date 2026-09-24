@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <climits>
+#include <cstdint>
 
 inline __attribute__((always_inline)) unsigned int mulsi3(unsigned int a, unsigned int b) { return a * b; }
 
