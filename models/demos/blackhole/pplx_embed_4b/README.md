@@ -878,6 +878,64 @@ QWEN_MM_GRID= python models/demos/blackhole/pplx_embed_4b/demo/demo_bs32_isl512.
 
 ---
 
+### bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 — landed (2026-09-24)
+
+bs1 went **21.5 → 17.7 ms** (chip 4, same-chip A/B; 23.3 at the start of the day). STS-B 0.8161
+unchanged. All three changes are gated to `batch_size == 1` in `apply_workload_env`; bs8/16/32 are
+untouched (123.0 / 228.7 / 438.0 ms after the change, within noise of 123.4 / 228.3 / 438.1).
+
+**1. The four bs1 matmuls run on 12×8 = 96 cores (−3.7 ms).** The bs1 path uses the legacy
+`MatmulMultiCoreReuseMultiCastProgramConfig` with DRAM width-sharded bfp4 weights in the 8 DRAM banks,
+and every grid wider than 8 columns returned inf. The cause was in the 2D program factory
+(`matmul_multicore_reuse_mcast_2d_program_factory.cpp`): the per-column bank walk sets
+`worker_core_stride = per_core_N_storage - storage_core_stride`, i.e. a column takes a whole bank
+stripe even when its `per_core_N` is smaller, so the L1 block is overrun. Capping it at `per_core_N`
+makes every wide grid bit-identical to 8×8 (PCC vs torch unchanged to 5 digits). Standalone, traced,
+M=512, chip 3:
+
+| projection | 8×8 (was) | 12×8 (now) | Δ |
+|---|---|---|---|
+| QKV 512×2560×6144 | 67.5 µs (1×4) | **49.8** (per_core_N 16, 1×4) | −26% |
+| WO 512×4096×2560 | 48.7 (1×2) | **40.1** (per_core_N 7, 2×1) | −18% |
+| FF1 / FF3 512×2560×9728 | 110.9 (1×2) | **79.5** each (per_core_N 26, 2×2) | −28% |
+| FF2 512×9728×2560 | 101.8 (1×2) | **78.8** (per_core_N 7, 2×1) | −23% |
+
+`per_core_N` 7 needs an explicit 2×1 subblock (the derived 1×1 is slower than 8×8). 12×10 is within
+1 µs of 12×8 (M pads 512 → 640 over 10 rows); 10×8 / 11×8 sit between. Knobs: `QWEN_QKV_GRID_X=12`,
+`QWEN_LEGACY_GRID_{FF13,FF2,WO}=12,8`, `QWEN_LEGACY_TIGHT_PER_CORE_N=1` (callers pass a per_core_N
+sized to the 8 shards; this sizes it to the grid), `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>=h,w` per shape.
+Opt out with `QWEN_LEGACY_BS1_WIDE=0` (falls back to the tuned 8×8 blocks, e2e 21.4).
+
+**2. DRAM-sharded weight reader: one NoC read per block-row segment (−0.8 ms).**
+`reader_bmm_tile_layout_in1_sender_writer_padding.cpp` (`IN1_DRAM_WIDTH_SHARDED`) issued one
+576-byte read per bfp4 tile — 240 requests per QKV block. The tiles of a block row inside one bank
+are contiguous in DRAM and in the L1 block, so each row segment is now a single multi-burst read
+(13.8 KB QKV, 21.9 KB FF1). Same bytes to the same addresses, numerics identical. Standalone
+QKV 70.3 → 67.8, WO 51.3 → 49.0, FF1 114.0 → 110.5, FF2 111.6 → 102.8 µs; e2e 22.3 → 21.5 (kernel
+file swapped between runs on chip 4). Only the bs1 path reaches this kernel here.
+
+**3. SDPA q_chunk 256 at bs1 (−0.9 ms).** With q512 the bs1 SDPA has 32 work units for 64 cores.
+Standalone at the model's exact config (LoFi, `fp32_dest_acc_en=False` = the streaming kernel, exp
+approx, bfp8 Q/K/V in L1): q512/k256 79.1 → **q256/k256 55.0 µs**; q256/k512 71.5, q128/k128 72.2,
+12×10 grids 67.6, fp32 acc on (legacy kernel) 109.3. e2e 23.3 → 22.4. Batched sizes keep 12×10/k512.
+Opt out: `QWEN_SDPA_BS1_Q256=0`.
+
+**Also in this landing (≈0 e2e, kept):** per-shape in0_block_w / subblock overrides for the legacy
+matmuls (`QWEN_LEGACY_IN0_BW_K<k>_N<n>`, `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>`; guarded to skip shapes
+they do not divide, e.g. shorter warm-up seq_lens). On 8×8 the sweep gave FF1 −3.7%, WO −2.0%,
+FF2 −1.9%, QKV −1.2% standalone but only −0.1 ms e2e.
+
+**What bounds the bs1 matmuls now.** At 8×8, HiFi2 costs +71% and interleaved weights +38% (even
+from L1: it is the tile-granular request pattern, not DRAM bandwidth), so the kernel was ≈70% FPU
+time and ≈30% weight delivery; 96 cores take it to ≈60% of the 96-core LoFi peak. The 1D-multicast
+kernel (`mcast_in0`, every core reading its own N-slice) is +16% and flat across grids: its single
+in0 sender caps at ≈17 GB/s. bs8/16 op outputs in L1 (the BGE-M3 B8/B16 win) still fail trace
+capture here by 42 KB/core, with or without the FF intermediates.
+
+**bs1 host path.** `QWEN_ITER_TIMING=1`: h2d 0.04 ms, trace issue 0.02, readback enqueue 0.02, device
+sync = the rest, to_torch 0.1 — the bs1 number is device time; the 3.4 ms host bubble of an earlier
+profile is gone since the extended trace landed.
+
 ## 6. Profiling
 
 ```bash

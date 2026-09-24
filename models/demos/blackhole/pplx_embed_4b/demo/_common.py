@@ -418,6 +418,52 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size > 1 and os.getenv("QWEN_SDPA_BATCHED_WIDE", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
+    # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
+    # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
+    # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
+    # 12x10 grids slower (67.6). e2e 23.3 -> 22.4 ms (-3.9%, chip 4). Opt out: QWEN_SDPA_BS1_Q256=0.
+    if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
+        os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
+        os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
+    # bs1 legacy 2D-multicast matmul blocks (8x8 grid, DRAM width-sharded bfp4 weights), from a
+    # standalone in0_block_w x out_subblock sweep at M=512 on the model's operand placement:
+    # FF1/FF3 (K=2560,N=9728) in0_bw 10->8 + subblock 1x2->2x2: 115.9->111.7 us (-3.7%);
+    # FF2 (K=9728,N=2560) subblock 1x2->1x5: 113.1->111.0 (-1.9%); WO (K=4096,N=2560) 1x2->1x5:
+    # 52.3->51.3 (-2.0%); QKV (K=2560,N=6144) in0_bw 10->8 + 1x4->1x6: 71.0->70.1 (-1.2%).
+    # e2e 22.4 -> 21.4 ms (-4.5%, chip 4, same-chip A/B on top of the q256 SDPA). Keyed by (K, N)
+    # so they only reach these projections; the guard in _legacy_block_overrides skips shapes
+    # they do not divide (shorter warm-up seq_lens). Opt out: QWEN_LEGACY_BS1_BLOCKS=0.
+    # bs1 legacy 2D-multicast matmuls on 12x8 = 96 cores instead of 8x8 = 64. The DRAM width-sharded
+    # bfp4 weights live in 8 banks; the 2D factory's per-column bank walk used to hand a column a
+    # whole bank stripe, so any grid wider than 8 columns computed garbage (NEGATIVE_RESULTS §16/§39).
+    # With the capped walk every wide grid is bit-identical to 8x8. Standalone, traced, M=512:
+    # QKV 67.5 -> 49.8 us, WO 48.7 -> 40.1, FF1/FF3 110.9 -> 79.5 each, FF2 101.8 -> 78.8
+    # (about -112 us/layer). per_core_N 7 needs a 2x1 subblock (the derived 1x1 is slower than 8x8).
+    # Opt out with QWEN_LEGACY_BS1_WIDE=0, which falls back to the tuned 8x8 blocks below.
+    wide = batch_size == 1 and os.getenv("QWEN_LEGACY_BS1_WIDE", "1") == "1"
+    if wide:
+        for k, v in (
+            ("QWEN_QKV_GRID_X", "12"),
+            ("QWEN_LEGACY_GRID_FF13", "12,8"),
+            ("QWEN_LEGACY_GRID_FF2", "12,8"),
+            ("QWEN_LEGACY_GRID_WO", "12,8"),
+            ("QWEN_LEGACY_TIGHT_PER_CORE_N", "1"),
+            ("QWEN_LEGACY_SUBBLOCK_K2560_N6144", "1,4"),
+            ("QWEN_LEGACY_SUBBLOCK_K2560_N9728", "2,2"),
+            ("QWEN_LEGACY_SUBBLOCK_K9728_N2560", "2,1"),
+            ("QWEN_LEGACY_SUBBLOCK_K4096_N2560", "2,1"),
+        ):
+            os.environ.setdefault(k, v)
+    if batch_size == 1 and not wide and os.getenv("QWEN_LEGACY_BS1_BLOCKS", "1") == "1":
+        for k, v in (
+            ("QWEN_LEGACY_IN0_BW_K2560_N9728", "8"),
+            ("QWEN_LEGACY_SUBBLOCK_K2560_N9728", "2,2"),
+            ("QWEN_LEGACY_SUBBLOCK_K9728_N2560", "1,5"),
+            ("QWEN_LEGACY_SUBBLOCK_K4096_N2560", "1,5"),
+            ("QWEN_LEGACY_IN0_BW_K2560_N6144", "8"),
+            ("QWEN_LEGACY_SUBBLOCK_K2560_N6144", "1,6"),
+        ):
+            os.environ.setdefault(k, v)
     # Fused-SwiGLU minimal_matmul blocks at bs16 (M=8192): 4,8,8 / 1x4 was -6% standalone and
     # -2.2% e2e vs the 8,8,8 / 1x8 default (237.0 -> 231.8, chip 8); a wider sweep then found
     # K_block 20 (4 K steps over the 80 K tiles) another -3.8% standalone (2988 -> 2874 us) and
