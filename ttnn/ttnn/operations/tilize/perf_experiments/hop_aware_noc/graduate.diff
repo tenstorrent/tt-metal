@@ -1,0 +1,359 @@
+--- a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
++++ b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+@@ -380,6 +380,44 @@
+ #   (noise), HEIGHT_SHARDED multi-row shards -1 .. -5 %. 2-tile sub-blocks beat 4-tile (-2.4 %) and 8-tile.
+ SUB_BLOCK_TILES = 2
+
++# ---- Perf 2 hop_aware_noc (perf_experiments/hop_aware_noc/README.md): hop-aware write NoC.
++# The writer (BRISC, NoC1, DM_DEDICATED_NOC) sends DRAM bank b's tile writes on NoC0 instead when
++# NoC0's Tensix core -> bank path is at least HOP_WRITE_MIN_SAVING hops shorter (28 % of the
++# (Tensix core, bank) pairs on WH n150), on whichever store path runs (store_rows or the column
++# sub-block path). NCRISC re-syncs its NoC0 counters after BRISC's last NoC0 ACK (HOP_SEM flag).
++# 0 = off: exactly the pre-hop programs (no define, no extra semaphore).
++# Engages wherever expressible AND not measured slower:
++#   expressible: Wormhole (the kernel's 10 x 12 NoC torus / untranslated-DRAM model), a DRAM
++#   TensorMemoryLayout::INTERLEAVED output (page p in bank p mod 12; an L1 or sharded output has
++#   Tensix-core banks), output not resident (nothing written), write_ahead == 1 and no parked
++#   write NoC split / DM_DYNAMIC_NOC lever (TileStorer's trids and the dynamic mode are one-NoC
++#   schemes), no BANK_COALESCE_SCATTER_WRITE (NCRISC NoC0 writes would share NIU 0's counters).
++#   carve-outs (measured, see HOP_WRITE_MIN_CORES / HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE).
++# Measured (WH B0 n150, DEVICE KERNEL DURATION ns, same-session medians of 4..6, head -> hop, bit-exact):
++#   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM (sub-block path) 15808 -> 14086 (-10.9 %,
++#   n=10); [1,1,8192,256] HEIGHT_SHARDED -14..-16 %, [1,1,1024,1024] BLOCK_SHARDED -12..-14 %, L1
++#   interleaved [1,1,16384,64] -11..-13 % (store_rows path), fp32 -10 %, WIDTH_SHARDED -8 %, padded
++#   -4..-9 %, low_l1 -13..-14 %, retile 32 -> 16 flat; guards (not engaged) LOOSE_CASES 0/1/2/6/8
++#   byte-identical programs.
++HOP_WRITE_MIN_SAVING = 6
++# Carve-out: fewer writing Tensix cores than this. NoC1's DRAM write path only congests with many
++# concurrent writers; below that each writer is bound by its own write path, and NoC0's slower DRAM
++# write path shows. Head -> hop with the carve-out lifted: 2 / 4 / 8 Tensix cores +41..45 / +26..41
++# / +15..28 %, 16 +2..10 % (HEIGHT / BLOCK / WIDTH_SHARDED and L1 interleaved), 20 -3..+5 %, 24
++# HEIGHT_SHARDED -4..-7 % but BLOCK_SHARDED 6 x 4 +1..+7 %; 32 -2.5..-8 %, 48 -10 %, 64 -9..-17 %.
++# Small outputs on many Tensix cores are flat (64 tiles on 64: +0.2 / +1.3 %): writers, not tiles.
++HOP_WRITE_MIN_CORES = 32
++# Carve-out: a DRAM input carrying more than this many input bytes per Tensix core. Its DRAM read
++# responses ride NoC0 through the steady state, and NoC0's write share then costs more than it
++# relieves NoC1 (carve-out lifted): [1,1,16384,64] +25 %, [1,1,16384,32] +34 %, [1,1,32768,64] +32 %,
++# [1,1,8192,256] +32 %, [1,1,2048,256] +19 %, [1,1,4096,128] +18 %, [1,1,1024,1024] +11 %. At
++# <= 8 KiB per Tensix core the reads are a short prefix and hop wins: [1,1,4096,64] -11 %,
++# [1,1,32,8192] -7 %, [1,1,2048,64] fp32 -13 %, [1,1,1024,256] -7.5 %. Left on the table at 16 KiB:
++# [1,1,8192,32] fp32 -6..-10 %, [1,1,8192,64] -2..-6 % (other 16 KiB shapes +8..+34 %).
++# None = no carve-out, 0 = every DRAM input.
++HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE = 8192
++HOP_SEM = 1  # semaphore id of the writer's "NoC0 writes ACKed" flag (CO_READ_SEM is 0)
++
+
+ def _sub_block_count(block_width, sb_tiles):
+     """tilize_sub_blocks::SubBlocks<block_width, sb_tiles>::n (kernels/tilize_sub_blocks.hpp)."""
+@@ -1174,6 +1212,32 @@
+         sub_block_tiles = max(2, SUB_BLOCK_TILES)
+     sub_block_defines = [("TILIZE_SUB_BLOCK_TILES", str(sub_block_tiles))] if sub_block_tiles else []
+
++    # ---------------- hop-aware write NoC (HOP_WRITE_MIN_SAVING) ----------------
++    out_mc = output_tensor.memory_config()
++    writer_cores = sum(1 for _, _, rows, _, cols in assignment if rows * cols > 0)
++    hop_write_t = (
++        HOP_WRITE_MIN_SAVING
++        if HOP_WRITE_MIN_SAVING > 0
++        and str(device.arch()).lower().split(".")[-1] == "wormhole_b0"
++        and (
++            in_mc.buffer_type != ttnn.BufferType.DRAM
++            or HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE is None
++            or R * tile_h * C * TILE_WIDTH * in_elem_bytes <= HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE * writer_cores
++        )
++        and out_mc.buffer_type == ttnn.BufferType.DRAM
++        and out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
++        and not output_resident
++        and write_ahead == 1
++        and not dynamic_noc
++        and not (coalesce and BANK_COALESCE_SCATTER_WRITE)
++        and writer_cores >= HOP_WRITE_MIN_CORES
++        else 0
++    )
++    # the reader and writer compile the hop code in only under these defines
++    hop_defines = (
++        [("TILIZE_HOP_WRITE_MIN_SAVING", str(hop_write_t)), ("TILIZE_HOP_SEM", str(HOP_SEM))] if hop_write_t else []
++    )
++
+     # ---------------- kernel args ----------------
+     # CT args: config only (dtype pair, tile, block_width, residency, accessor args) ->
+     # program-cache friendly; buffer addresses ride on RT args and on the resident CBs.
+@@ -1297,7 +1361,7 @@
+     co_read_defines = [("CO_READ_LISTED", "1")] if co_read_lists else []
+     reader_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+-        defines=_kernel_defines() + co_read_defines,
++        defines=_kernel_defines() + co_read_defines + hop_defines,
+         core_ranges=all_cores,
+         compile_time_args=reader_ct_args,
+         runtime_args=reader_rt_args,
+@@ -1311,7 +1375,7 @@
+     )
+     writer_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+-        defines=_kernel_defines() + co_read_defines + sub_block_defines,
++        defines=_kernel_defines() + co_read_defines + sub_block_defines + hop_defines,
+         core_ranges=all_cores,
+         compile_time_args=writer_ct_args,
+         runtime_args=writer_rt_args,
+@@ -1338,7 +1402,8 @@
+     return ttnn.ProgramDescriptor(
+         kernels=[reader_kernel, writer_kernel, compute_kernel],
+         semaphores=(
+-            [ttnn.SemaphoreDescriptor(id=CO_READ_SEM, core_ranges=all_cores, initial_value=0)] if co_read else []
++            ([ttnn.SemaphoreDescriptor(id=CO_READ_SEM, core_ranges=all_cores, initial_value=0)] if co_read else [])
++            + ([ttnn.SemaphoreDescriptor(id=HOP_SEM, core_ranges=all_cores, initial_value=0)] if hop_write_t else [])
+         ),
+         cbs=cbs + [cb_output_tiles],
+     )
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp
+@@ -312,6 +312,10 @@
+ }
+
+ void kernel_main() {
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++    // Hop-aware write NoC: runs the NoC0 counter re-sync on every return path (tilize_stick_reads.hpp).
++    const tilize_dataflow::HopReaderResync hop_resync(get_semaphore(TILIZE_HOP_SEM));
++#endif
+     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
+     constexpr uint32_t block_width = get_compile_time_arg_val(1);       // tiles per column block (CB quantum)
+     constexpr uint32_t tile_h = get_compile_time_arg_val(2);            // sticks per tile-row
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp
+@@ -335,6 +335,70 @@
+     }
+ };
+
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++// ---------------------------------------------------------------------------
++// Hop-aware write NoC (Perf 2, perf_experiments/hop_aware_noc; host knob HOP_WRITE_MIN_SAVING)
++// ---------------------------------------------------------------------------
++// The writer (BRISC, DM_DEDICATED_NOC on NoC1) sends DRAM bank b's tile writes on NoC0 instead
++// when NoC0's Tensix core -> bank path is at least TILIZE_HOP_WRITE_MIN_SAVING hops shorter (a
++// write's data rides the request, so the request path is the data path). Wormhole routes NoC0
++// east then south and NoC1 west then north on a 10 x 12 torus. A saving of 6 hops moves 28 % of the
++// (Tensix core, bank) pairs on WH n150: NoC0 carries ~1/2.6 of NoC1's DRAM write capacity
++// (LOOSE_CASES[7] writes-only: all on NoC0 41861 ns vs NoC1 15573 ns), so a 50/50 split loses and
++// a hop-picked ~28 % share wins (hop T6 14426 vs a random 28 % 16537 vs head 17167 ns).
++// Output page p lives in bank p mod NUM_DRAM_BANKS (DRAM TensorMemoryLayout::INTERLEAVED: host gate).
++// Compiled in only under the define, so the off programs are HEAD's exact binaries.
++namespace hop_write {
++
++inline uint32_t other_noc_banks = 0;  // bit b set: bank b's writes go on 1 - noc_index (BRISC)
++
++// Raw register read (NOC_CMD_BUF_READ_REG(NOC_NODE_ID), as select_co_read_list): no dataflow API
++// returns the physical coordinate (my_x / my_y hold the translated id, 18.. on Wormhole); the
++// DRAM endpoints dram_bank_to_noc_xy[0][b] are physical (DRAM is not translated). Measured with the
++// counter snapshot (writer_hop_init zone, LOOSE_CASES[7]): 451 cycles p50 per Tensix core, overlapped
++// with compute's first sub-block (writer_wait 394 -> 36 cycles), so ~90 cycles on the critical path.
++FORCE_INLINE void init() {
++    constexpr uint32_t GX = 10, GY = 12;  // Wormhole NoC grid
++    const uint32_t node_id = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
++    const uint32_t mx = node_id & NOC_NODE_ID_MASK;
++    const uint32_t my = (node_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++    uint32_t mask = 0;
++    for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
++        const uint32_t xy = dram_bank_to_noc_xy[0][b] >> NOC_COORD_REG_OFFSET;
++        const uint32_t x = xy & NOC_NODE_ID_MASK, y = (xy >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++        const uint32_t east = x >= mx ? x - mx : x + GX - mx, south = y >= my ? y - my : y + GY - my;
++        const uint32_t west = east == 0 ? 0 : GX - east, north = south == 0 ? 0 : GY - south;
++        if (west + north >= east + south + TILIZE_HOP_WRITE_MIN_SAVING) {
++            mask |= 1u << b;
++        }
++    }
++    other_noc_banks = mask;
++}
++FORCE_INLINE uint8_t noc_of_bank(uint32_t banks, uint32_t bank) {
++    return ((banks >> bank) & 1) ? 1 - noc_index : noc_index;
++}
++FORCE_INLINE uint32_t next_bank(uint32_t bank) { return bank + 1 == NUM_DRAM_BANKS ? 0 : bank + 1; }
++
++}  // namespace hop_write
++
++// NCRISC's half of the handshake: BRISC also writes on this RISC-V's NoC (NIU 0). At kernel end
++// (the destructor, so every return path of the reader runs it) wait until BRISC's NoC0 writes are
++// all ACKed (its flag), re-arm the flag for the next launch, and re-snapshot this RISC-V's NoC0
++// counters from the NIU so the firmware's kernel-end dedicated-NoC idle ASSERT holds (without it
++// --dev halts NCRISC at NKFW, ncrisck.cc). Raw firmware call noc_local_state_init: no dataflow API
++// re-syncs a RISC-V's software counters with its NIU.
++struct HopReaderResync {
++    volatile tt_l1_ptr uint32_t* flag;
++    explicit HopReaderResync(uint32_t flag_addr) : flag(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr)) {}
++    ~HopReaderResync() {
++        MaybeDeviceZoneScope("reader_hop_resync");  // NCRISC waiting on BRISC's final NoC0 ACKs
++        noc_semaphore_wait(flag, 1);
++        noc_semaphore_set(flag, 0);
++        noc_local_state_init(noc_index);
++    }
++};
++#endif  // TILIZE_HOP_WRITE_MIN_SAVING
++
+ // One position of the per-core walk.
+ template <uint32_t block_width>
+ struct Walker {
+@@ -839,7 +903,9 @@
+ // wrap (the write twin of the reader's stick rotation): when every Tensix core
+ // holds the same few tile-rows at once, concurrent first writes would otherwise
+ // all land on the banks of column 0. `noc_split` (parked, 0 = off): every
+-// noc_split-th write of a tile-row goes out on the other NoC (DM_DYNAMIC_NOC).
++// noc_split-th write of a tile-row goes out on the other NoC (DM_DYNAMIC_NOC). Under
++// TILIZE_HOP_WRITE_MIN_SAVING each page's write goes on the NoC hop_write picks for its DRAM bank
++// (the host never combines it with noc_split).
+ template <
+     uint32_t cb_output_tiles,
+     uint32_t block_width,
+@@ -861,8 +927,17 @@
+             const uint32_t row_tile_idx = walk.row() * tiles_per_row + walk.first_col();
+             const uint32_t valid_width = walk.valid_width();
+             uint32_t t = col_rotation % valid_width;
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++            const uint32_t hop_banks = hop_write::other_noc_banks;
++            uint32_t bank = (row_tile_idx + t) % NUM_DRAM_BANKS;
++#endif
+             for (uint32_t n = 0; n < valid_width; ++n) {
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++                const uint8_t noc = hop_write::noc_of_bank(hop_banks, bank);
++                bank = hop_write::next_bank(bank);
++#else
+                 const uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
++#endif
+                 noc_async_write(
+                     l1_row_addr + t * out_tile_bytes,
+                     accessor.get_noc_addr(row_tile_idx + t, 0, noc),
+@@ -870,6 +945,9 @@
+                     noc);
+                 if (++t == valid_width) {
+                     t = 0;
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++                    bank = row_tile_idx % NUM_DRAM_BANKS;
++#endif
+                 }
+             }
+             l1_row_addr += block_width * out_tile_bytes;
+@@ -878,9 +956,13 @@
+     {
+         MaybeDeviceZoneScope("writer_flush");  // the quantum's L1 source reads done (not landed)
+         noc_async_writes_flushed();
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++        noc_async_writes_flushed(1 - noc_index);
++#else
+         if constexpr (noc_split != 0) {
+             noc_async_writes_flushed(1 - noc_index);
+         }
++#endif
+     }
+     cb_pop_front(cb_output_tiles, pages);
+ }
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp
+@@ -38,6 +38,27 @@
+ // SUB_BLOCK_TILES): compute pushes each tile-row as column sub-blocks in production order
+ // (tilize_sub_blocks.hpp), and store_row_sub_blocked writes each sub-block as soon as it is packed
+ // instead of waiting for the whole tile-row, in exactly store_rows' tile order.
++//
++// Hop-aware write NoC (define TILIZE_HOP_WRITE_MIN_SAVING, Perf 2 hop_aware_noc; host knob
++// HOP_WRITE_MIN_SAVING): on either store path (store_rows -- also the split reader's store_next --
++// and store_row_sub_blocked) each output page's write goes on NoC1 (this RISC-V's own NoC) or on
++// NoC0, picked per DRAM bank by hop distance (tilize_stick_reads.hpp hop_write). The kernels stay
++// in DM_DEDICATED_NOC (DM_DYNAMIC_NOC alone measured +13..18 % on issue-bound shapes), which takes
++// three raw sites, each the only way to express the mechanism:
++//   * NOC_CMD_BUF_READ_REG(NOC_NODE_ID) -- this Tensix core's physical NoC0 coordinate (no dataflow
++//     API returns it; my_x / my_y are translated on Wormhole).
++//   * noc_local_state_init(0) at kernel start -- firmware snapshots only NoC1's counters for BRISC;
++//     this snapshots NIU 0's into BRISC's NoC0 software counters so its NoC0 flushes / barriers
++//     count its own writes. NIU 0's write counters are BRISC's alone: NCRISC never issues a NoC
++//     write where the host engages this (its reads use NIU 0's read command buffer; the only NCRISC
++//     write path, BANK_COALESCE_SCATTER_WRITE, is gated out).
++//   * after the final both-NoC write barrier, the TILIZE_HOP_SEM flag: NCRISC waits for it and
++//     re-syncs its NoC0 counters (HopReaderResync), so the firmware's kernel-end dedicated-NoC idle
++//     ASSERT on NCRISC holds; without it --dev halts NCRISC at NKFW (measured: every Tensix core of
++//     LOOSE_CASES[7]).
++// Measured (WH B0 n150, DEVICE KERNEL DURATION, same-session medians, head -> hop, bit-exact):
++// LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM 15808 -> 14086 ns (-10.9 %, n=10); the host
++// knob's comment and perf_experiments/hop_aware_noc/README.md carry the domain and carve-outs.
+
+ #include <cstdint>
+
+@@ -71,10 +92,24 @@
+     const uint32_t t0 = col_rotation % valid_width;
+     const uint32_t j0 = SB::start(col_rotation, valid_width);
+     auto write_cols = [&](uint32_t cb_off, uint32_t first, uint32_t lo, uint32_t hi) {
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++        const uint32_t hop_banks = tilize_dataflow::hop_write::other_noc_banks;
++        uint32_t bank = (row_tile_idx + lo) % NUM_DRAM_BANKS;
++        for (uint32_t c = lo; c < hi; ++c) {
++            const uint8_t noc = tilize_dataflow::hop_write::noc_of_bank(hop_banks, bank);
++            bank = tilize_dataflow::hop_write::next_bank(bank);
++            noc_async_write(
++                base + (cb_off + c - first) * out_tile_bytes,
++                accessor.get_noc_addr(row_tile_idx + c, 0, noc),
++                out_tile_bytes,
++                noc);
++        }
++#else
+         for (uint32_t c = lo; c < hi; ++c) {
+             noc_async_write(
+                 base + (cb_off + c - first) * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + c), out_tile_bytes);
+         }
++#endif
+     };
+     {
+         MaybeDeviceZoneScope("writer_wait");  // starved on read + the first sub-block's tilize
+@@ -98,6 +133,9 @@
+     {
+         MaybeDeviceZoneScope("writer_flush");  // the tile-row's L1 source reads done (not landed)
+         noc_async_writes_flushed();
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++        noc_async_writes_flushed(1 - noc_index);
++#endif
+     }
+     cb_pop_front(cb, block_width);
+     walk.advance();
+@@ -179,6 +217,20 @@
+     }
+
+     const auto output_accessor = TensorAccessor(output_args, dst_addr, out_tile_bytes);
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++    // Host-engaged only on the store_rows / sub-block paths (TileStorer's trids live on one NoC).
++    static_assert(!output_resident && write_ahead == 1 && write_noc_split == 0, "hop write NoC: store_rows paths");
++    {
++        MaybeDeviceZoneScope("writer_hop_init");  // NoC0 counter snapshot + the per-bank NoC mask
++        noc_local_state_init(1 - noc_index);      // raw: see the kernel head
++        tilize_dataflow::hop_write::init();
++    }
++    // Every tile write landed on both NoCs: release NCRISC's NoC0 counter re-sync.
++    auto hop_done = [&]() {
++        noc_async_write_barrier(1 - noc_index);
++        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(TILIZE_HOP_SEM)), 1);
++    };
++#endif
+
+     tilize_dataflow::Walker<block_width> store_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+     const uint32_t num_positions = store_walk.num_positions();
+@@ -193,8 +245,15 @@
+         tilize_sub_blocks::store_row_sub_blocked<cb_output_tiles, block_width, out_tile_bytes, TILIZE_SUB_BLOCK_TILES>(
+             output_accessor, store_walk, tiles_per_row, stick_rotation);
+     }
+-    MaybeDeviceZoneScope("writer_barrier");  // every tile write landed
+-    noc_async_write_barrier();
++    {
++        // (own scope: kernel_main's second writer_barrier zone below would redeclare it under
++        // KERNEL_PERF_ZONES -- HEAD fails to compile there)
++        MaybeDeviceZoneScope("writer_barrier");  // every tile write landed
++        noc_async_write_barrier();
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++        hop_done();
++#endif
++    }
+     return;
+ #endif
+
+@@ -274,4 +333,7 @@
+     if constexpr (write_noc_split != 0) {
+         noc_async_write_barrier(1 - noc_index);
+     }
++#ifdef TILIZE_HOP_WRITE_MIN_SAVING
++    hop_done();
++#endif
+ }

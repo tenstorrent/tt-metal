@@ -952,12 +952,7 @@ def create_program_descriptor(
         if output_resident and CO_READ_RESIDENT_OUTPUT_UNBOUNDED:
             co_read_max = None  # no NoC writes: the writer RISC-V's NoC1 carries only its reads
         elif not all(col_start == 0 and cols == C for _, _, _, col_start, cols in assignment):
-            # (None = unbounded, e.g. a knob that opens the window)
-            co_read_max = (
-                CO_READ_SHARED_STICK_MAX_BYTES
-                if co_read_max is None
-                else min(co_read_max, CO_READ_SHARED_STICK_MAX_BYTES)
-            )
+            co_read_max = min(co_read_max, CO_READ_SHARED_STICK_MAX_BYTES)
     segment_bytes = min(block_width, core_col_tiles_max) * TILE_WIDTH * in_elem_bytes
     if not (
         co_read > 0

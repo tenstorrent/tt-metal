@@ -335,14 +335,14 @@ void kernel_main() {
     constexpr bool retile_facewalk_noc = get_compile_time_arg_val(16) != 0;  // retile: face rows moved by NoC
     constexpr uint32_t read_noc_split = get_compile_time_arg_val(17);        // parked: 0, else other-NoC stick period
     constexpr bool eager_publish = get_compile_time_arg_val(18) != 0;        // parked: push landed slots early
-    constexpr uint32_t bank_stride = get_compile_time_arg_val(19);  // parked: 0 off, 1 bank-stride, 2 bank-major
-    constexpr bool padded = get_compile_time_arg_val(20) != 0;      // output padded shape > input: fill
+    constexpr uint32_t bank_stride = get_compile_time_arg_val(19);    // parked: 0 off, 1 bank-stride, 2 bank-major
+    constexpr bool padded = get_compile_time_arg_val(20) != 0;        // output padded shape > input: fill
     constexpr uint32_t cb_pad_source = get_compile_time_arg_val(21);  // padded: reader-private fill source
     constexpr uint32_t pad_source_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);  // shorter fills are CPU stores
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);         // input element size
-    constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;    // padded: band-fill first pass only
-    constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);     // 0, else bank_coalesced staging units
+    constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);        // shorter fills are CPU stores
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);               // input element size
+    constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;          // padded: band-fill first pass only
+    constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);           // 0, else bank_coalesced staging units
     constexpr bool coalesce_scatter_write = get_compile_time_arg_val(27) != 0;  // loopback writes, else reads
     constexpr uint32_t co_read = get_compile_time_arg_val(28);      // 0, else sticks per tile-row BRISC reads
     constexpr uint32_t co_read_sem = get_compile_time_arg_val(29);  // co-read: the landed flag's semaphore id

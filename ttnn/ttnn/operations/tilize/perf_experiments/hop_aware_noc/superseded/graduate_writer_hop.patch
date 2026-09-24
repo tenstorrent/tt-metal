@@ -1,0 +1,240 @@
+diff -ruN a/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp b/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp	2026-09-23 22:17:42.955861889 +0000
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp	2026-09-23 22:17:42.959861889 +0000
+@@ -311,7 +311,7 @@
+     noc_async_read_set_trid(0);
+ }
+ 
+-void kernel_main() {
++FORCE_INLINE void load_all() {
+     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
+     constexpr uint32_t block_width = get_compile_time_arg_val(1);       // tiles per column block (CB quantum)
+     constexpr uint32_t tile_h = get_compile_time_arg_val(2);            // sticks per tile-row
+@@ -463,3 +463,19 @@
+         producer.complete_all();
+     }
+ }
++
++void kernel_main() {
++    load_all();
++    constexpr auto input_args = TensorAccessorArgs<30>();
++    constexpr uint32_t hop_t = get_compile_time_arg_val(input_args.next_compile_time_args_offset());
++    constexpr uint32_t hop_sem = get_compile_time_arg_val(input_args.next_compile_time_args_offset() + 1);
++    if constexpr (hop_t != 0) {
++        // Hop-aware write NoC: BRISC also writes on this RISC-V's NoC (NIU 0). Once those writes
++        // are ACKed, re-snapshot this RISC-V's NoC0 counters from the NIU, so the firmware's
++        // kernel-end dedicated-NoC idle check holds.
++        volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hop_sem));
++        noc_semaphore_wait(flag, 1);
++        noc_semaphore_set(flag, 0);
++        noc_local_state_init(noc_index);
++    }
++}
+diff -ruN a/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp b/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp	2026-09-23 22:17:42.955861889 +0000
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_stick_reads.hpp	2026-09-23 22:17:42.959861889 +0000
+@@ -272,6 +272,33 @@
+     }
+ };
+ 
++// ---------------------------------------------------------------------------
++// Hop-aware write NoC (hop_aware_noc, Perf 2)
++// ---------------------------------------------------------------------------
++// The writer (BRISC) sends DRAM bank b's tile writes on NoC0 instead of its own NoC1 when NoC0's
++// core -> bank path is at least `min_saving` hops shorter (the write data rides the request).
++// Wormhole routes NoC0 east then south and NoC1 west then north on a 10 x 12 torus. Coordinates
++// are physical NoC0 ones: this Tensix core's from NIU 0's NOC_NODE_ID register (my_x / my_y hold
++// the translated id, 18.. on Wormhole) and the bank's from dram_bank_to_noc_xy[0] (DRAM is not
++// translated). Bit b of the result set = bank b goes on NoC0.
++template <uint32_t min_saving>
++FORCE_INLINE uint32_t noc0_write_bank_mask() {
++    constexpr uint32_t GX = 10, GY = 12;  // Wormhole NoC grid
++    const uint32_t node_id = *reinterpret_cast<volatile uint32_t*>(NOC_NODE_ID);
++    const uint32_t mx = node_id & NOC_NODE_ID_MASK, my = (node_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++    uint32_t mask = 0;
++    for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
++        const uint32_t xy = dram_bank_to_noc_xy[0][b] >> NOC_COORD_REG_OFFSET;
++        const uint32_t x = xy & NOC_NODE_ID_MASK, y = (xy >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++        const uint32_t east = x >= mx ? x - mx : x + GX - mx, south = y >= my ? y - my : y + GY - my;
++        const uint32_t west = east == 0 ? 0 : GX - east, north = south == 0 ? 0 : GY - south;
++        if (west + north >= east + south + min_saving) {
++            mask |= 1u << b;
++        }
++    }
++    return mask;
++}
++
+ // One position of the per-core walk.
+ template <uint32_t block_width>
+ struct Walker {
+@@ -771,16 +798,24 @@
+ // wrap (the write twin of the reader's stick rotation): when every Tensix core
+ // holds the same few tile-rows at once, concurrent first writes would otherwise
+ // all land on the banks of column 0. `noc_split` (parked, 0 = off): every
+-// noc_split-th write of a tile-row goes out on the other NoC (DM_DYNAMIC_NOC).
++// noc_split-th write of a tile-row goes out on the other NoC (DM_DYNAMIC_NOC). `hop_t` (0 = off):
++// page p's write goes on the other NoC iff bit (p mod NUM_DRAM_BANKS) of `other_noc_banks` is set
++// (noc0_write_bank_mask; DM_DEDICATED_NOC, see the writer's kernel head).
+ template <
+     uint32_t cb_output_tiles,
+     uint32_t block_width,
+     uint32_t out_tile_bytes,
+     uint32_t noc_split = 0,
++    uint32_t hop_t = 0,
+     typename Accessor,
+     typename Walk>
+ FORCE_INLINE void store_rows(
+-    const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows, uint32_t col_rotation) {
++    const Accessor& accessor,
++    Walk& walk,
++    uint32_t tiles_per_row,
++    uint32_t num_rows,
++    uint32_t col_rotation,
++    uint32_t other_noc_banks = 0) {
+     const uint32_t pages = num_rows * block_width;
+     {
+         MaybeDeviceZoneScope("writer_wait");  // starved on compute
+@@ -794,7 +829,10 @@
+             const uint32_t valid_width = walk.valid_width();
+             uint32_t t = col_rotation % valid_width;
+             for (uint32_t n = 0; n < valid_width; ++n) {
+-                const uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
++                uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
++                if constexpr (hop_t != 0) {
++                    noc = ((other_noc_banks >> ((row_tile_idx + t) % NUM_DRAM_BANKS)) & 1) ? 1 - noc_index : noc_index;
++                }
+                 noc_async_write(
+                     l1_row_addr + t * out_tile_bytes,
+                     accessor.get_noc_addr(row_tile_idx + t, 0, noc),
+@@ -810,7 +848,7 @@
+     {
+         MaybeDeviceZoneScope("writer_flush");  // the quantum's L1 source reads done (not landed)
+         noc_async_writes_flushed();
+-        if constexpr (noc_split != 0) {
++        if constexpr (noc_split != 0 || hop_t != 0) {
+             noc_async_writes_flushed(1 - noc_index);
+         }
+     }
+diff -ruN a/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp b/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp	2026-09-23 22:17:42.955861889 +0000
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp	2026-09-23 22:17:42.959861889 +0000
+@@ -61,6 +61,10 @@
+     constexpr uint32_t co_read_sem = get_compile_time_arg_val(19);       // co-read: the landed flag's semaphore id
+     constexpr auto output_args = TensorAccessorArgs<20>();
+     constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
++    // Hop-aware write NoC (0 = off, else the minimum hop saving that moves a bank to NoC0).
++    constexpr uint32_t hop_t = get_compile_time_arg_val(input_args.next_compile_time_args_offset());
++    constexpr uint32_t hop_sem = get_compile_time_arg_val(input_args.next_compile_time_args_offset() + 1);
++    static_assert(hop_t == 0 || (!split_reader && !output_resident && write_noc_split == 0), "store_rows only");
+ 
+     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+     const uint32_t row_start = get_arg_val<uint32_t>(1);
+@@ -100,6 +104,14 @@
+     }
+ 
+     const auto output_accessor = TensorAccessor(output_args, dst_addr, out_tile_bytes);
++    uint32_t noc0_banks = 0;
++    if constexpr (hop_t != 0) {
++        // DM_DEDICATED_NOC, BRISC writing on NoC0 too: NCRISC never issues a NoC write (its reads
++        // use NIU 0's read command buffer, these writes the write buffer NCRISC leaves unused),
++        // so NIU 0's write counters are BRISC's alone; firmware synced only NoC1's.
++        noc_local_state_init(1 - noc_index);
++        noc0_banks = tilize_dataflow::noc0_write_bank_mask<hop_t>();
++    }
+ 
+     tilize_dataflow::Walker<block_width> store_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+     const uint32_t num_positions = store_walk.num_positions();
+@@ -167,17 +179,22 @@
+     } else {
+         for (uint32_t done = 0; done < num_positions; done += rows_per_quantum) {
+             const uint32_t remaining = num_positions - done;
+-            tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes, write_noc_split>(
++            tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes, write_noc_split, hop_t>(
+                 output_accessor,
+                 store_walk,
+                 tiles_per_row,
+                 remaining < rows_per_quantum ? remaining : rows_per_quantum,
+-                stick_rotation);
++                stick_rotation,
++                noc0_banks);
+         }
+     }
+     MaybeDeviceZoneScope("writer_barrier");  // every tile write landed
+     noc_async_write_barrier();
+-    if constexpr (write_noc_split != 0) {
++    if constexpr (write_noc_split != 0 || hop_t != 0) {
+         noc_async_write_barrier(1 - noc_index);
+     }
++    if constexpr (hop_t != 0) {
++        // Every NoC0 write is ACKed: NCRISC may re-sync its NoC0 counters (tilize_reader.cpp).
++        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hop_sem)), 1);
++    }
+ }
+diff -ruN a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+--- a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py	2026-09-23 22:17:42.955861889 +0000
++++ b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py	2026-09-23 22:20:03.563851363 +0000
+@@ -197,6 +197,19 @@
+ READ_NOC_SPLIT = 0
+ WRITE_NOC_SPLIT = 0
+ 
++# Hop-aware write NoC (Perf 2, perf_experiments/hop_aware_noc). The writer (BRISC, NoC1) sends DRAM
++# bank b's tile writes on NoC0 instead when NoC0's Tensix core -> bank path is at least this many
++# hops shorter (28 % of (core, bank) pairs on WH n150), still in DM_DEDICATED_NOC. Only where NoC0
++# carries no DRAM read traffic (input not in DRAM): with DRAM reads on NoC0 it measured +12..30 %.
++# Same-session medians of 3: [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM 16671 -> 14376 ns, L1
++# interleaved [1,1,16384,64] -> DRAM 22120 -> 20179 ns. 0 = off.
++HOP_WRITE_MIN_SAVING = 6
++# ...and only on outputs of at least this many full-tile equivalents: below it the writes are
++# latency-bound, not NoC1-congested, and NoC0's slower DRAM write path costs (8 Tensix cores x
++# 16 tiles = 128 tiles: +5..10 %; 256 tiles on 2 or 16 Tensix cores: -6 / -4 %).
++HOP_WRITE_MIN_TILES = 256
++HOP_SEM = 1  # semaphore id of the writer's "NoC0 writes ACKed" flag (CO_READ_SEM is 0)
++
+ # ---- Padding (Refinement 4). The reader fills everything of the padded tile grid the input does
+ # not cover (W tail, H tail, whole pad sticks / tile-rows / images) before it publishes a slot.
+ # Fills shorter than PAD_NOC_MIN_BYTES are RISC-V stores (fill_l1_range); longer ones are NoC
+@@ -849,6 +862,18 @@
+     if write_noc_split != 0:
+         write_ahead = 1
+     dynamic_noc = read_noc_split != 0 or write_noc_split != 0
++    out_mc = output_tensor.memory_config()
++    hop_write_t = (
++        HOP_WRITE_MIN_SAVING
++        if ttnn.device.is_wormhole_b0(device)  # the kernel's NoC-grid / DRAM-coordinate model is Wormhole's
++        and in_mc.buffer_type != ttnn.BufferType.DRAM
++        and out_mc.buffer_type == ttnn.BufferType.DRAM
++        and out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
++        and not (output_resident or split_reader or dynamic_noc or BANK_COALESCE_SCATTER_WRITE)
++        and write_ahead == 1
++        and R * C * tile_h // FULL_TILE_HEIGHT >= HOP_WRITE_MIN_TILES
++        else 0
++    )
+     bank_stride = (
+         BANK_STRIDE
+         if stick_reader
+@@ -1004,6 +1029,7 @@
+         CO_READ_SEM,
+     ]
+     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
++    reader_ct_args.extend([hop_write_t, HOP_SEM])
+     writer_ct_args = [
+         CB_OUTPUT_TILES,
+         block_width,
+@@ -1028,6 +1054,7 @@
+     ]
+     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
++    writer_ct_args.extend([hop_write_t, HOP_SEM])
+     numeric = NumericConfig(input_tensor.dtype, output_tensor.dtype, compute_kernel_config)
+     compute_ct_args = [
+         CB_INPUT_STICKS,
+@@ -1122,7 +1149,8 @@
+     return ttnn.ProgramDescriptor(
+         kernels=[reader_kernel, writer_kernel, compute_kernel],
+         semaphores=(
+-            [ttnn.SemaphoreDescriptor(id=CO_READ_SEM, core_ranges=all_cores, initial_value=0)] if co_read else []
++            ([ttnn.SemaphoreDescriptor(id=CO_READ_SEM, core_ranges=all_cores, initial_value=0)] if co_read else [])
++            + ([ttnn.SemaphoreDescriptor(id=HOP_SEM, core_ranges=all_cores, initial_value=0)] if hop_write_t else [])
+         ),
+         cbs=cbs + [cb_output_tiles],
+     )

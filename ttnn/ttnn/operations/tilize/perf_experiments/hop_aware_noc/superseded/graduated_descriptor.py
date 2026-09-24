@@ -1,3 +1,5 @@
+# hop_aware_noc: the op's tilize_program_descriptor.py with graduate_writer_hop.patch applied (verification copy;
+# the harness variant "grad" points its KERNEL_DIR at kernels_dedg_hop/). Not imported by the op.
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +43,6 @@ quantum through two CBs of depth_in / depth_out quanta (2 at the default knobs).
 
 from __future__ import annotations
 
-import functools
 import os
 from pathlib import Path
 
@@ -198,6 +199,19 @@ EAGER_PUBLISH = False
 READ_NOC_SPLIT = 0
 WRITE_NOC_SPLIT = 0
 
+# Hop-aware write NoC (Perf 2, perf_experiments/hop_aware_noc). The writer (BRISC, NoC1) sends DRAM
+# bank b's tile writes on NoC0 instead when NoC0's Tensix core -> bank path is at least this many
+# hops shorter (28 % of (core, bank) pairs on WH n150), still in DM_DEDICATED_NOC. Only where NoC0
+# carries no DRAM read traffic (input not in DRAM): with DRAM reads on NoC0 it measured +12..30 %.
+# Same-session medians of 3: [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM 16671 -> 14376 ns, L1
+# interleaved [1,1,16384,64] -> DRAM 22120 -> 20179 ns. 0 = off.
+HOP_WRITE_MIN_SAVING = 6
+# ...and only on outputs of at least this many full-tile equivalents: below it the writes are
+# latency-bound, not NoC1-congested, and NoC0's slower DRAM write path costs (8 Tensix cores x
+# 16 tiles = 128 tiles: +5..10 %; 256 tiles on 2 or 16 Tensix cores: -6 / -4 %).
+HOP_WRITE_MIN_TILES = 256
+HOP_SEM = 1  # semaphore id of the writer's "NoC0 writes ACKed" flag (CO_READ_SEM is 0)
+
 # ---- Padding (Refinement 4). The reader fills everything of the padded tile grid the input does
 # not cover (W tail, H tail, whole pad sticks / tile-rows / images) before it publishes a slot.
 # Fills shorter than PAD_NOC_MIN_BYTES are RISC-V stores (fill_l1_range); longer ones are NoC
@@ -297,200 +311,12 @@ BANK_COALESCE_SCATTER_WRITE = False
 CO_READ_SHARE = 0.5
 CO_READ_SEM = 0  # semaphore id of the writer's "co-read landed" flag (the op's only semaphore)
 # Where it engages, by the input's BufferType: (min, max) stick-segment bytes, None = unbounded.
-# R8 measured the POSITIONAL split losing past 128 B on DRAM (192 B +4.6 %, 256 B +3..6 %,
-# 512 B..2 KiB +26..31 %): its NoC1 half took the long data path (Perf 2, below); with the
-# geometric split the DRAM window is 256 B (unbounded for a resident output). An L1 source reads well on both NoCs: interleaved L1 wins at every width
+# The writer's share travels on NoC1, which reads DRAM poorly: past ~128 B a DRAM read is no
+# longer issue-bound and the NoC1 half loses (192 B +4.6 %, 256 B +3..6 %, 512 B..2 KiB +26..31 %,
+# medians of 3). An L1 source reads well on both NoCs: interleaved L1 wins at every width
 # ([1,1,2048,W], 64 cores: 128 B -14 %, 512 B -24 %, 1 KiB -17 %, 2 KiB -28 %). A sharded L1 input
 # that streams (i.e. is not consumed resident) reads the same L1 banks through the accessor.
-CO_READ_SEGMENT_BYTES = {ttnn.BufferType.DRAM: (0, 256), ttnn.BufferType.L1: (0, None)}
-# A resident output (compute packs into this Tensix core's own shard) issues no NoC writes, so the
-# writer RISC-V's NoC1 carries only its co-read share: co-read then engages at ANY segment size
-# (DRAM -> HEIGHT_SHARDED L1 [1,1,2048,W], 64 cores: 128 B -24 %, 256 B -17 %, 512 B -8 %,
-# 1 KiB -11 % (LOOSE_CASES[8]), 2 KiB -12 %). With NoC-written output, past 256 B the op is at the
-# DRAM roofline and the writer's own NoC1 tile writes collide with its reads: 512 B..2 KiB measured
-# +0..6 % (DRAM out) and +6..14 % (L1-interleaved out), so the window stays 256 B there.
-CO_READ_RESIDENT_OUTPUT_UNBOUNDED = True
-# A 2-D split (several column groups per tile-row) makes those Tensix cores read segments of the SAME
-# tile_h sticks, so the op's reads pile onto that tile-row's banks (tile_h = 32 sticks over 12 banks:
-# 8 banks carry 3) and past 128 B it is bank-bound: co-read at 256 B measured +2..6 %
-# ([1,1,32,8192] = LOOSE_CASES[4], [1,1,256,1024]) where a row split wins -9..-14 % ([1,1,2048,128]).
-CO_READ_SHARED_STICK_MAX_BYTES = 128
-# Without the geometric lists (not WH, an L1 / sharded / paged input, or a light-load walk the model
-# keeps positional) R8's positional DRAM window applies unchanged.
-CO_READ_POSITIONAL_DRAM_MAX_BYTES = 128
-
-# ---- Perf 2 (hop_aware_coread): WHICH sticks the writer RISC-V co-reads, by DRAM-bank geometry.
-# A read's data path is bank -> core: NoC0 routes east then south, NoC1 west then north, on a
-# 10 x 12 torus (WH), and DRAM banks sit in physical columns x = 0 and x = 5. The request travels
-# the other way round the same rings, so request + response is the full loop on either NoC; only
-# the data path's length differs, and under load that is what costs. R8's positional cut (BRISC
-# reads the last half of the rotated order) sends ~half its sticks the long way: at 1 KiB segments
-# BRISC's 16 NoC1 reads took ~15.6 k cycles vs NCRISC's 32 NoC0 reads in ~8.3 k (zones,
-# LOOSE_CASES[8]), which is why R8 had to gate DRAM co-read to <= 128 B. Inverting the preference at
-# the same split sizes costs +24..80 % over the preferred split: the geometry is the lever.
-# The split (_co_read_split): BRISC takes the k sticks whose NoC1 data path is most shorter, k
-# minimizing  max(n_ncrisc, n_brisc) * CO_READ_ISSUE_CYCLES              (issue chain per RISC-V)
-#           + w * (sum of data-path hops + CO_READ_NOC1_PENALTY_HOPS * n_brisc)  (shared link load)
-# with w = CO_READ_HOP_WEIGHT * flits(segment) * active_cores / 64. Light load (few cores, 64-B
-# segments) -> the balanced 16 / 16 cut (the issue chain is the op there); heavy load -> near-pure
-# geometry. The NoC1 penalty is measured: sticks with EQUAL hops are cheaper on NoC0 (sending the
-# ties to NoC1 cost +13 % on LOOSE_CASES[8]).
-# Measured, this change vs R8 (WH B0 n150, bf16 unless noted, device-kernel ns, medians of 6
-# same-session A/Bs; identical-program pairs spread -5.5..+4.8 %, the noise floor):
-#   LOOSE_CASES[8] (DRAM -> HEIGHT_SHARDED L1, 1 KiB) -10 %   [1,1,2048,64] -5 %   [1,1,2048,128] -9 %
-#   [1,1,2048,W] -> HEIGHT_SHARDED L1: W=64 -24 %, W=256 -6 %, W=1024 -12 %   fp32 [1,1,2048,32] -12 %
-#   [1,1,2048,128] -> L1 -7 %   [1,1,32,4096] -6 %   LOOSE_CASES[3] / [4] / [5] / [0]: flat.
-# CO_READ_SPLIT = "positional" restores R8's cut (same kernels, lists = the positional steps).
-CO_READ_SPLIT = "geometry"
-CO_READ_ISSUE_CYCLES = 45  # one stick-read issue on one RISC-V (NCRISC reader_issue zone: ~708 cycles / 16)
-CO_READ_HOP_WEIGHT = 2.0  # cycles per 32-B flit-hop of data path at full-grid load
-CO_READ_NOC1_PENALTY_HOPS = 2
-_WH_NOC_GRID = (10, 12)  # NoC0 torus (x, y)
-_WH_TRANSLATED_ORIGIN = 18  # first translated Tensix x / y (worker_core_from_logical_core)
-_WH_TENSIX_X = (1, 2, 3, 4, 6, 7, 8, 9)  # translated x - 18 -> physical NoC0 x (WH harvests rows only)
-_WH_TENSIX_ROWS = (1, 2, 3, 4, 5, 7, 8, 9, 10, 11)  # physical NoC0 rows a Tensix row can sit on
-_CO_READ_ROW_CANDIDATES = 3  # up to 2 harvested rows above a Tensix row -> its row is one of 3
-# The list path's own cost vs R8's contiguous loop (zones, [1,1,128,64]): ~4 cycles per listed read,
-# ~65 cycles of physical-row select and ~90 cycles of launch (bigger binaries) per RISC-V. When the
-# model's mean per-core saving is below this, the program keeps R8's positional cut and HEAD's
-# exact binaries (no CO_READ_LISTED define, no list RT args): light-load walks, where any balanced
-# cut is equivalent and only the issue chain counts ([1,1,128,64] / [1,1,256,64]: 8 / 16 cores).
-CO_READ_LIST_MIN_GAIN_CYCLES = 250
-
-# ---- Perf 2 onepos_pipeline (perf_experiments/onepos_pipeline/README.md): column sub-blocks.
-# Compute tilizes each tile-row as column sub-blocks of SUB_BLOCK_TILES tiles (never 1: a trailing
-# 1-tile remainder merges into the previous sub-block) and pushes each sub-block's output pages as
-# soon as it is packed; the writer writes each sub-block at once, in store_rows' tile order
-# (production starts at the sub-block holding the rotated first tile). The writer's first write then
-# waits for one sub-block instead of the whole tile-row: on a one-position walk it otherwise idles
-# for the whole tilize (writer_wait 1361 -> 385 cycles on LOOSE_CASES[7]). Raw WH LLK on compute (the
-# helper cannot tilize a column slice of a wider row: kernels/tilize_compute.cpp, tilize_cols_fast).
-# 0 = off: exactly the pre-sub-block programs (no define, no extra RT arg).
-# Engages on EVERY walk (one or many positions) where it is expressible: Wormhole (the BH
-# fast-tilize LLK has another signature), the output streamed by store_rows (not resident: compute
-# packs into the shard and nothing is written; no split reader, write_ahead == 1, no write NoC
-# split: the parked knobs' other store paths), block_width >= 4 (fewer tiles cannot form two
-# >= 2-tile sub-blocks). Multi-position walks measured flat or faster, so no one-position carve-out.
-# Measured (WH B0 n150, 64 Tensix cores, DEVICE KERNEL DURATION ns, same-session medians, off -> on,
-# bit-exact vs off on every case):
-#   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM  16997 -> 15568 (-8.4 %, n=6), 16950 -> 15856
-#   (-6.5 %, n=8); LOOSE_CASES[4] [1,1,32,8192] -2.2 / -1.9 %; resident input -> DRAM / L1 other widths and
-#   dtypes -4 .. -10 %; L1-interleaved source -1 .. -5 %; DRAM -> DRAM one-position -3 .. +1 %;
-#   multi-position DRAM -> DRAM ([1,1,4096..16384,128..1024], tiny / fp32 / retile / low_l1): -2.5 .. +1.7 %
-#   (noise), HEIGHT_SHARDED multi-row shards -1 .. -5 %. 2-tile sub-blocks beat 4-tile (-2.4 %) and 8-tile.
-SUB_BLOCK_TILES = 2
-
-# ---- Perf 2 hop_aware_noc (perf_experiments/hop_aware_noc/README.md): hop-aware write NoC.
-# The writer (BRISC, NoC1, DM_DEDICATED_NOC) sends DRAM bank b's tile writes on NoC0 instead when
-# NoC0's Tensix core -> bank path is at least HOP_WRITE_MIN_SAVING hops shorter (28 % of the
-# (Tensix core, bank) pairs on WH n150), on whichever store path runs (store_rows or the column
-# sub-block path). NCRISC re-syncs its NoC0 counters after BRISC's last NoC0 ACK (HOP_SEM flag).
-# 0 = off: exactly the pre-hop programs (no define, no extra semaphore).
-# Engages wherever expressible AND not measured slower:
-#   expressible: Wormhole (the kernel's 10 x 12 NoC torus / untranslated-DRAM model), a DRAM
-#   TensorMemoryLayout::INTERLEAVED output (page p in bank p mod 12; an L1 or sharded output has
-#   Tensix-core banks), output not resident (nothing written), write_ahead == 1 and no parked
-#   write NoC split / DM_DYNAMIC_NOC lever (TileStorer's trids and the dynamic mode are one-NoC
-#   schemes), no BANK_COALESCE_SCATTER_WRITE (NCRISC NoC0 writes would share NIU 0's counters).
-#   carve-outs (measured, see HOP_WRITE_MIN_CORES / HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE).
-# Measured (WH B0 n150, DEVICE KERNEL DURATION ns, same-session medians of 4..6, head -> hop, bit-exact):
-#   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM (sub-block path) 15808 -> 14086 (-10.9 %,
-#   n=10); [1,1,8192,256] HEIGHT_SHARDED -14..-16 %, [1,1,1024,1024] BLOCK_SHARDED -12..-14 %, L1
-#   interleaved [1,1,16384,64] -11..-13 % (store_rows path), fp32 -10 %, WIDTH_SHARDED -8 %, padded
-#   -4..-9 %, low_l1 -13..-14 %, retile 32 -> 16 flat; guards (not engaged) LOOSE_CASES 0/1/2/6/8
-#   byte-identical programs.
-HOP_WRITE_MIN_SAVING = 6
-# Carve-out: fewer writing Tensix cores than this. NoC1's DRAM write path only congests with many
-# concurrent writers; below that each writer is bound by its own write path, and NoC0's slower DRAM
-# write path shows. Head -> hop with the carve-out lifted: 2 / 4 / 8 Tensix cores +41..45 / +26..41
-# / +15..28 %, 16 +2..10 % (HEIGHT / BLOCK / WIDTH_SHARDED and L1 interleaved), 20 -3..+5 %, 24
-# HEIGHT_SHARDED -4..-7 % but BLOCK_SHARDED 6 x 4 +1..+7 %; 32 -2.5..-8 %, 48 -10 %, 64 -9..-17 %.
-# Small outputs on many Tensix cores are flat (64 tiles on 64: +0.2 / +1.3 %): writers, not tiles.
-HOP_WRITE_MIN_CORES = 32
-# Carve-out: a DRAM input carrying more than this many input bytes per Tensix core. Its DRAM read
-# responses ride NoC0 through the steady state, and NoC0's write share then costs more than it
-# relieves NoC1 (carve-out lifted): [1,1,16384,64] +25 %, [1,1,16384,32] +34 %, [1,1,32768,64] +32 %,
-# [1,1,8192,256] +32 %, [1,1,2048,256] +19 %, [1,1,4096,128] +18 %, [1,1,1024,1024] +11 %. At
-# <= 8 KiB per Tensix core the reads are a short prefix and hop wins: [1,1,4096,64] -11 %,
-# [1,1,32,8192] -7 %, [1,1,2048,64] fp32 -13 %, [1,1,1024,256] -7.5 %. Left on the table at 16 KiB:
-# [1,1,8192,32] fp32 -6..-10 %, [1,1,8192,64] -2..-6 % (other 16 KiB shapes +8..+34 %).
-# None = no carve-out, 0 = every DRAM input.
-HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE = 8192
-HOP_SEM = 1  # semaphore id of the writer's "NoC0 writes ACKed" flag (CO_READ_SEM is 0)
-
-
-def _sub_block_count(block_width, sb_tiles):
-    """tilize_sub_blocks::SubBlocks<block_width, sb_tiles>::n (kernels/tilize_sub_blocks.hpp)."""
-    sb = max(2, sb_tiles)
-    n = 1 if block_width <= sb else _div_up(block_width, sb)
-    return n - 1 if n > 1 and block_width - (n - 1) * sb == 1 else n
-
-
-def _co_read_bank_xy(device):
-    """Physical NoC0 (x, y) of each DRAM bank (bank b = DRAM view b), or None when the geometric
-    split does not apply (not Wormhole: its NoC grid / endpoint tables are the ones above)."""
-    if str(device.arch()).lower().split(".")[-1] != "wormhole_b0":
-        return None
-    n = device.dram_grid_size().x
-    return tuple((c.x, c.y) for c in (device.dram_core_from_logical_core(ttnn.CoreCoord(b, 0)) for b in range(n)))
-
-
-@functools.lru_cache(maxsize=4096)
-def _co_read_split(bank_xy, px, py, first_stick, rotation, co_read, tile_h, flits, num_cores):
-    """(sequence steps (s -> stick (s + rotation) mod tile_h) the writer RISC-V reads, the model's
-    predicted saving in cycles over R8's positional cut)."""
-    gx, gy = _WH_NOC_GRID
-    hops = []
-    for s in range(tile_h):
-        dx, dy = bank_xy[(first_stick + (s + rotation) % tile_h) % len(bank_xy)]
-        hops.append(((px - dx) % gx + (py - dy) % gy, (dx - px) % gx + (dy - py) % gy))  # (NoC0, NoC1)
-    w = CO_READ_HOP_WEIGHT * flits * num_cores / 64
-
-    def cost(brisc):
-        total = sum(hops[s][1] + CO_READ_NOC1_PENALTY_HOPS if s in brisc else hops[s][0] for s in range(tile_h))
-        return max(len(brisc), tile_h - len(brisc)) * CO_READ_ISSUE_CYCLES + w * total
-
-    order = sorted(range(tile_h), key=lambda s: (hops[s][1] - hops[s][0], s))  # most NoC1-favoured first
-    total = sum(h0 for h0, _ in hops)
-    best_cost, best_k = None, co_read
-    for k in range(tile_h + 1):
-        if k:
-            s = order[k - 1]
-            total += hops[s][1] + CO_READ_NOC1_PENALTY_HOPS - hops[s][0]
-        c = (max(k, tile_h - k) * CO_READ_ISSUE_CYCLES + w * total, abs(k - co_read))
-        if best_cost is None or c < best_cost:
-            best_cost, best_k = c, k
-    chosen = frozenset(order[:best_k])
-    return chosen, cost(frozenset(range(tile_h - co_read, tile_h))) - cost(chosen)
-
-
-def _co_read_lists(device, bank_xy, core, first_stick, rotation, co_read, tile_h, segment_bytes, num_cores):
-    """(reader RT tail, writer RT tail, modelled saving in cycles over R8's positional cut): the
-    stick-list blocks select_co_read_list decodes, one per candidate physical row; the saving is
-    the worst candidate's. (None, None, 0) when this Tensix core has no geometry (not WH /
-    untranslated coordinates)."""
-    words = (tile_h + 3) // 4
-    virt = device.worker_core_from_logical_core(core)
-    xi, yi = virt.x - _WH_TRANSLATED_ORIGIN, virt.y - _WH_TRANSLATED_ORIGIN
-    if bank_xy is None or not (0 <= xi < len(_WH_TENSIX_X) and 0 <= yi < len(_WH_TENSIX_ROWS)):
-        return None, None, 0
-    px, rows = _WH_TENSIX_X[xi], _WH_TENSIX_ROWS[yi : yi + _CO_READ_ROW_CANDIDATES]
-    splits = [
-        _co_read_split(bank_xy, px, py, first_stick, rotation, co_read, tile_h, max(1, segment_bytes // 32), num_cores)
-        for py in rows
-    ]
-    packed_rows = 0
-    for c in range(_CO_READ_ROW_CANDIDATES):
-        packed_rows |= (rows[c] if c < len(rows) else 0xFF) << (8 * c)
-    tails = ([packed_rows], [packed_rows])
-    for brisc, _ in splits:
-        for tail, mine in zip(tails, (False, True)):
-            sticks = [(s + rotation) % tile_h for s in range(tile_h) if (s in brisc) == mine]
-            packed = [0] * words
-            for i, j in enumerate(sticks):
-                packed[i // 4] |= j << (8 * (i % 4))
-            tail.extend([len(sticks), *packed])
-    return tails[0], tails[1], min(gain for _, gain in splits)
+CO_READ_SEGMENT_BYTES = {ttnn.BufferType.DRAM: (0, 128), ttnn.BufferType.L1: (0, None)}
 
 
 # ---- Numeric formats (Refinement 7). cb_input_sticks carries the input dtype and cb_output_tiles
@@ -940,24 +766,6 @@ def create_program_descriptor(
     # with a stick segment inside its input BufferType's CO_READ_SEGMENT_BYTES window.
     co_read = min(tile_h - 1, int(tile_h * CO_READ_SHARE))
     co_read_min, co_read_max = CO_READ_SEGMENT_BYTES.get(in_mc.buffer_type, (0, -1))
-    # Perf 2: the geometric split applies to a DRAM-interleaved input with one page per stick
-    # (stick s lives in bank s mod num_banks) on a board whose geometry is known.
-    co_read_geometric = (
-        CO_READ_SPLIT == "geometry"
-        and in_mc.buffer_type == ttnn.BufferType.DRAM
-        and in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        and pages_per_stick == 1
-    )
-    if in_mc.buffer_type == ttnn.BufferType.DRAM:
-        if output_resident and CO_READ_RESIDENT_OUTPUT_UNBOUNDED:
-            co_read_max = None  # no NoC writes: the writer RISC-V's NoC1 carries only its reads
-        elif not all(col_start == 0 and cols == C for _, _, _, col_start, cols in assignment):
-            # (None = unbounded, e.g. a knob that opens the window)
-            co_read_max = (
-                CO_READ_SHARED_STICK_MAX_BYTES
-                if co_read_max is None
-                else min(co_read_max, CO_READ_SHARED_STICK_MAX_BYTES)
-            )
     segment_bytes = min(block_width, core_col_tiles_max) * TILE_WIDTH * in_elem_bytes
     if not (
         co_read > 0
@@ -967,37 +775,6 @@ def create_program_descriptor(
         and not (input_resident or retile or split_reader or padded)
         and READ_NOC_SPLIT == 0
         and BANK_STRIDE == 0
-    ):
-        co_read = 0
-    # Perf 2: the per-core stick lists, sent (CO_READ_LISTED) only where the model's mean saving
-    # beats the list path's own cost. Without them a DRAM segment past R8's positional window
-    # (CO_READ_POSITIONAL_DRAM_MAX_BYTES) is not co-read at all.
-    co_read_lists = {}  # (x, y) -> (reader RT tail, writer RT tail)
-    co_read_banks = _co_read_bank_xy(device) if co_read and co_read_geometric else None
-    if co_read_banks is not None:
-        tails = []
-        for core_idx, (core, row_start, *_) in enumerate(assignment):
-            reader_tail, writer_tail, gain = _co_read_lists(
-                device,
-                co_read_banks,
-                core,
-                row_start * tile_h,  # one position per core: its tile-row is row_start
-                core_idx % tile_h,  # the RT loop's stick_rotation
-                co_read,
-                tile_h,
-                segment_bytes,
-                len(assignment),
-            )
-            tails.append((core, reader_tail, writer_tail, gain))
-        if all(t[1] is not None for t in tails) and (
-            sum(t[3] for t in tails) / len(tails) >= CO_READ_LIST_MIN_GAIN_CYCLES
-        ):
-            co_read_lists = {(core.x, core.y): (rt, wt) for core, rt, wt, _ in tails}
-    if (
-        co_read
-        and not co_read_lists
-        and in_mc.buffer_type == ttnn.BufferType.DRAM
-        and segment_bytes > CO_READ_POSITIONAL_DRAM_MAX_BYTES
     ):
         co_read = 0
     coalesce_row_bytes = BANK_COALESCE_STAGE_DEPTH * tile_h * stick_page_bytes  # staging per tile-row
@@ -1087,6 +864,18 @@ def create_program_descriptor(
     if write_noc_split != 0:
         write_ahead = 1
     dynamic_noc = read_noc_split != 0 or write_noc_split != 0
+    out_mc = output_tensor.memory_config()
+    hop_write_t = (
+        HOP_WRITE_MIN_SAVING
+        if ttnn.device.is_wormhole_b0(device)  # the kernel's NoC-grid / DRAM-coordinate model is Wormhole's
+        and in_mc.buffer_type != ttnn.BufferType.DRAM
+        and out_mc.buffer_type == ttnn.BufferType.DRAM
+        and out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and not (output_resident or split_reader or dynamic_noc or BANK_COALESCE_SCATTER_WRITE)
+        and write_ahead == 1
+        and R * C * tile_h // FULL_TILE_HEIGHT >= HOP_WRITE_MIN_TILES
+        else 0
+    )
     bank_stride = (
         BANK_STRIDE
         if stick_reader
@@ -1204,45 +993,6 @@ def create_program_descriptor(
             ],
         )
 
-    # ---------------- column sub-blocks (SUB_BLOCK_TILES) ----------------
-    sub_block_tiles = 0
-    if (
-        SUB_BLOCK_TILES > 0
-        and str(device.arch()).lower().split(".")[-1] == "wormhole_b0"
-        and not (output_resident or split_reader)
-        and write_ahead == 1
-        and write_noc_split == 0
-        and _sub_block_count(block_width, SUB_BLOCK_TILES) > 1
-    ):
-        sub_block_tiles = max(2, SUB_BLOCK_TILES)
-    sub_block_defines = [("TILIZE_SUB_BLOCK_TILES", str(sub_block_tiles))] if sub_block_tiles else []
-
-    # ---------------- hop-aware write NoC (HOP_WRITE_MIN_SAVING) ----------------
-    out_mc = output_tensor.memory_config()
-    writer_cores = sum(1 for _, _, rows, _, cols in assignment if rows * cols > 0)
-    hop_write_t = (
-        HOP_WRITE_MIN_SAVING
-        if HOP_WRITE_MIN_SAVING > 0
-        and str(device.arch()).lower().split(".")[-1] == "wormhole_b0"
-        and (
-            in_mc.buffer_type != ttnn.BufferType.DRAM
-            or HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE is None
-            or R * tile_h * C * TILE_WIDTH * in_elem_bytes <= HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE * writer_cores
-        )
-        and out_mc.buffer_type == ttnn.BufferType.DRAM
-        and out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        and not output_resident
-        and write_ahead == 1
-        and not dynamic_noc
-        and not (coalesce and BANK_COALESCE_SCATTER_WRITE)
-        and writer_cores >= HOP_WRITE_MIN_CORES
-        else 0
-    )
-    # the reader and writer compile the hop code in only under these defines
-    hop_defines = (
-        [("TILIZE_HOP_WRITE_MIN_SAVING", str(hop_write_t)), ("TILIZE_HOP_SEM", str(HOP_SEM))] if hop_write_t else []
-    )
-
     # ---------------- kernel args ----------------
     # CT args: config only (dtype pair, tile, block_width, residency, accessor args) ->
     # program-cache friendly; buffer addresses ride on RT args and on the resident CBs.
@@ -1281,6 +1031,7 @@ def create_program_descriptor(
         CO_READ_SEM,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend([hop_write_t, HOP_SEM])
     writer_ct_args = [
         CB_OUTPUT_TILES,
         block_width,
@@ -1305,6 +1056,7 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    writer_ct_args.extend([hop_write_t, HOP_SEM])
     numeric = NumericConfig(input_tensor.dtype, output_tensor.dtype, compute_kernel_config)
     compute_ct_args = [
         CB_INPUT_STICKS,
@@ -1354,19 +1106,11 @@ def create_program_descriptor(
             in_addr,
             stick_rotation,
         ]
-        if co_read_lists:
-            reader_tail, writer_tail = co_read_lists[(core.x, core.y)]
-            reader_rt_args[core.x][core.y].extend(reader_tail)
-            writer_rt_args[core.x][core.y].extend(writer_tail)
-        # sub-blocks: RT arg 2 = stick_rotation (compute derives the writer's first sub-block from it)
-        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles] + (
-            [stick_rotation] if sub_block_tiles else []
-        )
+        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles]
 
-    co_read_defines = [("CO_READ_LISTED", "1")] if co_read_lists else []
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
-        defines=_kernel_defines() + co_read_defines + hop_defines,
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
@@ -1380,7 +1124,7 @@ def create_program_descriptor(
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
-        defines=_kernel_defines() + co_read_defines + sub_block_defines + hop_defines,
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
@@ -1394,7 +1138,7 @@ def create_program_descriptor(
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
-        defines=_kernel_defines() + sub_block_defines,
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
