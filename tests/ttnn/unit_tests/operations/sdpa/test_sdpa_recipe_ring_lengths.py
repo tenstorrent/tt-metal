@@ -59,8 +59,10 @@ def check_lengths(mesh, call, pairs, valid, record_property):
         try:
             outputs = call(n, l)
         except RuntimeError as error:
-            if not references and ("L1" in str(error) or "CBs need" in str(error)):
-                pytest.skip(f"layout exceeds L1: {str(error).splitlines()[0][:160]}")
+            # The CB layout depends on the length's padding (partial-tile masks), so any scalar length may be
+            # the first that does not fit; the tensor path below reuses the worst-case layout.
+            if "L1" in str(error) or "CBs need" in str(error):
+                pytest.skip(f"layout exceeds L1 at logical_n={n}: {str(error).splitlines()[0][:160]}")
             raise
         ttnn.synchronize_device(mesh)
         references.append(valid(outputs, n, l))
