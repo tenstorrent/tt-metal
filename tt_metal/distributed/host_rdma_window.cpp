@@ -125,26 +125,37 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
         return nullptr;
     }
 
+    // Both checks below are rank-local, but freeing the window is collective. Neither may
+    // return early: a rank freeing alone leaves the others waiting in a different collective.
+    std::string local_err;
+
     // The trailing flag needs the target to observe window memory with ordinary loads,
     // which is defined only under the unified model.
     int* model = nullptr;
     int flag = 0;
     MPI_Win_get_attr(im.win, MPI_WIN_MODEL, &model, &flag);
     if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
-        err =
+        local_err =
             "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "
             "flag is read with an ordinary load on the target, which that model leaves undefined.";
-        MPI_Win_free(&im.win);
-        return nullptr;
     }
 
     // Passive target for the whole run, so no access needs an epoch of its own.
-    if (const int rc = MPI_Win_lock_all(MPI_MODE_NOCHECK, im.win); rc != MPI_SUCCESS) {
-        err = mpi_error_text("MPI_Win_lock_all", rc);
-        MPI_Win_free(&im.win);
+    if (local_err.empty()) {
+        if (const int rc = MPI_Win_lock_all(MPI_MODE_NOCHECK, im.win); rc != MPI_SUCCESS) {
+            local_err = mpi_error_text("MPI_Win_lock_all", rc);
+        } else {
+            im.locked = true;
+        }
+    }
+
+    // The one collective every rank reaches whatever it found. On failure they all destroy
+    // `w`, whose destructor unlocks and frees -- one path, taken by everyone or no one.
+    std::string peer_err;
+    if (!agree(local_err.empty(), peer_err)) {
+        err = local_err.empty() ? peer_err : local_err;
         return nullptr;
     }
-    im.locked = true;
     return w;
 }
 
