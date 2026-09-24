@@ -422,7 +422,7 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
-def agmm_worker_grid(full_grid, transpose):
+def agmm_worker_grid(full_grid, transpose, num_links=None):
     """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
 
     The op places its input muxes on the device's last ROW when the core grid is transposed and its
@@ -430,8 +430,19 @@ def agmm_worker_grid(full_grid, transpose):
     workers must therefore avoid that row/column: reserve a row when transposed -> (x, y-1); reserve a
     column when not -> (x-1, y). `transpose` should be the op's own decision, i.e.
     `force_transpose or (M > N)`.
+
+    With `num_links`, the in0 sender axis (x when transposed, y when not) is also shortened until it
+    splits into exactly `num_links` groups of `ceil(axis / num_links)` workers, which the op asserts.
+    Blackhole's 12- and 10-long axes already do at 2 links; Wormhole's 8x9 grid at 4 links does not
+    when the grid is not transposed (9 rows -> 3 groups of 3), so it runs on 8 of the 9 rows.
     """
-    return ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    if not num_links:
+        return grid
+    axis = grid.x if transpose else grid.y
+    while axis > num_links and math.ceil(axis / math.ceil(axis / num_links)) != num_links:
+        axis -= 1
+    return ttnn.CoreCoord(axis, grid.y) if transpose else ttnn.CoreCoord(grid.x, axis)
 
 
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
@@ -760,7 +771,7 @@ def get_agmm_config(
     # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
     # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
     transpose_core_grid = force_transpose or M > N
-    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid)
+    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
     # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
     # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
