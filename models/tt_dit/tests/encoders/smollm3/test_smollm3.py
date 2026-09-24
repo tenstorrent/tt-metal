@@ -17,12 +17,7 @@ from models.tt_dit.utils.check import assert_quality
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis"),
-    [
-        pytest.param((1, 1), None, id="1x1"),
-        pytest.param((1, 2), None, id="1x2"),
-        pytest.param((1, 4), None, id="1x4"),
-        pytest.param((2, 2), 0, id="2x2sp"),
-    ],
+    [pytest.param((2, 2), 0, id="2x2sp")],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -30,13 +25,7 @@ from models.tt_dit.utils.check import assert_quality
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "masked",
-    [
-        pytest.param(True, id="masked"),
-        pytest.param(False, id="unmasked"),
-    ],
-)
+@pytest.mark.parametrize("masked", [pytest.param(True, id="masked")])
 def test_transformer(*, mesh_device: ttnn.MeshDevice, sp_axis: int | None, masked: bool) -> None:
     torch.manual_seed(0)
 

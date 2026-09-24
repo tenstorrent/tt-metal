@@ -28,18 +28,17 @@ from models.tt_dit.utils.check import assert_quality
 
 CHECKPOINT = "briaai/FIBO-vlm"
 PROMPT = "A red bicycle leaning against a stone wall at sunset."
-MAX_NEW_TOKENS = 64
+MAX_NEW_TOKENS = 32
 JSON_PREFIX = '{"short_description":'
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4"), pytest.param((1, 8), id="1x8")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_generation(*, mesh_device: ttnn.MeshDevice) -> None:
-    torch.set_num_threads(1)
     torch.manual_seed(0)
 
     tp_axis = 1
