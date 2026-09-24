@@ -445,3 +445,58 @@ inline void _llk_unpack_AB_matmul_(
         switch_config_context(unp_cfg_context);
     }
 }
+
+/**
+ * @brief Unpack the operand tiles for kt_dim consecutive K-tile steps of a matmul block.
+ *
+ * Runs @ref _llk_unpack_AB_matmul_ once per K tile, advancing operand A by one tile and operand B by
+ * in1_kt_stride tiles per step (operand A's rows are kt_dim tiles apart, as in the single-step call). The
+ * per-step delivery order into SrcA / SrcB is unchanged, so this pairs with both @ref _llk_math_matmul_ called
+ * kt_dim times and @ref _llk_math_matmul_kloop_.
+ *
+ * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
+ * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @param base_address_a: L1 base address of operand A's tile buffer.
+ * @param base_address_b: L1 base address of operand B's tile buffer.
+ * @param tile_index_a: Starting tile index into operand A for the first K tile.
+ * @param tile_index_b: Starting tile index into operand B for the first K tile.
+ * @param tile_size_a: Size of one operand A tile, used to compute per-tile offsets.
+ * @param tile_size_b: Size of one operand B tile, used to compute per-tile offsets.
+ * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
+ * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of K-tile steps to run; also operand A's row stride in tiles.
+ * @param in1_kt_stride: Operand B tiles between consecutive K tiles (its row width in tiles).
+ */
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+inline void _llk_unpack_AB_matmul_kloop_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const bool unpA_partial_face,
+    const bool unpB_partial_face,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t in1_kt_stride)
+{
+    for (std::uint32_t k = 0; k < kt_dim; k++)
+    {
+        _llk_unpack_AB_matmul_<kernel_broadcast_a, kernel_broadcast_b>(
+            base_address_a,
+            base_address_b,
+            tile_index_a + k,
+            tile_index_b + k * in1_kt_stride,
+            tile_size_a,
+            tile_size_b,
+            unpA_partial_face,
+            unpB_partial_face,
+            ct_dim,
+            rt_dim,
+            kt_dim);
+    }
+}
