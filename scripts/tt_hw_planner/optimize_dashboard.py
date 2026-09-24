@@ -280,22 +280,15 @@ def _serving_metrics(
     if stage_unit == "token" and fp_ms:
         tok_name = min(cur, key=lambda n: abs(cur[n] - fp_ms))
         tok_ms = cur[tok_name]
-        # The ledger's BASELINE is the TRUE original reading, so it is preferred for the baseline:
-        # deriving that from fp_ms (the CURRENT full-pipeline) pins baseline==current and hides the
-        # real gain as a bogus "0.0% vs baseline". The CURRENT figure is not taken from the ledger,
-        # because this view reports PER USER (= 1/TPOT) while the ledger's `current` is aggregate
-        # tok/s -- see the per_s comment below.
+        # Prefer the top-level, ledger-based throughput: its baseline is the TRUE original reading.
+        # Deriving the baseline from fp_ms (the CURRENT full-pipeline) pins baseline==current and
+        # hides the real gain as a bogus "0.0% vs baseline". Throughput is PER USER (= 1/TPOT).
         tt = throughput or {}
         tp_cur, tp_base = tt.get("current"), tt.get("baseline")
         base_tok_ms = (1000.0 / tp_base) if tp_base else fp_ms  # per-token decode = 1/throughput
         out["per_token"] = {"ms": tok_ms, "baseline_ms": base_tok_ms, "stage": tok_name}
         out["throughput"] = {
-            # PER USER, so derive it from TPOT: this view's unit is tok/s/user and 1/TPOT is that
-            # by definition. The ledger's `current` is AGGREGATE tok/s (its own unit says so), and
-            # preferring it published an aggregate number under a per-user label -- 40.0 tok/s/user
-            # beside a 30 ms per-token stage, which cannot both be true. The ledger value stays as
-            # the fallback for when no per-token stage was identified.
-            "per_s": (1000.0 / tok_ms) if tok_ms else tp_cur,
+            "per_s": tp_cur if tp_cur is not None else ((1000.0 / tok_ms) if tok_ms else None),
             "baseline": tp_base if tp_base is not None else (1000.0 / fp_ms),
             "unit": "tok/s/user",
         }
