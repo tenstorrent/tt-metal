@@ -84,6 +84,16 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
             cfg.ring_pages);
         return nullptr;
     }
+    // The ring is aliased into one core's arena, so a larger one addresses the next core's.
+    // Necessary, not sufficient: the ring starts at the socket's data_offset inside it.
+    if (fifo64 > kArenaBytes) {
+        err = fmt::format(
+            "H2DLeg::create: {} B page x {} ring pages exceeds the {} KiB arena",
+            cfg.page_bytes,
+            cfg.ring_pages,
+            kArenaBytes >> 10);
+        return nullptr;
+    }
 
     std::unique_ptr<H2DLeg> leg(new H2DLeg());
     Impl& im = *leg->impl_;
