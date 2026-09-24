@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "moe_ungroup_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -102,8 +103,19 @@ tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
+    const auto accessor_key = [](const ttnn::Tensor& tensor) {
+        return tt::tt_metal::TensorAccessorArgs(tensor.buffer()).get_compile_time_args();
+    };
+
+    // Mirror the exact TensorAccessorArgs state compiled into the reader and writer.
+    // Buffer addresses remain runtime arguments, so equivalent allocations still share
+    // a cached program while placement and aligned page-size changes do not.
     return tt::tt_metal::operation::hash_operation<MoeUngroupDeviceOperation>(
-        attrs, args.expert_out.dtype(), args.expert_out.logical_shape());
+        attrs,
+        accessor_key(args.expert_out),
+        accessor_key(args.plan),
+        accessor_key(args.offsets),
+        accessor_key(args.grouped_scores));
 }
 
 }  // namespace ttml::metal::ops::moe_ungroup::device
