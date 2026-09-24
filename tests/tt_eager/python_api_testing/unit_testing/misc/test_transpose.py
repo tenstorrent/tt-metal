@@ -126,6 +126,17 @@ def test_transpose_wh_bfp4(device):
     transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttnn.bfloat4_b)
 
 
+def test_transpose_identity_bfloat8_b(device):
+    # Regression test for #57715: an identity transpose (dim0 == dim1) on a bfloat8_b
+    # tensor used to typecast to bfloat16 and back even though no data movement occurs.
+    N = 1
+    C = 32
+    H = 32 * 2
+    W = 32 * 3
+    input_shape = (N, C, H, W)
+    transpose(input_shape, device, dim0=1, dim1=1, input_dtype=ttnn.bfloat8_b)
+
+
 @pytest.mark.parametrize(
     "dtype",
     (
