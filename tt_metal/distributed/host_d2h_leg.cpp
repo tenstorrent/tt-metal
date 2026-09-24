@@ -108,7 +108,14 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     im.cfg = cfg;
     im.page_size = page;
     im.fifo_bytes = static_cast<uint32_t>(fifo64);
-    im.device_id = static_cast<uint32_t>(mesh->get_devices()[0]->id());
+    // Empty is legal, not malformed: a mesh whose slots are all remote has no local device
+    // (mesh_device.cpp:839), and this leg needs one to write bytes_acked to.
+    const std::vector<IDevice*> devices = mesh->get_devices();
+    if (devices.empty()) {
+        err = "D2HLeg::create: the mesh has no local device";
+        return nullptr;
+    }
+    im.device_id = static_cast<uint32_t>(devices.front()->id());
 
     const uint32_t n = cfg.cores;
     im.core.resize(n);
@@ -118,7 +125,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
             const CoreCoord logical{i % cfg.grid_width, i / cfg.grid_width};
             // Logical here: D2HSocket does its own translation. The virtual coords below
             // are for the bytes_acked write only.
-            im.core[i].virt = mesh->get_devices()[0]->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
+            im.core[i].virt = devices.front()->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
             im.core[i].socket = std::make_unique<dist::D2HSocket>(
                 mesh,
                 dist::MeshCoreCoord{dist::MeshCoordinate(0, 0), logical},
