@@ -22,6 +22,10 @@ constexpr uint32_t kMaxCreditPeers = 8;
 // The credit line, not the UVA selector, is what caps the host count.
 constexpr uint32_t kMaxHosts = kMaxCreditPeers;
 
+// What the credit array can index is kMaxHosts; what the H2H RX ring can actually serve is
+// this. rx_slot_offset() has no host dimension, so a second sender collides -- raise together.
+constexpr uint32_t kMaxH2HHostsSupported = 2;
+
 // One line each, so peers RDMA-writing different entries never contend. Absolute counts
 // make a duplicated or reordered credit a no-op, so nothing here needs ordering.
 constexpr uint64_t kCreditLineBytes = 64;
