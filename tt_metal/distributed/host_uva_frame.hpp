@@ -72,7 +72,8 @@ static_assert(sizeof(FrameTrailer) == kFrameTrailerBytes, "the trailer must fill
 // A peer's bytes name the address this core stores to, so the span is bounded before use.
 constexpr bool tt_uva_frame_signal_ok(uint32_t sig_op, uint32_t sig_off, uint32_t l1_size) {
     return sig_op == kSignalNone ||
-           (sig_op <= kSignalAdd && static_cast<uint64_t>(sig_off) + sizeof(uint32_t) <= l1_size);
+           (sig_op <= kSignalAdd && sig_off % alignof(uint32_t) == 0 &&
+            static_cast<uint64_t>(sig_off) + sizeof(uint32_t) <= l1_size);
 }
 
 constexpr uint32_t tt_uva_frame_page_size(uint32_t payload_bytes) { return payload_bytes + kFrameTrailerBytes; }
