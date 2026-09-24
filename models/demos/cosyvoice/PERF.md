@@ -77,19 +77,24 @@ does not, the run fails and both are updated together.
 |---|---:|---:|---:|---:|
 | Semantic token generation | `>= 30 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
 | Semantic token generation (stretch) | `>= 60 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
-| Real-time factor | `< 0.5` | `0.342` ✅ | `0.362` ✅ | `0.552` ❌ |
-| Real-time factor (stretch) | `< 0.2` | `0.342` ❌ | `0.362` ❌ | `0.552` ❌ |
+| Real-time factor, steady state | `< 0.5` | `0.342` ✅ | `0.362` ✅ | `0.552` ❌ |
+| Real-time factor, steady state (stretch) | `< 0.2` | `0.342` ❌ | `0.362` ❌ | `0.552` ❌ |
 
-Best of each configuration; §3 breaks them out. `RTF < 0.5` is the only verdict that
-differs by architecture, and the gap is the compute grid: 64 cores against 130.
+Best of each configuration; §3 breaks them out. The steady state scales one decode step
+by the token count and replays the flow's trace. The `RTF < 0.5` requirement is judged
+instead on `synthesize`'s per-utterance figure, measured after this run (§3.5): ❌ on
+both Blackhole boards in every configuration, and asserted above `0.5` on n300. On the steady state, `RTF < 0.5` is the only verdict that differs by
+architecture, and the gap is the compute grid: 64 cores against 130.
 `RTF < 0.2` has a floor rather than being simply unmet (§3.4).
 
 ## 3. End-to-end real-time factor
 
-RTF is compute seconds per second of audio produced, measured on the captured
-utterance: 164 generated tokens, 3.27 s of audio at 22 050 Hz. The flow stage is timed on
-a second call at the same length, replaying its trace (Part II §2.2); `synthesize`
-captures that trace once per utterance.
+RTF is compute seconds per second of audio produced. §3.1–§3.4 give the steady state,
+measured on the captured utterance (164 generated tokens, 3.27 s of audio at 22 050 Hz):
+one decode step scaled by the token count, and the flow stage timed on a second call at
+the same length, replaying its trace (Part II §2.2). That leaves out what `synthesize`
+pays once per utterance: the prompt prefill, the decode-trace capture and the flow's trace
+capture. §3.5 has the per-utterance figure, which `RTF < 0.5` is judged on.
 
 The LLM runs once per token, and a second of speech is 50 tokens, so its contribution
 is `50 / tok_s` whatever the utterance length. The flow decoder runs ten Euler steps
@@ -144,6 +149,36 @@ under `1.5 ms`, against a best measured `4.97 ms`; Part II §1.3 has what limits
 
 The threshold is asserted against a recorded band, so an improvement fails the test
 until this table moves with it.
+
+### 3.5 What `synthesize` costs per utterance
+
+`test_device_synthesize_rtf` times `synthesize`'s three stages on the zero-shot Chinese
+example sentence from `COSYVOICE_INPUTS` (RAS, seed 1986), on the second call of the same
+utterance, so neither compilation nor first-use state is in the figure. RAS diverges once
+the logits differ in their last bits, so the utterance's length depends on the board and
+the configuration: 311 to 355 tokens below. Against the steady state, 2026-09-24, two runs
+per configuration on `p150a` and one on `p150b`:
+
+| configuration | `p150a` steady state | `p150a` `synthesize` | `p150b` steady state | `p150b` `synthesize` |
+|---|---:|---:|---:|---:|
+| default | `0.381` / `0.379` | `0.538` / `0.534` | `0.396` | `0.600` |
+| `COSYVOICE_FF2_GRID=8x2` | `0.357` / `0.357` | `0.512` / `0.512` | `0.381` | `0.592` |
+| `COSYVOICE_KV_INPLACE=1` | `0.345` / `0.346` | `0.732` / `0.736` | `0.379` | `0.914` |
+
+At the default on `p150a` the utterance is 355 tokens and 7.09 s of audio: the LLM takes
+`3.10`–`3.12 s` (114 tok/s), the flow `0.62 s` and the vocoder `0.07 s`. On `p150b` it is
+346 tokens and 6.92 s: `3.39 s` (102 tok/s), `0.68 s` and `0.09 s`. About `1.1 s` of the
+LLM's share on `p150a` is paid once per utterance, for the prompt prefill and the
+decode-trace capture, and the steady state's per-step scaling leaves it out. The in-place
+KV cache has the fastest steady state and the slowest `synthesize`: it captures a decode
+trace many times per utterance (65 in the `p150a` run), a cost the steady state never
+pays, and its LLM stage drops to 64 tok/s on `p150b`.
+
+Per utterance, `p150b` is 12–25 % slower than `p150a`, against 4–10 % on the steady state in
+the same table. An utterance at a length new to the process costs
+more again: `0.75`–`0.91` on `p150a` across three cases, measured with a probe and not
+asserted. On n300 the test asserts only that the figure stays above `0.5`, which the steady
+state there (§3.2) already implies.
 
 ## 4. Batched decode
 
@@ -324,7 +359,7 @@ each row names where its figure lives.
 
 | flag | default | what it does | what it is worth |
 |---|---|---|---|
-| `COSYVOICE_KV_INPLACE` | follows `device.arch()` — on for Wormhole, off for Blackhole | writes the KV cache with `ttnn.update_cache` instead of rebuilding it | §3.2, §6 |
+| `COSYVOICE_KV_INPLACE` | follows `device.arch()` — on for Wormhole, off for Blackhole | writes the KV cache with `ttnn.update_cache` instead of rebuilding it | §3.2, §6; its per-utterance cost, §3.5 |
 | `COSYVOICE_FF2_GRID` | unset | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
 | `COSYVOICE_SDPA_DECODE` | `1` | fused `sdpa_decode` for the AR decoder's relative-position attention | Part II §1.1 |
 | `COSYVOICE_SDPA` | `1` | fused SDPA in the flow estimator | Part II §2.1 |

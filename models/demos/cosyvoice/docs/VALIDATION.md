@@ -31,7 +31,7 @@ inside, and a named lever.
 | threshold | scope stage | enforced in |
 |---|---|---|
 | `>= 30 tok/s` semantic generation | Stage 1 | `test_device_end_to_end_rtf`, `test_device_traced_throughput`, `test_device_inplace_throughput` |
-| `RTF < 0.5` | Stage 1 | `test_device_end_to_end_rtf` |
+| `RTF < 0.5` | Stage 1 | `test_device_synthesize_rtf` (per utterance, the verdict); `test_device_end_to_end_rtf` (steady state, a regression guard) |
 | `>= 60 tok/s` | Stage 3 stretch | same three as the 30 tok/s threshold |
 | `RTF < 0.2` | Stage 3 stretch | `test_device_end_to_end_rtf` |
 | token agreement `> 95 %` | Stage 1 | `test_gate1_teacher_forced_argmax_match`, `test_gate1b_teacher_forced_argmax_through_the_kv_cache` |
@@ -79,7 +79,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Valid audio, 5 languages | ✅ zero-shot and cross-lingual 5/5 · SFT and instruct not re-run on this tree | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
 | Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
 | `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
-| `RTF < 0.5` | ✅ Blackhole · ❌ n300 | checked, with the n300 shortfall held to a recorded band | *End-to-end real-time factor* |
+| `RTF < 0.5` | ❌ per utterance on both Blackhole boards, every configuration · ❌ n300 | `test_device_synthesize_rtf`, against a recorded band on Blackhole; the steady state (✅ Blackhole, ❌ n300) stays checked by `test_device_end_to_end_rtf` | *What `synthesize` costs per utterance* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
 | WER `< 3.0`, speaker similarity `> 60` | ✅ English WER, both measured modes | `scripts/eval_wer_sim.py`, reference venv; `test_scoring.py` checks its English normaliser | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
@@ -134,12 +134,20 @@ share would need the decode step under 1.5 ms. `PERF.md` *End-to-end real-time f
 has the figures. The threshold is asserted against a recorded band, so an improvement
 fails the test until the published figure moves with it.
 
-### `RTF < 0.5` on Wormhole n300
+### `RTF < 0.5`
 
-Met on both Blackhole boards and not on n300, a named target. The gap is the compute
+Unmet per utterance, the figure the requirement is judged on. `synthesize` pays the
+prompt prefill, the decode-trace capture and the flow's trace capture once per
+utterance, which puts a repeated sentence above `0.5` on both Blackhole boards in every
+configuration, and a length new to the process higher still. The in-place KV cache is the slowest there,
+because it captures a decode trace many times per utterance. Keeping the flow's trace
+across utterances safely would save only the flow's capture, and only when a length
+repeats; the larger fixed cost is the LLM's. `PERF.md` §3.5 has the figures.
+
+On the steady state, Blackhole meets it and n300 does not. The gap there is the compute
 grid: 8 × 8 = 64 cores against Blackhole's 13 × 10 = 130, on a decode step dominated by
-weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and the band are
-in `PERF.md` and in `tests/perf/gates.py`'s `WORMHOLE` table.
+weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and the bands are
+in `PERF.md` and in `tests/perf/gates.py`.
 
 ### Speculative decoding — not explored
 
