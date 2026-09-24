@@ -53,15 +53,8 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "perf"
-      - name: Build test matrix
-        id: build-matrix
+      - name: Resolve enabled SKUs
+        id: resolve-skus
         env:
           ARCHITECTURE: ${{ inputs.architecture }}
         run: |
@@ -80,11 +73,15 @@ jobs:
               exit 1
               ;;
           esac
+          echo "enabled-skus=$ENABLED_SKUS" >> "$GITHUB_OUTPUT"
 
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "$ENABLED_SKUS" \
-            ./.github/sku_config.yaml
+      - name: Build test matrix
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
+          sku-config: ./.github/sku_config.yaml
 
   compile-quasar-perf:
     if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
@@ -137,6 +134,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          TT_LLK_DISABLE_ASSERTS: "1"
         run: |
           ${{ matrix.test-group.cmd }}
 

@@ -29,46 +29,44 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);  // number of tiles in seqlen of a k/v/mask chunk
     constexpr uint32_t num_cores = get_compile_time_arg_val(6);
     constexpr bool is_q_sharded = get_compile_time_arg_val(7);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(8);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(9);
-    constexpr uint32_t index_stick_size_B = get_compile_time_arg_val(10);
-    constexpr bool is_paged_attention = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
-    constexpr uint32_t Bkv = get_compile_time_arg_val(14);
-    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(16);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(17);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
-    constexpr bool is_causal = get_compile_time_arg_val(19) == 1;
-    constexpr bool use_attention_mask = get_compile_time_arg_val(20) == 1;
-    constexpr bool use_attention_sink = get_compile_time_arg_val(21) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
-    constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
-    constexpr bool reuse_k = get_compile_time_arg_val(24) == 1;
-    constexpr bool use_half_tile = get_compile_time_arg_val(25);
-    constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(26);
-    constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(27);
-    constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
-    constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
-    constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
+    constexpr uint32_t index_stick_size_B = get_compile_time_arg_val(8);
+    constexpr bool is_paged_attention = get_compile_time_arg_val(9) == 1;
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(10);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(11);
+    constexpr uint32_t Bkv = get_compile_time_arg_val(12);
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(14);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(15);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(16);
+    constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(20);
+    constexpr bool tilize_q = get_compile_time_arg_val(21) == 1;
+    constexpr bool reuse_k = get_compile_time_arg_val(22) == 1;
+    constexpr bool use_half_tile = get_compile_time_arg_val(23);
+    constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(24);
+    constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(25);
+    constexpr bool is_page_table_sharded = get_compile_time_arg_val(26);
+    constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(27);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(29);
     constexpr bool has_block_padding = is_paged_attention && original_block_size > 0 && original_block_size < 32;
-    constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(32);
-    constexpr bool q_locally_available = get_compile_time_arg_val(33) == 1;
-    constexpr bool use_k_mcast = get_compile_time_arg_val(34) == 1;
-    constexpr uint32_t Bmask = get_compile_time_arg_val(35);
+    constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(30);
+    constexpr bool q_locally_available = get_compile_time_arg_val(31) == 1;
+    constexpr bool use_k_mcast = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t Bmask = get_compile_time_arg_val(33);
     // 0 = unbounded cache (legacy); nonzero = wrap virtual tile index mod this value
     // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
     // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
-    constexpr uint32_t capacity_t = get_compile_time_arg_val(36);
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(34);
     // Speculative multi-position mode: Tg candidates share one batch row (PNHt == Tg) and the
     // scan range is driven by the LAST (largest) entry of this batch row's GROUP of Tg bounds,
     // i.e. cur_pos[cur_batch*Tg + Tg-1], rather than by cur_pos[cur_batch]. 0 = off.
-    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(37);
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(35);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<38>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -98,12 +96,10 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
-    const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
     const bool do_k_mcast = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_x = get_arg_val<uint32_t>(arg_idx++);
@@ -195,7 +191,6 @@ void kernel_main() {
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
         get_workload_for_core(
             cur_pos,
-            cur_batch,
             core_num_in_reduce,
             num_cores_per_head,
             k_chunk_size_dynamic,
@@ -217,7 +212,6 @@ void kernel_main() {
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
     uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t_dynamic;
 
-    constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);

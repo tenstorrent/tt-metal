@@ -71,6 +71,11 @@ KernelHandle CreateKernelFromString(
     const EthernetConfig& config);
 
 struct DramConfig {
+    // The kernel can only initiate NOC transactions on a NIU firmware left in stream mode. NOC0
+    // qualifies on every DRAM core; NOC1 only on cores that are no DRAM view's NOC1 endpoint. A
+    // kernel that drives both NOCs regardless of this field (the streaming profiler's relay reads on
+    // the one it does not write on) has to pick its core off
+    // metal_SocDescriptor::get_dram_endpoint_noc_mask. See tt_metal/hw/inc/experimental/drisc_mode.h.
     NOC noc = NOC::NOC_0;
     std::vector<uint32_t> compile_args;
     std::map<std::string, std::string> defines;
@@ -151,6 +156,15 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+};
+
+// Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
+// One accessor names one program PrefetcherPipe slot (dense id the kernel constructs its
+// PrefetcherPipe with); the slot resolves to whichever pipe of the accessor's group is present
+// on the executing node. Emitted as a constexpr token in the `pipe::` namespace.
+struct PrefetcherPipeBindingHandle {
+    std::string accessor_name;
+    uint8_t prefetcher_pipe_id = 0;
 };
 
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
@@ -235,6 +249,7 @@ public:
     uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
+    std::string get_profiler_zone_src_id() const override { return this->kernel_src_.profiler_zone_src_id(); }
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
@@ -264,6 +279,16 @@ public:
     std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() { return scratchpad_binding_handles_; }
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
+    }
+    // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_prefetcher_pipe_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const override;
+    const std::vector<PrefetcherPipeBindingHandle>& prefetcher_pipe_binding_handles() const {
+        return prefetcher_pipe_binding_handles_;
+    }
+    void set_prefetcher_pipe_binding_handles(std::vector<PrefetcherPipeBindingHandle> handles) {
+        prefetcher_pipe_binding_handles_ = std::move(handles);
     }
     void process_tensor_binding_sequences(
         std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
@@ -376,6 +401,8 @@ protected:
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
+    // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
+    std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;

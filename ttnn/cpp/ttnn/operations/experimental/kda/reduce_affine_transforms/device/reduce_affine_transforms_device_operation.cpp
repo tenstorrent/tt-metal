@@ -21,6 +21,13 @@ ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperati
 void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "reduce_affine_transforms";
+    TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
+    TT_FATAL(
+        attrs.local_rows > 0 && attrs.local_rows % tt::constants::TILE_HEIGHT == 0 &&
+            (attrs.local_rows / tt::constants::TILE_HEIGHT) % attrs.groups_per_head == 0,
+        "{}: local_rows must contain a positive whole number of 32-token chunks per group",
+        operation_name);
+    kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
@@ -41,7 +48,6 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     };
     check_input_memory_layout(in.a, "a");
     check_input_memory_layout(in.b, "b");
-    TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 
@@ -114,7 +120,10 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::Tensor& b,
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
-    const ttnn::DeviceComputeKernelConfig& cfg) {
+    const ttnn::DeviceComputeKernelConfig& cfg,
+    const Tensor& actual_start,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes both shapes before dispatching validation.
     TT_FATAL(groups > 0, "reduce_affine_transforms: groups_per_head must be positive");
@@ -130,9 +139,11 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
             .groups_per_head = groups,
             .key_dim = static_cast<uint32_t>(shape[1]),
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
+            .sequence_parallel_axis = sequence_parallel_axis,
+            .local_rows = local_rows,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
-        ReduceAffineTransformsInputs{.a = a, .b = b});
+        ReduceAffineTransformsInputs{.a = a, .b = b, .actual_start = actual_start});
     return {outputs[0], outputs[1]};
 }
 }  // namespace ttnn::experimental::prim

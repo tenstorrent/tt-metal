@@ -132,6 +132,12 @@ def set_tg_attention_config(
 
 
 class TtQwenModelArgs(TtModelArgs):
+    # Qwen Galaxy needs decode program buffers allocated before prefill traces.
+    prepare_decode_before_prefill = True
+
+    # Preserve FF2 partial sums through the prefill reduction across devices.
+    prefill_mlp_output_dtype = ttnn.bfloat16
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -215,23 +221,7 @@ class TtQwenModelArgs(TtModelArgs):
         self.unfuse_res_add = True
         self.pad_logits_to_power_of_2 = True
 
-        if self.num_devices == 32:
-            self.use_prefetcher = not self.is_blackhole
-            # The Blackhole galaxy dram_prefetcher decode path is opt-in (QWEN_BH_PREFETCHER=1):
-            # external runners (e.g. vLLM) stay on the proven no-prefetcher path by default, while
-            # the tt-metal CI yamls export the flag to keep the prefetcher path covered.
-            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
-                self.use_prefetcher = True
-
-        # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
-        # all_gather_concat, llama_rs_matmul, llama_reduce_scatter) use 1D-multicast writers that no-op
-        # on the 2D-torus fabric, so with the prefetcher on we keep the ring matmuls (they must consume
-        # the prefetched global-CB weights) but route every collective through the stable/standard ops
-        # the no-prefetcher path already uses, each pinned to the worker sub-device. use_prefetcher
-        # still gates the matmuls; use_unfused_ccl gates the post-matmul collective/head/rotary logic.
-        self.use_unfused_ccl = (
-            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
-        )
+        self._configure_prefetcher_path()
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
         if self.is_blackhole:
@@ -1671,6 +1661,44 @@ class TtQwenModelArgs(TtModelArgs):
             self.num_reduce_scatter_links = 1
             self.num_all_gather_links = 1 if self.is_blackhole else 2
             self.ccl_dtype = ttnn.bfloat8_b
+
+    def _configure_prefetcher_path(self):
+        """Pick the decode weight path and the flags that hang off it.
+
+        Reads num_devices and is_blackhole (set by __init__) plus the QWEN_BH_PREFETCHER and
+        QWEN_BH_UNFUSED_CCL environment flags, and sets use_prefetcher, use_unfused_ccl and
+        prepare_decode_before_prefill. Kept as one method so the flag logic can be unit tested
+        without a device (tests/unit_tests/test_qwen_model_config.py).
+        """
+        if self.num_devices == 32:
+            self.use_prefetcher = not self.is_blackhole
+            # The Blackhole galaxy dram_prefetcher decode path is opt-in (QWEN_BH_PREFETCHER=1):
+            # external runners (e.g. vLLM) stay on the proven no-prefetcher path by default, while
+            # the tt-metal CI yamls export the flag to keep the prefetcher path covered.
+            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
+                self.use_prefetcher = True
+
+        # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
+        # all_gather_concat, llama_rs_matmul, llama_reduce_scatter) use 1D-multicast writers that no-op
+        # on the 2D-torus fabric, so with the prefetcher on we keep the ring matmuls (they must consume
+        # the prefetched global-CB weights) but route every collective through the stable/standard ops
+        # the no-prefetcher path already uses, each pinned to the worker sub-device. use_prefetcher
+        # still gates the matmuls; use_unfused_ccl gates the post-matmul collective/head/rotary logic.
+        self.use_unfused_ccl = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
+        )
+        # With the Blackhole prefetcher on, decode runs with the prefetcher's global circular buffer
+        # (656 * 1088 B, top of L1) live, whichever CCL path the collectives take. Staging decode
+        # before the prefill warmup then allocates the decode program buffers beneath that CB, where
+        # they stay after it is released, so the lowest live L1 buffer is left about 340 KB above the
+        # L1 base for the rest of the run and every later prefill program whose static circular
+        # buffers need more than that fails with "Statically allocated ... buffers clash with L1
+        # buffers" (the layer-0 distributed norm on 4 cores, then the batched QKV matmul). Keep the
+        # decode-after-prefill order whenever the Blackhole prefetcher is on. Measured with
+        # TT_METAL_TRACE_ALLOC_TRACKING=1 on the CI demo: no buffer is left alive behind a live
+        # trace in this order. The Wormhole prefetcher path is unchanged.
+        if self.use_prefetcher and self.is_blackhole:
+            self.prepare_decode_before_prefill = False
 
     def is_distributed_norm(self, mode):
         if not self.is_multichip:

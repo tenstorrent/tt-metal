@@ -98,9 +98,7 @@ m2::KernelSpec make_touch_consumer(
 
 uint32_t touch_result_l1_addr(distributed::MeshDevice& mesh_device, uint32_t num_dfbs) {
     const uint32_t bytes = num_dfbs * 3 * sizeof(uint32_t);
-    const uint32_t align = mesh_device.allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + align - 1) / align * align;
-    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
+    return top_of_l1_scratch_addr(mesh_device, bytes);
 }
 
 void expect_touch_results(
@@ -356,6 +354,52 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
         this->device(), CoreCoord{0, 0}, result_addr, per_half, /*expected_entry_size=*/32, touched_magic, left_slots);
     expect_touch_results(
         this->device(), CoreCoord{1, 0}, result_addr, per_half, /*expected_entry_size=*/32, touched_magic, right_slots);
+}
+
+// All bindings here are 1-to-1, so 22 active DFBs consume exactly 22 shared Pack TC slots.
+TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Pack DFB TC-slot pooling is Quasar-only";
+    }
+
+    constexpr uint32_t num_dfbs = 22;
+    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_PACK);
+    static_assert(num_dfbs <= ::dfb::MAX_PACK_TC_SLOTS);
+
+    const m2::KernelSpecName pack_name{"pack"};
+    auto pack = make_compute_kernel(
+        pack_name, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_pack_multi_touch.cpp", /*num_threads=*/1);
+    pack.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
+
+    auto dm = make_touch_producer("dm_consumer", num_dfbs, this->device());
+
+    m2::ProgramSpec spec;
+    spec.name = "pack_22_dfb_tc_slot_pool";
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const std::string name = "dfb_" + std::to_string(i);
+        const m2::DFBSpecName dfb{name};
+        auto dfb_spec = MakeMinimalDFB(name, /*entry_size=*/32, /*num_entries=*/2);
+        dfb_spec.data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers.push_back(dfb_spec);
+        pack.dfb_bindings.push_back({
+            .dfb_spec_name = dfb,
+            .accessor_name = name,
+            .endpoint_type = m2::DFBEndpointType::PRODUCER,
+        });
+        dm.dfb_bindings.push_back({
+            .dfb_spec_name = dfb,
+            .accessor_name = name,
+            .endpoint_type = m2::DFBEndpointType::CONSUMER,
+        });
+        disable_implicit_sync_for(dm, dfb);
+    }
+    spec.kernels = {pack, dm};
+    spec.work_units = {
+        MakeMinimalWorkUnit("wu", m2::NodeCoord{0, 0}, {"pack", "dm_consumer"}),
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    LaunchProgram(this->device(), std::move(program));
 }
 
 // End-to-end identity across two disjoint halves: one DFB + producer/consumer pair per half.

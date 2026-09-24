@@ -24,7 +24,7 @@ SHARDING (sequence-parallel):
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 
 import torch
 
@@ -325,6 +325,10 @@ class TtDFlashDrafter:
         *,
         slot_idx: int = 0,
         actual_end: Optional[int] = None,
+        d2h_service=None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
+        on_layer_complete: Optional[Callable[[int], None]] = None,
+        layer_ack_base: int = 0,
     ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
         ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
@@ -345,6 +349,16 @@ class TtDFlashDrafter:
         ``actual_end`` is the end of the chunk's real tokens: given it, the writes skip the padded tail,
         so only the real tokens have to fit (the same clamp the verifier's KVPE write uses).
 
+        ``d2h_service`` / ``metadata_msg`` / ``on_layer_complete`` carry the per-draft-layer migration ack,
+        mirroring the verifier block's two ack paths (cf. ``tt_prefill_block.forward``): a device op on the
+        same CQ right after the layer's cache writes, or a host callback that needs an explicit flush first.
+        Without them a consumer acting on the verifier's last ack would migrate draft chunks this chunk has
+        not written, since these writes land after the verifier's forward returns.
+
+        ``layer_ack_base`` is the global layer id this drafter's layer 0 acks as, i.e. the verifier's total
+        layer count (draft layer i -> global ``layer_ack_base + i``). Used by the host-callback path only;
+        the device path is counted positionally by ``LayerAckService`` and ignores the record's contents.
+
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
         the interleaved indexed rope op derives each chip's shard offset on-device from the whole-cache table
@@ -353,6 +367,7 @@ class TtDFlashDrafter:
             "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
             "via export_partial instead"
         )
+        assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
         cfg = self.config
         # Sanity-check the un-sharded cache dims (layer/head_dim are not seq/SP-sharded, so .shape is
         # unambiguous here); the seq (dim 2) capacity is checked in GLOBAL tokens below.
@@ -480,4 +495,13 @@ class TtDFlashDrafter:
                 )
             ttnn.deallocate(k)
             ttnn.deallocate(v)
+            # Ack AFTER both caches are written, so one ack means draft layer i is complete for K and V.
+            # Ordering carries the meaning on the device path: the record is enqueued on the same CQ behind
+            # this layer's writes, and LayerAckService numbers records positionally, so these land as global
+            # layers layer_ack_base..layer_ack_base+num_hidden_layers-1 behind the verifier's own acks.
+            if d2h_service is not None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            elif on_layer_complete is not None:
+                ttnn.synchronize_device(self.mesh_device)
+                on_layer_complete(layer_ack_base + i)
         ttnn.deallocate(target_hidden)

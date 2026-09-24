@@ -212,7 +212,7 @@ uint32_t read_mask_chunk(
 }
 
 template <uint32_t cb_mask_in, uint32_t PNHt>
-void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
+void generate_mask(uint32_t /*k_num_chunks*/, uint32_t Sk_chunk_t, uint32_t cur_pos) {
     Noc noc;
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
@@ -356,7 +356,7 @@ void generate_mask_spec_multi_pos(uint32_t Sk_chunk_t, uint32_t chunk_start_pos,
 }
 
 template <uint32_t cb_mask_in, uint32_t PNHt>
-void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
+void generate_sliding_window_mask(uint32_t Sk_chunk_t, uint32_t window_start) {
     Noc noc;
     /*
     Generate sliding window mask for the first chunk:

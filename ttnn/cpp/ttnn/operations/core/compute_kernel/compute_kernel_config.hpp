@@ -73,6 +73,14 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);
 
+// Maps a fully-populated ComputeGen1Config to the compute config the target platform accepts: the
+// Gen1 config unchanged on WH/BH, or the equivalent ComputeGen2Config on Quasar. Use this at a program
+// factory's `.hw_config` site instead of assigning a bare ComputeGen1Config, which Gen2/Quasar rejects
+// (program_spec.cpp ValidateProgramSpec: "targets Gen2 but holds a ComputeGen1Config"). Every field maps
+// 1:1 except bfp_pack_precision_mode, which does not exist on Gen2 (MXFP replaces BFP) and is dropped.
+tt::tt_metal::experimental::ComputeHardwareConfig arch_compute_config(
+    tt::ARCH arch, const tt::tt_metal::experimental::ComputeGen1Config& gen1);
+
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<std::array<uint32_t, 2>> tile_shape = std::nullopt);

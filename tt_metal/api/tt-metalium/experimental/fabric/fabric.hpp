@@ -209,7 +209,11 @@ public:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
-        CoreType core_type = CoreType::WORKER);
+        CoreType core_type = CoreType::WORKER,
+        // usable_l1_end_address is highest L1 address the memory map may reach, exclusive.  A caller that wants the
+        // mux kept clear of L1_SMALL, to avoid clobbering persistent semaphores, passes
+        // the L1_SMALL floor here. 0 means "use the physical end of L1".
+        size_t usable_l1_end_address = 0);
 
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
@@ -334,7 +338,11 @@ public:
         uint8_t num_channels,
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
-        size_t base_l1_address);
+        size_t base_l1_address,
+        // Highest L1 address the memory map may reach, exclusive. 0 means "use the physical end of L1".
+        // Unlike V1 there is no shrink loop here, so a ceiling that binds is a hard error rather than a
+        // smaller mux.
+        size_t usable_l1_end_address = 0);
 
     void append_client_connection_rt_args(
         const tt::tt_metal::CoreCoord& mux_virtual_core,
@@ -384,13 +392,13 @@ private:
     uint32_t forwarder_service_burst_size_ = 0;
     uint32_t trid_ring_capacity_ = 0;
 
-    MemoryRegion status_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion shared_ring_region_{};
-    MemoryRegion channel_region_{};
-    MemoryRegion shared_control_region_{};
-    MemoryRegion credit_notify_scratch_region_{};
+    MemoryRegion status_region_;
+    MemoryRegion connection_info_region_;
+    MemoryRegion connection_handshake_region_;
+    MemoryRegion shared_ring_region_;
+    MemoryRegion channel_region_;
+    MemoryRegion shared_control_region_;
+    MemoryRegion credit_notify_scratch_region_;
 
     size_t memory_map_end_address_ = 0;
 };

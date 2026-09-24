@@ -44,15 +44,10 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
 
-# The common runner reads PREFILL_NUM_LAYERS with a hardcoded default of 61 (DeepSeek's layer count).
-# M3 has 60 decoder layers. This adapter module is imported (via get_adapter) BEFORE the runner reads
-# PREFILL_NUM_LAYERS, so a setdefault here gives M3 the right default without touching the common runner.
-# An explicit PREFILL_NUM_LAYERS still wins (e.g. a partial-model bring-up run).
-os.environ.setdefault("PREFILL_NUM_LAYERS", "60")
-
 
 class MiniMaxM3Config:
-    """Static model-dimension constants the common runner reads. The runner uses only
+    """Static model-dimension constants the common runner reads: ``NUM_LAYERS`` (its layer-count
+    default, overridable with PREFILL_NUM_LAYERS for a partial-model bring-up) and
     ``FABRIC_PAYLOAD_SIZE`` (the fabric router's max packet payload, mirrored from the embedding dim as
     in the DeepSeek config); the rest document M3's dimensions for readers."""
 

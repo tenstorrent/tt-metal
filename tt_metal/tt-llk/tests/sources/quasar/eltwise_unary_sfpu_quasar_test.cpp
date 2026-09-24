@@ -34,26 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-        }
-        else
-        {
-            const DataFormat src_format     = static_cast<DataFormat>(formats.math);
-            const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
-            const bool int8_math_into_int32_dest =
-                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
-            if (int8_math_into_int32_dest)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-            }
-        }
-
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 

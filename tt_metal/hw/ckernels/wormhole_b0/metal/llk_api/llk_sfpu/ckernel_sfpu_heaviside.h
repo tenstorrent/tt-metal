@@ -37,7 +37,8 @@ inline void calculate_heaviside(std::uint32_t value) {
         // (torch returns NaN here instead; neither the old nor the new kernel does, and
         // this rewrite does not change that.)
         vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
-        v_if(v == 0.0f) { r = s; }
+        // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare v == 0.0f can miss it.
+        v_if(sfpi::abs(v) == 0.0f) { r = s; }
         v_endif;
 
         dst_reg[0] = r;

@@ -752,9 +752,12 @@ def test_demo(
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
+    # total_inference_decode_time is the last batch's decode time, so use that batch's token count.
+    decode_tok_s_user = (
+        num_tokens_generated_decode[batch_idx] - 1
+    ) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
+        (num_tokens_generated_decode[batch_idx] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
     vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
@@ -893,7 +896,7 @@ def test_demo(
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
+            output_sequence_length=num_tokens_generated_decode[batch_idx],
         )
         if targets:
             verify_perf(
