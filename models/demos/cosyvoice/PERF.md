@@ -87,7 +87,9 @@ differs by architecture, and the gap is the compute grid: 64 cores against 130.
 ## 3. End-to-end real-time factor
 
 RTF is compute seconds per second of audio produced, measured on the captured
-utterance: 164 generated tokens, 3.27 s of audio at 22 050 Hz.
+utterance: 164 generated tokens, 3.27 s of audio at 22 050 Hz. The flow stage is timed on
+a second call at the same length, replaying its trace (Part II §2.2); `synthesize`
+captures that trace once per utterance.
 
 The LLM runs once per token, and a second of speech is 50 tokens, so its contribution
 is `50 / tok_s` whatever the utterance length. The flow decoder runs ten Euler steps
@@ -135,7 +137,7 @@ control, measured in the same process, is in §6.
 ### 3.4 Why `RTF < 0.2` is not reachable here
 
 `0.2` on this utterance is a budget of `0.654 s`. The flow decoder alone spends about
-`0.256 s` of it with fused SDPA and the cross-utterance trace cache; its cost is 64
+`0.256 s` of it with fused SDPA and a replayed trace; its cost is 64
 transformer blocks × 10 Euler steps, and halving the step count buys `1.43×` at a PCC
 below every threshold here (Part II §2.2). The LLM's share would need the decode step
 under `1.5 ms`, against a best measured `4.97 ms`; Part II §1.3 has what limits it.
@@ -185,7 +187,8 @@ Two claims, checked separately.
 Content: `test_device_streamed_matches_non_streamed` compares concatenated streamed
 audio with non-streamed audio for the same tokens, in mel space and in the energy
 envelope, plus continuity at chunk seams. Mel-space PCC: `0.901830` (p150a) /
-`0.901541` (p150b) / `0.902374` (n300).
+`0.901541` (p150b) / `0.902374` (n300). It feeds 120-token chunks; the interleaved
+stream's own chunk geometry has an open defect (`docs/VALIDATION.md`).
 
 Schedule: `test_device_streaming_first_audio_latency` checks that audio starts before
 generation finishes. Both schedules run in one process on one device over the same
@@ -275,8 +278,8 @@ portable; the ratio is the point. `forward_chunk_fixed` holds the key width at
 | Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
 | Streaming vs batch generation, greedy | `100.00 %` | — |
-| WER (English) | `0.00 %` | `< 3.0` ✅ |
-| Speaker similarity (mean, 10 utterances) | `83–96` | `> 60` ✅ |
+| WER (English) | §8 | `< 3.0` ✅ |
+| Speaker similarity | §8 | `> 60` ✅ |
 
 WER and speaker similarity come from `scripts/eval_wer_sim.py` in the reference venv —
 whisper `large-v3` and `WavLMForXVector`, neither of which tt-metal's `python_env`
@@ -290,26 +293,29 @@ model; with a self-computed excitation the energy envelope (`0.9975`) and RMS (w
 
 ## 8. Generation modes and speech quality
 
-All four modes run on device across five languages: 20 cases, all synthesising.
+Zero-shot and cross-lingual are measured on this tree in all five languages (`p150a`,
+seed 1986, 2026-09-23). SFT and instruct have not been re-run on this tree.
 
-| mode | prompt | on device |
+| mode | prompt | on this tree |
 |---|---|---|
 | zero-shot | reference audio | ✅ 5/5 |
 | cross-lingual | reference audio, different language | ✅ 5/5 |
-| SFT | speaker id, no prompt audio | ✅ 5/5 |
-| instruct | speaker id + description, no prompt audio | ✅ 5/5 |
+| SFT | speaker id, no prompt audio | not re-run |
+| instruct | speaker id + description, no prompt audio | not re-run |
 
-Scored with whisper `large-v3`; CER for CJK, WER for English.
+Scored with whisper `large-v3` (CER for CJK, WER for English) and `WavLMForXVector`
+speaker similarity:
 
-| mode | zh | en | ja | ko | yue |
-|---|---:|---:|---:|---:|---:|
-| zero-shot | `3.03` | `0.00` | `5.56` | `3.12` | `64.52` |
-| cross-lingual | `6.06` | `0.00` | `2.78` | `0.00` | `100.00` |
+| mode | zh | en | ja | ko | yue | speaker similarity |
+|---|---:|---:|---:|---:|---:|---:|
+| zero-shot | `0.00` | `0.00` | `11.11` | `9.38` | `70.97` | `90.97`–`96.61` |
+| cross-lingual | `0.00` | `0.00` | `0.00` | `0.00` | `32.26` | `84.7`–`92.1` |
 
-Cantonese is a model limitation, not a port defect: the PyTorch reference scores worse
-on the same text through the same ASR, `83.87 %` against this port's `64.52 %`
-zero-shot. Excluding Cantonese, the CJK mean is `3.90 %` zero-shot and `2.95 %`
-cross-lingual. `docs/VALIDATION.md` records the open `cross_lingual yue` early stop.
+The zero-shot ja CER is the reference's too: the PyTorch reference turns the same 332
+tokens into the same transcript. The PyTorch reference also scores a high Cantonese CER
+on the same text and ASR (`54.84 %` on the device's cross-lingual tokens, where zh, en,
+ja and ko score `0.00`), so the port is not the cause; whether the model or Whisper's
+Cantonese transcription is responsible is not established.
 
 ## 9. Tuning flags
 
@@ -322,7 +328,7 @@ each row names where its figure lives.
 | `COSYVOICE_FF2_GRID` | unset | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
 | `COSYVOICE_SDPA_DECODE` | `1` | fused `sdpa_decode` for the AR decoder's relative-position attention | Part II §1.1 |
 | `COSYVOICE_SDPA` | `1` | fused SDPA in the flow estimator | Part II §2.1 |
-| `COSYVOICE_CFM_TRACE_CACHE` | `1` | keeps the CFM estimator trace across utterances of the same mel length | Part II §2.2 |
+| `COSYVOICE_CFM_TRACE_CACHE` | `1` | keeps the CFM estimator trace between flow calls of the same mel length; the pipeline releases it per utterance and per stream | Part II §2.2 |
 | `COSYVOICE_GN_PERMUTE` | unset (matmul form) | restores the permute-based GroupNorm | Part II §2.3 |
 | `COSYVOICE_FLOW_STEPS` | `10` | Euler solver depth | Part II §2.2 |
 | `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls | §7 |
@@ -497,19 +503,27 @@ The estimator's self-attention has no mask and no relative-position term, so
 Faster and more accurate on every check. `scale=1.0` because `1/sqrt(d_head)` is folded
 into the fused QKV weight's q half. `COSYVOICE_SDPA=0` restores the explicit chain.
 
-### 2.2 Trace-cache reuse across utterances
+At a length that is not a tile multiple, SDPA needs the k/v tile padding zero-filled
+first (`docs/VALIDATION.md`). That costs about 6 ms of a 0.33 s traced flow stage, where
+the explicit chain, which does not need it, is 1.55× slower (`p150a`, 2026-09-23).
+
+### 2.2 Trace-cache reuse
 
 The stage is not linear in solver depth: `T(n) ≈ 0.350 s + 35.8 ms/step`. Halving the
 10-step solver buys `1.43×`, not `2×`, at PCC `0.9825`, below every threshold here, so
 `COSYVOICE_FLOW_STEPS` exists and is unused by default.
 
 The fixed `0.350 s` is trace capture: 46.6 % of the solve, against 52.9 % for the
-replay. Keeping the trace across utterances of the same mel length is worth `1.67×` on
-the solver (`0.601 → 0.359 s` steady state) and takes n300 end-to-end RTF from `0.736`
-to `0.628` (n300, 2026-08-06). It is correct across utterances with different
-conditioning, because the trace bakes a buffer address that is refilled in place: PCC
-`1.0000000000` over three consecutive solves. `COSYVOICE_CFM_TRACE_CACHE=0` turns it
-off, which `synthesize_batch` requires (`docs/VALIDATION.md`).
+replay. Keeping the trace between calls of the same mel length is worth `1.67×` on the
+solver (`0.601 → 0.359 s` steady state) and takes n300 end-to-end RTF from `0.736` to
+`0.628` (n300, 2026-08-06). It is correct across calls with different conditioning,
+because the trace bakes a buffer address that is refilled in place: PCC `1.0000000000`
+over three consecutive solves. A device buffer allocated while the trace is kept may be
+corrupted by its next replay, per TTNN's own warning, so the pipeline releases the trace
+around each utterance's solve and when a stream ends (`docs/VALIDATION.md`). Reuse still
+applies across a stream's chunks, and in `test_device_end_to_end_rtf`, which times the
+flow stage on a second call at one length. `COSYVOICE_CFM_TRACE_CACHE=0` turns it
+off.
 
 ### 2.3 GroupNorm as a matmul
 
