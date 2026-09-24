@@ -94,11 +94,27 @@ def create_tt_model(
     num_devices = mesh_device.get_num_devices() if is_mesh else 1
     if is_mesh and num_devices > 1:
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
-        # all-reduces (the dominant ~31% of prefill device time) use full
-        # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # all-reduces (the dominant share of prefill device time) use full
+        # inter-device bandwidth. is_moe selects the topology default: Ring is
+        # faster on a 1x8 WH mesh but tanks MoE PCC — see
+        # ccl.default_ccl_topology.
+        ccl_manager = CCLManager(mesh_device, is_moe=bool(getattr(model_args, "enable_moe_block", False)))
     else:
         ccl_manager = None
+
+    tp = mesh_config.tp if mesh_config is not None else 1
+    nq = int(getattr(model_args, "num_attention_heads", 0) or 0)
+    nkv = int(getattr(model_args, "num_key_value_heads", 0) or 0)
+    logger.info(
+        f"Gemma4 parallel: mesh={tuple(mesh_device.shape) if is_mesh else (1, 1)} "
+        f"devices={num_devices} decode TP={tp} DP={mesh_config.dp if mesh_config else 1} "
+        f"EP={mesh_config.ep if mesh_config else 1}"
+        + (
+            f" local_heads Q={nq // tp} KV={nkv // tp} (global Q={nq} KV={nkv})"
+            if tp > 0 and nq and nkv and nq % tp == 0 and nkv % tp == 0
+            else ""
+        )
+    )
 
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
@@ -120,7 +136,9 @@ def create_tt_model(
     # model_args still carries its construction default here (the served value is
     # applied further below), so reading it silently skipped the bfp8 context
     # ceiling at long context.
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
+    _precision_for_variant = Gemma4Precision.load(
+        model_path, _worker_mesh, hf_config=model_args, max_seq_len=max_seq_len
+    )
     # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
     # only their dtype: a warm marker seeded before a filename change certifies a build whose files
     # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
@@ -200,6 +218,7 @@ def create_assistant_model(
     max_local_batch_size=1,
     bounded_sliding_kv_cache=None,
     max_seq_len=None,
+    precision=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -272,6 +291,16 @@ def create_assistant_model(
             assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
+    # The assistant is its own checkpoint (e.g. "gemma-4-31B-it-assistant"), so
+    # its precision overrides are looked up under its own table key -- it does
+    # NOT inherit the target's resolved precision. The *-assistant entries in
+    # precision_overrides.json (bfp8 shared_mlp/attention/lm_head) come from
+    # ign/gemma4_31B_MTP_Dflash; without them the drafter runs bf16.
+    # A caller-supplied ``precision`` wins, so an explicit override is not
+    # silently replaced by the table lookup.
+    if precision is None:
+        precision = Gemma4Precision.load(assistant_path, mesh_shape, hf_config=hf_config, max_seq_len=max_seq_len)
+
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
         assistant_args=assistant_args,
@@ -302,5 +331,27 @@ def create_assistant_model(
                 and getattr(target_model, "_spec_unbounded_layer", None) is None
             )
         ),
+        precision=precision,
     )
     return assistant_args, model
+
+
+def get_gemma4_padded_prefill_len(seq_len: int) -> int:
+    """Pad prefill ISL to the next kernel bucket (default: tt_transformers policy).
+
+    By default this matches ``get_padded_prefill_len`` so prefill Metal Trace
+    buckets warmed at startup (128, 512, …) replay at runtime. Opt into shorter
+    buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=96,128`` only when the same
+    lengths are listed in ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` — otherwise prefill
+    pays a cold eager compile on the first request (TTFT seconds, not ms).
+    """
+    seq_len = int(seq_len)
+    override = os.environ.get("GEMMA4_SHORT_PREFILL_BUCKETS")
+    if override:
+        buckets = tuple(int(x.strip()) for x in override.split(",") if x.strip())
+        for bucket in buckets:
+            if seq_len <= bucket:
+                return bucket
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    return get_padded_prefill_len(seq_len)

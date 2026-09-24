@@ -36,6 +36,15 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
+from models.demos.gemma4.tt.dflash.rope_cache import gather_rope_from_buffer
+from models.demos.gemma4.tt.dram_sharded import (
+    dflash_ctx_kv_linear_config,
+    dflash_ctx_kv_linear_out_memcfg,
+    dflash_ctx_kv_merge_mode,
+    dflash_fc_linear_config,
+    linear_l1_safe,
+    matmul_rows,
+)
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 _SHARD_ARGMAX_K = 32
@@ -157,6 +166,66 @@ def _rope_tables(head_dim, theta, max_pos):
     return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
 
 
+def recommended_dflash_block_size(
+    ctx_len_hint: int | None,
+    checkpoint_block_size: int,
+    *,
+    long_context_threshold: int = int(_os.environ.get("GEMMA4_DFLASH_LONG_CTX_THRESHOLD", 2048)),
+    long_context_block_size: int = 8,
+) -> int:
+    """Heuristic ``block_size`` (K) pick for sessions whose context is long enough
+    that a smaller speculative block measurably helps.
+
+    NOT gated on the drafter's architectural ``sliding_window`` (2048, see
+    ``config.py``) -- an earlier version of this function used that as the
+    threshold, but a real T3K A/B sweep (block_size=8 vs. the checkpoint's own
+    default 16, across the same ISL buckets as models/demos/gemma4/README.md's
+    "Full ISL sweep" table) falsified it as a *mechanism*: at ISL 3,808 with a
+    quote-extraction task, block_size=8 measured 36.9 tok/s vs. block_size=16's
+    ~92 tok/s -- a 60% REGRESSION, not an improvement, because that bucket's
+    mean-accepted-drafts/iteration is actually its best of any measured bucket
+    (8.56, vs. 5.67 at ISL 44) at the checkpoint's default block_size. Only at
+    ISL 7,548+ does block_size=8 measure a net win for that task (+7-16% tok/s).
+
+    However, a *different* task (code generation) measured a severe FAILURE at
+    that same ISL 3,797-3,808 with block_size=16, not just a smaller win: four
+    independent Fibonacci-prompt runs there (two instruction phrasings, two
+    source passages) all collapsed to 0.64-3.33 mean-accepted/iter and produced
+    degenerate/blank output, and forcing block_size=8 fixed it completely (see
+    models/demos/gemma4/README.md's "Fibonacci-prompt ISL sweep" section). So
+    the two task types disagree in the ISL 2048-6000 range: quote-extraction
+    wants 16, code-generation needs 8. ``long_context_threshold`` is set to
+    2048 (matching the single-chunk prefill-trace boundary,
+    ``demo/dflash_fused_decoder_demo.py``'s ``PREFILL_CHUNK_SIZE``) so that
+    range defaults to block_size=8 -- deliberately trading the quote-extraction
+    task's measured regression there (a slower but still-correct answer) for
+    avoiding code-generation's measured failure mode (no usable output at all).
+    Workloads that know they're quote-extraction/document-analysis-style and
+    want the faster block_size=16 in this range should pass
+    ``GEMMA4_DFLASH_BLOCK=16`` explicitly. The original ~5.1/7-vs-~2.9/7
+    reference comparison motivating block_size=8 as an alternative geometry at
+    all (see the ``GEMMA4_DFLASH_BLOCK`` comment a few lines below this
+    function) does not state what ISL it was measured at, so it cannot resolve
+    this either.
+
+    Only applies when the caller has an upfront ``ctx_len_hint`` for the whole
+    session (e.g. a benchmark/demo script that knows its target ISL before
+    constructing the drafter) -- returns ``checkpoint_block_size`` unchanged
+    when ``ctx_len_hint`` is unknown (``None``, the default), so existing
+    callers that don't pass a hint see no behavior change. Does not attempt
+    to be "adaptive" mid-session: block_size is baked into the steady-state
+    Metal trace's fixed shapes for the life of one ``DFlashDrafter`` instance
+    (see generate.py's module docstring), so this can only be chosen once,
+    upfront -- not re-picked per iteration as the real context grows.
+
+    ``GEMMA4_DFLASH_BLOCK``, if set, always wins over this (see call site) --
+    this heuristic only supplies the DEFAULT an operator hasn't overridden.
+    """
+    if ctx_len_hint is None or ctx_len_hint <= long_context_threshold:
+        return checkpoint_block_size
+    return min(checkpoint_block_size, long_context_block_size)
+
+
 class DFlashDrafter:
     """Device-side dFlash drafter (see module docstring)."""
 
@@ -170,6 +239,7 @@ class DFlashDrafter:
         tensor_cache_path=None,
         dtype=ttnn.bfloat16,
         max_ctx=262144 + 2048,
+        ctx_len_hint=None,
     ):
         """
         Args:
@@ -182,6 +252,14 @@ class DFlashDrafter:
                 gathers of the per-iteration noise rows.
             mesh_config: gemma4 MeshConfig (tp over mesh axis 1).
             ccl_manager: the target's CCL manager (all_reduce/all_gather).
+            ctx_len_hint: caller's upfront estimate of this session's context
+                length (e.g. the target ISL bucket), used ONLY to pick a
+                smaller default block_size once that estimate already exceeds
+                the drafter's sliding_window -- see
+                ``recommended_dflash_block_size``. None (default) preserves
+                the previous behavior exactly (checkpoint's own block_size
+                unless GEMMA4_DFLASH_BLOCK overrides it). Ignored entirely when
+                GEMMA4_DFLASH_BLOCK is set -- that always wins.
         """
         from safetensors import safe_open
 
@@ -198,15 +276,27 @@ class DFlashDrafter:
         self.n_heads = cfg["num_attention_heads"]
         self.n_kv_heads = cfg["num_key_value_heads"]
         self.head_dim = cfg["head_dim"]
+        self.sliding_window = cfg.get("sliding_window")
         # Block-size override (tt-blaze atupe/gemma4-0824-dflash runs this SAME
         # checkpoint at block 8 BY DEFAULT and accepts ~5.1/7 vs our 16-block
         # ~2.9-of-first-7: fewer mask tokens in the bidirectional denoise ->
         # cleaner early positions). Checkpoint config says 16; 8 is the other
-        # geometry tt-blaze supports in production.
-        self.block_size = int(_os.environ.get("GEMMA4_DFLASH_BLOCK", cfg["block_size"]))
+        # geometry tt-blaze supports in production. GEMMA4_DFLASH_BLOCK always
+        # wins when set; otherwise, callers with an upfront ctx_len_hint get a
+        # smaller default once that estimate is long enough to benefit (see
+        # recommended_dflash_block_size -- NOT simply "past sliding_window";
+        # real measurement matters here, an earlier version of this that used
+        # sliding_window as the threshold was measured to regress ISL ~3.8k by
+        # 60%) -- callers without one (ctx_len_hint=None) see the unchanged
+        # checkpoint default.
+        self.block_size = int(
+            _os.environ.get(
+                "GEMMA4_DFLASH_BLOCK",
+                recommended_dflash_block_size(ctx_len_hint, cfg["block_size"]),
+            )
+        )
         self.mask_token_id = cfg["dflash_config"]["mask_token_id"]
         self.target_layer_ids = list(cfg["dflash_config"]["target_layer_ids"])
-        self.sliding_window = cfg.get("sliding_window")
         self.layer_types = list(cfg["layer_types"])
         if len(self.layer_types) < self.n_layers:  # config lists per-layer types
             self.layer_types = self.layer_types + [self.layer_types[-1]] * (self.n_layers - len(self.layer_types))
@@ -257,7 +347,47 @@ class DFlashDrafter:
             )
 
         # fc + norms: replicated (fc is [6H, H] transposed for x@W — small).
-        self.fc = _dev("fc", sd["fc.weight"], None)
+        # fc matmul is M x 32256 x 5376 (e.g. M=32 ctx rows); bfp8 halves weight
+        # bandwidth with negligible PCC loss on this projection (production default).
+        # GEMMA4_DFLASH_FC_BFP8=0 reverts to bf16.
+        fc_bfp8 = _os.environ.get("GEMMA4_DFLASH_FC_BFP8", "1").lower() not in ("0", "false", "no")
+        fc_dtype = ttnn.bfloat8_b if fc_bfp8 else dtype
+
+        def _dev_fc(name, w, mapper, transpose=True):
+            wt = w.transpose(-2, -1).contiguous() if transpose else w
+            wt = wt.unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+            return ttnn.as_tensor(
+                wt,
+                device=mesh_device,
+                dtype=fc_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mapper if mapper is not None else self._replicate,
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"dflash_{'rep_' if self.replicated else ''}{'bfp8_' if fc_bfp8 else ''}{name}"
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.fc = _dev_fc("fc", sd["fc.weight"], None)
+        self._fc_k = int(self.fc.shape[-2])
+        self._fc_n = int(self.fc.shape[-1])
+        # NOT routed through RMSNorm/dflash_context_hidden_norm here (unlike
+        # generate.py's context.py, which uses that mechanism safely -- see
+        # test_dflash_generate.py/test_dflash_generate_traced.py, both passing).
+        # Constructing an RMSNorm object here specifically -- whose weight is
+        # reshaped to (1,1,hidden/32,32) for its width-sharded fast path, then
+        # fed into the plain non-sharded ttnn.rms_norm anyway since
+        # dflash_context_hidden_norm/dflash_ctx_kv_hidden_norm always pass
+        # skip_sharded_path=True -- shifts the device allocator's state enough
+        # that the TARGET model's own prefill SDPA (called moments later, in
+        # dflash_fused_decoder_demo.py, unrelated code) then TT_THROWs
+        # "Statically allocated circular buffers... clash with L1 buffers" on
+        # its first compile. Confirmed by elimination: DFlashDrafter.__init__
+        # is the only DFlash code that runs before that prefill call, and
+        # fc_bfp8's default flip (this same commit's other __init__ change)
+        # was ruled out empirically (GEMMA4_DFLASH_FC_BFP8=0 still fails
+        # identically). Reverting to the plain flat-weight-tensor load this
+        # file used before restores a working demo.
         self.hidden_norm_w = _dev("hidden_norm", sd["hidden_norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
         self.final_norm_w = _dev("final_norm", sd["norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
 
@@ -350,6 +480,150 @@ class DFlashDrafter:
         self._ctx_acc = None
         self._ctx_len = 0
 
+    def _fc_linear(self, taps_cat_tt, *, memory_config=None):
+        """``fc`` matmul: concat taps [*, 6*H] -> [*, H].
+
+        Mode via ``GEMMA4_DFLASH_FC_MODE`` (default ``auto_hifi4``): ttnn auto progcfg
+        + HiFi4 without fp32 dest-acc — sweep winner on T3K WH at 16x32256x5376.
+        ``legacy`` restores auto + ``self._ckc`` (HiFi4 + fp32 dest-acc).
+        """
+        out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        m = matmul_rows(taps_cat_tt)
+        pc, ckc = dflash_fc_linear_config(self.mesh_device, m, self._fc_k, self._fc_n)
+        if pc is not None:
+            return linear_l1_safe(
+                taps_cat_tt,
+                self.fc,
+                program_config=pc,
+                compute_kernel_config=ckc or self._ckc,
+                memory_config=out_mc,
+            )
+        if ckc is not None:
+            return ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=ckc, memory_config=out_mc)
+        return ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=self._ckc, memory_config=out_mc)
+
+    def _ctx_kv_linear(self, hn, weight, *, memory_config=None):
+        """Ctx ``k_proj``/``v_proj`` matmul: hidden_norm output [*, H] -> [*, local_kv*hd].
+
+        Mode via ``GEMMA4_DFLASH_CTX_KV_MODE`` (default ``auto_hifi3_destacc``): ttnn
+        auto + HiFi3 + fp32 dest-acc (sweep winner at 32x5376x128). ``legacy`` restores
+        ``self._ckc``.
+        """
+        m = matmul_rows(hn)
+        k = int(hn.shape[-1])
+        n = int(weight.shape[-1])
+        out_mc = memory_config if memory_config is not None else dflash_ctx_kv_linear_out_memcfg(self.mesh_device, m, n)
+        pc, ckc = dflash_ctx_kv_linear_config(self.mesh_device, m, k, n)
+        if pc is not None:
+            return linear_l1_safe(
+                hn,
+                weight,
+                program_config=pc,
+                compute_kernel_config=ckc if ckc is not None else self._ckc,
+                memory_config=out_mc,
+            )
+        if ckc is not None:
+            return ttnn.linear(hn, weight, compute_kernel_config=ckc, memory_config=out_mc)
+        return ttnn.linear(hn, weight, compute_kernel_config=self._ckc, memory_config=out_mc)
+
+    def merge_ctx_kv_cache(self, cache, new, merge_idx, cap, *, base_idx=None):
+        """Gather-merge ``[cache | new]`` rows into persistent ``cache`` via ``merge_idx``.
+
+        ``cache``: ``[1, local_kv, cap, head_dim]``; ``new``: ``[1, local_kv, n_new, head_dim]``.
+        Mode via ``GEMMA4_DFLASH_CTX_KV_MERGE`` (``dram`` default). Matches the packed-verify
+        loop-free pattern: DRAM concat, per-head ``[src_seq, hd]`` row-gather (never flatten
+        all KV heads — tile order breaks for ``local_kv >= 2``), assign back in place.
+        """
+        mode = dflash_ctx_kv_merge_mode()
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        l1 = ttnn.L1_MEMORY_CONFIG
+        concat_mc = l1 if mode == "l1" else dram
+        embed_out_mc = l1 if mode in ("l1", "l1_embed") else dram
+
+        hd = self.head_dim
+        n_new = int(new.shape[2])
+        src_seq = int(cap) + n_new
+        # ``merge_idx`` is already ``[1, cap]``; never slice/deallocate it here —
+        # a sliced view shares the parent buffer and ``deallocate`` would kill the
+        # persistent device tensor across commit iterations.
+        idx = base_idx if base_idx is not None else merge_idx
+
+        def _merge_head(cache_h, new_h):
+            new_in = new_h if mode != "l1_new" else ttnn.to_memory_config(new_h, l1)
+            src = ttnn.concat([cache_h, new_in], dim=2, memory_config=concat_mc)
+            if mode == "l1_new":
+                ttnn.deallocate(new_in)
+            src_h = ttnn.slice(src, [0, 0, 0, 0], [1, 1, src_seq, hd])
+            src2d = ttnn.reshape(src_h, (src_seq, hd))
+            merged = ttnn.embedding(idx, src2d, layout=ttnn.TILE_LAYOUT, memory_config=embed_out_mc)
+            merged4 = ttnn.reshape(merged, (1, 1, cap, hd))
+            ttnn.assign(merged4, cache_h)
+            src.deallocate(True)
+            merged.deallocate(True)
+            merged4.deallocate(True)
+
+        if self.local_kv == 1:
+            _merge_head(cache, new)
+        else:
+            for h_i in range(self.local_kv):
+                _merge_head(cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :])
+
+    def merge_ctx_kv_cache_append(self, cache, new, win_len, produced):
+        """Append-only merge: write ``new[:,:,:produced,:]`` into ``cache`` at ``win_len``.
+
+        Eager / non-traced fast path when the row map is append-without-window-shift
+        (no gather over ``cap`` rows). Not used inside the Metal trace (variable
+        ``win_len``); the traced body keeps the embedding gather instead.
+        """
+        if produced <= 0:
+            return
+        end = int(win_len) + int(produced)
+        if self.local_kv == 1:
+            src = ttnn.slice(new, [0, 0, 0, 0], [1, 1, produced, self.head_dim])
+            dst = ttnn.slice(cache, [0, 0, win_len, 0], [1, 1, end, self.head_dim])
+            ttnn.assign(src, dst)
+            return
+        for h_i in range(self.local_kv):
+            src = ttnn.slice(new[:, h_i : h_i + 1, :, :], [0, 0, 0, 0], [1, 1, produced, self.head_dim])
+            dst = ttnn.slice(cache[:, h_i : h_i + 1, :, :], [0, 0, win_len, 0], [1, 1, end, self.head_dim])
+            ttnn.assign(src, dst)
+
+    def commit_ctx_kv_update(
+        self,
+        raw_rows,
+        cos_rows,
+        sin_rows,
+        ctx_k,
+        ctx_v,
+        merge_idx,
+        cap,
+        *,
+        skip_merge=False,
+        merge_append=None,
+    ):
+        """``project_ctx_kv`` + per-layer merge into ``ctx_k``/``ctx_v`` caches.
+
+        ``skip_merge``: identity row map — projected K/V are discarded (Tracy no-op).
+        ``merge_append``: ``(win_len, produced)`` for eager append-only slice assign.
+        """
+        kv_new = self.project_ctx_kv(raw_rows, cos_rows, sin_rows)
+        if skip_merge:
+            for k_new, v_new in kv_new:
+                k_new.deallocate(True)
+                v_new.deallocate(True)
+            return
+        use_append = merge_append is not None
+        for li, (k_new, v_new) in enumerate(kv_new):
+            if use_append:
+                win_len, produced = merge_append
+                self.merge_ctx_kv_cache_append(ctx_k[li], k_new, win_len, produced)
+                self.merge_ctx_kv_cache_append(ctx_v[li], v_new, win_len, produced)
+            else:
+                self.merge_ctx_kv_cache(ctx_k[li], k_new, merge_idx, cap)
+                self.merge_ctx_kv_cache(ctx_v[li], v_new, merge_idx, cap)
+            k_new.deallocate(True)
+            v_new.deallocate(True)
+
     # ------------------------------------------------------------------ ctx
 
     def reset(self):
@@ -386,7 +660,7 @@ class DFlashDrafter:
 
     def append_taps_tt(self, taps_cat_tt):
         """Append device taps [1, 1, rows, len(taps)*H] -> fc -> ctx buffer."""
-        proj = ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=self._ckc)  # replicated [1,1,rows,H]
+        proj = self._fc_linear(taps_cat_tt)  # replicated [1,1,rows,H]
         if self._ctx_acc is None:
             self._ctx_acc = proj
         else:
@@ -400,6 +674,12 @@ class DFlashDrafter:
 
     def _rms(self, x, w):
         return ttnn.rms_norm(x, epsilon=self.rms_eps, weight=w)
+
+    def _hidden_norm(self, x):
+        """``fc`` output -> context rows. See ``self.hidden_norm_w``'s comment
+        for why this stays a plain ``_rms`` call rather than routing through
+        ``dflash_context_hidden_norm``."""
+        return self._rms(x, self.hidden_norm_w)
 
     def _rope4d(self, positions):
         # On-device row gather from the persistent tables; only the position ids
@@ -440,8 +720,8 @@ class DFlashDrafter:
         hn = self._rms(raw_rows, self.hidden_norm_w)
         out = []
         for lyr in self.layers:
-            k = ttnn.linear(hn, lyr["k_proj"], compute_kernel_config=self._ckc)
-            v = ttnn.linear(hn, lyr["v_proj"], compute_kernel_config=self._ckc)
+            k = self._ctx_kv_linear(hn, lyr["k_proj"])
+            v = self._ctx_kv_linear(hn, lyr["v_proj"])
             k = ttnn.transpose(ttnn.reshape(k, (1, R, self.local_kv, self.head_dim)), 1, 2)
             v = ttnn.transpose(ttnn.reshape(v, (1, R, self.local_kv, self.head_dim)), 1, 2)
             k = self._rms(k, lyr["k_norm"])
@@ -574,6 +854,16 @@ class DFlashDrafter:
         # identical id-producing tail to block_forward
         h = self._rms(x, self.final_norm_w)
         x.deallocate(True)
+        # Row-dropping slice on a possibly-sharded activation: the current ttnn
+        # core validates shard alignment strictly and TT_FATALs
+        # (tensor_layout.cpp shard_align_error) when the sliced row count no
+        # longer maps cleanly onto per-core shards. Park in DRAM interleaved
+        # first -- same fix as attention/prefill.py's _ensure_dram_interleaved
+        # for the identical class of issue.
+        if h.is_sharded():
+            h_interleaved = ttnn.sharded_to_interleaved(h, ttnn.DRAM_MEMORY_CONFIG)
+            h.deallocate(True)
+            h = h_interleaved
         h_drafts = h[:, :, 1:, :]
         h.deallocate(True)
         n_draft_rows = int(h_drafts.shape[2])
@@ -800,6 +1090,16 @@ class DFlashDrafter:
 
         h = self._rms(x, self.final_norm_w)
         x.deallocate(True)
+        # Row-dropping slice on a possibly-sharded activation: the current ttnn
+        # core validates shard alignment strictly and TT_FATALs
+        # (tensor_layout.cpp shard_align_error) when the sliced row count no
+        # longer maps cleanly onto per-core shards. Park in DRAM interleaved
+        # first -- same fix as attention/prefill.py's _ensure_dram_interleaved
+        # and block_forward_cached's identical h[:, :, 1:, :] tail.
+        if h.is_sharded():
+            h_interleaved = ttnn.sharded_to_interleaved(h, ttnn.DRAM_MEMORY_CONFIG)
+            h.deallocate(True)
+            h = h_interleaved
         h_drafts = h[:, :, 1:, :]
         h.deallocate(True)
         n_draft_rows = int(h_drafts.shape[2])
@@ -853,7 +1153,7 @@ class DFlashDrafter:
         x = ttnn.concat([anchor_tt, self._mask_rows], dim=2)
         anchor_tt.deallocate(True)
 
-        h_ctx = self._rms(self._ctx_acc, self.hidden_norm_w)
+        h_ctx = self._hidden_norm(self._ctx_acc)
         ctx_first = start_pos - ctx
         cos_ctx, sin_ctx = self._rope4d(torch.arange(ctx_first, ctx_first + ctx))
         cos_blk, sin_blk = self._rope4d(torch.arange(start_pos, start_pos + K + 1))
@@ -1171,30 +1471,10 @@ class DFlashFusedDecoder:
         if self.ctx_cache:
             # commit: project the PREVIOUS replay's fc rows at their absolute
             # positions and gather-merge into every layer's roped K/V cache.
-            cos_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
-            sin_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
-            kv_new = d.project_ctx_kv(self.fc_prev, cos_c, sin_c)
+            cos_c, sin_c = gather_rope_from_buffer(self.commit_pos, d._cos_2d, d._sin_2d, d.head_dim, n=self.P_v)
+            d.commit_ctx_kv_update(self.fc_prev, cos_c, sin_c, self.ctx_k, self.ctx_v, self.merge_idx, self.cap)
             cos_c.deallocate(True)
             sin_c.deallocate(True)
-            hd = d.head_dim
-            for li, (k_new, v_new) in enumerate(kv_new):
-                for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
-                    for h_i in range(d.local_kv):
-                        src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
-                        src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
-                        m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
-                        m4 = ttnn.reshape(m, (1, 1, self.cap, hd))
-                        dst = cache if d.local_kv == 1 else None
-                        if dst is None:
-                            raise NotImplementedError("ctx cache merge assumes local_kv == 1 per device")
-                        ttnn.assign(m4, dst)
-                        for t in (m4, m, src2d, src):
-                            try:
-                                t.deallocate(True)
-                            except Exception:
-                                pass
-                k_new.deallocate(True)
-                v_new.deallocate(True)
         else:
             src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
             src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
@@ -1214,7 +1494,7 @@ class DFlashFusedDecoder:
                 noise, self.ctx_k, self.ctx_v, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
             )  # [1,1,1,K] uint32
         else:
-            h_ctx = d._rms(self.ctx_dev, d.hidden_norm_w)
+            h_ctx = d._hidden_norm(self.ctx_dev)
             hd = d.head_dim
             cos_ctx = ttnn.reshape(
                 ttnn.embedding(self.ctx_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd)
@@ -1308,7 +1588,7 @@ class DFlashFusedDecoder:
         # also land in the persistent fc_prev so the NEXT replay's start-of-body
         # merge can commit the accepted prefix on device.
         cat = ttnn.concat(self.tap_bufs, dim=3)
-        fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+        fc_out = d._fc_linear(cat)
         ttnn.assign(fc_out, self.fc_prev)
         fc_out.deallocate(True)
         # ONE fused id output ([1, K+P_v]: drafts then posterior) -> ONE
@@ -1376,7 +1656,7 @@ class DFlashFusedDecoder:
             cat = ttnn.concat([t[:, :, lo:rv, :] for t in g], dim=3)
             for t in g:
                 t.deallocate(True)
-            proj = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            proj = d._fc_linear(cat)
             cat.deallocate(True)
             host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
             proj.deallocate(True)

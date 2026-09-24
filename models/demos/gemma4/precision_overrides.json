@@ -17,18 +17,18 @@
   "gemma-4-31B-it": {
     "default": {
       "shared_mlp": "bfp8",
-      "attention": "bfp8"
+      "attention": "bfp8",
+      "lm_head": "bfp8"
     },
     "bfp8_max_context": {
-      "1x8": {
-        "shared_mlp": 131072
-      }
+      "shared_mlp": 262144
     }
   },
   "gemma-4-12B-it": {
     "default": {
       "shared_mlp": "bfp8",
-      "attention": "bfp8"
+      "attention": "bfp8",
+      "lm_head": "bfp8"
     }
   }
 }

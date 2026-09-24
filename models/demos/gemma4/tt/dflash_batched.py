@@ -285,24 +285,9 @@ class DFlashBatchedDecoder:
         # commit previous fc rows into the stacked ctx K/V caches
         cos_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
         sin_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
-        kv_new = d.project_ctx_kv(self.fc_prev, cos_c, sin_c)
+        d.commit_ctx_kv_update(self.fc_prev, cos_c, sin_c, self.ctx_k, self.ctx_v, self.merge_idx, B * self.cap)
         cos_c.deallocate(True)
         sin_c.deallocate(True)
-        hd = d.head_dim
-        for li, (k_new, v_new) in enumerate(kv_new):
-            for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
-                src = ttnn.concat([cache, new], dim=2)
-                src2d = ttnn.reshape(src, (B * self.cap + B * P_v, hd))
-                m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
-                m4 = ttnn.reshape(m, (1, 1, B * self.cap, hd))
-                ttnn.assign(m4, cache)
-                for t in (m4, m, src2d, src):
-                    try:
-                        t.deallocate(True)
-                    except Exception:
-                        pass
-            k_new.deallocate(True)
-            v_new.deallocate(True)
         # drafter block (folded rows)
         cos_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
         sin_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
@@ -363,7 +348,7 @@ class DFlashBatchedDecoder:
                 v_b, _lp = self._sampler.sample(lg_b, enable_trace=False)
                 vidx_parts.append(v_b)
                 cat_b = ttnn.concat(self.tap_bufs, dim=3)
-                fc_parts.append(ttnn.linear(cat_b, d.fc, compute_kernel_config=d._ckc))
+                fc_parts.append(d._fc_linear(cat_b))
                 cat_b.deallocate(True)
             vidx = ttnn.concat(vidx_parts, dim=len(vidx_parts[0].shape) - 1)
             fc_out = ttnn.concat(fc_parts, dim=2)
@@ -422,7 +407,7 @@ class DFlashBatchedDecoder:
             # tensors with a fixed footprint, not per-replay leaks.
             # tap fc -> persistent for next commit
             cat = ttnn.concat(self.tap_bufs, dim=3)
-            fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            fc_out = d._fc_linear(cat)
             ttnn.assign(fc_out, self.fc_prev)
             fc_out.deallocate(True)
         if self.out_draft is None:

@@ -105,10 +105,10 @@ def test_build_hybrid_page_tables_shapes_and_padding():
                 assert torch.equal(pt[u], expected)
 
 
-def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error):
-    """A ring smaller than one block cannot be paged. Kept reachable by using a
-    POWER-OF-TWO window: bounded_ring_modulo screens the ring first, so a window
-    like 100 never reaches this check (see the power-of-two test below)."""
+def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error, monkeypatch):
+    # 100 is neither a power of two nor a multiple of 32; use 16 (power of two,
+    # so it clears bounded_ring_modulo's ring check) to isolate this check.
+    monkeypatch.delenv("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", raising=False)
     with expect_error(ValueError, "must be a multiple of block_size"):
         build_hybrid_page_tables(
             num_layers=1,
