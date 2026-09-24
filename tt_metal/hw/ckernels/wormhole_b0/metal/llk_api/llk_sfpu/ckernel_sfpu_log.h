@@ -185,10 +185,8 @@ template <
     bool IS_BASE_TWO = false>
 struct Log : SfpuUnaryOp<
                  Log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t log_base_scale_factor) {
-        calculate_log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>(
-            log_base_scale_factor);
-    }
+    static constexpr auto& calculate =
+        calculate_log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>;
     static inline __attribute__((always_inline)) void init_op() {
         log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
     }

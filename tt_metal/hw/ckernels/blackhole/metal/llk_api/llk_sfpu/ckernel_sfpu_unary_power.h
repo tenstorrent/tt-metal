@@ -440,18 +440,14 @@ inline void sfpu_unary_pow_init() {
 // Op class for x ^ exponent. Only run() needs is_fp32_dest_acc_en.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct UnaryPower : SfpuUnaryOp<UnaryPower<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exponent) {
-        calculate_unary_power<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(exponent);
-    }
+    static constexpr auto& calculate = calculate_unary_power<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { sfpu_unary_pow_init(); }
 };
 
 // Op class for x ^ exponent by repeated multiplication.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct UnaryPowerIterative : SfpuUnaryOp<UnaryPowerIterative<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exponent) {
-        calculate_unary_power_iterative<APPROXIMATION_MODE, ITERATIONS>(exponent);
-    }
+    static constexpr auto& calculate = calculate_unary_power_iterative<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { power_init(); }
 };
 

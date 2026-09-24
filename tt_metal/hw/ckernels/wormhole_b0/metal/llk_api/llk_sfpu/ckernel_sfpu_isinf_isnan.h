@@ -13,9 +13,7 @@ namespace ckernel::sfpu {
 // test holds, else 0.0.
 template <bool APPROXIMATION_MODE, FiniteCheck CHECK, int ITERATIONS = 8>
 struct IsinfIsnan : SfpuUnaryOp<IsinfIsnan<APPROXIMATION_MODE, CHECK, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_sfpu_isinf_isnan_<CHECK, APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_sfpu_isinf_isnan_<CHECK, APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace ckernel::sfpu

@@ -51,7 +51,7 @@ inline void calculate_mish() {
             }
 
             // numerator = u * (u + 2)
-            sfpi::vFloat number = u * (u + 2.0f);
+            sfpi::vFloat numer = u * (u + 2.0f);
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
             sfpi::vFloat one_plus_u = u + 1.0f;
@@ -66,7 +66,7 @@ inline void calculate_mish() {
                 inv_denom = sfpu_reciprocal_iter<1>(denom);
             }
 
-            result = x * (number * inv_denom);
+            result = x * (numer * inv_denom);
         }
         v_endif;
 
@@ -88,9 +88,7 @@ inline void mish_init() {
 // Op class for mish: x * tanh(softplus(x)).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Mish : SfpuUnaryOp<Mish<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_mish<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_mish<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { mish_init<APPROXIMATION_MODE>(); }
 };
 

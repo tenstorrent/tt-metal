@@ -186,10 +186,8 @@ template <
 struct Exp : SfpuUnaryOp<
                  Exp<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE, scale, SLOT>,
                  SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exp_base_scale_factor) {
-        calculate_exponential<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>(
-            exp_base_scale_factor);
-    }
+    static constexpr auto& calculate =
+        calculate_exponential<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>;
     static inline __attribute__((always_inline)) void init_op() {
         exp_init<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE, is_fp32_dest_acc_en>();
     }

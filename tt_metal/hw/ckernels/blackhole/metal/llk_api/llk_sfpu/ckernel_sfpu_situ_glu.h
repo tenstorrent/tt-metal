@@ -104,10 +104,7 @@ inline void situ_glu_init() {
 // Op class for situ_glu of a gate tile (in0) and an up tile (in1).
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluConfigKimi>
 struct SituGlu : SfpuBinaryOp<SituGlu<is_fp32_dest_acc_en, ITERATIONS, Config>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_situ_glu<is_fp32_dest_acc_en, ITERATIONS, Config>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_situ_glu<is_fp32_dest_acc_en, ITERATIONS, Config>;
     static inline __attribute__((always_inline)) void init_op() { situ_glu_init(); }
 };
 

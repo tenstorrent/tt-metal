@@ -121,9 +121,7 @@ inline void calculate_reshuffle_rows(std::uint32_t idx_addr) {
 template <bool APPROXIMATION_MODE>
 struct ReshuffleRows : SfpuUnaryOp<ReshuffleRows<APPROXIMATION_MODE>> {
     static constexpr bool walks_faces = false;
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t idx_addr) {
-        calculate_reshuffle_rows<APPROXIMATION_MODE>(idx_addr);
-    }
+    static constexpr auto& calculate = calculate_reshuffle_rows<APPROXIMATION_MODE>;
 };
 
 }  // namespace sfpu

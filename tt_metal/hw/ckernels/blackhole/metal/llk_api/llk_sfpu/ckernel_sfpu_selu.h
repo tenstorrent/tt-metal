@@ -43,9 +43,7 @@ inline void calculate_selu(std::uint32_t scale, std::uint32_t alpha) {
 // Op class for selu with scale and alpha (fp32 bits).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Selu : SfpuUnaryOp<Selu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scale, const std::uint32_t alpha) {
-        calculate_selu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(scale, alpha);
-    }
+    static constexpr auto& calculate = calculate_selu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { selu_init(); }
 };
 

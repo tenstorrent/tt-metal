@@ -32,9 +32,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Negative : SfpuUnaryOp<Negative<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_negative_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_negative_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Element-wise negate for int32: out = -x (two's-complement negate), for the negative_tile_int32 path.
@@ -54,9 +52,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct NegativeInt : SfpuUnaryOp<NegativeInt<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_negative_int_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_negative_int_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

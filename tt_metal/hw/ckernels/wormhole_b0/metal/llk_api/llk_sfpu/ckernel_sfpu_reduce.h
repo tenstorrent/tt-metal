@@ -1838,10 +1838,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
 template <PoolType pool_type, DataFormat format, bool is_fp32_dest_acc_en, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 struct Reduce : SfpuUnaryOp<Reduce<pool_type, format, is_fp32_dest_acc_en, reduce_dim>> {
     static constexpr bool walks_faces = false;
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
-        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(block_ct_dim, block_rt_dim);
-    }
+    static constexpr auto& calculate = calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>;
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t block_ct_dim) {
         init_reduce<pool_type, format, is_fp32_dest_acc_en>(block_ct_dim);
     }

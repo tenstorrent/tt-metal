@@ -17,10 +17,7 @@ template <BroadcastType BCAST_DIM, BinaryOp BINOP = BinaryOp::ADD>
 struct BinaryBcast : SfpuBinaryOp<BinaryBcast<BCAST_DIM, BINOP>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_data, const std::uint32_t dst_index_bcast, const std::uint32_t dst_index_out) {
-        _calculate_sfpu_binary_bcast_full_tile_<BINOP, BCAST_DIM>(dst_index_data, dst_index_bcast, dst_index_out);
-    }
+    static constexpr auto& calculate = _calculate_sfpu_binary_bcast_full_tile_<BINOP, BCAST_DIM>;
 
     static inline __attribute__((always_inline)) void init_op() { _sfpu_binary_bcast_init_<BCAST_DIM>(); }
 };

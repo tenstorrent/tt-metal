@@ -21,11 +21,8 @@ struct AddInt : SfpuBinaryOp<AddInt<APPROXIMATION_MODE, data_format, ITERATIONS>
     static constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        _add_int_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate =
+        _add_int_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */>;
 };
 
 }  // namespace ckernel::sfpu

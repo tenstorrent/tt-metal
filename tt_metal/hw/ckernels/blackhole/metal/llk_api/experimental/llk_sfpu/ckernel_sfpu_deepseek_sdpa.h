@@ -86,9 +86,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 // Op class for the fused max-sub-exp-add kernel of the SDPA tail reduction.
 template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
 struct FusedMaxSubExpAdd : SfpuUnaryOp<FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, final_norm>> {
-    static inline __attribute__((always_inline)) void calculate(const int scale_bf16) {
-        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>(scale_bf16);
-    }
+    static constexpr auto& calculate = calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>;
 };
 
 }  // namespace ckernel::sfpu

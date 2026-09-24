@@ -25,9 +25,7 @@ inline void calculate_rpow(const std::uint32_t base_val) {
 // Op class for base ** x.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 struct Rpow : SfpuUnaryOp<Rpow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t base_val) {
-        calculate_rpow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(base_val);
-    }
+    static constexpr auto& calculate = calculate_rpow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
     static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
 };
 

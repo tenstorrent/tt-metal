@@ -64,11 +64,8 @@ template <
     InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
     int ITERATIONS = 8>
 struct BinaryBitwise : SfpuBinaryOp<BinaryBitwise<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_binary_bitwise<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate =
+        calculate_sfpu_binary_bitwise<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

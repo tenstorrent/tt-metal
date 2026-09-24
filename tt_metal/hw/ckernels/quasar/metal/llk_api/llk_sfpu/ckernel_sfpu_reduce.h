@@ -509,11 +509,12 @@ struct Reduce : SfpuUnaryOp<Reduce<pool_type, format, is_fp32_dest_acc_en, reduc
     static constexpr bool walks_faces = false;
     static inline __attribute__((always_inline)) void calculate(
         const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
-        // The row reduce bounds its block by the Dest capacity of the kernel's sync mode.
+        // The row reduce bounds its block by the Dest capacity of the kernel's sync mode. The #ifdef only
+        // keeps this header includable by builds that never use Reduce (the tt-llk harness).
 #ifdef DST_SYNC_MODE
         calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en, DST_SYNC_MODE>(block_ct_dim, block_rt_dim);
 #else
-        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>(block_ct_dim, block_rt_dim);
+        static_assert(sizeof(Reduce*) == 0, "sfpu::Reduce needs the kernel-global DST_SYNC_MODE");
 #endif
     }
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t block_ct_dim) {

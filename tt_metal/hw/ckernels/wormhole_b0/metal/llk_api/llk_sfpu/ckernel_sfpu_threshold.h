@@ -14,9 +14,7 @@ namespace sfpu {
 // Op class for threshold: value where x <= threshold, x otherwise. The kernel lives in tt-llk.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, typename T = std::uint32_t>
 struct Threshold : SfpuUnaryOp<Threshold<APPROXIMATION_MODE, ITERATIONS, T>> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold, const T value) {
-        _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>(threshold, value);
-    }
+    static constexpr auto& calculate = _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>;
 };
 
 }  // namespace sfpu

@@ -97,9 +97,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 struct GeneralizedMoeGateSumTop2 : SfpuUnaryOp<GeneralizedMoeGateSumTop2<APPROXIMATION_MODE, is_fp32_dest_acc_en>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
-    }
+    static constexpr auto& calculate = generalized_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>;
 
     static inline __attribute__((always_inline)) void init_op() {
         generalized_moe_gate_topk_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
@@ -112,9 +110,7 @@ struct GeneralizedMoeGateSortTop4Groups
     : SfpuUnaryOp<GeneralizedMoeGateSortTop4Groups<APPROXIMATION_MODE, is_fp32_dest_acc_en>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_sort_top4_groups<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
-    }
+    static constexpr auto& calculate = generalized_moe_gate_sort_top4_groups<APPROXIMATION_MODE, is_fp32_dest_acc_en>;
 };
 
 // Op class that merges the selected groups into the normalized top-8.
@@ -122,9 +118,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 struct GeneralizedMoeGateTop8 : SfpuUnaryOp<GeneralizedMoeGateTop8<APPROXIMATION_MODE, is_fp32_dest_acc_en>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate(std::uint32_t eps, std::uint32_t scale) {
-        generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
-    }
+    static constexpr auto& calculate = generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>;
 };
 
 // Op class that merges the selected groups into the normalized top-8, folding in an extra scale.
@@ -133,10 +127,7 @@ struct GeneralizedMoeGateTop8Scaled
     : SfpuUnaryOp<GeneralizedMoeGateTop8Scaled<APPROXIMATION_MODE, is_fp32_dest_acc_en>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate(
-        std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale) {
-        generalized_moe_gate_top8_scaled<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale, extra_scale);
-    }
+    static constexpr auto& calculate = generalized_moe_gate_top8_scaled<APPROXIMATION_MODE, is_fp32_dest_acc_en>;
 };
 
 // Op class that merges four groups into a top-8 run.
@@ -151,9 +142,8 @@ struct GeneralizedMoeGateMerge4Top8
           GeneralizedMoeGateMerge4Top8<APPROXIMATION_MODE, is_fp32_dest_acc_en, read_base, store_lo, store_hi>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_merge4_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en, read_base, store_lo, store_hi>();
-    }
+    static constexpr auto& calculate =
+        generalized_moe_gate_merge4_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en, read_base, store_lo, store_hi>;
 };
 
 // Op class that merges two top-8 runs into a re-mergeable top-8 run.
@@ -168,9 +158,8 @@ struct GeneralizedMoeGateMerge16ToRun
           GeneralizedMoeGateMerge16ToRun<APPROXIMATION_MODE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_merge16_to_run<APPROXIMATION_MODE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>();
-    }
+    static constexpr auto& calculate =
+        generalized_moe_gate_merge16_to_run<APPROXIMATION_MODE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>;
 };
 
 // Op class that relocates a top-k run between column pairs.
@@ -184,9 +173,8 @@ struct GeneralizedMoeGateCopyTopkRun
     : SfpuUnaryOp<GeneralizedMoeGateCopyTopkRun<APPROXIMATION_MODE, from_lo, from_hi, to_lo, to_hi>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_copy_topk_run<APPROXIMATION_MODE, from_lo, from_hi, to_lo, to_hi>();
-    }
+    static constexpr auto& calculate =
+        generalized_moe_gate_copy_topk_run<APPROXIMATION_MODE, from_lo, from_hi, to_lo, to_hi>;
 };
 
 // Op class that places one field of a run from the interm region into its home region.
@@ -201,9 +189,8 @@ struct GeneralizedMoeGatePlaceFieldFromInterm
     : SfpuUnaryOp<GeneralizedMoeGatePlaceFieldFromInterm<APPROXIMATION_MODE, field, src_lo, src_hi, dst_lo, dst_hi>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() {
-        generalized_moe_gate_place_field_from_interm<APPROXIMATION_MODE, field, src_lo, src_hi, dst_lo, dst_hi>();
-    }
+    static constexpr auto& calculate =
+        generalized_moe_gate_place_field_from_interm<APPROXIMATION_MODE, field, src_lo, src_hi, dst_lo, dst_hi>;
 };
 
 // Op class that sorts two top-8 runs into the global top-k and normalizes it.
@@ -212,10 +199,8 @@ struct GeneralizedMoeGateFinalizeUngrouped
     : SfpuUnaryOp<GeneralizedMoeGateFinalizeUngrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate(std::uint32_t eps, std::uint32_t scale) {
-        generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax>(
-            eps, scale);
-    }
+    static constexpr auto& calculate =
+        generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax>;
 
     static inline __attribute__((always_inline)) void init_op() {
         generalized_moe_gate_topk_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();

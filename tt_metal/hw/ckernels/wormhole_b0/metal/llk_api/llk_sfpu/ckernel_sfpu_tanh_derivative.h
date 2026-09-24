@@ -259,9 +259,8 @@ inline void tanh_derivative_sech2_init() {
 // Op class for the tanh derivative, computed as sech^2(x).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct TanhDerivative : SfpuUnaryOp<TanhDerivative<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_tanh_derivative_sech2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate =
+        calculate_tanh_derivative_sech2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { tanh_derivative_sech2_init<APPROXIMATION_MODE>(); }
 };
 

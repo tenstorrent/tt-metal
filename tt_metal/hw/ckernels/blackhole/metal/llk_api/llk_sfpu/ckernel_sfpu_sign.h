@@ -40,9 +40,7 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
 // Op class for sign(x).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Sign : SfpuUnaryOp<Sign<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exponent_size_8) {
-        calculate_sign<APPROXIMATION_MODE, ITERATIONS>(exponent_size_8);
-    }
+    static constexpr auto& calculate = calculate_sign<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { sign_init(); }
 };
 

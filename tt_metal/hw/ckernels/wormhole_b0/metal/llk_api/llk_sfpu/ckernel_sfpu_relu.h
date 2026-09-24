@@ -81,9 +81,7 @@ inline void relu_clamp_uint(std::uint32_t threshold) {
 // Op class for the unsigned (uint32/uint16) relu_min / relu_max clamp against a threshold.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
 struct ReluClampUint : SfpuUnaryOp<ReluClampUint<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t threshold) {
-        relu_clamp_uint<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, ITERATIONS>(threshold);
-    }
+    static constexpr auto& calculate = relu_clamp_uint<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, ITERATIONS>;
 };
 
 // Signed int32 clamp against a threshold, shared by relu_min and relu_max/relu6.
@@ -154,9 +152,7 @@ inline void relu_clamp_int(std::uint32_t threshold) {
 // Op class for the int32 relu_min / relu_max clamp against a threshold.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
 struct ReluClampInt : SfpuUnaryOp<ReluClampInt<APPROXIMATION_MODE, IS_LOWER_BOUND, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t threshold) {
-        relu_clamp_int<APPROXIMATION_MODE, IS_LOWER_BOUND, ITERATIONS>(threshold);
-    }
+    static constexpr auto& calculate = relu_clamp_int<APPROXIMATION_MODE, IS_LOWER_BOUND, ITERATIONS>;
 };
 
 inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
@@ -192,17 +188,13 @@ inline void relu_max(std::uint32_t uint_threshold) {
 // Op class for relu_min: max(x, threshold) (relu with a zero threshold).
 template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS = 8, typename T = std::uint32_t>
 struct ReluMin : SfpuUnaryOp<ReluMin<VectorType, APPROXIMATION_MODE, ITERATIONS, T>> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold) {
-        _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
-    }
+    static constexpr auto& calculate = _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>;
 };
 
 // Op class for relu_max: max(0, min(x, threshold)).
 template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS = 8, typename T = std::uint32_t>
 struct ReluMax : SfpuUnaryOp<ReluMax<VectorType, APPROXIMATION_MODE, ITERATIONS, T>> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold) {
-        _relu_max_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
-    }
+    static constexpr auto& calculate = _relu_max_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>;
     static inline __attribute__((always_inline)) void init_op() { relu_max_init(); }
 };
 
@@ -216,9 +208,7 @@ inline void calculate_lrelu(const std::uint32_t slope) {
 // Op class for leaky relu: x for x >= 0, slope * x otherwise.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Lrelu : SfpuUnaryOp<Lrelu<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t slope) {
-        calculate_lrelu<APPROXIMATION_MODE, ITERATIONS>(slope);
-    }
+    static constexpr auto& calculate = calculate_lrelu<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

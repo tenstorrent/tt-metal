@@ -76,9 +76,8 @@ template <
     DataFormat DATA_FORMAT = DataFormat::Int32,
     int ITERATIONS = 8>
 struct UnaryBitwise : SfpuUnaryOp<UnaryBitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_sfpu_unary_bitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate =
+        calculate_sfpu_unary_bitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() {
         if constexpr (BITWISE_OP == UnaryBitwiseOp::AND) {

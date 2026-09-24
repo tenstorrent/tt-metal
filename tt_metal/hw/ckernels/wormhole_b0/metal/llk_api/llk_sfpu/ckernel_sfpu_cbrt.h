@@ -81,9 +81,7 @@ inline void cube_root_init() {
 // Op class for the cube root.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct Cbrt : SfpuUnaryOp<Cbrt<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { cube_root_init<APPROXIMATION_MODE>(); }
 };
 

@@ -182,9 +182,8 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Log1p : SfpuUnaryOp<Log1p<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_log1p<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate =
+        calculate_log1p<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         log1p_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
     }

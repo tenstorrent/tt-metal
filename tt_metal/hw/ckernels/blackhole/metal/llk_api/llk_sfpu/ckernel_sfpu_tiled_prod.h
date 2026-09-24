@@ -35,9 +35,7 @@ inline void calculate_tiled_prod() {
 // Op class for the running product over a tile.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct TiledProd : SfpuUnaryOp<TiledProd<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_tiled_prod<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_tiled_prod<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { tiled_prod_init(); }
 };
 

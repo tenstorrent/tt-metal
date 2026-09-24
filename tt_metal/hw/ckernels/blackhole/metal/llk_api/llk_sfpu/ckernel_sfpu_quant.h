@@ -576,11 +576,8 @@ struct Requant : SfpuBinaryOp<Requant<APPROXIMATION_MODE, OUTPUT_FORMAT, INT8_IN
 // fp32. init takes the negated zero point.
 template <bool APPROXIMATION_MODE, bool INT8_INPUT = false, int ITERATIONS = 8>
 struct Dequant : SfpuBinaryOp<Dequant<APPROXIMATION_MODE, INT8_INPUT, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_dequant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate =
+        calculate_dequant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>;
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
         dequant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(zero_point);
     }

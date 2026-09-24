@@ -170,9 +170,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Floor : SfpuUnaryOp<Floor<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_floor_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_floor_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for elementwise ceil.
@@ -181,9 +179,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Ceil : SfpuUnaryOp<Ceil<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_ceil_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_ceil_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for elementwise truncation toward zero.
@@ -192,9 +188,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Trunc : SfpuUnaryOp<Trunc<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_trunc_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_trunc_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for the elementwise fractional part, x - trunc(x).
@@ -203,9 +197,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Frac : SfpuUnaryOp<Frac<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_frac_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_frac_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for elementwise round-half-to-even to a given number of decimal places.
@@ -214,9 +206,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Round : SfpuUnaryOp<Round<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const int decimals) {
-        _calculate_round_<APPROXIMATION_MODE, ITERATIONS>(decimals);
-    }
+    static constexpr auto& calculate = _calculate_round_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for elementwise stochastic rounding of FP32 to BF16.
@@ -225,9 +215,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct StochasticRound : SfpuUnaryOp<StochasticRound<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        _calculate_stochastic_round_<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_stochastic_round_<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

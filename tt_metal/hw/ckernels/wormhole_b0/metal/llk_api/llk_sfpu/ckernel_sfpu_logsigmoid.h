@@ -61,10 +61,7 @@ inline void calculate_logsigmoid(
 // Op class for logsigmoid(x) from x (in0) and exp(-x) (in1).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Logsigmoid : SfpuBinaryOp<Logsigmoid<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_logsigmoid<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 template <bool APPROXIMATION_MODE>

@@ -88,7 +88,7 @@ void erfc_init() {
 // Op class for erfc(x). APPROXIMATION_MODE only selects the init; the kernel has a single mode.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Erfc : SfpuUnaryOp<Erfc<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_erfc<ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_erfc<ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { erfc_init<APPROXIMATION_MODE>(); }
 };
 

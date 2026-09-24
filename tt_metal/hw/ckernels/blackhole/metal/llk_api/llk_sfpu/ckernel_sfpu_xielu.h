@@ -182,10 +182,7 @@ void xielu_init() {
 // Op class for xielu with alpha_p and alpha_n (fp32 bits).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Xielu : SfpuUnaryOp<Xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t alpha_p, const std::uint32_t alpha_n) {
-        calculate_xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(alpha_p, alpha_n);
-    }
+    static constexpr auto& calculate = calculate_xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { xielu_init<APPROXIMATION_MODE>(); }
 };
 

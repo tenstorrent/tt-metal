@@ -17,7 +17,7 @@ template <std::uint32_t ROW_OFFSET = 0, int ITERATIONS = 32>
 struct CsaIndexRemap : SfpuUnaryOp<CsaIndexRemap<ROW_OFFSET, ITERATIONS>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate() { _csa_index_remap_<ITERATIONS, ROW_OFFSET>(); }
+    static constexpr auto& calculate = _csa_index_remap_<ITERATIONS, ROW_OFFSET>;
 };
 
 }  // namespace ckernel::sfpu

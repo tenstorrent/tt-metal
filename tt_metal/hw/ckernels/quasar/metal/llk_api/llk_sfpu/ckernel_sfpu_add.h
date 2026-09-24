@@ -97,11 +97,8 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct AddInt : SfpuBinaryOp<AddInt<APPROXIMATION_MODE, data_format, ITERATIONS, SLOT>, SLOT> {
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for add_int on Quasar. Supported: Int32");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_add_int<APPROXIMATION_MODE, ITERATIONS, data_format, 0, true /* SIGN_MAGNITUDE_FORMAT */, SLOT>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate =
+        calculate_add_int<APPROXIMATION_MODE, ITERATIONS, data_format, 0, true /* SIGN_MAGNITUDE_FORMAT */, SLOT>;
 };
 
 }  // namespace sfpu

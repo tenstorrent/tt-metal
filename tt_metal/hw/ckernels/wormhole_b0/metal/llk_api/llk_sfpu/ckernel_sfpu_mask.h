@@ -60,23 +60,19 @@ inline void calculate_mask_posinf() {
 // Op class for masking a float tile with 0.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Mask : SfpuUnaryOp<Mask<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_mask<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_mask<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for masking an int32 tile with 0.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct IntMask : SfpuUnaryOp<IntMask<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_int_mask<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_int_mask<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for masking a float tile with +inf.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct MaskPosinf : SfpuUnaryOp<MaskPosinf<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

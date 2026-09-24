@@ -400,10 +400,7 @@ inline void remainder_binary_init() {
 // Op class for an elementwise remainder of two int32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct RemainderInt32 : SfpuBinaryOp<RemainderInt32<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_remainder_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_remainder_int32<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { remainder_int32_init<APPROXIMATION_MODE>(); }
 };
@@ -411,10 +408,7 @@ struct RemainderInt32 : SfpuBinaryOp<RemainderInt32<APPROXIMATION_MODE, ITERATIO
 // Op class for an elementwise remainder of two uint32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct RemainderUint32 : SfpuBinaryOp<RemainderUint32<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_remainder_uint32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_remainder_uint32<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { remainder_uint32_init<APPROXIMATION_MODE>(); }
 };
@@ -422,11 +416,8 @@ struct RemainderUint32 : SfpuBinaryOp<RemainderUint32<APPROXIMATION_MODE, ITERAT
 // Op class for an elementwise remainder of two float tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 struct BinaryRemainder : SfpuBinaryOp<BinaryRemainder<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_binary_remainder<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate =
+        calculate_sfpu_binary_remainder<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
 
     static inline __attribute__((always_inline)) void init_op() { remainder_binary_init<APPROXIMATION_MODE>(); }
 };

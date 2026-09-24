@@ -235,10 +235,7 @@ inline void div_floor_init() {
 // Op class for an elementwise floor division of two int32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct DivInt32Floor : SfpuBinaryOp<DivInt32Floor<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { div_floor_init<APPROXIMATION_MODE>(); }
 };
@@ -246,10 +243,7 @@ struct DivInt32Floor : SfpuBinaryOp<DivInt32Floor<APPROXIMATION_MODE, ITERATIONS
 // Op class for an elementwise truncating division of two int32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct DivInt32Trunc : SfpuBinaryOp<DivInt32Trunc<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { div_trunc_init<APPROXIMATION_MODE>(); }
 };

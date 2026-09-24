@@ -224,9 +224,8 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct ZeroComp : SfpuUnaryOp<ZeroComp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_zero_comp<APPROXIMATION_MODE, DataFormat::Float32, COMP_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate =
+        calculate_zero_comp<APPROXIMATION_MODE, DataFormat::Float32, COMP_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { init_zero_comp(); }
 };
 

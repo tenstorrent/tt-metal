@@ -110,14 +110,7 @@ inline void calculate_mac(
 // Op class for elementwise multiply-accumulate: out = in0 * in1 + in2 (the tiles are fixed by mac_init's recording).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
 struct Mac : SfpuTernaryOp<Mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_in2,
-        const std::uint32_t dst_index_out) {
-        calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
-            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() {
         mac_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format>();

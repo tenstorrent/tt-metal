@@ -99,9 +99,7 @@ inline void tanhshrink_init() {
 // Op class for tanhshrink: x - tanh(x). APPROXIMATION_MODE only selects the init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Tanhshrink : SfpuUnaryOp<Tanhshrink<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_tanhshrink<is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_tanhshrink<is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         tanhshrink_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }

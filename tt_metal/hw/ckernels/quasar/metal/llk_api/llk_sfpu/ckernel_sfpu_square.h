@@ -88,7 +88,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Square : SfpuUnaryOp<Square<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_square<ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_square<ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { init_square(); }
 };
 

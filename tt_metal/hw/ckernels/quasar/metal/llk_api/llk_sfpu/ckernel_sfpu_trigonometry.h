@@ -1237,9 +1237,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Sine : SfpuUnaryOp<Sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { sine_init<APPROXIMATION_MODE>(); }
 };
 
@@ -1250,9 +1248,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Cosine : SfpuUnaryOp<Cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { cosine_init<APPROXIMATION_MODE>(); }
 };
 
@@ -1263,9 +1259,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Tangent : SfpuUnaryOp<Tangent<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_tangent<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_tangent<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { tangent_init<APPROXIMATION_MODE>(); }
 };
 
@@ -1276,9 +1270,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Asin : SfpuUnaryOp<Asin<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_asin<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_asin<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { asin_acos_init<is_fp32_dest_acc_en>(); }
 };
 
@@ -1289,9 +1281,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Acos : SfpuUnaryOp<Acos<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_acos<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_acos<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { asin_acos_init<is_fp32_dest_acc_en>(); }
 };
 
@@ -1302,9 +1292,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Atan : SfpuUnaryOp<Atan<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         atan_init<true /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
     }
@@ -1317,9 +1305,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Sinh : SfpuUnaryOp<Sinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_sinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_sinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         sinh_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
@@ -1332,9 +1318,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Cosh : SfpuUnaryOp<Cosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_cosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_cosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         cosh_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
@@ -1347,9 +1331,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Asinh : SfpuUnaryOp<Asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         init_inverse_hyperbolic<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
@@ -1362,9 +1344,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Acosh : SfpuUnaryOp<Acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         init_inverse_hyperbolic<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
@@ -1377,9 +1357,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Atanh : SfpuUnaryOp<Atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         init_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }

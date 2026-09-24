@@ -42,9 +42,8 @@ template <
     bool FAST_APPROX = false,
     bool legacy_compat = false>
 struct Rsqrt : SfpuUnaryOp<Rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat>();
-    }
+    static constexpr auto& calculate =
+        calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat>;
     static inline __attribute__((always_inline)) void init_op() { rsqrt_init<APPROXIMATION_MODE, legacy_compat>(); }
 };
 
