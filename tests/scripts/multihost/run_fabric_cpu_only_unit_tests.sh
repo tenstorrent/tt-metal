@@ -932,6 +932,9 @@ if run_group "bh-misc"; then
 # Runs split MPI communicators (4 ranks → two sub-contexts × 2 ranks): fabric KV exchange, subcommunicator vs job-world checks, launcher metadata / rank translation.
 run_test tt-run --mock-cluster-rank-binding "${MOCK_GALAXY_QUAD_2X4_FOUR_RANK_CLUSTER_DESC_MAPPING}" --rank-bindings-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
 
+# H2D/D2H sockets on a mesh shared by 4 ranks: collective construction, matching addresses, owner-only host I/O.
+run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_qb_4x4/bh_qb_4x4_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/bh_qb_4x4_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="SharedHDSocketFixture.ConstructOnSharedMesh"
+
 # Multi-MGD subcontext (-M / --mesh-graph-descriptor-mapping): bh_6u (non-torus) mock cluster, one MGD per sub-context.
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
 
