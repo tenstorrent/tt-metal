@@ -19,9 +19,9 @@ from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, prepare
 
 T = ttnn._ttnn.operations.transformer
 KV_DTYPE = {"E_bf16": ttnn.bfloat16, "E_bfp8": ttnn.bfloat8_b, "E_bfp4": ttnn.bfloat4_b}
-# Representative per-core CB budgets (bytes): a plain P150b device and the H3/ring pipeline's worker L1.
-DEVICE_L1 = 1_440_000
-PIPELINE_L1 = 1_344_544 - 191_360 + 191_360  # CBs end below the pipeline's live buffers
+# Measured per-core CB budgets on a P150b (bytes): a default device, and worker_l1_size=1344544 (H3/ring).
+DEVICE_L1 = 1_461_248
+PIPELINE_L1 = 1_344_512
 GRID = (11, 10)  # P150b compute grid
 WORKER_GRID = (10, 10)  # ring: last column reserved for CCL
 
@@ -166,6 +166,15 @@ def test_exp_ring_choice(name, heads, local, ring, variant):
     assert gy == GRID[1] and 3 <= cols <= GRID[0] - 1 and chunks % cols == 0
     segments = heads * (chunks // cols)
     assert segments >= gy and passes == math.ceil(segments / gy) <= 3
+
+
+def test_search_floors():
+    # Blocks below Q128/K256 are overhead-dominated; only a shorter sequence selects them.
+    for variant in VARIANTS:
+        q, k, *_ = choose("dense", variant, 2, 512, 928, head_dim=256)
+        assert q >= 128 and k >= 256
+    q, k, *_ = choose("joint", "A", 8, 64, 64, joint_q_rows=0, joint_k_rows=0)
+    assert (q, k) == (64, 64)
 
 
 def test_candidates_only_supported_geometry():

@@ -31,10 +31,13 @@ namespace ttnn::operations::transformer::sdpa::detail {
 enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 
 // Q/K chunk tile counts the chooser enumerates. Candidates outside the supported geometry are
-// filtered by `recipe_geometry_rejection`; this range only bounds the search. K stops at 512 rows:
-// the cost model is fitted on K256/K512 and K > 512 is not yet measured (a caller may still pass it).
-inline constexpr uint32_t kRecipeSearchMinQTiles = 1;
+// filtered by `recipe_geometry_rejection`; this range only bounds the search to where the cost
+// model is fitted: Q from 128 rows and K from 256 to 512 rows (shorter only when the whole
+// sequence is shorter). Smaller blocks are overhead-dominated and K > 512 is not yet measured;
+// a caller may still pass any supported chunk explicitly.
+inline constexpr uint32_t kRecipeSearchMinQTiles = 4;
 inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
+inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
 inline constexpr uint32_t kRecipeSearchMaxKTiles = 16;
 
 // Why (op, recipe, q_tiles, k_tiles, d_tiles) is not a supported recipe geometry, or nullopt if it is.

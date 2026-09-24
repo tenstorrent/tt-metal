@@ -321,8 +321,10 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     const bool dense = p.op == RecipeOp::Dense || p.op == RecipeOp::Joint;
     const uint32_t q_cap = std::min(kRecipeSearchMaxQTiles, std::max(div_up(p.q_rows + p.joint_q_rows, kTile), 10u));
     const uint32_t k_cap = kRecipeSearchMaxKTiles;  // padded K blocks are costed, so short K picks short chunks
-    const auto q_range = tile_range(p.fixed_q_tiles, kRecipeSearchMinQTiles, q_cap);
-    const auto k_range = tile_range(p.fixed_k_tiles, 1, k_cap);
+    const uint32_t q_floor = std::min(kRecipeSearchMinQTiles, div_up(p.q_rows + p.joint_q_rows, kTile));
+    const uint32_t k_floor = std::min(kRecipeSearchMinKTiles, div_up(p.k_rows + p.joint_k_rows, kTile));
+    const auto q_range = tile_range(p.fixed_q_tiles, q_floor, q_cap);
+    const auto k_range = tile_range(p.fixed_k_tiles, k_floor, k_cap);
     for (auto qi = q_range.rbegin(); qi != q_range.rend(); ++qi) {  // ascending Q
         const uint32_t qt = *qi;
         bool any_fit = false;
