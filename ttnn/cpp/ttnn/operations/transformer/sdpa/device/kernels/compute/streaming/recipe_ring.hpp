@@ -4,7 +4,7 @@
 #include "recipe_checkpoint.hpp"
 #include "../../dataflow/chunked_prefill_utils.hpp"
 
-template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles = 16>
+template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles = 16, uint32_t d_tiles = 4>
 void sdpa_recipe_ring_segment(
     RecipeAccumulatorState& resident,
     uint32_t q_begin,
@@ -24,7 +24,7 @@ void sdpa_recipe_ring_segment(
     for (uint32_t q = q_begin; q < q_end; ++q) {
         RecipeAccumulatorState state = staged ? RecipeAccumulatorState{{12, 10, 8}, {13, 11, 9}} : resident;
         if (staged && !first_ring) {
-            recipe_checkpoint<q_tiles, 17, 18>(state, q, true);
+            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, true);
         }
         uint32_t processed = 0;
         for (uint32_t k = 0; k < total_chunks; ++k) {
@@ -39,13 +39,13 @@ void sdpa_recipe_ring_segment(
             sdpa_segment_v2<
                 q_tiles,
                 k_tiles,
-                4,
-                4,
+                d_tiles,
+                d_tiles,
                 scale,
                 subblock_h,
                 4,
                 subblock_h,
-                4,
+                (d_tiles < 4 ? d_tiles : 4),
                 0,
                 1,
                 2,
@@ -59,16 +59,16 @@ void sdpa_recipe_ring_segment(
                 state, 1, last_ring && last_k, last_k && (staged || last_ring));
         }
         if (staged && !last_ring) {
-            recipe_checkpoint<q_tiles, 17, 18>(state, q, false);
+            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, false);
         }
         if (!staged) {
             resident = state;
         }
     }
     if (dummy_kv_chunks_for_phase_alignment<false>((q_end - q_begin) * valid_chunks)) {
-        CircularBuffer(1).wait_front(k_tiles * 4);
-        CircularBuffer(1).pop_front(k_tiles * 4);
-        CircularBuffer(2).wait_front(k_tiles * 4);
-        CircularBuffer(2).pop_front(k_tiles * 4);
+        CircularBuffer(1).wait_front(k_tiles * d_tiles);
+        CircularBuffer(1).pop_front(k_tiles * d_tiles);
+        CircularBuffer(2).wait_front(k_tiles * d_tiles);
+        CircularBuffer(2).pop_front(k_tiles * d_tiles);
     }
 }

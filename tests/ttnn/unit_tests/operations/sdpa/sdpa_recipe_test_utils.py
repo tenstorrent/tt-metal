@@ -70,7 +70,7 @@ def reference(q, k, v, block=4096):
     denominator = torch.zeros_like(maximum)
     numerator = torch.zeros_like(q)
     for start in range(0, k.shape[-2], block):
-        scores = q @ k[..., start : start + block, :].double().transpose(-1, -2) / 128**0.5
+        scores = q @ k[..., start : start + block, :].double().transpose(-1, -2) / q.shape[-1] ** 0.5
         new_maximum = torch.maximum(maximum, scores.amax(-1, keepdim=True))
         correction = torch.exp(maximum - new_maximum)
         probabilities = torch.exp(scores - new_maximum)

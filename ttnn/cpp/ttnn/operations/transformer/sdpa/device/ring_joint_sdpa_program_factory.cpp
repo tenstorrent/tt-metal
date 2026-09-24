@@ -1242,7 +1242,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             core_grid_set,
             1,
             Sq_chunk_t,
-            Sk_chunk_t);
+            Sk_chunk_t,
+            DHt);
         desc.cbs = recipe_program->cbs;
     }
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -1409,7 +1410,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
     if (named_compute) {
         out_out_subblock_h = fp32_dest_acc_en ? 1 : 2;
-        out_out_subblock_w = 4;
+        out_out_subblock_w = std::min<uint32_t>(4, vDHt);
     }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group

@@ -477,7 +477,8 @@ void kernel_main() {
 #else
                 2,
 #endif
-                Sk_chunk_t>(
+                Sk_chunk_t,
+                DHt>(
                 acc_state,
                 global_q_start,
                 global_q_end,

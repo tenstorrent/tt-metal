@@ -13,30 +13,32 @@ struct StateTransfer {
     // Raw bytes of one Q block's state planes, for q_tiles query tile rows at D128:
     // numerator (FP32 or BF16 high/low), BF16 maxima, denominator (FP32 or
     // BF16 high/low), and the BF16 recipes' pending local numerator.
-    template <bool fp32, uint32_t q_tiles>
+    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t plane_bytes(uint32_t plane) {
-        return plane == 0   ? q_tiles * 16384
+        return plane == 0   ? q_tiles * d_tiles * 4096
                : plane == 1 ? q_tiles * 2048
                : plane == 2 ? q_tiles * 4096
                : fp32       ? 0
-                            : q_tiles * 16384;
+                            : q_tiles * d_tiles * 4096;
     }
 
     // Host-side page count for a runtime Q chunk; matches pages<fp32, q_tiles>.
-    static constexpr uint32_t page_count(bool fp32, uint32_t q_tiles) {
-        return q_tiles * (16384 + 2048 + 4096 + (fp32 ? 0 : 16384)) / page_bytes;
+    static constexpr uint32_t page_count(bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4) {
+        return q_tiles * (d_tiles * 4096 + 2048 + 4096 + (fp32 ? 0 : d_tiles * 4096)) / page_bytes;
     }
 
-    template <bool fp32, uint32_t q_tiles>
+    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t pages =
-        (plane_bytes<fp32, q_tiles>(0) + plane_bytes<fp32, q_tiles>(1) + plane_bytes<fp32, q_tiles>(2) +
-         plane_bytes<fp32, q_tiles>(3)) /
+        (plane_bytes<fp32, q_tiles, d_tiles>(0) + plane_bytes<fp32, q_tiles, d_tiles>(1) +
+         plane_bytes<fp32, q_tiles, d_tiles>(2) + plane_bytes<fp32, q_tiles, d_tiles>(3)) /
         page_bytes;
 
-    template <bool fp32, uint32_t q_tiles>
+    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr bool page_aligned =
-        plane_bytes<fp32, q_tiles>(0) % page_bytes == 0 && plane_bytes<fp32, q_tiles>(1) % page_bytes == 0 &&
-        plane_bytes<fp32, q_tiles>(2) % page_bytes == 0 && plane_bytes<fp32, q_tiles>(3) % page_bytes == 0;
+        plane_bytes<fp32, q_tiles, d_tiles>(0) % page_bytes == 0 &&
+        plane_bytes<fp32, q_tiles, d_tiles>(1) % page_bytes == 0 &&
+        plane_bytes<fp32, q_tiles, d_tiles>(2) % page_bytes == 0 &&
+        plane_bytes<fp32, q_tiles, d_tiles>(3) % page_bytes == 0;
 };
 
 }  // namespace sdpa::streaming

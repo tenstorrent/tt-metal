@@ -578,19 +578,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 "Named ring recipe joint types must match their primary Q/K/V types");
         }
         TT_FATAL(
-            q_shape[3] == 128 && tensor_args.input_k.logical_shape()[3] == 128 &&
-                tensor_args.input_v->logical_shape()[3] == 128 && args.get_q_chunk_size() % 64 == 0 &&
+            (q_shape[3] == 64 || q_shape[3] == 128) && tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
+                tensor_args.input_v->logical_shape()[3] == q_shape[3] && args.get_q_chunk_size() % 64 == 0 &&
                 args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 &&
                 (args.get_k_chunk_size() == 256 || args.get_k_chunk_size() == 384 || args.get_k_chunk_size() == 512),
-            "Named ring recipes require Q128/Q192/Q256/Q320, K256/K384/K512 and D128");
+            "Named ring recipes require Q128/Q192/Q256/Q320, K256/K384/K512 and D64/D128");
         TT_FATAL(
             !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
                 !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink &&
                 !tensor_args.has_logical_n_tensor() && !tensor_args.has_logical_l_tensor(),
             "Unsupported feature for named ring recipes");
         TT_FATAL(
-            !args.scale || *args.scale == 1.0f / std::sqrt(128.0f),
-            "Named ring recipes require the default D128 scale");
+            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(q_shape[3])),
+            "Named ring recipes require the default 1/sqrt(head_dim) scale");
     } else if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
@@ -1098,7 +1098,7 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
                           *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE;
         using State = sdpa::streaming::StateTransfer;
         const uint32_t q_chunk = args.get_q_chunk_size();
-        const uint32_t pages = State::page_count(fp32, q_chunk / 32) + 1;
+        const uint32_t pages = State::page_count(fp32, q_chunk / 32, input.logical_shape()[3] / 32) + 1;
         const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
                                   ((input.padded_shape()[2] + q_chunk - 1) / q_chunk +
                                    (joint_padded_seq + q_chunk - 1) / q_chunk);
