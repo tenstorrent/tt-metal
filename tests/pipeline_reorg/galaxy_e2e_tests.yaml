@@ -38,29 +38,30 @@
   budget_type: e2e
 
 # Single BH galaxy 2x2 inter-mesh torus repro for #56298: four 2x2 RING/LINE stages ring-connected on
-# one galaxy, every mesh opening with the SAME fabric config under Torus X/Y/XY. Both entries below run
-# the SAME config (test_galaxy_fabric_2x2_torus.yaml) against different MGDs: this -z entry routes the
-# inter-mesh links over Z (assign_z_direction); the -nonz entry routes them over N/S/E/W. Checks the
-# torus fabric does not hang/starve.
+# one galaxy. The test config is topology-agnostic -- the MGD is what fixes the 2x2 shape -- so both
+# entries below reuse the generic multi-mesh sanity config (test_fabric_multi_mesh_sanity_common.yaml),
+# whose Torus XY inter-/intra-mesh neighbor-exchange (and mesh/all-to-all) cases exercise the deadlock
+# path. Same config, two MGDs: the -z entry routes the inter-mesh links over Z (assign_z_direction);
+# the -nonz entry routes them over the normal N/S/E/W routers. Checks the torus fabric does not hang/starve.
 - id: galaxy-fabric-2x2-torus-z
-  name: Galaxy Fabric 2x2 Torus X/Y/XY (inter-mesh over Z)
+  name: Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over Z)
   cmd: |
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus.yaml
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
   skus:
     bh_galaxy:
-      timeout: 12
+      timeout: 15
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
 
 - id: galaxy-fabric-2x2-torus-nonz
-  name: Galaxy Fabric 2x2 Torus X/Y/XY (inter-mesh over N/S/E/W)
+  name: Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over N/S/E/W)
   cmd: |
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus.yaml
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
   skus:
     bh_galaxy:
-      timeout: 12
+      timeout: 15
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
