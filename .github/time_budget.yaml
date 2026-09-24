@@ -378,9 +378,9 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 123  # +15 LLVC (PR #49699)
+    wh_n150: 133  # +25 LLVC (PR #49699)
     wh_n300: 60
-    bh_p150: 48  # +15 LLVC (PR #49699)
+    bh_p150: 58  # +25 LLVC (PR #49699)
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:

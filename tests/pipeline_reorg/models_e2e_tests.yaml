@@ -2151,15 +2151,19 @@
 # perf suite asserts RTF < 0.3 and chunk latency < 100 ms end to end.
 - name: LLVC e2e tests
   cmd: |
-    pytest --timeout 600 models/demos/llvc/tests/perf/test_perf.py -v -s
+    exit_code=0
+    pytest --timeout 600 models/demos/llvc/tests/perf/test_perf.py -v -s || exit_code=$?
+    # Real KoeAI checkpoint (pre-staged in the HF cache on /mnt/MLPerf) against the PR's claims.
+    pytest --timeout 900 models/demos/llvc/tests/perf/test_checkpoint_ci.py -v -s || exit_code=$?
+    exit $exit_code
   model: llvc
   model_family: LLVC
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 25
       tier: 3
     bh_p150:
-      timeout: 15
+      timeout: 25
       tier: 3
   owner_id: U03PUAKE719
   team: models
