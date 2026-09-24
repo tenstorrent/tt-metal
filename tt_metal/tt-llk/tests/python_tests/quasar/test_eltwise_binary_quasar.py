@@ -18,7 +18,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
@@ -36,6 +37,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
@@ -140,7 +142,7 @@ ELTWISE_FORMATS = (
         formats, is_perf=False
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_unary_input_dimensions(
+        lambda dest_sync_dest_acc: generate_reduced_input_dimensions(
             dest_sync_dest_acc[1], dest_sync_dest_acc[0]
         )
     ),
@@ -168,6 +170,11 @@ def test_eltwise_binary(
     dest_sync_mode, dest_acc = dest_sync_dest_acc
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
+
+    num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode, dest_acc, formats, input_dimensions
+    )
+    output_tiles_in_block = input_tiles_in_block // num_tiles_per_accumulation
 
     if formats.input_format == DataFormat.Int8:
         stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
@@ -219,7 +226,11 @@ def test_eltwise_binary(
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
-            NUM_TILES_IN_BLOCK(num_tiles_per_accumulation),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(
+                input_tiles_in_block,
+                output_num_tiles_in_block=output_tiles_in_block,
+            ),
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
