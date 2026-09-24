@@ -172,16 +172,12 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
-    // Callbacks are copied to isolate mutable target state, matching the overrides.
-    virtual void process_dataflow_buffer_binding_handles(
-        std::function<
-            // NOLINTNEXTLINE(performance-unnecessary-value-param)
-            void(
-                const std::string& accessor_name,
-                uint16_t logical_dfb_id,
-                bool is_relay,
-                uint8_t prefetcher_pipe_id,
-                const std::optional<LLKMetadata>&)>) const {}
+    virtual void process_dataflow_buffer_binding_handles(const std::function<void(
+                                                             const std::string& accessor_name,
+                                                             uint16_t logical_dfb_id,
+                                                             bool is_relay,
+                                                             uint8_t prefetcher_pipe_id,
+                                                             const std::optional<LLKMetadata>&)>&) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             // NOLINTNEXTLINE(performance-unnecessary-value-param)
@@ -200,14 +196,12 @@ public:
     //    CRTA words in total.
     //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
-    virtual void process_tensor_binding_handles(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(
-            const std::string& accessor_name,
-            uint32_t cta_offset,
-            uint32_t addr_crta_offset,
-            uint32_t num_runtime_field_crta_words,
-            const std::optional<LLKMetadata>&)>) const {}
+    virtual void process_tensor_binding_handles(const std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t cta_offset,
+                                                    uint32_t addr_crta_offset,
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    const std::optional<LLKMetadata>&)>&) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
@@ -215,13 +209,11 @@ public:
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
-    virtual void process_scratchpad_binding_handles(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(
-            const std::string& accessor_name,
-            uint32_t size_bytes,
-            uint32_t addr_crta_word,
-            const std::optional<LLKMetadata>&)>) const {}
+    virtual void process_scratchpad_binding_handles(const std::function<void(
+                                                        const std::string& accessor_name,
+                                                        uint32_t size_bytes,
+                                                        uint32_t addr_crta_word,
+                                                        const std::optional<LLKMetadata>&)>&) const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
