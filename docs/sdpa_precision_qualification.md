@@ -503,8 +503,10 @@ milliseconds (10 heads, 4096 rows/device, D128; exp ring 20 Q chunks/head):
 | exp ring Q224 two-pass | 1.15 | 1.15 | 2.09 -> 1.64 | 2.03 -> 1.44 | 2.11 -> 1.44 | 2.10 -> 1.43 |
 | dense Q224/K512 | 1.14 | 1.30 | 2.08 -> 1.71 | 2.05 -> 1.53 | 2.11 -> 1.50 | 2.14 -> 1.47 |
 
-C/D keep O2 and cost 1.6-2.4x legacy (HiFi4/FP32 arithmetic). At the H3
-worker L1 budget, C/D ring at Q256/K512 and Q320/K384 exceed L1 by about 1 KB.
+C/D keep O2 and cost 1.6-2.4x legacy (HiFi4/FP32 arithmetic). At MiniMax H3's
+worker L1 budget (1,344,544 B) C/D ring at Q256/K512 and Q320/K384 exceeded L1 by
+about 1 KB; the ring factory now falls back to a single-slot Q buffer only in that
+case (210 ring cases pass bitwise at that budget; C/D Q256/K512 2.29/2.99 ms).
 
 ## Continuous coverage
 
