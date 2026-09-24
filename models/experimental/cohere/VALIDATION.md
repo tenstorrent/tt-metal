@@ -122,7 +122,14 @@ accept the license and authenticate (`HF_TOKEN` / `huggingface-cli login`);
 
 Mesh: all three tests read `MESH_DEVICE` (`N150`/`N300`/`T3K`/`TG` map; default
 QB2 (1,4)) — on a T3K run with `MESH_DEVICE=T3K` (TP=8; untested by us).
-Env knobs: `COHERE_LAYER` / `COHERE_LAYERS`, `COHERE_REF_PROMPT`, `COHERE_GATE`,
-`COHERE_DECODE_TOKENS`, `COHERE_MAX_SEQ` (keep <= 8192), `HF_MODEL`.
+Env knobs: `COHERE_LAYER` / `COHERE_LAYERS`, `COHERE_REF_PROMPT` (reference dump index —
+pair with `--prompts-file` below for prompts > 32 tokens so the logits tail window
+(rows seq_len-32:seq_len, the serving-relevant last position) is exercised), `COHERE_GATE`,
+`COHERE_DECODE_TOKENS`, `COHERE_MAX_SEQ` (keep <= 8192), `HF_MODEL`, `COHERE_PROMPT`
+(e2e prompt override used by `test_cohere_vllm_e2e.py`; default "The capital of France is").
+Prompt sets beyond the three defaults: `cpu_reference_capture.py --prompts-file prompts.json`
+(JSON list of strings; dumps land as `prompt{NN}.npz` in list order — select one with
+`COHERE_REF_PROMPT`). The `Post-fix full chain` row above used a 36-token manual-chat-template
+math prompt captured with `add_special_tokens=False` (dumps `prompt03.npz`).
 Expected values: the Correctness table above (e.g. 40-layer chained min 0.995873 /
 mean 0.999017; logits 0.997250; e2e `1 passed in 230.18s` on QB2).

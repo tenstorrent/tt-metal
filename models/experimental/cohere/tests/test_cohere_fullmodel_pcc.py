@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.experimental.cohere.tt.cohere_decoder import CohereDecoderLayer
 from models.experimental.cohere.tt.cohere_lm_head import CohereLMHead
@@ -75,8 +75,11 @@ def _pcc(a, b):
     """comp_pcc wrapper returning (passing, message, numeric_pcc)."""
     passing, msg = comp_pcc(a, b, pcc=float(os.environ.get("COHERE_GATE", "0.99")))
     # msg is the formatted pcc; recompute numerically for logging/summary
-    a_f = a.flatten().float()
-    b_f = b.flatten().float()
+    # float64 accumulation (review tenstorrent/tt-metal#55747 @mtairum 2026-09-24): fp32
+    # drifts above 1.0 over ~295k elements and two evaluations of the same quantity
+    # disagree by ~7.5e-5; verdicts unaffected (every margin is far larger).
+    a_f = a.flatten().double()
+    b_f = b.flatten().double()
     vx = a_f - a_f.mean()
     vy = b_f - b_f.mean()
     denom = vx.norm() * vy.norm()
@@ -116,9 +119,7 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
         _mc.convert_hf_to_meta = _mc.convert_hf_to_meta_no_qkv_permute
         logger.info("[cohere-fullmodel] COHERE_SKIP_QKV_PERMUTE=1 — Q/K kept in HF interleaved-native layout")
 
-    model_args = ModelArgs(
-        mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False
-    )
+    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False)
     state_dict = model_args.load_state_dict()  # full 40-layer checkpoint
 
     rot_mats = get_rot_mats(
@@ -180,15 +181,12 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
             mode=Mode.PREFILL,
             page_table=None,
         )
-        hidden_full = (
-            ttnn.to_torch(
-                tt_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
-                ),
-            )[:, 0:1, :, : model_args.dim]
-            .reshape(1, max_seq_len, -1)  # [1, S_pad, 8192] 3-D — keep padding for the next layer
-        )
+        hidden_full = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )[:, 0:1, :, : model_args.dim].reshape(
+            1, max_seq_len, -1
+        )  # [1, S_pad, 8192] 3-D — keep padding for the next layer
 
         passing, pcc_message, pcc_val = _pcc(ref_out, hidden_full[:, :seq_len].float())
         pccs.append((layer_idx, pcc_val, passing))
@@ -212,9 +210,7 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
                 vy = rf_pos[p] - rf_pos[p].mean()
                 denom = vx.norm() * vy.norm()
                 per.append(float((vx @ vy) / denom) if float(denom) > 0 else 0.0)
-            logger.info(
-                f"[pos-pcc] layer={layer_idx:02d} per-position PCC: " + " ".join(f"{v:.4f}" for v in per)
-            )
+            logger.info(f"[pos-pcc] layer={layer_idx:02d} per-position PCC: " + " ".join(f"{v:.4f}" for v in per))
             first_bad = next((i for i, v in enumerate(per) if v < 0.99), -1)
             logger.info(f"[pos-pcc] layer={layer_idx:02d} first position < 0.99: {first_bad}")
 
@@ -240,10 +236,9 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
         f"mean_pcc={mean_pcc:.6f} final_layer_pcc={vals[-1]:.6f}"
     )
     failures = [f"layer{li:02d}={v:.6f}" for li, v, ok in pccs if not ok]
-    assert not failures, (
-        f"Full-model chained PCC < 0.99 (bounty gate) on {len(failures)}/{len(pccs)} layers: "
-        + ", ".join(failures)
-    )
+    assert (
+        not failures
+    ), f"Full-model chained PCC < 0.99 (bounty gate) on {len(failures)}/{len(pccs)} layers: " + ", ".join(failures)
 
 
 @torch.no_grad()
@@ -277,9 +272,7 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
         src = "reference layer39_out (standalone)"
     logger.info(f"[cohere-head] input: {src}")
 
-    model_args = ModelArgs(
-        mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False
-    )
+    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False)
     state_dict = model_args.load_state_dict()
     tt_ccl = TT_CCL(mesh_device)
 
@@ -344,8 +337,12 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
             tt_logits,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
-        logits_w = logits_w.reshape(1, -1, logits_w.shape[-1])[:, :32, : model_args.vocab_size]
-        rows = logits_w.shape[1]
+        # The device window is always a full 32-row tile, but the CPU reference only
+        # holds seq_len rows, so take the overlap: without this, any prompt shorter
+        # than 32 tokens (all three DEFAULT_PROMPTS are) raises a shape mismatch in
+        # comp_pcc before the gate is ever evaluated.
+        rows = min(32, ref_logits.shape[1] - start)
+        logits_w = logits_w.reshape(1, -1, logits_w.shape[-1])[:, :rows, : model_args.vocab_size]
         passing_w, pcc_msg_w, pcc_w = _pcc(ref_logits[:, start : start + rows], logits_w.float())
         logger.info(
             f"[cohere-head] logits window rows {start}:{start+rows} pcc={pcc_w:.6f} "
