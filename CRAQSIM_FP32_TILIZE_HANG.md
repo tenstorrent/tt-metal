@@ -27,12 +27,32 @@ Two things to fix, tracked separately:
 2. **craq-sim (issue #401):** ttsim should surface/trap the `ILLEGAL_FORMAT_CONVERSION` like RTL instead of
    hanging; plus the separate `qsr_convert_pack_value` bf16→fp32 (`5→0`) gap.
 
-## Root cause: OPEN again. Leading lead = UnpackToDest ↔ ELWADD-datacopy mismatch (NOT a Float32→Tf32 relabel)
+## Root cause: CONFIRMED + FIXED (fp32) — Quasar tilize never actually unpacked to DEST
 
-> **The earlier "missing Float32→Tf32 unpack substitution" candidate is CONTRADICTED by PR #50728 + the tilize
-> config — do NOT implement that fix.** It is aimed at the wrong unpack route and would be lossy.
+**Confirmed root cause:** the tilize factories request **unpack-to-DEST** for fp32 (`UnpackMode::UnpackToDest`), but
+Quasar's tilize never implemented that route — it pushed the fp32 tile into a **source register** instead. Real RTL
+rejects fp32 in a src register (`UNPACKER_0 ILLEGAL_FORMAT_CONVERSION`); and the math stage waited on an
+UNPACK→MATH handshake the unpacker never posted, which is why **craq-sim hung instead of faulting**. It is a
+route/handshake bug, **not** a Float32→Tf32 relabel.
 
-**Why the Tf32-substitution candidate is wrong for tilize:**
+**Fix (peer session, validated; tracked as tt-metal #57780 — not on this repro branch):** make Quasar tilize
+actually unpack straight into DEST, one tile per DEST section, using the same unpack/math/pack handshake Quasar
+`copy_tile` already uses; math becomes a sync-only forwarder (no `ELWADD`). 3 files: `llk_unpack_tilize_api.h`
+(UNP_DEST tilize MOP + per-DEST-section execute), `tilize.h` (Quasar branch passes `UnpackToDestEn` to the math
+datacopy), `llk_unpack_tilize.h` (runtime `full_ct_dim` overload; compile-time version forwards). Only the
+`UnpackToDestEn=true` path changes (it could never work on Quasar before), so bf16/other paths are untouched.
+
+**Validated:** fp32 32×32 (craq-sim: hung→PASS; ZEBU exact-value: fault→PASS), fp32 32×512 (16 tiles, bank flips,
+per-tile DEST handoff: PASS), bf16 32×32 regression (PASS). The **exact-value** pass confirms it stays lossless —
+which is exactly why the Tf32 relabel below would have been wrong (lossy).
+
+**Still open:** **uint8** faults the same way but its config never requests unpack-to-DEST, so this fix doesn't touch
+it — a separate bug (see the issue). Untested at time of writing: larger/multi-core shapes (e.g. 256×2048), tt-llk's
+own `unpack_tilize_quasar_test`, metal LLK integration tests, pre-commit.
+
+---
+
+### Why the earlier Tf32-substitution candidate was wrong (kept — it is what pointed at the real route bug)
 - The harness Tf32 substitution (`data_format_inference.py`, `infer_unpack_out`) is gated on
   **`not unpacking_to_dest and not unpacking_to_srcs`** — i.e. it applies only on the unpack-to-**SrcA/B** route.
   On the unpack-to-**DEST** route, `Float32` falls through to `return input_format` → **stays Float32**.
@@ -51,7 +71,8 @@ relabel. Leading remaining lead: a **route-vs-math mismatch** — tilize unpacks
 that reads the **source** registers → data in DEST, math reading SRC. The harness file also notes Quasar unpacker
 conversions are under-tested ("for now only conversions performed by the packer are tested"). **uint8 also faults**
 (no Tf32 rule applies to it at all) — consistent with the bug being about the DEST/ELWADD path, not a Float32 format
-label. Not yet confirmed; needs ZEBU to disambiguate.
+label. **This lead was CONFIRMED** (see the top section): the fix makes tilize genuinely unpack to DEST with the
+proper handshake, and fp32 passes on both craq-sim and ZEBU.
 
 ### Earlier hypotheses (checked + refuted / contradicted, kept for the record)
 
