@@ -120,6 +120,12 @@ def test_full_mismatched_fill_value_type(device, input_shape, fill_value, dtype)
     assert torch.equal(torch_output, tt_output_cpu)
 
 
+@pytest.mark.parametrize("fill_value", [1e20, -1e20, float("nan")])
+def test_full_int32_fill_value_out_of_range(device, expect_error, fill_value):
+    with expect_error(RuntimeError, "out of range for INT32"):
+        ttnn.moreh_full([32, 32], fill_value, device, dtype=ttnn.int32)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
