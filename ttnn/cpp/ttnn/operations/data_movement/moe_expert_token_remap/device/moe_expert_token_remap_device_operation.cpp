@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement {
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& topk_tensor = tensor_args.topk_tensor;
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;
@@ -53,6 +53,17 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
         "Expected metadata dim 1 to be equal to topk dim 1 (batch size), got {} and {}, respectively",
         metadata_shape[1],
         topk_shape[1]);
+
+    const auto& reduction_size = operation_attributes.reduction_size;
+    TT_FATAL(reduction_size > 0, "reduction_size must be non-zero, got {}", reduction_size);
+
+    const uint32_t batch_seq = metadata_shape[1] * metadata_shape[2];
+    TT_FATAL(
+        batch_seq % reduction_size == 0,
+        "batch_size * seq_size ({}) must be evenly divisible by reduction_size ({}); a ragged trailing group is not "
+        "supported",
+        batch_seq,
+        reduction_size);
 }
 
 MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDeviceOperation::compute_output_specs(

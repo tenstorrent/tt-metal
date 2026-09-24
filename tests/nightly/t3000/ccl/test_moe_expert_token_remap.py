@@ -195,6 +195,124 @@ def test_moe_expert_token_remaps(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
+@pytest.mark.parametrize("batches_per_device", [1])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("reduction_size", [0])
+def test_moe_expert_token_remap_rejects_zero_reduction_size(
+    mesh_device,
+    mesh_shape,
+    experts_per_device,
+    batches_per_device,
+    seq,
+    selected_experts_k,
+    input_memory_config,
+    reduction_size,
+):
+    # reduction_size == 0 must be rejected on the host rather than reaching a divide-by-zero in
+    # split_work_to_cores_even_multiples / the program factory (issue #57512).
+    devices = prod(mesh_shape)
+    batch = devices * batches_per_device
+    experts = devices * experts_per_device
+
+    expert_mapping, metadata_tensor, topk_tensor, _, _ = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, REDUCTION_SIZE, "sequential"
+    )
+
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    with pytest.raises(RuntimeError):
+        ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, tt_metadata, reduction_size=reduction_size)
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("batches_per_device", [1])
+@pytest.mark.parametrize("seq", [3])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("reduction_size", [16])
+def test_moe_expert_token_remap_rejects_ragged_batch_seq(
+    mesh_device,
+    mesh_shape,
+    experts_per_device,
+    batches_per_device,
+    seq,
+    selected_experts_k,
+    input_memory_config,
+    reduction_size,
+):
+    # batch_size * seq_size (here devices*batches_per_device*seq == 24) not evenly divisible by
+    # reduction_size (16) must be rejected on the host: the writer emits one reduced page per full
+    # group with no flush for a partial trailing group (issue #57512).
+    devices = prod(mesh_shape)
+    batch = devices * batches_per_device
+    experts = devices * experts_per_device
+    assert (batch * seq) % reduction_size != 0
+
+    expert_mapping, metadata_tensor, topk_tensor, _, _ = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, REDUCTION_SIZE, "sequential"
+    )
+
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    with pytest.raises(RuntimeError):
+        ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, tt_metadata, reduction_size=reduction_size)
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("seq", [1, 2])
 @pytest.mark.parametrize("experts_per_device", [8])
