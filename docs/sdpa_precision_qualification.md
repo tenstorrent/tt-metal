@@ -433,6 +433,54 @@ small trace-wall differences are not claimed as a speedup. Host policy/addressin
 **14/14 passed** (`final-perf`, `final-host`). The repository-wide time-budget
 validator passes all 271 CI budget buckets after the job split.
 
+## DiT adoption geometry and callers (2026-09-24)
+
+Branch `cglagovich/sdpa-dit-adoption`, stacked on PR2, on bh-32 (two P150b).
+Scope: remove research-phase geometry constraints for DiT callers without
+changing the frozen Q256/K512/D128 outputs.
+
+| Check | Result |
+| --- | --- |
+| Frozen outputs, recipe suite, accuracy baselines | 218 passed; all 147 frozen outputs bit-identical |
+| Q chunk 128-320 (dense/joint, all recipes incl. odd for B/E) | 119 passed + 83 odd-chunk passed; L1 skips only |
+| K chunk 256/384 (dense/joint) | 176 + 3 B@K256 cases re-gated (see below) |
+| D64 / D256 (dense/joint, all recipes) | 196 passed, 8 L1 skips |
+| Ring: Q/K blocking, D64, D256 | 564 passed (incl. D64); D256 70 passed |
+| Exp ring single- and multi-pass (1x2) | 124 passed |
+| Continuation | 162 passed |
+| Watcher subset: odd Q (B/E), D64/D256, K256/K384 | 12 + 31 + 35 passed; L1 skips only |
+| Joint, tails, GQA, preparation, FP32 state | 595 passed (combined regression) |
+| Model device smoke (random weights; FLUX.1/2, Qwen path, Mochi, Wan, LTX-2 video/audio, MiniMax H3, SD3.5, Motif, Ideogram4) | all passed; 1x1 and 1x2 |
+
+Numerical notes:
+
+- Non-Q256 blocking is **not bit-identical** to Q256 (about one BF16 ulp on the
+  first PV row group of each Q chunk); gated on determinism and FP64 accuracy.
+- COMPENSATED at K256 keeps less of its long-context advantage (8192-key uniform:
+  1.48% vs 1.04% at K512, 0.93% at K384), still below FAST (2.0%).
+- D64/D256 are gated against the D128 recipe on the same generator. The
+  concatenated D256 changed-max stress is harsher than its D128 counterpart and is
+  recorded rather than gated relative to D128.
+- Odd-chunk COMPENSATED/LOW_PRECISION dense kernels compile with -Os to fit the
+  kernel config buffer. On exp ring those recipes hang at Q224 and are rejected on
+  the host until fixed; FAST/BALANCED/ACCURATE exp ring Q224 passes.
+
+Matched-chunk trace-wall timing (single P150b, 10 heads, 8192 x 8192, D128, full
+grid, preparation excluded; legacy = HiFi2, BF16 destination, exact exponential,
+as DiT callers configure it). Milliseconds:
+
+| Blocking | Legacy | A | B | C | D | E_bf16 | E_bfp8 | E_bfp4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q256/K512 | 1.895 | 2.122 | 2.168 | 3.348 | 4.369 | 2.122 | 1.854 | 1.847 |
+| Q128/K512 | 3.169 | 4.125 | 4.140 | 4.138 | 4.409 | 4.131 | 3.275 | 2.922 |
+| Q256/K256 | 1.914 | 2.201 | 2.729 | 3.928 | 5.117 | 2.432 | 2.420 | 2.436 |
+| Q224/K384 | 3.043 | 2.803 | 4.095 | 4.246 | 5.526 | 3.919 | 4.229 | 4.197 |
+| Q320/K256 | 2.373 | 2.428 | 3.377 | 4.895 | 6.336 | 2.993 | 3.017 | 3.012 |
+
+These are single-op trace timings, not model throughput. Small Q chunks cost the
+recipes more than legacy (Q128: +30% for A), so callers should prefer the largest
+Q chunk their parallel layout allows.
+
 ## Continuous coverage
 
 The [SDPA sanity matrix](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) separates
