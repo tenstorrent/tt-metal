@@ -84,12 +84,21 @@ TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.
 # TT only, quick smoke over a few samples
 TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
   --mode tt --task STSBenchmark --smoke-samples 50
+
+# Single chip (for example one Blackhole Galaxy chip), S512, masked path, B1/B8/B16/B32
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+  --mode tt --batch 1 8 16 32 --task STSBenchmark ArguAna --output-dir ./mteb_eval_results/s512
 ```
 
-Install the eval dependencies once inside `python_env`:
+`--batch` runs S512 on one chip at each batch size (one trace per batch, results in
+`tt_b<B>/`). mteb's HF reference for BAAI/bge-m3 uses 8192 tokens; compare the
+S512 scores with HF at 512 tokens, because ArguAna has documents longer than 512.
+
+Install the eval dependencies once inside `python_env`. Keep the pydantic pin of
+`tt_metal/python_env/requirements-dev.txt` (uv then picks mteb 2.12.10):
 
 ```bash
-uv pip install --python python_env/bin/python mteb
+uv pip install --python python_env/bin/python mteb 'pydantic==2.9.2'
 ```
 
 ### Kernel-level profiling (`tracy_perf.py`)
