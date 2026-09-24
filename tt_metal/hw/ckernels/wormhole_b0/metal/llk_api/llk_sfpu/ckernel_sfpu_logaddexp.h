@@ -9,7 +9,6 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "ckernel_sfpu_conversions.h"
 
 namespace ckernel::sfpu {
 
@@ -18,11 +17,13 @@ namespace ckernel::sfpu {
 // Call _sfpu_logaddexp_max_ before _sfpu_logaddexp_gap_: the gap relies on a NaN pair
 // already having been copied into the result.
 
-// max(a, b), with a NaN in either operand copied through rather than left to SFPSWAP.
-// Defence in depth, not a correctness requirement: for a NaN operand the gap below is NaN
-// and calculate_log1p_fp32 returns NaN for it on both of its branches, so the sum is NaN
-// whichever operand max() picked. The copy stays because max() is a bare SFPSWAP with no
-// NaN guard, which orders a NaN by its sign -- the result should not rest on that.
+// max(a, b), with a NaN in either operand copied through rather than left to SFPSWAP,
+// which is a bare swap with no NaN guard and orders a NaN by its sign. On the fp32 path
+// this is defence in depth: for a NaN operand the gap below is NaN, the fp32 exponential
+// carries it, and calculate_log1p_fp32 returns NaN for it on both of its branches, so the
+// sum is NaN whichever operand max() picked. On the bfloat16 path it is what makes the
+// result NaN: the bfloat16 exponentials clamp their argument into a finite range and do
+// not promise to carry a NaN through.
 sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi::vFloat& b) {
     sfpi::vFloat result = sfpi::max(a, b);
     v_if(sfpi::is_nan(a)) { result = a; }
@@ -60,8 +61,9 @@ sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
 // logaddexp2 shares. Without the gap helper the fused form would regress on equal
 // infinities, which the composed form returns as +/-inf.
 //
-// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential
-// below is always the accurate one, because the approximate body is not accurate enough here.
+// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential below is
+// chosen by the destination precision instead, and is never the approximate body, which is
+// not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -71,15 +73,22 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
 
         sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
         _sfpu_logaddexp_gap_(a, b);
-        // The accurate exponential is required, not a preference: the approximate body
-        // returns 255/256 rather than 1 at zero, which lands as a 2.8e-03 relative error
-        // on the whole result. _sfpu_exp_fp32_accurate_unsafe_ is also not usable here --
-        // it drops the underflow guard, and -|a-b| reaches large negative values.
-        b = _sfpu_exp_fp32_accurate_(-a);
+        // The exponential follows the destination precision, as calculate_log1p_fp32 does:
+        // _sfpu_exp_accurate_ is _sfpu_exp_fp32_accurate_ for an fp32 destination and, for
+        // bfloat16, exp_21f -- the exponential exp itself uses for a bfloat16 result, at a
+        // fraction of the instructions. Both are guarded against the large negative values
+        // -|a-b| reaches, which the unguarded _sfpu_exp_fp32_accurate_unsafe_ is not. The
+        // approximate body is not usable either: it returns 255/256 rather than 1 at zero,
+        // which lands as a 2.8e-03 relative error on the whole result.
+        b = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(-a);
         result = result + calculate_log1p_fp32<is_fp32_dest_acc_en>(b);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
+            // SFPSTORE would truncate to bfloat16, so round first, the way calculate_log1p and
+            // exp round their own bfloat16 results. The hardware rounds a tie away from zero
+            // rather than to even, which can only matter when the fp32 sum lands exactly
+            // halfway between two bfloat16 values.
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

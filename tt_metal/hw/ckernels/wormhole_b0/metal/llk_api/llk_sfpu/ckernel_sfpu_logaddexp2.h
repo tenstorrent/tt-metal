@@ -8,9 +8,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp2.h"
 #include "ckernel_sfpu_log1p.h"
 #include "ckernel_sfpu_logaddexp.h"
-#include "ckernel_sfpu_conversions.h"
 
 namespace ckernel::sfpu {
 
@@ -22,8 +22,9 @@ namespace ckernel::sfpu {
 // power is -|a - b| <= 0, so it lands in (0, 1] and cannot overflow; the magnitude comes
 // from max(a, b), which is representable by assumption.
 //
-// Evaluated through the base-e primitives that ckernel_sfpu_logaddexp.h already relies on:
-//     2^-|a - b|    = exp(-|a - b| * ln 2)
+// Evaluated through the primitives that ckernel_sfpu_logaddexp.h already relies on:
+//     2^-|a - b|    = exp(-|a - b| * ln 2)    for an fp32 destination
+//     2^-|a - b|    by exp2's bfloat16 body   for a bfloat16 destination
 //     log2(1 + t)   = log1p(t) * log2(e)
 // No new polynomial: log1p sees exactly the same (0, 1] argument range as it does in
 // logaddexp, so its existing coefficient set applies unchanged. A variant with log2(e)
@@ -37,8 +38,9 @@ namespace ckernel::sfpu {
 // Equal infinities and NaN operands are handled by _sfpu_logaddexp_max_ and
 // _sfpu_logaddexp_gap_ in ckernel_sfpu_logaddexp.h, shared with logaddexp.
 //
-// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential
-// below is always the accurate one, because the approximate body is not accurate enough here.
+// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential below is
+// chosen by the destination precision instead, and is never the approximate body, which is
+// not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -51,14 +53,23 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
 
         sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
         _sfpu_logaddexp_gap_(a, b);
-        // The accurate exponential is required for the same reason as in logaddexp: the
-        // approximate body returns 255/256 rather than 1 at zero, and here that error
-        // lands on the correction term whose exact value at |a - b| = 0 is 1.
-        b = _sfpu_exp_fp32_accurate_(a * -LN_TWO);
+        // The exponential follows the destination precision, as in logaddexp. For bfloat16,
+        // _sfpu_exp2_bf16_ is what exp2 uses for a bfloat16 result: logaddexp's exp_21f
+        // taken in base 2, so the ln 2 multiply drops out. Neither the approximate body nor
+        // an unguarded exponential is usable, for the reasons given in logaddexp; here the
+        // approximate body's 255/256 at zero lands on the correction term whose exact value
+        // at |a - b| = 0 is 1.
+        if constexpr (is_fp32_dest_acc_en) {
+            b = _sfpu_exp_fp32_accurate_(a * -LN_TWO);
+        } else {
+            b = _sfpu_exp2_bf16_(-a);
+        }
         result = result + calculate_log1p_fp32<is_fp32_dest_acc_en>(b) * LOG2_E;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
+            // Rounded as in logaddexp: SFPSTORE would truncate, and the hardware rounds a tie
+            // away from zero rather than to even.
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
