@@ -386,13 +386,12 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
-        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3 does
-        # not support multi-turn continuation from a prefix that is not chunk-aligned (the shared
-        # producer's PREFILL_PRODUCER_MULTI_TURN_PROB mode resumes at a 32-token boundary). Fail here,
-        # not as a scrambled cache read deep in attention.
-        assert actual_start % self.config.chunk_size == 0, (
-            f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}: MiniMax-M3 "
-            f"does not support resuming (multi-turn continuation) from a non-chunk-aligned prefix"
+        # A chunk may start mid-slab (multi-turn continuation resumes at a 32-token boundary): the KV writer,
+        # indexed rope, ring-joint SDPA and the MSA indexer / sparse_sdpa_msa all derive this device's rotated
+        # positions from actual_start, on the writer's 32-row tile grid.
+        assert actual_start % 32 == 0, (
+            f"actual_start={actual_start} must be a multiple of 32 (the KV-cache writer's tile grid); resume a "
+            f"multi-turn continuation at a 32-token boundary"
         )
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
