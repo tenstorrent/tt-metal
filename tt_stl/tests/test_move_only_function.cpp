@@ -84,6 +84,27 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     EXPECT_EQ(f(), 8u);
 }
 
+// std::function and std::move_only_function both yield an empty wrapper here. The backing type
+// would store the null pointer as an ordinary target, report engaged, and then call through it.
+TEST(MoveOnlyFunctionTest, CPU_NullFunctionPointerIsEmpty) {
+    void (*fp)() = nullptr;
+    move_only_function<void()> f{fp};
+    EXPECT_FALSE(static_cast<bool>(f));
+    EXPECT_TRUE(f == nullptr);
+    EXPECT_THROW(f(), std::bad_function_call);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_NullptrConstructsEmpty) {
+    move_only_function<void()> f{nullptr};
+    EXPECT_FALSE(static_cast<bool>(f));
+}
+
+TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
+    move_only_function<int()> f{+[]() { return 5; }};
+    EXPECT_TRUE(static_cast<bool>(f));
+    EXPECT_EQ(f(), 5);
+}
+
 // Pinned deliberately: std::move_only_function makes this undefined, so at the C++23 switch this
 // test failing is the intended signal.
 TEST(MoveOnlyFunctionTest, CPU_CallingEmptyThrows) {

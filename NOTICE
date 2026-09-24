@@ -38,6 +38,12 @@ Each is subject to its own license terms:
   Licensed under Apache 2.0
   https://github.com/tenstorrent/sfpi-gcc
 
+- zoo
+  Copyright (c) 2017 thecppzoo
+  Licensed under MIT
+  https://github.com/thecppzoo/zoo
+  https://github.com/thecppzoo/zoo/blob/master/LICENSE
+
 - OpenMPI
   Licensed under BSD-3-Clause
   https://github.com/open-mpi/ompi
