@@ -1612,5 +1612,166 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreBoundedProducerNoWaitControl) {
     EXPECT_LT(r[1], num_iters) << "every post survived without back-pressure -- saturation was not reached";
 }
 
+// ============================================================================
+// LLKOperand address accessors (SPEC Part III)
+// ============================================================================
+//
+// On Blackhole, each TRISC reports the byte and LLK-word addresses returned by
+// DataflowBuffer::front/back, Scratchpad::operand, and LocalTensorAccessor::operand into a fixed L1
+// report buffer. Host checks the conversion and the MATH-thread DFB zero.
+TEST_F(ProgramSpecHWTest, LLKOperandAddressAccessors) {
+    auto mesh_device = devices_.at(0);
+    if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only: LLKOperand does not compile on other architectures";
+    }
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t kReportAddr = 100 * 1024;
+    constexpr uint32_t kNumReportWords = 18;
+    constexpr uint32_t kScratchpadBytes = 2048;  // one Float16_b 32x32 tile
+    constexpr uint32_t kTileBytes = 2048;
+
+    const NodeCoord node{0, 0};
+
+    auto tensor_param = MakeShardedTensorParameter("a", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
+    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec);
+
+    auto dm = MakeMinimalGen1DMKernel("dm");
+    dm.source = KernelSpec::SourceCode{R"(
+void kernel_main() {}
+)"};
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    // Report layout (uint32_t words), 6 per TRISC:
+    //   UNPACK @ 0:  scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_front_llk, dfb_read_ptr
+    //   MATH   @ 6:  scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_front_llk, dfb_back_llk
+    //   PACK   @ 12: scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_back_llk,  dfb_write_ptr
+    compute.source = KernelSpec::SourceCode{R"(
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/llk_operand_from_tokens.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    const uint32_t report_addr = get_arg(args::report_addr);
+
+    DataflowBuffer in(dfb::in);
+    Scratchpad<uint32_t> pad(scratch::pad);
+    LocalTensorAccessor<uint32_t> a(tensor::a);
+
+    using InOp = LLKOperandFrom<dfb::in>;
+    using PadOp = LLKOperandFrom<scratch::pad>;
+    using AOp = LLKOperandFrom<tensor::a>;
+
+    const uint32_t scratch_byte = pad.get_base_address();
+    const uint32_t scratch_llk = pad.operand<PadOp>().l1_address;
+    const uint32_t tensor_byte = a.get_bank_base_address();
+    const uint32_t tensor_llk = a.operand<AOp>().l1_address;
+
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
+
+#if defined(TRISC_UNPACK)
+    out[0] = scratch_byte;
+    out[1] = scratch_llk;
+    out[2] = tensor_byte;
+    out[3] = tensor_llk;
+    out[4] = in.front<InOp>().l1_address;
+    out[5] = in.get_read_ptr();
+#elif defined(TRISC_MATH)
+    out[6] = scratch_byte;
+    out[7] = scratch_llk;
+    out[8] = tensor_byte;
+    out[9] = tensor_llk;
+    out[10] = in.front<InOp>().l1_address;
+    out[11] = in.back<InOp>().l1_address;
+#elif defined(TRISC_PACK)
+    out[12] = scratch_byte;
+    out[13] = scratch_llk;
+    out[14] = tensor_byte;
+    out[15] = tensor_llk;
+    out[16] = in.back<InOp>().l1_address;
+    out[17] = in.get_write_ptr();
+#endif
+}
+)"};
+    compute.runtime_arg_schema.runtime_arg_names = {"report_addr"};
+    BindTensorParameterToKernel(compute, "a", "a");
+    compute.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    auto dfb = MakeMinimalDFB("in", kTileBytes, /*num_entries=*/2);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in"}, "in"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in"}, "in"));
+
+    ProgramSpec spec;
+    spec.name = "llk_operand_address_accessors";
+    spec.kernels = {dm, compute};
+    spec.dataflow_buffers = {dfb};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = kScratchpadBytes,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    }};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm", "compute"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
+    }};
+    params.tensor_args = {
+        {TensorParamName{"a"}, TensorArgument{local_tensor}},
+    };
+    SetProgramRunArgs(program, params);
+
+    std::vector<uint32_t> zero_report(kNumReportWords, 0u);
+    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+
+    auto workload = LaunchProgram(*mesh_device, std::move(program));
+    Program& launched = workload.get_programs().begin()->second;
+    auto in_dfb = launched.impl().get_dataflow_buffer(launched.impl().get_dfb_handle("in"));
+    const uint32_t expected_dfb_llk = (in_dfb->uniform_alloc_addr() >> 4) - 1;
+    const uint32_t expected_tensor_byte = static_cast<uint32_t>(local_tensor.address());
+
+    std::vector<uint32_t> reported;
+    detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), kNumReportWords);
+
+    auto expect_byte_and_llk = [](uint32_t byte_addr, uint32_t llk_addr, const char* label) {
+        EXPECT_NE(byte_addr, 0u) << label << " byte address is 0";
+        EXPECT_EQ(llk_addr, (byte_addr >> 4) - 1) << label << " LLK address";
+    };
+
+    // UNPACK
+    expect_byte_and_llk(reported[0], reported[1], "UNPACK scratch");
+    EXPECT_EQ(reported[2], expected_tensor_byte) << "UNPACK tensor byte";
+    expect_byte_and_llk(reported[2], reported[3], "UNPACK tensor");
+    EXPECT_EQ(reported[4], reported[5] - 1) << "UNPACK front == read_ptr - 1";
+    EXPECT_EQ(reported[4], expected_dfb_llk) << "UNPACK front vs DFB alloc";
+
+    // MATH: same scratch/tensor conversion; DFB accessors are 0
+    expect_byte_and_llk(reported[6], reported[7], "MATH scratch");
+    EXPECT_EQ(reported[6], reported[0]) << "MATH scratch byte matches UNPACK";
+    EXPECT_EQ(reported[8], expected_tensor_byte) << "MATH tensor byte";
+    expect_byte_and_llk(reported[8], reported[9], "MATH tensor");
+    EXPECT_EQ(reported[10], 0u) << "MATH front";
+    EXPECT_EQ(reported[11], 0u) << "MATH back";
+
+    // PACK
+    expect_byte_and_llk(reported[12], reported[13], "PACK scratch");
+    EXPECT_EQ(reported[12], reported[0]) << "PACK scratch byte matches UNPACK";
+    EXPECT_EQ(reported[14], expected_tensor_byte) << "PACK tensor byte";
+    expect_byte_and_llk(reported[14], reported[15], "PACK tensor");
+    EXPECT_EQ(reported[16], reported[17] - 1) << "PACK back == write_ptr - 1";
+    EXPECT_EQ(reported[16], expected_dfb_llk) << "PACK back vs DFB alloc";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

@@ -101,6 +101,11 @@ public:
         return static_cast<uint32_t>(mem_.get_address());
     }
 
+    template <typename Operand>
+    [[nodiscard]] Operand operand() const {
+        return Operand{(get_bank_base_address() >> 4) - 1};
+    }
+
     /** @brief Lock num_elements elements starting at element `offset`.
      *
      * @param offset       Index of the first element to lock.

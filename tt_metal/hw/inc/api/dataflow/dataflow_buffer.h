@@ -327,6 +327,26 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
+    // after wait_front
+    template <typename Operand>
+    Operand front() const {
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+        return Operand{0};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
+    // after reserve_back
+    template <typename Operand>
+    Operand back() const {
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+        return Operand{0};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
     // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
