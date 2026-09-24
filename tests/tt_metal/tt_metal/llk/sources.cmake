@@ -11,6 +11,7 @@ set(UNIT_TESTS_LLK_SRC
     test_deepseek_binary_dest_reuse.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
+    test_generic_moe_gate_compute.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
@@ -24,6 +25,7 @@ set(UNIT_TESTS_LLK_SRC
     test_reconfig.cpp
     test_reduce.cpp
     test_rmsnorm_chunked.cpp
+    test_rope_fused_compute.cpp
     test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp

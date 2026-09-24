@@ -33,6 +33,7 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.operations.ccl import Topology
+from ttnn.operations.transformer_golden import torch_sdpa_reference
 
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
@@ -426,85 +427,6 @@ def deterministic_input_tensor(*shape, offset=0.0):
     head_pattern = (torch.arange(h, dtype=torch.float32).view(1, h, 1, 1) % 31) * 0.01
     dim_pattern = (torch.arange(d, dtype=torch.float32).view(1, 1, 1, d) % 37) * 0.0001
     return (seq_pattern + head_pattern + dim_pattern + offset).expand(shape).contiguous()
-
-
-def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
-    """
-    Memory-efficient PyTorch reference for ring joint attention.
-
-    Chunks over heads and the combined Q sequence so the [B, H, Sq, Sk]
-    attention matrix never materializes at full size — CPU SDPA's math
-    kernel otherwise allocates it in fp32 and OOMs on long sequences.
-    """
-    SEQ_CHUNK = 4096
-    HEAD_CHUNK = 16
-
-    B, H, total_seq, _ = q.shape
-    Dv = v.shape[-1]
-
-    def take_heads(t, h_start, h_end):
-        if t.shape[1] == H:
-            return t[:, h_start:h_end]
-        assert H % t.shape[1] == 0, f"Q heads must be divisible by KV heads, got H={H}, KV={t.shape[1]}"
-        heads_per_kv = H // t.shape[1]
-        kv_indices = torch.arange(h_start, h_end, device=t.device) // heads_per_kv
-        return t[:, kv_indices]
-
-    if attention_sink is not None:
-        assert is_causal, "attention sink reference is defined for causal attention only"
-        # Unlike PyTorch SDPA, the virtual sink key has no V row. Compute the
-        # sink-aware softmax explicitly, using compact blocks to keep the
-        # full-causal M3 reference bounded in host memory.
-        SEQ_CHUNK = 512
-        HEAD_CHUNK = 4
-        scale = q.shape[-1] ** -0.5
-        attn_out = torch.empty(B, H, total_seq, Dv, dtype=q.dtype)
-        for h_start in range(0, H, HEAD_CHUNK):
-            h_end = min(h_start + HEAD_CHUNK, H)
-            q_heads = q[:, h_start:h_end]
-            k_heads = take_heads(k, h_start, h_end)
-            v_heads = take_heads(v, h_start, h_end)
-            sink_scores = attention_sink[:, h_start:h_end].float() * scale
-            for seq_start in range(0, total_seq, SEQ_CHUNK):
-                seq_end = min(seq_start + SEQ_CHUNK, total_seq)
-                scores = (
-                    q_heads[:, :, seq_start:seq_end].float() @ k_heads[:, :, :seq_end].transpose(-2, -1).float()
-                ) * scale
-                q_pos = torch.arange(seq_start, seq_end, device=q.device).unsqueeze(1)
-                k_pos = torch.arange(seq_end, device=q.device).unsqueeze(0)
-                scores = scores.masked_fill(k_pos > q_pos, float("-inf"))
-                expanded_sink = sink_scores.expand(B, h_end - h_start, seq_end - seq_start, 1)
-                weights = torch.softmax(torch.cat([scores, expanded_sink], dim=-1), dim=-1)[..., :-1]
-                attn_out[:, h_start:h_end, seq_start:seq_end] = (weights @ v_heads[:, :, :seq_end].float()).to(q.dtype)
-    elif total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
-        attn_out = torch.nn.functional.scaled_dot_product_attention(
-            q,
-            take_heads(k, 0, H),
-            take_heads(v, 0, H),
-            is_causal=is_causal,
-        )
-    else:
-        attn_out = torch.empty(B, H, total_seq, Dv, dtype=q.dtype)
-        for h_start in range(0, H, HEAD_CHUNK):
-            h_end = min(h_start + HEAD_CHUNK, H)
-            q_heads = q[:, h_start:h_end]
-            k_heads = take_heads(k, h_start, h_end)
-            v_heads = take_heads(v, h_start, h_end)
-            for seq_start in range(0, total_seq, SEQ_CHUNK):
-                seq_end = min(seq_start + SEQ_CHUNK, total_seq)
-                q_chunk = q_heads[:, :, seq_start:seq_end]
-                if is_causal:
-                    q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
-                    k_pos = torch.arange(seq_end).unsqueeze(0)
-                    mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
-                    out = torch.nn.functional.scaled_dot_product_attention(
-                        q_chunk, k_heads[:, :, :seq_end], v_heads[:, :, :seq_end], attn_mask=mask
-                    )
-                else:
-                    out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads)
-                attn_out[:, h_start:h_end, seq_start:seq_end] = out
-
-    return attn_out
 
 
 def compute_pcc_rmse(expected, actual):
@@ -5138,9 +5060,6 @@ def test_ring_joint_attention_create_perf_table(model_name):
         if config_id.startswith(model_name)
     ]
 
-    # Look up model configuration
-    model = model_configs[model_name]
-
     # Use hardware config values (cannot query device due to TLB conflicts with subprocess tests)
     full_grid_rows = mesh_config.grid_rows
     total_compute_cores = mesh_config.sdpa_cores
@@ -5430,8 +5349,6 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
         pytest.skip("ring_mla perf config unavailable for current mesh")
 
     model = MODEL_CONFIGS[model_name]
-    joint_config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
-    mla_config_id = RING_MLA_TEST_CONFIG_IDS[0]
 
     def profile_with_runtime(run_fn):
         runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
@@ -5515,7 +5432,6 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }
-CHUNKED_PREFILL_MODELS = list(CHUNKED_PREFILL_MODEL_CONFIGS.keys())
 
 # ring_mla (latent-V) chunked-prefill configs are identical to the classic separate-V configs
 # except V lives in the first d_v columns of the shared K/V latent (the MLA deployment shape):

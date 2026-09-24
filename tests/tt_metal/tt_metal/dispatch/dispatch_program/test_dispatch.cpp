@@ -481,14 +481,14 @@ TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
 
 namespace {
 
-std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
+std::optional<CoreCoord> quasar_dispatch_s_virtual_core(distributed::MeshDevice& mesh_device) {
     auto& metal_context = MetalContext::instance();
     if (!metal_context.get_dispatch_query_manager().dispatch_s_enabled()) {
         return std::nullopt;
     }
 
     auto& dcm = metal_context.get_dispatch_core_manager();
-    const ChipId chip = device->id();
+    const ChipId chip = mesh_device.get_device_ids()[0];
     const uint16_t channel = metal_context.get_cluster().get_assigned_channel_for_device(chip);
     if (!dcm.is_dispatcher_s_core_allocated(chip, channel, /*cq_id=*/0)) {
         return std::nullopt;
@@ -496,7 +496,7 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
 
     const auto& logical_cxy = dcm.dispatcher_s_core(chip, channel, 0);
     const CoreType core_type = dcm.get_dispatch_core_type();
-    return device->virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+    return mesh_device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
 }
 
 Program create_quasar_l1_write_program(
@@ -540,8 +540,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
-    IDevice* device = this->device().get_devices().front();
-    if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
+    if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(this->device())) {
         GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
     }
 
@@ -558,10 +557,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     // dispatch_s is wired in topology/core manager
-    const auto dispatch_s_core = quasar_dispatch_s_virtual_core(device);
+    const auto dispatch_s_core = quasar_dispatch_s_virtual_core(this->device());
     ASSERT_TRUE(dispatch_s_core.has_value());
 
-    const ChipId chip = device->id();
+    const ChipId chip = this->device().get_device_ids()[0];
     const uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip);
     const auto& dispatch_s_logical = dispatch_core_manager.dispatcher_s_core(chip, channel, 0);
     const auto& dispatch_logical = dispatch_core_manager.dispatcher_core(chip, channel, 0);

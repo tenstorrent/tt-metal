@@ -518,15 +518,11 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# tt-emule (software emulation, header-only consumption)
+# tt-emule (software emulation runtime, sourced from a local TT_EMULE_PATH)
 ############################################################################################################################
 if(TT_METAL_USE_EMULE)
-    CPMAddPackage(
-        NAME tt_emule
-        GITHUB_REPOSITORY tenstorrent/tt-emule
-        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
-        EXCLUDE_FROM_ALL YES
-    )
+    # No public fetch: cmake/project_options.cmake requires TT_EMULE_PATH and points CPM at that checkout.
+    CPMAddPackage(NAME tt_emule EXCLUDE_FROM_ALL YES)
 endif()
 
 ############################################################################################################################

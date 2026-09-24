@@ -452,14 +452,10 @@ def main():
         "t3000-profiler-tests.yaml",
         # Galaxy
         "blaze-models-prefill-tests.yaml",
-        "galaxy-e2e-tests.yaml",
-        "galaxy-health.yaml",
-        "galaxy-integration-tests.yaml",
-        "galaxy-multi-user-isolation-tests.yaml",
-        "galaxy-profiler-tests.yaml",
+        "galaxy-tests.yaml",
         "galaxy-sanity.yaml",
+        "galaxy-profiler-tests.yaml",
         "galaxy-stress-tests.yaml",
-        "galaxy-unit-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",

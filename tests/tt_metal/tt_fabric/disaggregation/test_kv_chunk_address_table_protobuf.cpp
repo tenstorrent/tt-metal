@@ -528,6 +528,59 @@ TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
     expect_tables_equal(original, restored);
 }
 
+TEST(KvChunkAddressTableProtobuf, ShardedRowRunsRoundTrip) {
+    // SP-sharded row: 4 devices each own a contiguous 5-chunk block of every 20-chunk span,
+    // and each device round-robins its own chunks over 8 banks. The row switches device group
+    // every 5 chunks and only repeats after 8 spans (period 160, well past any small cap), so
+    // it compresses only with a per-residue device group and a long period.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kDevices = 4;
+    constexpr uint32_t kBlock = 5;
+    constexpr uint32_t kBanks = 8;
+    constexpr uint32_t kPeriod = kDevices * kBlock * kBanks;
+    constexpr uint32_t kChunks = 400;
+    constexpr uint64_t kChunkBytes = 0x4000;
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 3, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    std::vector<DeviceGroupIndex> groups;
+    groups.reserve(kDevices);
+    for (uint32_t d = 0; d < kDevices; d++) {
+        groups.push_back(original.add_device_group({make_proto_fnid(0, d)}));
+    }
+    std::array<uint32_t, kDevices> counters{};
+    for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
+        for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
+            for (uint32_t i = 0; i < kChunks; i++) {
+                const uint32_t d = (i / kBlock) % kDevices;
+                const uint32_t n = counters[d]++;
+                original.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr =
+                            (static_cast<uint64_t>(n % kBanks) << 32) | (0x10000ULL + (n / kBanks) * kChunkBytes),
+                        .size_bytes = 512,
+                        .device_group_index = groups[d]});
+            }
+        }
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    ASSERT_EQ(pb.configs(0).compression(), ::tt::disaggregation::proto::STRIDED_ROWS);
+    EXPECT_EQ(pb.entries_size(), 0);
+    EXPECT_EQ(pb.runs_size(), static_cast<int>(cfg.num_slots * cfg.num_layers * kPeriod));
+    for (const auto& run : pb.runs()) {
+        EXPECT_EQ(run.chunk_step(), kPeriod);
+        EXPECT_EQ(run.device_group_index(), *groups[(run.start_chunk() / kBlock) % kDevices]);
+    }
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
 TEST(KvChunkAddressTableProtobuf, MixedCompressionPerConfigRoundTrip) {
     // Compression is per-config: the affine config exports STRIDED_ROWS, the pseudo-random
     // config stays UNROLLED. The importer must honor both tags in one table.
