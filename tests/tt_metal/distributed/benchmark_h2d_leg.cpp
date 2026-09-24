@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -396,9 +397,57 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
         }
         const double window_us = us_since(t0);
 
+        // How far the run got, not what the drain below feeds through.
+        const uint64_t frames_at_exit = frames;
+
+        // The kernel exits only once it has seen `iters` frames, so on every ok=false path it
+        // is still parked. Keep publishing -- unverified, the run already failed -- to free it.
+        if (!ok) {
+            uint64_t drained = frames;
+            auto drain_until = std::chrono::steady_clock::now() + kStall;
+            while (frames < total_frames_ && std::chrono::steady_clock::now() < drain_until) {
+                for (uint32_t c = 0; c < cores_; ++c) {
+                    while (core[c].published < iters_ && core[c].published - core[c].drained < ring_pages_) {
+                        DeliverTask t;
+                        t.core = c;
+                        t.slot = static_cast<uint32_t>(core[c].published % ring_pages_);
+                        t.page_offset = rx_slot_offset(c, t.slot, page_, h2d_->data_offset(c));
+                        t.page_bytes = page_;
+                        t.length = payload_bytes_;
+                        if (!h2d_->publish(t)) {
+                            break;
+                        }
+                        ++core[c].published;
+                    }
+                }
+                for (uint32_t c = 0; c < cores_; ++c) {
+                    const uint32_t n = h2d_->drained(c);
+                    frames += n;
+                    core[c].drained += n;
+                }
+                // Bounded on progress, not on total time: a slow drain is still a drain.
+                if (frames != drained) {
+                    drained = frames;
+                    drain_until = std::chrono::steady_clock::now() + kStall;
+                }
+            }
+        }
+
         // Only after the rings have drained: Finish() before that is unbounded.
-        if (ok) {
+        if (frames >= total_frames_) {
             Finish(mesh_->mesh_command_queue());
+        } else {
+            // Nothing here can stop the kernel or close the shared device, and returning runs
+            // ~H2DLeg and release() under pages it may still read. Leave them mapped.
+            std::fprintf(
+                stderr,
+                "fatal: %s; the receiver kernel did not drain within %llds, so the device may still be "
+                "reading the pinned region. Exiting without teardown -- reset the device before "
+                "the next run.\n",
+                run_error.c_str(),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(kStall).count()));
+            std::fflush(stderr);
+            std::_Exit(EXIT_FAILURE);
         }
 
         // result[0] is the bad count, result[1] what the kernel saw. Read even without verify.
@@ -425,7 +474,7 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
             }
         }
 
-        state.counters["frames"] = static_cast<double>(frames);
+        state.counters["frames"] = static_cast<double>(frames_at_exit);
         state.counters["bad_frames"] = static_cast<double>(bad_total);
         if (ok && window_us > 0.0) {
             const double gb = static_cast<double>(total_frames_ - warmup_frames_) * payload_bytes_ / 1e9;
