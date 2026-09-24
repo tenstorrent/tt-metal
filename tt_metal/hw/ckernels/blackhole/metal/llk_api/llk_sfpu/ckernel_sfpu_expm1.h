@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 /*
  * The expm1(x) code is derived from code by Norbert Juffa.
@@ -201,5 +202,16 @@ void expm1_init() {
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
     }
 }
+
+// Op class for exp(x) - 1.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Expm1 : SfpuUnaryOp<Expm1<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_expm1<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        expm1_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace ckernel::sfpu

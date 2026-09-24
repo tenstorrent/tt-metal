@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -68,6 +69,15 @@ inline void sigmoid_init() {
         sigmoid_appx_init();
     }
 }
+
+// Op class for sigmoid(x) = 1 / (1 + exp(-x)). Only run() needs is_fp32_dest_acc_en.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Sigmoid : SfpuUnaryOp<Sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { sigmoid_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

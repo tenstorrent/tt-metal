@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace sfpi;
 
@@ -39,6 +40,22 @@ inline void calculate_abs_int32() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for |x| on float tiles. Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Abs : SfpuUnaryOp<Abs<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_abs<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { abs_init(); }
+};
+
+// Op class for |x| on int32 tiles. Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct AbsInt32 : SfpuUnaryOp<AbsInt32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_abs_int32<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { abs_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

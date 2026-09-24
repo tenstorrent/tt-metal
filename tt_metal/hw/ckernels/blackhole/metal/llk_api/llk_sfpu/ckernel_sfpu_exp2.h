@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -142,5 +143,16 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm2 = 0x1.c6afd8p-5f;
     }
 }
+
+// Op class for 2 ^ x.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Exp2 : SfpuUnaryOp<Exp2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_exp2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        exp2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace ckernel::sfpu

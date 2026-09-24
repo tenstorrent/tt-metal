@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace sfpi;
 
@@ -30,6 +31,16 @@ inline void calculate_tiled_prod() {
     dst_reg[0] = result;
     dst_reg++;
 }
+
+// Op class for the running product over a tile. Same name and leading template parameters as on
+// Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct TiledProd : SfpuUnaryOp<TiledProd<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_tiled_prod<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { tiled_prod_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

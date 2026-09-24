@@ -10,6 +10,7 @@
 #include <limits>
 
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -35,6 +36,22 @@ inline void calculate_identity_uint() {
         dst_reg++;
     }
 }
+
+// Op class for identity(x) on float tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Identity : SfpuUnaryOp<Identity<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_identity<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for identity(x) on uint32 tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct IdentityUint : SfpuUnaryOp<IdentityUint<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_identity_uint<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -72,6 +73,19 @@ inline void calculate_add_top_row(
  *        four rows itself and must not be walked per face.
  */
 inline void init_add_top_row() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
+
+// Op class for adding the top rows of two tiles; the kernel walks Dest itself (with a 32x32 tile stride).
+// Only run() needs format. Same name and leading template parameters as on Wormhole/Blackhole.
+template <DataFormat format = DataFormat::Invalid, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct AddTopRow : SfpuBinaryOp<AddTopRow<format, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "calculate_add_top_row assumes 32x32 Dest tiles");
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t tile_idx_0, const std::uint32_t tile_idx_1, const std::uint32_t tile_idx_dst) {
+        calculate_add_top_row<format>(tile_idx_0, tile_idx_1, tile_idx_dst);
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_add_top_row(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

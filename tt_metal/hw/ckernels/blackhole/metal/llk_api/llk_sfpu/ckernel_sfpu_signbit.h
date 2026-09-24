@@ -5,9 +5,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 using namespace sfpi;
 
 namespace ckernel::sfpu {
@@ -89,10 +91,10 @@ inline void signbit_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x00 | 0x40 | (1 << 3) | 5;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | 4;
-        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (1 << 3) | 5;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -117,10 +119,10 @@ inline void signbit_int32_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (0 << 3) | 4;
-        constexpr uint store_bits = 0x00 | 0x40 | (1 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (0 << 3) | 4;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (1 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -135,5 +137,23 @@ inline void signbit_int32_init() {
     TTI_SFPCONFIG(0x110, 8, 1);
 #endif
 }
+
+// Op class for signbit(x) on float tiles. signbit_init programs ADDR_MOD_6.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Signbit : SfpuUnaryOp<Signbit<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { signbit_init(); }
+};
+
+// Op class for signbit(x) on int32 tiles. signbit_int32_init programs ADDR_MOD_6.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct SignbitInt32 : SfpuUnaryOp<SignbitInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_signbit_int32<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { signbit_int32_init(); }
+};
 
 }  // namespace ckernel::sfpu

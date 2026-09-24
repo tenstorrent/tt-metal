@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -97,6 +98,22 @@ inline void copy_dest_value(
 
 /** @brief No-op init; Dest-to-Dest copy programs no SFPU constants. */
 inline void copy_dest_value_init() {}
+
+// Op class for copying one Dest tile onto another. Same name and leading template parameters as on
+// Wormhole/Blackhole. Only run() needs DATA_FORMAT.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat DATA_FORMAT = DataFormat::Invalid,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct CopyDestValue : SfpuBinaryOp<CopyDestValue<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in, const std::uint32_t dst_index_out, const std::uint32_t dst_index_unused) {
+        copy_dest_value<DATA_FORMAT, APPROXIMATION_MODE, ITERATIONS, SLOT>(
+            dst_index_in, dst_index_out, dst_index_unused);
+    }
+    static inline __attribute__((always_inline)) void init_op() { copy_dest_value_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

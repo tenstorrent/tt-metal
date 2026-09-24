@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -438,6 +439,26 @@ inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm1 = -127.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
+
+// Op class for x ^ exponent. Only run() needs is_fp32_dest_acc_en. Same name and leading template
+// parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct UnaryPower : SfpuUnaryOp<UnaryPower<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exponent) {
+        calculate_unary_power<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(exponent);
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_unary_pow_init(); }
+};
+
+// Op class for x ^ exponent by repeated multiplication. Same name and leading template parameters as on
+// Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct UnaryPowerIterative : SfpuUnaryOp<UnaryPowerIterative<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t exponent) {
+        calculate_unary_power_iterative<APPROXIMATION_MODE, ITERATIONS>(exponent);
+    }
+    static inline __attribute__((always_inline)) void init_op() { power_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

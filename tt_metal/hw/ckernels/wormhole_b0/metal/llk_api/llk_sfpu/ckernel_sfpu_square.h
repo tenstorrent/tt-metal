@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -50,5 +51,14 @@ inline void calculate_square() {
         sfpi::dst_reg[1].mode(ADDR_MOD_2) = r1;
     }
 }
+
+// Op class for x * x.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Square : SfpuUnaryOp<Square<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_square<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { square_init(); }
+};
 
 }  // namespace ckernel::sfpu

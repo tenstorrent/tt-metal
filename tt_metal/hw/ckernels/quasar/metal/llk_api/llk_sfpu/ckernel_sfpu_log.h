@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -243,6 +244,29 @@ inline void log_init() {
         sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
+
+// Op class for ln(x), optionally scaled by a base factor (log_with_base). Same name and leading template
+// parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX,
+    bool HAS_BASE_SCALING,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    bool IS_BASE_TWO = false,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Log
+    : SfpuUnaryOp<
+          Log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO, SLOT>,
+          SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t log_base_scale_factor) {
+        calculate_log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>(
+            log_base_scale_factor);
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -2,4 +2,4 @@ square_tile
 ============
 
 .. doxygenfunction:: square_tile_init()
-.. doxygenfunction:: square_tile(uint32_t idst)
+.. doxygenfunction:: square_tile(std::uint32_t idst)
