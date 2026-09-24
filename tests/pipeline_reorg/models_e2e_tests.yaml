@@ -2146,3 +2146,38 @@
 #       release_ready: false
 #   owner_id: U07K00A281X # Kevin Wu
 #   team: train
+
+# CosyVoice-300M (PR #52540). e2e synthesis plus the perf suite; tests/perf/gates.py asserts the
+# tok/s and RTF thresholds (and the recorded bands for the ones not met), so this job is what
+# checks the published PERF.md numbers. Perf runs without the watcher.
+- name: CosyVoice-300M e2e tests
+  cmd: |
+    set -e
+    # Goldens + fp16 weight exports (see the .gitignore in tests/golden): a release asset built with
+    # the PR's own scripts. Without these every device test skips and the job is green on nothing.
+    curl -sSfL --retry 3 -o /tmp/cosyvoice_ci_assets.tar.gz https://github.com/mtairum/cosyvoice-300m-ttnn-ci-assets/releases/download/v1/cosyvoice_ci_assets_v1.tar.gz
+    tar -xzf /tmp/cosyvoice_ci_assets.tar.gz -C models/experimental/cosyvoice/tests/golden/
+    export COSYVOICE_INPUTS=models/experimental/cosyvoice/tests/golden/inputs
+    # Run both suites even if the first fails: the perf gates are the point of this job and
+    # must report regardless of an e2e failure. Exit code is the OR of the two.
+    exit_code=0
+    pytest models/experimental/cosyvoice/tests/e2e/ -v --timeout 1800 || exit_code=$?
+    unset TT_METAL_WATCHER
+    # test_streaming_perf.py is left out on purpose: on bh_p150 CI VMs the job died twice at the same
+    # point ("runner lost communication with the server", tt-metal-ci-vm-302 and -305, ~12 min into the
+    # perf suite), and that test is the one PERF.md documents as wedging a board at 100 % host CPU.
+    pytest models/experimental/cosyvoice/tests/perf/ -v -s --timeout 1800 \
+      --ignore=models/experimental/cosyvoice/tests/perf/test_streaming_perf.py || exit_code=$?
+    exit $exit_code
+  model: cosyvoice-300m
+  model_family: CosyVoice
+  skus:
+    wh_n300:
+      timeout: 60
+      tier: 3
+    bh_p150:
+      timeout: 60
+      tier: 3
+  owner_id: U03PUAKE719
+  team: models
+  budget_type: e2e

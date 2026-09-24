@@ -2203,5 +2203,31 @@
       timeout: 10
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
+
+# CosyVoice-300M (PR #52540). Goldens and fp16 weight exports are not in the tree (see
+# models/experimental/cosyvoice/tests/golden/.gitignore); the tests skip cleanly without them, so
+# they are fetched first or the job would be green on skips alone.
+  team: models
+  budget_type: unit
+
+- name: CosyVoice-300M unit tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    # Goldens + fp16 weight exports (see the .gitignore in tests/golden): a release asset built with
+    # the PR's own scripts. Without these every device test skips and the job is green on nothing.
+    curl -sSfL --retry 3 -o /tmp/cosyvoice_ci_assets.tar.gz https://github.com/mtairum/cosyvoice-300m-ttnn-ci-assets/releases/download/v1/cosyvoice_ci_assets_v1.tar.gz
+    tar -xzf /tmp/cosyvoice_ci_assets.tar.gz -C models/experimental/cosyvoice/tests/golden/
+    pytest models/experimental/cosyvoice/tests/pcc/ -v --timeout 900
+  model: cosyvoice-300m
+  model_family: CosyVoice
+  skus:
+    wh_n300:
+      timeout: 30
+      tier: 3
+    bh_p150:
+      timeout: 30
+      tier: 3
+  owner_id: U03PUAKE719
   team: models
   budget_type: unit

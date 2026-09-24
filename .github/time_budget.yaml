@@ -379,8 +379,8 @@ models:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 108
-    wh_n300: 60
-    bh_p150: 33
+    wh_n300: 120  # +60 CosyVoice-300M (PR #52540)
+    bh_p150: 93  # +60 CosyVoice-300M (PR #52540)
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
@@ -407,8 +407,8 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
-    bh_p150: 30
+    wh_n300: 73  # 43 on main (+10 DiffusionDrive #42995) +30 CosyVoice-300M (PR #52540)
+    bh_p150: 60  # +30 CosyVoice-300M (PR #52540)
     bh_p300: 30
     bh_quietbox_2: 25
   integration:
