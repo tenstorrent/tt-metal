@@ -289,6 +289,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
     max_cores_per_head_batch=16,
+    q_column_groups=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -374,13 +375,7 @@ def run_flash_mla_decode_impl(
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-        max_cores_per_head_batch=max_cores_per_head_batch,
-    )
+    sdpa_grid = device.compute_with_storage_grid_size()
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -410,6 +405,24 @@ def run_flash_mla_decode_impl(
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
+        if q_column_groups:
+            # One 32 row shard per virtual batch on the output core of its group: the head groups of a
+            # batch go down a column of core groups on an 8x8 grid (column major group indexing).
+            num_shards = batch * nh // ttnn.TILE_SIZE
+            max_cores_per_head_batch = 64 // num_shards
+            groups_per_row = 8 // max_cores_per_head_batch
+            group_rows = num_shards // groups_per_row
+            q_core_grid = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, 0),
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, group_rows - 1),
+                    )
+                    for g in range(groups_per_row)
+                ]
+            )
+            sdpa_grid = ttnn.CoreCoord(8, 8)
+            block_height = ttnn.TILE_SIZE
         if q_mem_config is None:
             q_mem_config = ttnn.create_sharded_memory_config(
                 shape=(block_height, q.shape[-1]),
@@ -429,6 +442,14 @@ def run_flash_mla_decode_impl(
     # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=max_cores_per_head_batch,
+    )
 
     tt_q = ttnn.from_torch(
         q_for_tt,

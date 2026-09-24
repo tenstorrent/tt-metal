@@ -253,8 +253,42 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // A core group can be laid out in either row-major or column-major order on the core grid.
     // By default core groups are laid out in row-major order. But when Q heads is parallelized,
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
-    const bool use_col_major_group_indexing =
-        (q_heads_parallel_factor > 1) && (grid_size.y >= num_cores_per_head) && !on_subcoregrid && q_locally_available;
+    // Without replicated Q the reader fetches Q from the group's output core, so the column major layout
+    // (and the K multicast that comes with it) is used only when the Q shards already sit on those cores.
+    auto col_major_layout_possible = [&]() -> bool {
+        if (q_heads_parallel_factor <= 1 || grid_size.y < num_cores_per_head || on_subcoregrid) {
+            return false;
+        }
+        if (q_locally_available) {
+            return true;
+        }
+        if (!is_q_sharded || num_heads_per_core != 1 || grid_size.x % num_cores_per_head != 0 ||
+            num_active_cores % num_cores_per_head != 0) {
+            return false;
+        }
+        const uint32_t groups = num_active_cores / num_cores_per_head;
+        const uint32_t groups_per_row = grid_size.x / num_cores_per_head;
+        if (groups != B || groups % groups_per_row != 0) {
+            return false;
+        }
+        const uint32_t rows = groups / groups_per_row;
+        if (rows % q_heads_parallel_factor != 0) {
+            return false;
+        }
+        const auto& shard_spec = input_tensor_q.memory_config().shard_spec().value();
+        const auto shard_cores =
+            corerange_to_cores(shard_spec.grid, B, shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        if (shard_cores.size() != B) {
+            return false;
+        }
+        for (uint32_t cb = 0; cb < B; ++cb) {
+            if (shard_cores[cb] != CoreCoord{(cb / rows) * num_cores_per_head, cb % rows}) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const bool use_col_major_group_indexing = col_major_layout_possible();
     uint32_t num_group_rows = 0;
     uint32_t num_group_cols = 0;
     uint32_t num_groups_total = 0;
@@ -327,7 +361,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
         uint32_t group_row = row_major_idx / num_group_rows;
         uint32_t group_col = row_major_idx % num_group_rows;
-        return (group_col * num_group_rows) + group_row;
+        return (group_col * num_group_cols) + group_row;
     };
 
     // Reducer cores (one per KV head group)
@@ -799,6 +833,21 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
     reader_desc.config = ReaderConfigDescriptor{};
+    // A Blackhole DRAM endpoint accepts one read request per ~16 cycles per NoC, so K/V pages under 2 KB (bfp8,
+    // bfp4) cannot fill the channel from one NoC. The reader then takes V on the second NoC, which puts both data
+    // movement kernels in dynamic NoC mode. The K multicast of the column major groups keeps its static NoC.
+    // bfp4 pages are small enough that the split only pays from a 16k cache; below that the request split costs
+    // 1 to 2 percent, so bfp4 keeps one NoC there.
+    const bool split_kv_noc = device->arch() == tt::ARCH::BLACKHOLE && input_tensor_k.buffer()->is_dram() &&
+                              k_tile_size < 2048 && v_tile_size < 2048 && !use_col_major_group_indexing &&
+                              (v_tile_size >= 1088 || S >= 16384);
+    if (split_kv_noc) {
+        reader_desc.defines = {{"SPLIT_KV_NOC", "1"}};
+        reader_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    }
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
@@ -806,6 +855,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+    if (split_kv_noc) {
+        writer_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
