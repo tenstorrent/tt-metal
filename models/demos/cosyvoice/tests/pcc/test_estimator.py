@@ -15,6 +15,7 @@ Three tiers, cheapest first:
 """
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
@@ -239,7 +240,7 @@ def test_device_attention_ignores_tile_padding(device, length):
 
     torch.manual_seed(0)
     x = torch.randn(2, length, 256)
-    padded = -(-length // 32) * 32
+    padded = math.ceil(length / ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # rounded up to whole tiles
     host = torch.full((2, padded, 256), float("nan"))
     host[:, :length] = x
     xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
