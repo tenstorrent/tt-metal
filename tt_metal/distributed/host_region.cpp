@@ -292,6 +292,16 @@ void HostRegion::provision(
         throw std::runtime_error(fmt::format(
             "need {} MiB but the driver's max_total_pin_size is {} MiB", want >> 20, limits.max_total_pin >> 20));
     }
+    // A count, not a size: each core's D2HSocket pins its own SHM and this region is one
+    // more, so the pin table runs out as cores grow even while the byte limits hold.
+    const uint32_t pins_needed = cores_in_use + 1;
+    if (limits.max_pins != 0 && pins_needed > limits.max_pins) {
+        throw std::runtime_error(fmt::format(
+            "{} cores need {} pins (one per socket plus this region) but the driver allows {}",
+            cores_in_use,
+            pins_needed,
+            limits.max_pins));
+    }
 
     uint8_t* const base = region_;
     if (reinterpret_cast<uintptr_t>(base) % kAlign2M != 0 || want % kPageBytes != 0) {
