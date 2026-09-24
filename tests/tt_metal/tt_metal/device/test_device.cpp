@@ -559,10 +559,10 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     EXPECT_EQ(src, aligned_copy);
 }
 
-// Blackhole splits a 64-bit destination across NOC_RET_ADDR_LO and NOC_RET_ADDR_MID. The burst loop in
-// cq_noc_async_write_with_state_any_len advances a 64-bit address but only reprograms LO, so a destination that
-// carries past 2^32 part way through leaves MID describing the previous 4GB window and the rest of the transfer
-// lands there. The kernel disables sending, so the synthetic destination below needs no mapping behind it.
+// Blackhole splits a 64-bit destination across NOC_RET_ADDR_LO and NOC_RET_ADDR_MID. Guards against the burst loop
+// in cq_noc_async_write_with_state_any_len reprogramming only LO, which would leave MID on the previous 4GB window
+// once the destination carries past 2^32 and send the rest of the transfer there. The kernel disables sending, so
+// the synthetic destination below needs no mapping behind it.
 TEST_F(MeshDeviceFixture, WriteWithStateAnyLenUpdatesRetAddrMidOnCarry) {
     using tt::tt_metal::distributed::EnqueueMeshWorkload;
     using tt::tt_metal::distributed::MeshCoordinate;

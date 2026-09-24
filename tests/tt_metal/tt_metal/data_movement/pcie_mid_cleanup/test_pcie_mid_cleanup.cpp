@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Regression test for NOC_TARG_ADDR_MID / NOC_RET_ADDR_MID cleanup after a PCIe-routed transaction. The
-// register is sticky per command buffer and the plain noc_async_read/write no longer clear it, so a
+// register is sticky per command buffer and the plain noc_async_read/write do not program it, so a
 // leftover value silently misroutes the next on-chip transaction to host memory. The test also confirms
 // the PCIe transfers themselves reached host memory, so a routing bit that is never set cannot pass.
 // Blackhole only.
@@ -25,7 +25,8 @@ using namespace std;
 
 namespace unit_tests::dm::pcie_mid_cleanup {
 
-// Offsets within the channel-0 host hugepage. Kept clear of the dispatch CQ headroom.
+// Offsets within the channel-0 host hugepage. These sit inside CQ0's issue region, which is safe only
+// because the fixture opens a fresh device per test and one small enqueue never writes this far in.
 constexpr uint32_t kHostReadOffset = 1024 * 1024 * 50;
 constexpr uint32_t kHostWriteOffset = 1024 * 1024 * 51;
 constexpr uint32_t kHostBatchWriteOffset = 1024 * 1024 * 52;
@@ -38,16 +39,10 @@ void fill_pattern(std::vector<uint32_t>& data, uint32_t tag) {
 
 }  // namespace unit_tests::dm::pcie_mid_cleanup
 
-TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
+static void run_pcie_mid_cleanup(const std::shared_ptr<distributed::MeshDevice>& mesh_device, NOC noc) {
     namespace test_consts = unit_tests::dm::pcie_mid_cleanup;
 
-    auto mesh_device = get_mesh_device();
     IDevice* device = mesh_device->impl().get_device(0);
-
-    if (device->arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "NOC_TARG_ADDR_MID/NOC_RET_ADDR_MID PCIe routing is Blackhole-specific";
-    }
-
     const CoreCoord logical_core = {0, 0};
     constexpr uint32_t transfer_size = 64;
     constexpr uint32_t num_words = transfer_size / sizeof(uint32_t);
@@ -126,7 +121,7 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
         logical_core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = noc,
             .compile_args = {
                 test_consts::kHostReadOffset,
                 test_consts::kHostWriteOffset,
@@ -215,6 +210,19 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
 
     ASSERT_TRUE(read_l1(l1_batch_onchip_write_dst_addr, result));
     EXPECT_EQ(result, onchip_write_pattern) << "On-chip write after the PCIe write batch was misrouted";
+}
+
+TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
+    auto mesh_device = get_mesh_device();
+    if (mesh_device->impl().get_device(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "NOC_TARG_ADDR_MID/NOC_RET_ADDR_MID PCIe routing is Blackhole-specific";
+    }
+
+    // Each NOC has its own copy of the command buffer registers, so a clean MID on one says nothing about the other.
+    for (NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
+        SCOPED_TRACE("NOC " + std::to_string(static_cast<int>(noc)));
+        run_pcie_mid_cleanup(mesh_device, noc);
+    }
 }
 
 }  // namespace tt::tt_metal

@@ -29,8 +29,7 @@ void kernel_main() {
             noc_async_write_with_state(l1_local_addr, pcie_l1_local_addr, bytes_per_transaction);
         }
         noc_async_write_barrier();
-        // Inside the zone with the setup, so the measurement covers the whole batch including its
-        // one-time cost rather than only the issue loop.
+        // Clear inside the zone so the measurement includes the batch teardown.
         noc_async_write_clear_pcie_state();
     }
 
