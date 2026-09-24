@@ -28,8 +28,9 @@ namespace ttnn::experimental::prim {
 //   built and moe_compute's own writer (dm1) writes each expert's token rows straight into the
 //   final [k, T, H] row-major output (one token row per page: INTERLEAVED or HEIGHT_SHARDED,
 //   DRAM or L1). No fabric; the CCL options are accepted and unused. On a
-//   multi-device mesh the token set must be replicated and every coordinate returns the partial
-//   of its own experts, which the caller reduces across the other axis. Returns 6 tensors like
+//   multi-device mesh the token set and its routing metadata must be replicated and every
+//   coordinate returns the partial of its own experts (their rows hold the results, every other
+//   row is written as zero), which the caller sums across the other axis. Returns 6 tensors like
 //   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged.
 //   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
