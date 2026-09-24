@@ -31,7 +31,7 @@ excludeAgent: "cloud-agent"
 
 - **Naming clarity**: kernel variables like "block", "chunk", "step" must be used consistently. If `total_blocks` actually means `active_steps * num_chunks`, rename or add a clarifying comment.
 - **Overlap opportunities**: when a kernel reads then computes sequentially, ask whether double-buffering or pipelining (read chunk N+1 while computing chunk N) is feasible.
-- **Dest reuse**: if a compute kernel packs an intermediate to a CB only to immediately unpack it for the next op, flag the opportunity to use `binary_dest_reuse_tiles` to keep the result in DST registers.
+- **Dest reuse**: if a compute kernel packs an intermediate to a CB only to immediately unpack it for the next op, flag the opportunity to use `{add,sub,mul}_reuse_dest_tiles` to keep the result in DST registers.
 - **Shared dataflow utilities**: before writing new tile-read loops, check if `read_tiles_by_row()` or similar utilities in `dataflow_utils.hpp` already cover the pattern. If the kernel has special needs (strided reads, mcast, transpose-on-read), document why the fork is necessary.
 - **Unnecessary init/uninit pairs**: flag redundant `_init` / `_uninit` calls in compute kernels. Reconfigs must match the actual CB data formats being used — wrong source/dest CB in a `reconfigure_*` call is a silent correctness bug.
 - **Scalar constants**: prefer `add_unary_tile(idst, param)` over generating an entire constant tile in a reader CB when only a scalar value is needed.

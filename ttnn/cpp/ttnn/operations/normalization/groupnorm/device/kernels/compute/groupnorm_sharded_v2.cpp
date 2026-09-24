@@ -352,7 +352,7 @@ void kernel_main() {
             // non-result datum of dfb_ex_partial to zero.
             // If this `reduce<…, REDUCE_SCALAR>` pack into dfb_ex_partial is
             // ever replaced by something that does not have the same
-            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
+            // packer-zero contract (e.g. a `pack_tile` / `pack_block`
             // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
             // reader's "single-tile-overwrite trick" must be adjusted accordingly
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the

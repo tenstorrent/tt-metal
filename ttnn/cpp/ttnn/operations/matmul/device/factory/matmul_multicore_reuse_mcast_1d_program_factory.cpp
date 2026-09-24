@@ -795,7 +795,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
     // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks,
     // the intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST
-    // between blocks by copy_block_matmul_partials. Unless the reload's CB view is marked
+    // between blocks by copy_block. Unless the reload's CB view is marked
     // UnpackToDestFp32, that reload is routed through SrcA and rounded to TF32 (10 mantissa bits),
     // so the fp32 partial loses precision on every block boundary. The flag is set on the alias
     // when bias forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
@@ -1794,7 +1794,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
     // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks, the
     // intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST between blocks
-    // by copy_block_matmul_partials. Unless the reload's CB view is marked UnpackToDestFp32, that
+    // by copy_block. Unless the reload's CB view is marked UnpackToDestFp32, that
     // reload is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses
     // precision on every block boundary. The flag is set on the alias when bias forces a separate SrcA
     // view of cb_intermed0 (see above), else on cb_intermed0 itself.
@@ -2626,7 +2626,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_remote", remote_cb_index}}});
 
     // fp32 K-partials (interm0_cb_index) are reloaded into DEST between blocks via
-    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to
+    // copy_block; mark the CB UnpackToDestFp32 so the reload goes directly to
     // DEST instead of through SrcA (which would truncate the fp32 partial to TF32).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

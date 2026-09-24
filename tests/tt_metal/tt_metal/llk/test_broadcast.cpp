@@ -50,7 +50,7 @@ namespace unit_tests::compute::broadcast {
 
 enum ApiConvention : std::uint8_t {
     DEFAULT = 0,
-    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init_short instead of init_bcast
+    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init instead of bcast_init<OP, DIM>
     SHORT_CALL = 2,  // call <op>_tiles_bcast_<dim> instead of <op>_tiles_bcast
     SHORT_BOTH = 3   // both SHORT_INIT and SHORT_CALL
 };
@@ -286,19 +286,11 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
         defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_bcast_" +
-                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-
-        if ((test_config.eltwise_op == EltwiseOp::SUB || test_config.eltwise_op == EltwiseOp::MUL) &&
-            test_config.broadcast_dim == BroadcastDim::SCALAR) {
-            // FIXME sub_bcast_scalar_init_short and mul_bcast_scalar_init_short are instead called
-            // sub_tiles_bcast_scalar_init_short and mul_tiles_bcast_scalar_init_short
-            defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast_" +
-                                       broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-        }
+                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init";
 
         log_info(tt::LogTest, "Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
-        log_info(tt::LogTest, "Init function is init_bcast");
+        log_info(tt::LogTest, "Init function is bcast_init");
     }
 
     if (test_config.api_convention == ApiConvention::SHORT_CALL ||

@@ -25,7 +25,7 @@
  * --------------------
  * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
  * (plus `compute_kernel_hw_startup` / `mm_init` / `reduce_init` when the kernel mixes those
- * primitives). The chain owns only per-element init — `*_tile_init`, `init_bcast`, `copy_init`,
+ * primitives). The chain owns only per-element init — `*_tile_init`, `bcast_init`, `copy_init`,
  * and the `reconfig_data_format_*` fold and dst-sync lifecycle.
  * Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
  * into the chain: it is only correct for single-stage kernels and breaks multi-stage / mid-loop
