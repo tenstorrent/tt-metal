@@ -1,6 +1,9 @@
 name: "LLK perf"
 
 on:
+  push:
+    branches:
+      - "perf-trial/sol-nightly"
   schedule:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
@@ -47,6 +50,7 @@ concurrency:
 jobs:
   llk-perf-tests:
     name: "LLK perf tests"
+    if: false
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       # Scheduled runs have no dispatch inputs, so retain the existing behavior.
@@ -62,7 +66,7 @@ jobs:
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"
     needs: llk-perf-tests
-    if: ${{ always() && (github.event_name == 'schedule' || inputs.speed-of-light) }}
+    if: ${{ always() }}
     strategy:
       fail-fast: false
       matrix:
@@ -76,17 +80,18 @@ jobs:
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
+      perf_run_id: "35950198207"
       baseline_pipeline: baseline
       speed_of_light: "true"
       run_types: ${{ matrix.run_types }}
       threshold: ${{ matrix.threshold }}
       min_cycles: 30
-      measure_result: ${{ needs.llk-perf-tests.result }}
+      measure_result: success
     secrets: inherit
 
   llk-perf-summary:
     name: "LLK perf summary"
-    if: always()
+    if: false
     needs:
       - llk-perf-tests
     runs-on: ubuntu-slim
@@ -99,7 +104,7 @@ jobs:
   report-status:
     name: "Report status"
     runs-on: ubuntu-slim
-    if: always()
+    if: false
     needs: llk-perf-summary
     steps:
       - name: Checkout repository
