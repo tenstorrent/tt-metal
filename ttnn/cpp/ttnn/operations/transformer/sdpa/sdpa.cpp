@@ -6,6 +6,8 @@
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_numerics.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -46,12 +48,41 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink,
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
+    std::optional<SDPAPrecision> precision,
+    bool inputs_prepared) {
+    if (precision) {
+        namespace numeric = operations::transformer::sdpa::detail;
+        TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+        TT_FATAL(
+            !is_causal && !attn_mask && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
+                windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor,
+            "Named SDPA recipes currently support dense noncausal, unmasked attention only");
+        TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
+        TT_FATAL(!scale || *scale == 1.0f / std::sqrt(128.0f), "SDPA recipes currently require the default D128 scale");
+        const auto selection = numeric::select_recipe(*precision, input_tensor_k.dtype());
+        TT_FATAL(
+            inputs_prepared == (selection.recipe == numeric::Recipe::E),
+            "LOW_PRECISION requires inputs_prepared=True and explicit SDPA preparation; other recipes use ordinary "
+            "inputs");
+        const auto resolved = numeric::resolve_numerics(
+            input_tensor_q.device()->arch(),
+            selection,
+            compute_kernel_config,
+            program_config ? program_config->exp_approx_mode : std::nullopt);
+        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, *resolved.policy, program_config);
+    }
+    TT_FATAL(!inputs_prepared, "inputs_prepared is meaningful only with an explicit LOW_PRECISION recipe");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    // Omitting precision preserves the existing numerical and dispatch contract.
+    auto numerics = operations::transformer::sdpa::detail::resolve_numerics(
+        input_tensor_q.device()->arch(),
+        std::nullopt,
+        compute_kernel_config,
+        program_config ? program_config->exp_approx_mode : std::nullopt);
+    auto kernel_config_val = numerics.compute;
 
     // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V, where `scale` applies
     // to Q·Kᵀ only and the mask is added unscaled.

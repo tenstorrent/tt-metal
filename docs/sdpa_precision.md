@@ -1,0 +1,139 @@
+# Explicit streaming SDPA precision recipes
+
+`ttnn.transformer.scaled_dot_product_attention(..., precision=...)` selects a
+qualified numerical recipe independently of the compute grid. Omitting
+`precision` preserves existing defaults, configurations and feature dispatch.
+No existing caller is migrated by this change.
+
+## Choosing a recipe
+
+| `ttnn.SDPAPrecision` | Frozen ID | QK / PV fidelity | Destination / recurrent state | Input preparation |
+| --- | --- | --- | --- | --- |
+| `FAST` | A | HiFi2 / HiFi2 | BF16 / uncompensated BF16 | None |
+| `COMPENSATED` | B | HiFi2 / HiFi2 | BF16 / compensated BF16 | None |
+| `BALANCED` | C | HiFi4 / HiFi2 | FP32 / FP32 | None |
+| `ACCURATE` | D | HiFi4 / HiFi4 | FP32 / FP32 | None |
+| `LOW_PRECISION` | E_bf16 | LoFi / LoFi | BF16 / compensated BF16 | Q RNE7, KV RNE5 |
+| `LOW_PRECISION` | E_bfp8 | Same | Same | Q RNE7, KV RNE5 then BFP8 packing |
+| `LOW_PRECISION` | E_bfp4 (formerly G) | Same | Same | Q RNE7, KV BFP4-grid RNE with saturation |
+
+All return BF16. Names describe numerical choices, not universal accuracy or
+speed guarantees. `FAST` retains the original streaming approximation and
+long-context accumulation limitations. B reduces recurrent-state loss but
+does not make HiFi2 matmuls exact. C uses the matched, biased cubic exponential
+and cheaper subtraction. D retains full-FP32 score subtraction and the
+unbiased, refined exponential. FP32 state updates multiply before the separate
+L1 addition; neither the rounding point nor the two-iteration reciprocal is
+replaced with a fused approximation.
+
+B/E keep high/low BF16 recurrent state and combine two local numerator chunks
+when possible. Changed maxima force the qualified fold; an odd final chunk is
+flushed, and validity flags reset for each Q block. E still uses HiFi2 for
+recurrent/output scaling: using LoFi there would discard state bits even for
+an identity multiplier. B requires **no special input rounding**.
+
+Large common components and outliers remain stress cases, especially for low
+precision KV. These recipes do not center or rotate inputs or apply fitted
+output corrections. The qualification suite records L2, PCC, row-error tails
+and absolute errors; PCC alone is not an acceptance criterion. See the
+[measured results](sdpa_precision_qualification.md).
+
+## Current support and rejection rules
+
+The initial implementation supports a single Blackhole device, dense noncausal
+unmasked attention, and:
+
+- Q `[1, H, Q, 128]`, K/V `[1, H, K, 128]`, matching positive head counts;
+- Q divisible by 256, K divisible by 512; fixed Q256/K512 blocks;
+- standard 32x32 tiles, no logical padding, interleaved DRAM inputs/output;
+- BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
+- a rectangular origin-based grid with at least one core per head;
+- `scale=None` or the default `1 / sqrt(128)` represented as FP32. A BF16-rounded
+  scale is a different value and is rejected; the kernel always uses the default.
+
+The default grid is the device's compute grid. The host assigns a per-head KV
+forwarding chain, capped by `max_cores_per_head_batch` (default 16) and available
+Q blocks. Unequal chain job counts are supported. Q is double buffered; KV
+has one slot for C/D and two slots for A/B/E, matching the frozen schedules.
+
+Explicit recipes reject causal/masked/windowed/sink attention, GQA, alternative
+scales, sub-core grids, other head dimensions, tails, sharded/L1 tensors,
+multi-device meshes and unsupported architectures. They also reject an explicit
+`compute_kernel_config` or `exp_approx_mode=False`: the recipe already owns
+those numerical decisions. They never silently fall back to legacy attention.
+Do not zero-pad K/V to bypass these checks; that changes the softmax denominator.
+
+## Examples
+
+```python
+cfg = ttnn.SDPAProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    q_chunk_size=256,
+    k_chunk_size=512,
+)
+output = ttnn.transformer.scaled_dot_product_attention(
+    q, k, v,
+    is_causal=False,
+    program_config=cfg,
+    precision=ttnn.SDPAPrecision.ACCURATE,
+)
+```
+
+Choose a grid that fits the actual device. For low-precision KV, prepare from
+the original BF16 tensors explicitly, before caching or communication:
+
+```python
+prepare = ttnn.transformer.prepare_sdpa_input
+prepared_q = prepare(q, is_query=True)  # RNE7, BF16 storage
+prepared_k = prepare(k, is_query=False, dtype=ttnn.bfloat4_b)
+prepared_v = prepare(v, is_query=False, dtype=ttnn.bfloat4_b)
+output = ttnn.transformer.scaled_dot_product_attention(
+    prepared_q, prepared_k, prepared_v,
+    is_causal=False,
+    program_config=cfg,
+    precision=ttnn.SDPAPrecision.LOW_PRECISION,
+    inputs_prepared=True,
+)
+```
+
+Use `bfloat16` or `bfloat8_b` instead for the other E storage choices. RNE7/RNE5
+count significant bits **including the leading bit**, not fraction bits.
+BFP4 uses a shared exponent for each native group of 16 values and saturates
+rounded magnitudes to the grid maximum. An ordinary dtype cast is not the same
+operation. Preparation runs on device, returns new tensors and does not mutate
+the originals. There is no CPU copy or hidden attention-side preparation.
+
+`inputs_prepared=True` is a caller assertion, not tensor provenance tracking.
+An external producer may implement the same rounding contract; dtype alone
+cannot verify it. Prepare static KV once, and keep preparation outside repeated
+attention traces unless the original input changes. Preparation itself supports
+program-cache hits and trace replay.
+
+The preparation value domain is finite normal BF16 or zero, with no RNE5/7
+overflow. For BFP4, nonzero groups require maximum exponent in `[-124, 106]`.
+Subnormal/nonfinite behavior is not qualified. Value-domain constraints are
+caller responsibilities, not an implicit host scan.
+
+## Implementation and review map
+
+- `sdpa_precision_policy.hpp`: numerical identities, not scheduling knobs.
+- `sdpa_numerics.cpp`: conflicts and legacy defaults.
+- `sdpa_recipe.cpp`: eligibility, grid/chain assignment, CB formats/capacities,
+  and ordinary cached program descriptors.
+- `compute/sdpa_recipe.cpp`: recipe specialization; A reuses the existing
+  streaming implementation. B/C/D/E share `streaming/recipe_streaming.hpp`.
+- `streaming/recipe_sfpu.hpp`, `compensated_sfpu.hpp`, `compensated_group.hpp`:
+  selected exponential and state arithmetic. `fp32_state.hpp` is shared by
+  attention and its independent component tests, not a separate test implementation.
+- `sdpa_input_preparation.cpp`, `compute/prepare_*`: explicit device preparation.
+- `tests/.../sdpa/recipe_accuracy_baseline.json`: compact frozen input/output
+  digests and metrics, with source hashes; no experimental kernels or media.
+
+Watcher builds use size optimization to fit instrumentation in the instruction
+buffer. Release recipes retain their selected optimization settings. Do not use
+Watcher timings for performance claims.
+
+This is the first integration PR, not removal of legacy feature coverage.
+Follow-on work expands geometry/platform/model coverage before deleting the
+non-streaming path. Pretrained FLUX/Wan quality evidence from the research
+branch must not be relabeled as a run of this production branch.
