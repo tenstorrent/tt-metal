@@ -317,8 +317,10 @@ class TransformerBlock(LightweightModule):
         prefill_seq_len = int(x.shape[-2]) if mode == Mode.PREFILL else None
         skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_seq_len)
 
-        assert (
-            x.memory_config() == skip_mem_cfg
+        # pplx-embed bs1 (QWEN_BS1_RESID_SHARDED=1) hands the residual over in the prefill RMSNorm's L1
+        # block-shard layout so the norm's interleaved-to-sharded op is a no-op: same buffer type, sharded.
+        assert x.memory_config() == skip_mem_cfg or (
+            x.is_sharded() and x.memory_config().buffer_type == skip_mem_cfg.buffer_type
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode

@@ -1067,6 +1067,18 @@ STS-B through the batch-8 path 0.8123 with embeddings identical to the concat pa
 1.0000). Shipped-default numbers after this landing (30-iteration runs): bs1 17.6 / 18.3 sustained,
 bs8 115.3 / 121.0, bs16 221.0 / 228.2, bs32 425.5 / 451.1 ms.
 
+### bs1: concat-free SDPA output and the residual stream in the norm's shard layout (2026-09-24)
+
+Two op-count items at bs1, both bit-identical, both from sizing Gio's BGE-M3 items against our profiles
+(`doc/NEGATIVE_RESULTS.md` §50): SDPA now writes `[1, 1, S, H·d]` at bs1 as well (`QWEN_SDPA_CONCAT_OUT_BS1=1`;
+standalone SDPA 57.3 → 54.1 µs and the 4.6 µs model-local concat op per layer disappears — the base forward's
+pre-concat reshape is bypassed for that tensor), and the two residual adds per layer write the block-shard
+layout the prefill RMSNorm reads (`QWEN_BS1_RESID_SHARDED=1`, `tt/decoder_fusion.py`), so the
+interleaved-to-sharded op before each norm is a no-op (`ttnn.add` takes one sharded and one interleaved input;
+the decoder's input-layout assert accepts a sharded L1 residual). Same chip (4), 10 iterations: best 17.6 → 17.5,
+median 17.85 → 17.5; 30-iteration run: cold 17.5, sustained 17.7 (was 17.6 / 18.3). STS-B 0.8161 unchanged.
+The residual item alone is neutral (the 80-core sharded-output add gives back what the 72 I2S ops cost).
+
 ## 6. Profiling
 
 ```bash

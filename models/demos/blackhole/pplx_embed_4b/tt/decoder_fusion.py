@@ -55,7 +55,15 @@ def install_decoder_fusion(model) -> int:
     for i, layer in enumerate(layers):
         next_attn = consts[i + 1][1] if i + 1 < len(layers) else None
         next_layer = layers[i + 1] if i + 1 < len(layers) else None
-        _wrap_layer(layer, consts[i][0], next_attn, stash, is_first=(i == 0), verify=(verify, i, next_layer))
+        _wrap_layer(
+            layer,
+            consts[i][0],
+            next_attn,
+            stash,
+            is_first=(i == 0),
+            verify=(verify, i, next_layer),
+            model_args=getattr(model, "args", None),
+        )
     return len(layers)
 
 
@@ -66,7 +74,43 @@ def _pcc(t, r):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verify=(False, 0, None)):
+def _forward_resid_sharded(layer, orig_forward, model_args, has_next_layer, x, args, kwargs):
+    """bs1 (few rows, no fused add+norm): write the two residual adds straight in the block-shard layout the
+    prefill RMSNorm reads (10x8 grid), so the interleaved-to-sharded op in front of each norm becomes a no-op
+    (``to_memory_config`` hands the tensor back). ``ttnn.add`` with one block-sharded and one interleaved
+    input is bit-identical to add + I2S (standalone 11.3 vs 10.7 + 8.7 us). The last layer keeps its
+    interleaved output for the final norm / pooling path. Opt out: QWEN_BS1_RESID_SHARDED=0."""
+    cfg = model_args.get_prefill_block_sharded_norm_config(int(x.padded_shape[-2]))
+    if cfg is None:
+        return orig_forward(x, *args, **kwargs)
+    shard_mc = cfg["sharded_input_mem_cfg"]
+    shape = list(x.padded_shape)
+    calls = [0]
+    orig_add = ttnn.add
+
+    def add_wrapper(a, b, *a_args, **a_kwargs):
+        if (
+            a_args
+            or not hasattr(a, "padded_shape")
+            or not hasattr(b, "padded_shape")
+            or list(a.padded_shape) != shape
+            or list(b.padded_shape) != shape
+            or any(k not in ("memory_config", "dtype") for k in a_kwargs)
+        ):
+            return orig_add(a, b, *a_args, **a_kwargs)
+        calls[0] += 1
+        if calls[0] == 1 or (calls[0] == 2 and has_next_layer):
+            a_kwargs = dict(a_kwargs, memory_config=shard_mc)
+        return orig_add(a, b, **a_kwargs)
+
+    ttnn.add = add_wrapper
+    try:
+        return orig_forward(x, *args, **kwargs)
+    finally:
+        ttnn.add = orig_add
+
+
+def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verify=(False, 0, None), model_args=None):
     orig_forward = layer.forward
     orig_ff_norm = layer.ff_norm
     orig_attn_norm = layer.attention_norm
@@ -100,6 +144,10 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                     a, b, *consts, R=R, sum_dtype=dt, memory_config=mc
                 )
         if fuse is None:
+            if model_args is not None and os.getenv("QWEN_BS1_RESID_SHARDED", "1") == "1":
+                return _forward_resid_sharded(
+                    layer, orig_forward, model_args, next_attn_consts is not None, x, args, kwargs
+                )
             return orig_forward(x, *args, **kwargs)
         if is_first:
             stash.clear()
