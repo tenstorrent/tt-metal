@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Perf 2 harness: run LOOSE_CASES (by index) against kernel-dir variants, under --profile.
 
-TILIZE_P2_CASES="0,7"            LOOSE_CASES indices (default "0", the perf focus)
+TILIZE_P2_CASES="0,7"            LOOSE_CASES indices (default "0", the perf focus); an entry "s1x1x32x4096"
+                                 is an extra shape with LOOSE_CASES[0]'s placement (DRAM interleaved, bf16)
 TILIZE_P2_VARIANTS="head,<dir>"  kernel dirs: "head" = the op's kernels/, else a path relative to
                                  ttnn/ttnn/operations/tilize/perf_experiments/ (or absolute)
                                  A variant may carry descriptor-knob overrides after "@", joined
@@ -25,7 +26,7 @@ from eval.golden_tests.tilize.feature_spec import LOOSE_CASES, TARGET
 from ttnn.operations.tilize import INPUT_TAGGERS  # type: ignore
 
 EXP = Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/tilize/perf_experiments"
-CASES = [int(c) for c in os.environ.get("TILIZE_P2_CASES", "0").split(",")]
+CASES = os.environ.get("TILIZE_P2_CASES", "0").split(",")
 VARIANTS = os.environ.get("TILIZE_P2_VARIANTS", "head").split(",")
 CHECK = os.environ.get("TILIZE_P2_CHECK", "1") != "0"
 
@@ -48,7 +49,12 @@ def test_loose_variant(device, monkeypatch, idx, variant):
     if kernels != "head":
         d = Path(kernels)
         monkeypatch.setattr(pd, "KERNEL_DIR", d if d.is_absolute() else EXP / d)
-    case = LOOSE_CASES[idx]
+    if idx.startswith("s"):
+        base = LOOSE_CASES[0]
+        scenario = dict(base["inputs"][0], input_shape=[int(d) for d in idx[1:].split("x")])
+        case = dict(base, inputs=(scenario,))
+    else:
+        case = LOOSE_CASES[int(idx)]
     axes = _axes(case)
     if not CHECK:
         monkeypatch.setattr(helpers, "check_output", lambda *a, **k: None)

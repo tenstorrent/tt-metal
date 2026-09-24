@@ -374,8 +374,10 @@ def test_hop_variant(device, monkeypatch, idx, slot, rep):
                 value = EXP / value
             monkeypatch.setattr(mod, name, value)
     elif variant == "grad":
-        # the graduation patch end to end: patched descriptor + kernels_dedg_hop (graduate_writer_hop.patch)
-        spec = importlib.util.spec_from_file_location("hop_grad_pd", EXP / "hop_aware_noc/graduated_descriptor.py")
+        # the graduation patch end to end: patched descriptor + kernels_dedg_hop (superseded/graduate_writer_hop.patch)
+        spec = importlib.util.spec_from_file_location(
+            "hop_grad_pd", EXP / "hop_aware_noc/superseded/graduated_descriptor.py"
+        )
         gpd = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gpd)
         gpd.KERNEL_DIR = EXP / "hop_aware_noc/kernels_dedg_hop"

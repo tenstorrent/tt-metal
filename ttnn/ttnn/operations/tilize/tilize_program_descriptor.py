@@ -392,7 +392,8 @@ SUB_BLOCK_TILES = 2
 #   Tensix-core banks), output not resident (nothing written), write_ahead == 1 and no parked
 #   write NoC split / DM_DYNAMIC_NOC lever (TileStorer's trids and the dynamic mode are one-NoC
 #   schemes), no BANK_COALESCE_SCATTER_WRITE (NCRISC NoC0 writes would share NIU 0's counters).
-#   carve-outs (measured, see HOP_WRITE_MIN_CORES / HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE).
+#   carve-outs (measured, see HOP_WRITE_MIN_CORES / HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE /
+#   HOP_WRITE_DRAM_INPUT_MIN_TILES_PER_CORE).
 # Measured (WH B0 n150, DEVICE KERNEL DURATION ns, same-session medians of 4..6, head -> hop, bit-exact):
 #   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM (sub-block path) 15808 -> 14086 (-10.9 %,
 #   n=10); [1,1,8192,256] HEIGHT_SHARDED -14..-16 %, [1,1,1024,1024] BLOCK_SHARDED -12..-14 %, L1
@@ -416,6 +417,14 @@ HOP_WRITE_MIN_CORES = 32
 # [1,1,8192,32] fp32 -6..-10 %, [1,1,8192,64] -2..-6 % (other 16 KiB shapes +8..+34 %).
 # None = no carve-out, 0 = every DRAM input.
 HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE = 8192
+# Carve-out (coordinator, Perf 2 guard sweep): a DRAM input whose every writing Tensix core writes
+# fewer than this many tiles. The ~450-cycle hop init (NOC_NODE_ID read, bank mask, other-NoC state
+# init) plus the NCRISC counter re-sync is not amortized by one tile: LOOSE_CASES[5] [1,1,32,2048]
+# (2-D split, 1 tile per Tensix core) head -> hop 3480 -> 3667 ns (+5.4 %, medians of 7 same-session
+# A/Bs, hop slower in 6 of 7). Two tiles per Tensix core already win: [1,1,32,4096] -3 %,
+# [1,1,64,2048] -6.5 %, [1,1,32,6144] (3 tiles) -1.6 %, [1,1,32,8192] (4 tiles) -6.6 %. A resident
+# input with one tile per Tensix core measured flat (+0.2 / +1.3 %), so it keeps the hop path.
+HOP_WRITE_DRAM_INPUT_MIN_TILES_PER_CORE = 2
 HOP_SEM = 1  # semaphore id of the writer's "NoC0 writes ACKed" flag (CO_READ_SEM is 0)
 
 
@@ -1228,6 +1237,10 @@ def create_program_descriptor(
             in_mc.buffer_type != ttnn.BufferType.DRAM
             or HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE is None
             or R * tile_h * C * TILE_WIDTH * in_elem_bytes <= HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE * writer_cores
+        )
+        and (
+            in_mc.buffer_type != ttnn.BufferType.DRAM
+            or max(rows * cols for _, _, rows, _, cols in assignment) >= HOP_WRITE_DRAM_INPUT_MIN_TILES_PER_CORE
         )
         and out_mc.buffer_type == ttnn.BufferType.DRAM
         and out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED

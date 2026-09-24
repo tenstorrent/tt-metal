@@ -515,3 +515,152 @@ All within noise: no regression.
 
 ### Helper bypasses — none
 No graduated path bypasses a helper. The kernels are unchanged, and the zones and host define are not helper-replaceable code.
+
+## Perf 2 — perf tournament, round 2 (re-measured breakdown + 4-idea portfolio)
+- **Date**: 2026-09-23 / 24
+- **Outcome**: all 4 ideas were measured and all 4 graduated. The coordinator added one carve-out after the guard sweep. There is no regression: golden is identical to HEAD, the unit nets pass, and the guard set is flat or faster.
+  - LOOSE_CASES[7] (HEIGHT_SHARDED L1 → DRAM): 16566 → 13700 ns (−17.3 %).
+  - LOOSE_CASES[8] (DRAM → HEIGHT_SHARDED L1): 12101 → 10802 ns (−10.7 %).
+  - LOOSE_CASES[4] ([1,1,32,8192]): 7310 → 6843 ns (−6.4 %).
+  - LOOSE_CASES[10] (BLOCK_SHARDED → BLOCK_SHARDED): 1909 → 1816 ns (−4.9 %).
+  - The perf focus is unchanged: it is at the DRAM roofline, and no lever engages there except the compute change, which is flat on it.
+- **Focus (the LOOSE_CASES `attention:` entry)**: `[1,1,16384,64]` bf16 → bf16, DRAM `TensorMemoryLayout::INTERLEAVED` in and out. It was measured exactly as declared: default precision, every knob in SUPPORTED.
+- **Hardware**: WH B0 n150, 64 Tensix cores, AICLK 1000 MHz (cycles = ns). All times are DEVICE KERNEL DURATION.
+- **Noise**: ±3–5 %. Every claim below is a same-session A/B with alternating order.
+- **SUPPORTED**: unchanged.
+
+### Measured breakdown (round start, HEAD b2bbe6a)
+The Perf 1 kernels were unchanged, so the whole LOOSE set was re-measured and ablated. Harness: `tests/ttnn/unit_tests/operations/tilize/test_tilize_perf2_loose.py` (LOOSE_CASES by index × kernel-dir variants × descriptor-knob overrides). Ablation generator: `perf_experiments/p2_breakdown/make_ablations.py`, where R = every stick read, S = scatter, C = compute, W = writes.
+
+**LOOSE baseline vs the reference (ns):**
+
+| LOOSE | case | Baseline | Reference |
+|---|---|---|---|
+| 0 | focus | 24544 | 25998 |
+| 1 | | 13506 | 17765 |
+| 2 | | 46469 | 54010 |
+| 3 | [1,1,128,64] | 2405 | 2294 (over) |
+| 4 | [1,1,32,8192] | 7463 | 7142 (over) |
+| 5 | [1,1,32,2048] | 3506 | 3486 (over) |
+| 6 | fp32 | 14035 | 15064 |
+| 7 | HS L1 → DRAM | 17674 | 16852 (over) |
+| 8 | DRAM → HS L1 | 11981 | 12142 |
+| 9 | HS → HS | 1920 | 1891 (over) |
+| 10 | BS → BS | 1964 | 1832 (over) |
+
+**Ablation (full / payload stubbed, synchronization kept; ns):**
+
+| Case | Full | Writes only | Reads only | Compute only | Floor | Other |
+|---|---|---|---|---|---|---|
+| Focus | 23512 | 15614 | 11409 | 2260 | 974 | −R 18030, −W 15591, −S 23559, −C **26726** |
+| 7 | 17286 | 15424 | — | 1942 | 666 | −C 15194, −W 1971 |
+| 4 | 7168 | 4599 | 3735 | 1225 | 679 | — |
+| 8 | 12086 | — | — | — | — | −C 10804 |
+| 9 | 1896 | — | — | — | — | −C 614 |
+| 10 | 1907 | — | — | — | — | −C 694 |
+
+**Zones (cycles):**
+- Case 9, compute_tilize: unpack 497, math 835, pack **1422** for 16 tiles. The pack thread is the long pole.
+- Case 7: `writer_issue` p50 8772 / max 14271, i.e. NoC1 write back-pressure with no reads competing. `writer_wait` 1404: the writer waits for the whole serial tilize.
+- Case 4: `reader_issue` 1359 + `reader_barrier` 1319, then `writer_wait` 3495.
+
+**Ranked bottleneck:**
+1. DRAM tile writes on NoC1. They cap at ~135–146 GB/s in every regime (focus writes-only, case 7, case 4). This is the focus's and case 7's critical path.
+2. DRAM reads, ~200 GB/s, sharing the DRAM with the writes on the focus.
+3. One-position walks: read → tilize (1.2–1.3 µs for 16 tiles) → write is serial (cases 7, 8, 4).
+4. The tilize pack thread (compute-only resident cases 9, 10).
+
+The scatter is hidden (−S flat) and the synchronization floor is ~1 µs.
+
+**Ceiling gate**: the focus remains at the empirical DRAM copy ceiling (Refinement 8 / Perf 1). The one open question was the write-throughput cap.
+
+**Not applicable**: input-reuse mcast. The Tensix cores read disjoint data, so there is no shared operand.
+
+### Portfolio and verdicts
+Each idea has its own dir, `perf_experiments/<dir>`, with a README, a generator and logs. Every candidate is bit-exact (`torch.equal`).
+
+| Idea | Verdict | Before → after (same session) | Domain / carve-outs (measured reason) |
+|---|---|---|---|
+| `tilize_pack_throughput`: cut the tilize compute cost at fixed precision | **WIN** | Case 10: 1957 → 1862. Case 9: 1918 → 1870. 1×2-tile shard −15 %. Focus, fp32 and case 7 flat. | The fix is `ReconfigureRegisterDatatypeMode::NoReconfigure`: `compute_kernel_hw_startup` already configures exactly these CBs, so the helper's reconfig was redundant. It applies everywhere, bit-identical on 384 cells. The pack itself is bandwidth-bound (~48 ns/tile). NULL options: smaller DEST sections (regression), no ZEROACC (incorrect), multi-row DEST sections (+45 % on [1,1,16384,32]), standard tilize (regression). Skipping uninit is unsafe across programs. |
+| `hop_aware_coread`: the writer RISC-V co-reads the sticks whose DRAM bank NoC1 reaches in fewer hops (Refinement 8's cut was positional) | **WIN** | Case 8: 12098 → 10813 (−10.6 %). [1,1,2048,128] −9 %. DRAM → HS W=64 −24 %. fp32 −12 %. Cases 0/1/3/4/5 flat. | The co-read window widens to 256 B on a DRAM row split, and is unbounded for a resident output. Carve-outs: a NoC-written output past 256 B (+0..14 %), a 2-D split past 128 B (+2..6 %), and light-load walks whose modelled gain is < 250 cycles keep Refinement 8's cut and binaries (list overhead: unbalanced splits +8..13 %). Control: inverted preference at the same split is +24..80 %. |
+| `onepos_pipeline`: overlap tilize with the DM on one-position walks | **WIN** (output-streaming half) | Case 7: 16690 → 15860 (−5.0 %). Multi-position walks flat or faster ([1,1,4096,512] HS → DRAM −4.3 %). | Raw WH LLK column-slice tilize in 2-tile sub-blocks, starting at the writer's rotated first tile. One path on every walk where it is expressible. The inexpressible-only carve-outs are: not WH, `block_width` ≤ 3, resident output, and the parked split-reader / write-ahead / write-NoC-split paths. Column-order sub-blocks are +8.6 % on case 4, from write order alone. The resident-output split-read half (case 8 −2 %) was superseded by `hop_aware_coread` and not graduated. |
+| `hop_aware_noc`: the writer sends a (Tensix core, DRAM bank) pair's writes on NoC0 when NoC0's path is ≥ 6 hops shorter | **WIN** (not for DRAM input) | Case 7 (on top of sub-blocks): 15753 → 13645 (−13.4 %). Case 4: 7378 → 6893 (−6.6 %). [1,1,8192,256] HS → DRAM −14 %. L1-interleaved [1,1,16384,64] → DRAM −13 %. | Hop-awareness is the lever: at the same 28 % NoC0 share, random is +20 % and inverted +38 %. Carve-outs: < 32 writing Tensix cores (+2..45 %); DRAM input > 8 KiB per Tensix core (focus +25 %, since its reads return on NoC0); DRAM input with 1 tile per Tensix core (coordinator, below); not WH / TileStorer / NoC-split (inexpressible). Reader twin: bank_coalesced reads on NoC1 regress the focus (29.3k vs 24.1k), NULL. |
+
+### Graduated
+Commits: `cba43c07457`, `975178ffaca`, `be093526489`, `d947ca078b4` and this entry's commit.
+
+1. **Compute: `NoReconfigure`.** This is the one path, and the helper is kept.
+2. **Geometric co-read.**
+   - Host: `_co_read_split` / `_co_read_lists` and the `CO_READ_*` knobs.
+   - Kernels: `select_co_read_list` / `read_tile_row_sticks_listed` under `CO_READ_LISTED`.
+   - `CO_READ_SPLIT = "positional"` restores Refinement 8's behavior.
+3. **Column sub-blocks.** `SUB_BLOCK_TILES = 2`, `kernels/tilize_sub_blocks.hpp`, compute `tilize_cols_fast` / `tilize_cols_slow`, and the writer's sub-block store path. `0` restores the old programs.
+4. **Hop-aware write NoC.** `HOP_WRITE_MIN_SAVING = 6`, `HOP_WRITE_MIN_CORES = 32`, `HOP_WRITE_DRAM_INPUT_MAX_BYTES_PER_CORE = 8192`, `HOP_SEM = 1`; the kernels' `hop_write::` and `HopReaderResync`. `0` restores byte-identical programs.
+   - **Carve-out earned by the coordinator's guard sweep**: `HOP_WRITE_DRAM_INPUT_MIN_TILES_PER_CORE = 2`.
+     - LOOSE_CASES[5] [1,1,32,2048] (2-D split, 1 tile per Tensix core) went 3480 → 3667 (+5.4 %, medians of 7 A/Bs, hop slower in 6 of 7). The ~450-cycle hop init is not amortized by one tile.
+     - Two tiles per Tensix core already win: [1,1,32,4096] −3 %, [1,1,64,2048] −6.5 %.
+     - A resident input at 1 tile per Tensix core measured flat, so it keeps the path.
+5. **Fixed along the way (regressions this round introduced, caught by the unit nets / zones):**
+   - `co_read_max = min(None, 128)` `TypeError` when a knob opens the co-read window on a 2-D split (`test_tilize_knobs` `co_read_open_gate`, 5 cases).
+   - The sub-block writer's duplicate `writer_barrier` zone, which did not compile with `TT_METAL_KERNEL_PERF_ZONES=1`.
+6. **Instrumentation (permanent, opt-in as in Perf 1).** New zones: `writer_hop_init`, `reader_hop_resync`, and per-sub-block `writer_wait` / `writer_issue` / `writer_flush` on the sub-block path. A zoned run compiles and records on every new path.
+7. **Harness.** `test_tilize_perf2_*.py` are opt-in (`TILIZE_PERF_EXPERIMENTS=1`; the conftest now covers the `test_tilize_perf2_` prefix). `test_tilize_perf2_loose.py` takes `head@KNOB=value+...` overrides and `sAxBxCxD` extra DRAM shapes.
+8. **Nothing was deleted.** Each lever's off-switch reproduces the pre-Perf-2 programs, for A/B. The code each lever replaces is still the only path wherever that lever is carved out.
+
+### Whole-op before → after
+Pre-Perf-2 kernels with every new host lever off, vs HEAD. ns, medians of 3 alternating sessions.
+
+| LOOSE | case | before | after | Δ | reference |
+|---|---|---|---|---|---|
+| 0 | [1,1,16384,64] focus | 23503 | 24341 | flat* | 25998 |
+| 1 | [1,1,16384,32] | 13241 | 13379 | flat | 17765 |
+| 2 | [1,1,32768,64] | 46092 | 44584 | flat | 54010 |
+| 3 | [1,1,128,64] | 2366 | 2319 | flat | 2294 |
+| 4 | [1,1,32,8192] | 7310 | 6843 | −6.4 % | 7142 |
+| 5 | [1,1,32,2048] | 3480 | ~3510 | flat (carve-out: same program) | 3486 |
+| 6 | fp32 [1,1,8192,32] | 14201 | 14463 | flat | 15064 |
+| 7 | HS L1 → DRAM | 16566 | 13700 | **−17.3 %** | 16852 |
+| 8 | DRAM → HS L1 | 12101 | 10802 | **−10.7 %** | 12142 |
+| 9 | HS → HS | 1914 | 1882 | −1.7 % | 1891 |
+| 10 | BS → BS | 1909 | 1816 | −4.9 % | 1832 |
+
+\*Focus: a dedicated 4-session A/B isolating each lever gave medians of 23726 (HEAD), 23591 (hop off), 23452 (all host levers off) and 23680 (pre-Perf-2 kernels). No lever engages there except `NoReconfigure`, so these are the same programs within noise.
+
+Every LOOSE case except 3 and 5 (both within noise of their reference) is now under its WH reference.
+
+### Guard set (`test_r3_guard`, final code, two fresh runs; Perf 1 figures in parentheses)
+
+| Guard | Run 1 | Run 2 | Perf 1 |
+|---|---|---|---|
+| narrow_dram | 23860 | 24287 | 23485 |
+| wide_dram | 43913 | 42972 | 44494 |
+| l1_interleaved | 5710 | 5854 | 5616 |
+| sharded_resident | 1901 | 1917 | 1928 |
+| sharded_accessor | **13324** | **13747** | 15939 |
+| tiny_tile16 | 23072 | 24047 | 23144 |
+| retile_32_to_16 | 38103 | 37912 | 38032 |
+| grid_2d_short_wide | 3619 | 3368 | 3516 |
+| low_l1_narrow | 23268 | 24157 | 23680 |
+| narrow32_dram | 13332 | 13221 | 13390 |
+| wide1024_dram | 45582 | 45401 | 46709 |
+| tiny_one_position | 2321 | 2367 | 2276 |
+| l1_one_position | **9509** | **9765** | 10661 |
+
+No regression beyond noise.
+
+### Golden and unit nets
+- **`eval/golden_tests/tilize/`**: 1760 passed, 8 failed, 2604 skipped, 18 xfailed after every graduation. These are the same 8 as HEAD in Perf 1: 4 deterministic translated failures, plus 4 that pass in isolation or depend on the random input.
+- **Unit nets**: `test_tilize` / `knobs` / `padding` / `grid_2d` / `tile_geometry` / `sharded` / `registry` / `numeric_formats` / `perf_shapes`: 936 passed, 224 skipped.
+- **Subagent `--dev` runs**:
+  - `hop_aware_noc`: 41 / 41 and 102 / 102 cases, plus 30 back-to-back program steps (engaged → non-engaged → DRAM → DRAM → `ttnn.add`, cached repeats). No hang and no idle assert. The negative control without the counter re-sync hangs at `ncrisck.cc:86`.
+  - `onepos_pipeline`: 15 cases clean.
+- **Pre-existing, not from this round**: the parked `*window*` knobs (TileStorer path, `WRITE_WINDOW_MIN_TILES`) hang under `--dev`. Reproduced at `b2bbe6a` (pre-Perf-2) with `test_tilize_knobs.py -k write_window_only --dev`. Release runs pass.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::tilize` (and `fast_tilize_block` / `tilize_block` under it) | capability | Cannot tilize a column slice of a wider tile-row. The unpacker's row stride is tied to the tilized width (WH `fast_tilize_block`: `full_dim = block`), and there is no column-offset argument. A 2-tile sub-block of a `block_width`-wide row (or of a resident shard) needs stride = `block_width` and width = 2 at offset `in_col`. | 16997 (LOOSE 7, whole-row helper) | 15568 | `kernels/tilize_compute.cpp:89` (justification), `:109` `tilize_cols_fast`, `:164` `tilize_cols_slow` |
+| no helper (dataflow API: physical NoC coordinate) | capability | No dataflow API returns a Tensix core's physical NoC0 coordinate: WH `my_x` / `my_y` are translated ids (18..25), and the host bindings return translated coordinates too. Raw `NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID)`. | — (no helper path) | co-read select ~65 cycles; hop init 451 cycles (~90 on the critical path) | `kernels/tilize_stick_reads.hpp:277` (`select_co_read_list`), `:362` (`hop_write::init`) |
+| no helper (NoC mode: one RISC-V on both NoCs) | capability | No API lets a RISC-V issue on the other NoC in `DM_DEDICATED_NOC` while keeping the other RISC-V's per-NoC counters consistent for its firmware end-of-kernel idle check. `DM_DYNAMIC_NOC` is the only supported alternative, and it costs +13..18 % on issue-bound shapes. Raw `noc_local_state_init(1 - noc_index)` on BRISC, plus a flag-gated re-sync of NCRISC's NoC0 counters. | 15904 (dynamic mode, 2-core issue-bound probe; 13546 dedicated) | LOOSE 7: 15808 → 14086 | `kernels/tilize_writer.cpp:225`, `kernels/tilize_stick_reads.hpp:390` (`HopReaderResync`), `kernels/tilize_reader.cpp:317` |
+
+Ergonomics note for the helper library (not a bypass; the helper is kept): `ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure` reads as the safe default. Called right after `compute_kernel_hw_startup` on the same CBs, it re-issues identical config (stalls plus cfg writes) on the critical path: 7.9 % on a 4×4-tile resident shard and 15 % on a 2-tile one. The header does not say when `NoReconfigure` is safe.
