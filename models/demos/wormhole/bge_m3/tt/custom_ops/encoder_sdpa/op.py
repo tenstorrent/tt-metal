@@ -230,6 +230,7 @@ def _reader_compile_args(
             CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
             int(plan.config.use_runtime_lengths),
             CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+            int(plan.config.fused_qkv_input),
         ]
     )
     return args
@@ -481,6 +482,8 @@ def build_encoder_sdpa_descriptor(
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
     if config.use_streaming and (config.kv_alias or config.use_runtime_lengths or config.reuse_prev_max_for_exp):
         raise ValueError("use_streaming runs the stock compute kernel: no kv_alias, runtime lengths or reused max CB")
+    if config.fused_qkv_input and (config.kv_alias or config.use_runtime_lengths):
+        raise ValueError("fused_qkv_input supports the plain read path only: no kv_alias or runtime lengths")
     if config.use_runtime_lengths:
         if valid_lengths is None:
             raise ValueError("use_runtime_lengths requires a valid_lengths tensor")
@@ -654,7 +657,9 @@ def build_encoder_sdpa_descriptor(
         output=output,
         # generic_op treats the last entry as the output, so valid_lengths goes
         # before it.
-        io_tensors=[q, k, v] + ([valid_lengths] if valid_lengths is not None else []) + [output],
+        io_tensors=([q] if config.fused_qkv_input else [q, k, v])
+        + ([valid_lengths] if valid_lengths is not None else [])
+        + [output],
         plan=plan,
     )
 

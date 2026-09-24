@@ -43,6 +43,9 @@ parser.add_argument(
 parser.add_argument("--no-timing", action="store_true", help="accuracy only")
 parser.add_argument("--fused-fp32-dest", action="store_true", help="fused op accumulates in fp32 DEST")
 parser.add_argument("--approx-exp", action="store_true", help="fused streaming op runs the approximate exp")
+parser.add_argument(
+    "--fused-qkv", action="store_true", help="fused op reads Q/K/V from one [B, 1, S, 3*H*D] QKV tensor (no head split)"
+)
 args = parser.parse_args()
 
 from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
@@ -62,6 +65,11 @@ def dev(t):
 
 
 q, k, v = dev(q_h), dev(k_h), dev(v_h)
+# The QKV projection layout: Q | K | V sections, heads in order. Each head is whole
+# tiles, so its bf8 tiles equal the ones in q, k, v.
+qkv = None
+if args.fused_qkv:
+    qkv = dev(torch.cat([t.permute(0, 2, 1, 3).reshape(B, 1, SEQ, HEADS * HEAD_DIM) for t in (q_h, k_h, v_h)], dim=-1))
 # Reference in the concat layout [B, 1, S, H*D], from the bf8-rounded inputs.
 qr, kr, vr = (ttnn.to_torch(t).float() for t in (q, k, v))
 ref = torch.softmax(qr @ kr.transpose(-1, -2) * scale, dim=-1) @ vr
@@ -101,6 +109,7 @@ fcfg = EncoderSDPAConfig(
     fp32_dest_acc_en=args.fused_fp32_dest,
     direct_concat_heads=not args.no_concat,
     exp_approx_mode=args.approx_exp,
+    fused_qkv_input=args.fused_qkv,
 )
 
 
@@ -122,6 +131,8 @@ def stock():
 
 
 def fused():
+    if qkv is not None:
+        return bge_encoder_sdpa_experimental(qkv, qkv, qkv, config=fcfg, output_mem_config=mem)
     return bge_encoder_sdpa_experimental(q, k, v, config=fcfg, output_mem_config=mem)
 
 

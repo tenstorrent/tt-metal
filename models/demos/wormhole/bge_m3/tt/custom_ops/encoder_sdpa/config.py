@@ -59,6 +59,10 @@ class EncoderSDPAConfig:
     # Emit SDPA output directly in concat-heads layout [B,1,S,H*D]. This is
     # exact for the BGE head-fold contract and removes a DRAM reorder pass.
     direct_concat_heads: bool = False
+    # Read Q, K and V from the fused QKV projection output [B, 1, S, (NQH+2*NKH)*D]
+    # (sections Q | K | V, heads in order) instead of three head tensors. This
+    # removes the head-split op. Pass the same tensor as q, k and v.
+    fused_qkv_input: bool = False
     # EXP_APPROX_MODE define. The stock streaming compute reads it; the local legacy
     # compute does not. Stock SDPA on Blackhole runs the exact exp.
     exp_approx_mode: bool = True
@@ -91,6 +95,10 @@ class EncoderSDPAConfig:
     @property
     def kv_shape(self) -> tuple[int, int, int, int]:
         return (self.batch, self.num_kv_heads, self.kv_seq_len, self.head_dim)
+
+    @property
+    def fused_qkv_shape(self) -> tuple[int, int, int, int]:
+        return (self.batch, 1, self.q_seq_len, (self.num_q_heads + 2 * self.num_kv_heads) * self.head_dim)
 
     @property
     def output_shape(self) -> tuple[int, int, int, int]:
@@ -414,12 +422,20 @@ def validate_encoder_sdpa_inputs(
     plan.validate_static_contract()
     plan.validate_kv_alias_contract()
 
-    if _shape_tuple(q) != config.q_shape:
-        raise ValueError(f"expected Q shape {config.q_shape}, got {_shape_tuple(q)}")
-    if _shape_tuple(k) != config.kv_shape:
-        raise ValueError(f"expected K shape {config.kv_shape}, got {_shape_tuple(k)}")
-    if _shape_tuple(v) != config.kv_shape:
-        raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
+    if config.fused_qkv_input:
+        if config.q_seq_len != config.kv_seq_len:
+            raise ValueError("fused_qkv_input needs q_seq_len == kv_seq_len")
+        if not (q.buffer_address() == k.buffer_address() == v.buffer_address()):
+            raise ValueError("fused_qkv_input: pass the same QKV tensor as q, k and v")
+        if _shape_tuple(q) != config.fused_qkv_shape:
+            raise ValueError(f"expected fused QKV shape {config.fused_qkv_shape}, got {_shape_tuple(q)}")
+    else:
+        if _shape_tuple(q) != config.q_shape:
+            raise ValueError(f"expected Q shape {config.q_shape}, got {_shape_tuple(q)}")
+        if _shape_tuple(k) != config.kv_shape:
+            raise ValueError(f"expected K shape {config.kv_shape}, got {_shape_tuple(k)}")
+        if _shape_tuple(v) != config.kv_shape:
+            raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
     if q.layout != ttnn.TILE_LAYOUT or k.layout != ttnn.TILE_LAYOUT or v.layout != ttnn.TILE_LAYOUT:
         raise ValueError("encoder SDPA requires TILE_LAYOUT Q/K/V")
     if q.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
