@@ -199,5 +199,25 @@
   "rc": 0,
   "started": "2026-09-24T19:36:06",
   "status": "PASS"
+ },
+ "P2.5": {
+  "duration_s": 19.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:37:04"
+   }
+  ],
+  "last_run": "2026-09-24T19:37:04",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.5.log",
+  "metrics": {
+   "pcc_rope_k_c0": 0.9999943904597018,
+   "pcc_rope_k_c1": 0.9999938710629974,
+   "pcc_rope_q_c0": 0.9999943459260331,
+   "pcc_rope_q_c1": 0.9999936513098661
+  },
+  "rc": 0,
+  "started": "2026-09-24T19:36:45",
+  "status": "PASS"
  }
 }
