@@ -336,7 +336,7 @@ def test_tt_forward_pretrained_pcc(mesh_device):
     Skipped when weights/chronos-2 is absent. Short context (C=512 -> 32
     patches) keeps L small on the single chip.
     """
-    pytest.importorskip("ttnn")
+    ttnn = pytest.importorskip("ttnn")
     from pathlib import Path
 
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -369,3 +369,16 @@ def test_tt_forward_pretrained_pcc(mesh_device):
     assert got.shape == expected.shape
     log_golden("tt_forward_pretrained/device_quantiles", got)
     assert_with_pcc(expected.float(), got, pcc=0.99)
+
+    prepared = tt.prepare_inputs(context=context, num_output_patches=1)
+    inputs = tt.upload_inputs(prepared)
+    output_device = None
+    try:
+        output_device = tt.forward_device(inputs)
+        device_resident = tt.postprocess_output(output_device, prepared.loc_scale, num_output_patches=1)
+    finally:
+        if output_device is not None:
+            ttnn.deallocate(output_device)
+        tt.deallocate_inputs(inputs)
+    log_golden("tt_forward_pretrained_device_resident/device_quantiles", device_resident)
+    assert_with_pcc(expected.float(), device_resident, pcc=0.99)

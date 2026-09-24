@@ -29,7 +29,7 @@ def _percentile(values, fraction):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 100_000_000, "num_command_queues": 1}],
+    [{"trace_region_size": 100_000_000, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -70,7 +70,7 @@ def test_paper_forward_trace_perf(mesh_device):
         for index in range(20):
             start = time.perf_counter()
             prepared_iteration = model.prepare_inputs(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
-            result = runner.execute(prepared_iteration, blocking=True, readback=True)
+            result = runner.execute_pipelined(prepared_iteration, readback=True)
             duration = time.perf_counter() - start
             e2e_times.append(duration)
             print(f"[TRACE PERF] e2e    {index + 1:2d}/20 {duration:.6f}s")

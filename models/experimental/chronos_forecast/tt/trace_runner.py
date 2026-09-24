@@ -35,6 +35,7 @@ class TtChronosTraceRunner:
         self._trace_output = None
         self._op_event = None
         self._write_event = None
+        self._released = False
         self.device.enable_program_cache()
 
         # Compile every program and stabilize allocations before capture.
@@ -56,11 +57,20 @@ class TtChronosTraceRunner:
     def capture(self):
         import ttnn
 
+        if self._released:
+            raise RuntimeError("Chronos trace runner has been released")
         if self._trace_id is not None:
             raise RuntimeError("Chronos trace is already captured")
-        self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
-        self._trace_output = self.model.forward_device(self.inputs)
-        ttnn.end_trace_capture(self.device, self._trace_id, cq_id=self.cq_id)
+        set_cache_misses_allowed = getattr(self.device, "set_program_cache_misses_allowed", None)
+        if set_cache_misses_allowed is not None:
+            set_cache_misses_allowed(False)
+        try:
+            self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
+            self._trace_output = self.model.forward_device(self.inputs)
+            ttnn.end_trace_capture(self.device, self._trace_id, cq_id=self.cq_id)
+        finally:
+            if set_cache_misses_allowed is not None:
+                set_cache_misses_allowed(True)
         ttnn.synchronize_device(self.device)
         self._op_event = ttnn.record_event(self.device, self.cq_id)
         return self._trace_output
@@ -150,6 +160,8 @@ class TtChronosTraceRunner:
     def release(self) -> None:
         import ttnn
 
+        if self._released:
+            return
         if self._trace_id is not None:
             ttnn.release_trace(self.device, self._trace_id)
             self._trace_id = None
@@ -159,6 +171,7 @@ class TtChronosTraceRunner:
         self.model.deallocate_inputs(self.inputs)
         self._op_event = None
         self._write_event = None
+        self._released = True
 
     def __enter__(self):
         self.capture()

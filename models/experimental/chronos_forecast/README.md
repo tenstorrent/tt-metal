@@ -31,6 +31,35 @@ Chronos-1 tokenizer only:
 PYTHONPATH=. python models/experimental/chronos_forecast/demo/demo.py --tokenizer-only --context-length 16
 ```
 
+## Single-chip TTNN trace
+
+The fixed paper benchmark (`batch=1024`, context `2048`, forecast `64`) has a
+device-resident path and an address-stable TTNN trace runner. It keeps the
+embeddings, 12-layer encoder, and output head on device, specializes group
+attention when every series has a unique group ID, and refreshes fixed input
+slots between replays.
+
+Accuracy and lifecycle:
+
+```bash
+source python_env/bin/activate
+PYTHONPATH=. pytest \
+  models/experimental/chronos_forecast/tests/pcc/test_modules.py \
+  models/experimental/chronos_forecast/tests/pcc/test_trace.py
+```
+
+Paper-shape performance (20 replay and 20 end-to-end iterations):
+
+```bash
+PYTHONPATH=. pytest \
+  models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py \
+  -s
+```
+
+`TtChronosTraceRunner` is TT Metal trace capture/replay, not a resident
+persistent compute kernel. A true persistent kernel would require porting the
+full transformer into unified device kernels under slow dispatch.
+
 ## References
 - Paper: [Chronos](https://arxiv.org/abs/2403.07815)
 - Chronos-2: [arXiv:2510.15821](https://arxiv.org/abs/2510.15821)
