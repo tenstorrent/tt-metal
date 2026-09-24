@@ -1,0 +1,17 @@
+# Rank 0 sends, rank 1 receives. Each rank owns its own single-chip mesh and is
+# pinned to one PCIe x8 chip (ids 5, 13, 21, 29 on these Galaxy hosts).
+# Consumed by run_host_socket_tests.sh, which sets these as per-rank mpirun env
+# rather than shelling out to tt-run, which would need the full Python package.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "5"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "5"
+
+mesh_graph_desc_path: "two_bh_single_chip_mgd.textproto"

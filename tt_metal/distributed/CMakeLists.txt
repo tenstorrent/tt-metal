@@ -61,6 +61,37 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# The host-interconnect socket (device -> host -> network -> host -> device)
+# carries its host-to-host hop over MPI, so it exists exactly when MPI does. Set
+# TT_METAL_ENABLE_HOST_TRANSPORT explicitly to force it on or off.
+set(TT_METAL_HOST_TRANSPORT_MPI ${USE_MPI} CACHE INTERNAL "Build the MPI host-socket backend")
+
+if(NOT DEFINED TT_METAL_ENABLE_HOST_TRANSPORT)
+    set(TT_METAL_ENABLE_HOST_TRANSPORT
+        ${TT_METAL_HOST_TRANSPORT_MPI}
+        CACHE INTERNAL
+        "Build the host-interconnect socket transport"
+    )
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(NOT TT_METAL_HOST_TRANSPORT_MPI)
+        message(
+            FATAL_ERROR
+            "TT_METAL_ENABLE_HOST_TRANSPORT is ON but no MPI build is available; enable ENABLE_DISTRIBUTED"
+        )
+    endif()
+    message(STATUS "Host-interconnect sockets enabled (mpi)")
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        host_mesh_socket.cpp
+        host_transport/host_transport.cpp
+        host_transport/mpi_transport.cpp
+        host_transport/socket_relay.cpp
+    )
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
@@ -87,6 +118,15 @@ add_dependencies(distributed metalium_GeneratedHeaders)
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    target_compile_definitions(
+        distributed
+        PUBLIC
+            TT_METAL_HOST_TRANSPORT=1
+            TT_METAL_HOST_TRANSPORT_MPI=1
+    )
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

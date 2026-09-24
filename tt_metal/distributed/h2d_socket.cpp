@@ -263,7 +263,9 @@ void H2DSocket::write_socket_metadata(
     const PinnedBufferInfo& data_info) {
     // The L2CPU path has no MeshBuffer-backed config_buffer_ (the caller pre-reserves a fixed LIM address and
     // init_config_buffer is never called), so config_buffer_ is null there; it still has exactly one md slot.
-    const size_t num_md_slots = is_l2cpu_ ? 1u : (config_buffer_->size() / sizeof(receiver_socket_md));
+    // External-config and L2CPU paths have no MeshBuffer and one md slot.
+    const size_t num_md_slots =
+        (is_l2cpu_ || config_buffer_ == nullptr) ? 1u : (config_buffer_->size() / sizeof(receiver_socket_md));
     std::vector<receiver_socket_md> config_data(num_md_slots, receiver_socket_md());
 
     auto& md = config_data[0];
@@ -288,7 +290,12 @@ void H2DSocket::write_socket_metadata(
         return;
     }
 
-    if (svc_config_l1_addr_.has_value()) {
+    if (config_buffer_ == nullptr) {
+        // No MeshBuffer: write straight to the caller-reserved L1 region.
+        auto* device = mesh_device->get_device(recv_core_.device_coord);
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
+        tt::tt_metal::detail::WriteToDeviceL1(device, recv_core_.core_coord, config_buffer_address_, bytes);
+    } else if (svc_config_l1_addr_.has_value()) {
         // WriteShard can't reach service cores, so write L1 directly. config_buffer_address_ isn't assigned yet.
         auto* device = mesh_device->get_device(recv_core_.device_coord);
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
@@ -398,7 +405,8 @@ H2DSocket::H2DSocket(
     const MeshCoreCoord& recv_core,
     BufferType buffer_type,
     uint32_t fifo_size,
-    H2DMode h2d_mode) :
+    H2DMode h2d_mode,
+    std::optional<ExternalConfigBuffer> external_config) :
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
@@ -433,12 +441,25 @@ H2DSocket::H2DSocket(
     }
     enable_mock_flow_control(*mesh_device);
 
-    init_config_buffer(mesh_device);
+    if (external_config.has_value()) {
+        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        TT_FATAL(external_config->address != 0, "External config buffer address must be non-zero.");
+        TT_FATAL(
+            external_config->address % l1_alignment == 0,
+            "External config buffer address 0x{:x} must be L1-aligned ({} B).",
+            external_config->address,
+            l1_alignment);
+        config_buffer_address_ = external_config->address;
+    } else {
+        init_config_buffer(mesh_device);
+    }
     init_data_buffer(mesh_device, pcie_alignment);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
 
-    config_buffer_address_ = config_buffer_->address();
+    if (!external_config.has_value()) {
+        config_buffer_address_ = config_buffer_->address();
+    }
 
     // Initialize the persistent connector-state struct living in SHM.
     // NamedShm::create zero-initialized the region; we stamp the version and
@@ -838,6 +859,43 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+}
+
+uint32_t H2DSocket::required_config_buffer_size() {
+    return tt::align(sizeof(receiver_socket_md), MetalContext::instance().hal().get_alignment(HalMemType::L1));
+}
+
+std::span<std::byte> H2DSocket::host_fifo() const {
+    TT_FATAL(
+        h2d_mode_ == H2DMode::DEVICE_PULL,
+        "H2DSocket::host_fifo: only DEVICE_PULL keeps the ring in host memory; HOST_PUSH writes device L1 directly");
+    TT_FATAL(host_buffer_ != nullptr, "H2DSocket::host_fifo: no host data buffer");
+    return {reinterpret_cast<std::byte*>(host_buffer_.get()), fifo_size_};
+}
+
+void H2DSocket::commit_pages(uint32_t num_pages) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before committing pages.");
+    TT_FATAL(h2d_mode_ == H2DMode::DEVICE_PULL, "H2DSocket::commit_pages is only meaningful for a DEVICE_PULL ring");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot commit more pages than the socket FIFO size.");
+    TT_FATAL(
+        num_bytes <= fifo_size_ - (bytes_sent_ - bytes_acked_),
+        "commit_pages({}) would overrun the FIFO: {} B in flight of {} B (bytes_sent={}, bytes_acked={}, "
+        "page_size={}). The producer must respect has_space().",
+        num_pages,
+        bytes_sent_ - bytes_acked_,
+        fifo_size_,
+        bytes_sent_,
+        bytes_acked_,
+        page_size_);
+    this->push_bytes(num_bytes);
+    this->notify_receiver();
+}
+
+uint32_t H2DSocket::bytes_acked_snapshot() {
+    tt_driver_atomics::mfence();
+    bytes_acked_ = bytes_acked_ptr_[0];
+    return bytes_acked_;
 }
 
 void H2DSocket::write(void* data, uint32_t num_pages) {
