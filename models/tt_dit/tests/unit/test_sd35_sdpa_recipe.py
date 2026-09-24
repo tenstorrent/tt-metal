@@ -59,20 +59,14 @@ def test_recipe_sdpa_kwargs_replace_compute_config(precision, prepared):
 
 @pytest.mark.parametrize(
     ("q_chunk", "k_chunk"),
-    sorted({*SD35JointAttention.sdpa_chunk_size_map.values(), SD35JointAttention.default_sdpa_chunk_size}),
+    sorted({*SD35JointAttention.sdpa_chunk_size_map.values(), SD35JointAttention.default_sdpa_chunk_size, (224, 1024)}),
 )
-def test_tuned_chunks_are_kept_by_the_recipe(q_chunk, k_chunk):
+def test_recipe_chunks_are_op_selected(q_chunk, k_chunk):
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)
     for ring in (False, True):
         recipe = attention._sdpa_program_config(ring=ring)
         assert recipe is not attention.sdpa_program_config
-        assert _chunks(recipe) == (q_chunk, k_chunk)
-
-
-def test_recipe_falls_back_and_ring_keeps_odd_q_tiles():
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=224, k_chunk=1024)
-    assert _chunks(attention._sdpa_program_config(ring=False)) == (224, 512)
-    assert _chunks(attention._sdpa_program_config(ring=True)) == (224, 512)
+        assert _chunks(recipe) == (0, 0)
 
 
 @pytest.mark.parametrize(

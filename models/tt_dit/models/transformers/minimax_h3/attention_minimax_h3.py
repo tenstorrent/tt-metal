@@ -321,10 +321,9 @@ class MiniMaxH3Attention(Module):
         return self._sdpa_program_configs[key]
 
     def _attn_program_config(self, seq_local: int, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """The ring/dense program config: legacy as-is, or mapped to recipe-supported chunks.
+        """The ring/dense program config: legacy as-is, or the same grid with op-selected chunks.
 
-        Under a recipe the measured / generic (q, k) is kept where the recipe supports it (ring needs
-        any 32-row step), else Q256 / K512, on the same grid and with exp_approx_mode unset.
+        Under a recipe the op chooses (q, k) from the shape, recipe and L1; exp_approx_mode is unset.
         """
         legacy = self._sdpa_program_config(seq_local, ring=ring)
         if self.sdpa_precision is None:
@@ -479,7 +478,10 @@ class MiniMaxH3Attention(Module):
     _RECIPE_EXP_MAX_PASSES = 3
 
     def _build_recipe_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
-        """`_build_exp_sdpa_program_config`'s (cols, segs_per_head) search, restricted to recipe shapes.
+        """Whether a recipe exp-ring shape exists (else None: ring joint SDPA), as an op-selected config.
+
+        Feasibility uses `_build_exp_sdpa_program_config`'s (cols, segs_per_head) search, restricted to
+        recipe shapes; the op then chooses the Q chunk and grid width itself.
 
         Keeps the same column/segment geometry and score (passes * q_chunk, then wider grids), but
         only admits q_chunk in 128..320, fixes k_chunk at 512 and caps passes at 3. The legacy L1
@@ -509,11 +511,10 @@ class MiniMaxH3Attention(Module):
                     best = (score, cols, q_chunk)
         if best is None:
             return None
-        _, cols, q_chunk = best
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
-            q_chunk_size=q_chunk,
-            k_chunk_size=self._RECIPE_EXP_K_CHUNK,
+        # A recipe exp-ring shape exists: the op picks the Q chunk and grid width itself from the full
+        # grid (the same row-filling, pass and Q-range constraints, plus L1).
+        return sdpa_recipe.recipe_program_config(
+            ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.full_grid), exp_ring=True
         )
 
     # ------------------------------------------------------------------ forward

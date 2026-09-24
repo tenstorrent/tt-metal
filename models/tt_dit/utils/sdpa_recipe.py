@@ -6,21 +6,16 @@ Mirrors the Wan integration (models/transformers/wan2_2/attention_wan.py): a mod
 ``sdpa_precision: ttnn.SDPAPrecision | None`` and ``sdpa_kv_dtype: ttnn.DataType | None``. ``None``
 keeps the model's existing attention configuration exactly; nothing in this module is consulted then.
 
-Recipe support (docs/sdpa_precision.md):
-- head dims 64, 128 and 256 for dense, joint and ring joint SDPA (default scale 1/sqrt(D)); exp ring
-  joint SDPA is D128 only. D256 is L1-limited (e.g. Q128/K256).
-- dense and joint SDPA: Q chunk 128-320 rows in 32-row steps; K chunk 256, 384 or 512;
-- ring joint SDPA: the same (odd Q tile counts are supported since the raw state checkpoint moves a
-  half-page BF16 maxima plane partially);
-- exp ring joint SDPA: Q chunk 128-320 in 32-row steps; K chunk 512 only.
-A tuned chunk the recipe supports is kept; otherwise Q falls back to 256 and K to 512.
+Recipe blocking is op-selected (docs/sdpa_precision.md, "Blocking"): a recipe config keeps the
+caller's grid and leaves ``q_chunk_size``/``k_chunk_size`` at 0, and SDPA chooses the chunks (and, for
+exp ring, the grid width) from the shape, recipe, op, grid and L1. The legacy path keeps its tuned
+configs unchanged. Exp ring joint SDPA recipes are D128 only.
 """
 
 from __future__ import annotations
 
 import ttnn
 
-TILE = 32
 RECIPE_HEAD_DIMS = (64, 128, 256)
 EXP_RING_HEAD_DIMS = (128,)
 RECIPE_KV_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
@@ -57,30 +52,17 @@ def exp_ring_supports(head_dim: int) -> bool:
     return head_dim in EXP_RING_HEAD_DIMS
 
 
-def recipe_q_chunk(q_chunk: int, *, ring: bool = False) -> int:
-    """Keep a tuned Q chunk when the recipe supports it, else Q256.
-
-    ``ring`` is kept for call-site clarity; ring joint recipes accept the same Q chunks as dense.
-    """
-    supported = q_chunk % TILE == 0 and 128 <= q_chunk <= 320
-    return q_chunk if supported else 256
-
-
-def recipe_k_chunk(k_chunk: int, *, exp_ring: bool = False) -> int:
-    """Keep a tuned K chunk when the recipe supports it, else K512 (exp ring is K512 only)."""
-    if exp_ring:
-        return 512
-    return k_chunk if k_chunk in (256, 384, 512) else 512
-
-
 def recipe_program_config(
     program_config: ttnn.SDPAProgramConfig, *, ring: bool = False, exp_ring: bool = False
 ) -> ttnn.SDPAProgramConfig:
-    """The same grid with recipe-supported chunks; exp_approx_mode is left unset (recipes own it)."""
+    """The same grid with op-selected chunks; exp_approx_mode is left unset (recipes own it).
+
+    ``ring``/``exp_ring`` name the call site only: every recipe op picks its own blocking.
+    """
+    del ring, exp_ring
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
-        q_chunk_size=recipe_q_chunk(program_config.q_chunk_size, ring=ring),
-        k_chunk_size=recipe_k_chunk(program_config.k_chunk_size, exp_ring=exp_ring),
+        max_cores_per_head_batch=program_config.max_cores_per_head_batch,
     )
 
 
