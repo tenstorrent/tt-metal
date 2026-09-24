@@ -35,7 +35,8 @@ wrong; loopback is unconditional at this engine commit.
 ### One endpoint per runner — this is the constraint that bites
 
 **A worker accepts exactly ONE `SET_TABLE` for its lifetime.** `ControlThread::handle_set_table`
-throws on the second, and nothing catches it:
+guards on `table_initialized` and calls `std::terminate()` outright — a deliberate fail-fast, not an
+escaped exception:
 
 ```
 [ep 1] SET_TABLE -> both workers

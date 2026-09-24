@@ -96,10 +96,12 @@ The driver needs the venv explicitly. A bare `/usr/bin/python3` imports `ttnn` a
 ## 4. One endpoint per runner — the constraint that bites
 
 **A worker accepts exactly one `SET_TABLE` for its lifetime.**
-`ControlThread::handle_set_table` throws on the second and nothing catches it, so both workers die
-with `terminate called without an active exception` / `FATAL signal=6`. The endpoint process stays
-alive and `prun` goes zombie, so **the next driver hangs forever in `wait_complete` with no error of
-its own**. Whenever a migration stalls with a silent driver, read `endpoint.log` first.
+`ControlThread::handle_set_table` guards on `table_initialized`, logs
+`[ctrl <id>] second SET_TABLE — fatal` and calls `std::terminate()` — a deliberate fail-fast, not an
+escaped exception, so both workers die with `terminate called without an active exception` /
+`FATAL signal=6`. The endpoint process stays alive and `prun` goes zombie, so **the next driver hangs
+forever in `wait_complete` with no error of its own**: the fatal never reaches the client. Whenever a
+migration stalls with a silent driver, `grep 'second SET_TABLE' endpoint.log` first.
 
 A runner killed *before* it publishes sends no `SET_TABLE`, which is why the endpoint looks reusable
 right up until the first restart that actually reaches `WORKER_READY`.
