@@ -490,14 +490,15 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
     to stock SDPA + concat (tests/perf/encoder_sdpa_concat.py, Galaxy chip 0).
     - B1/S512 on Blackhole: the stock chunk plan and 8x8 grid. 22.4 us against
       30.7 us for stock SDPA + concat.
-    - B8/S512 on a grid narrower than 13 columns (Galaxy): the stock q256/k512 plan
-      on the full 12x10 grid, 256 work units split 2 or 3 per core. 86.1 us against
-      121.8 us for stock SDPA + concat (108.6 us for stock SDPA alone). A 13-column
+    - B8 and B16/S512 on a grid narrower than 13 columns (Galaxy): the stock
+      q256/k512 plan on the full 12x10 grid, with a balanced flat work split (B8 256
+      units, 2 or 3 per core; B16 512 units, 4 or 5 per core). B8 86.1 us against
+      121.8 us for stock SDPA + concat; B16 144.7 us against 239.9 us. A 13-column
       grid keeps the stock path; it has not been measured there.
     """
-    if seq_len != 512 or batch_size not in (1, 8) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+    if seq_len != 512 or batch_size not in (1, 8, 16) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
-    if batch_size == 8 and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
+    if batch_size in (8, 16) and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
         return None
     from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
 
