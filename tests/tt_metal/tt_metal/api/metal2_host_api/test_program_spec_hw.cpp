@@ -1421,14 +1421,13 @@ std::vector<std::uint32_t> RunComputeSemaphore(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const ComputeSemaphoreRun& run,
     std::uint32_t n_report) {
-    IDevice* device = mesh_device->get_devices()[0];
     Program program = MakeComputeSemaphoreProgram(*mesh_device, run);
     std::vector<std::uint32_t> zero_report(64, 0u);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, kSemNode, kSemReportAddr, zero_report);
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> r;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, n_report * sizeof(std::uint32_t), r);
+    slow_dispatch::ReadFromL1(*mesh_device, kSemNode, kSemReportAddr, n_report * sizeof(std::uint32_t), r);
     return r;
 }
 
@@ -1476,8 +1475,7 @@ struct DatacopyResult {
 };
 
 DatacopyResult RunComputeSemaphoreDatacopy(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t num_tiles, std::uint32_t nosync) {
-    IDevice* device = mesh_device->get_devices()[0];
+    distributed::MeshDevice& mesh_device, std::uint32_t num_tiles, std::uint32_t nosync) {
     constexpr std::uint32_t kMaxTiles = 8;
     constexpr std::uint32_t kDepth = kSemDepth;
     constexpr std::uint32_t kTileWords = 32 * 32 * 2 / 4;
@@ -1491,7 +1489,7 @@ DatacopyResult RunComputeSemaphoreDatacopy(
 
     // Capacity = ring depth, so PACK's wait_not_full() holds the packer while all kDepth slots are full.
     Program program = MakeComputeSemaphoreProgram(
-        *mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
+        mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
 
     // Input: tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F). Normal positive values (exact through a
     // bf16 datacopy) and distinct per tile, so a stale ring read (the previous tile) is detected.
@@ -1505,15 +1503,15 @@ DatacopyResult RunComputeSemaphoreDatacopy(
     }
     std::vector<std::uint32_t> zero_report(64, 0u);
     std::vector<std::uint32_t> poison((kDepth + kMaxTiles) * kTileWords, 0xDEADBEEFu);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kInOffset, in);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kMidOffset, poison);  // covers mid and out
-    LaunchProgram(*mesh_device, std::move(program));
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr, zero_report);
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr + kInOffset, in);
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr + kMidOffset, poison);  // covers mid and out
+    LaunchProgram(mesh_device, std::move(program));
 
     DatacopyResult res;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, 4 * sizeof(std::uint32_t), res.report);
+    slow_dispatch::ReadFromL1(mesh_device, kSemNode, kSemReportAddr, 4 * sizeof(std::uint32_t), res.report);
     std::vector<std::uint32_t> out;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr + kOutOffset, num_tiles * kTileWords * 4, out);
+    slow_dispatch::ReadFromL1(mesh_device, kSemNode, kSemReportAddr + kOutOffset, num_tiles * kTileWords * 4, out);
     for (std::uint32_t t = 0; t < num_tiles; ++t) {
         if (!std::equal(
                 out.begin() + t * kTileWords, out.begin() + (t + 1) * kTileWords, in.begin() + t * kTileWords)) {
@@ -1531,7 +1529,7 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreDatacopy) {
         GTEST_SKIP() << "Blackhole-only";
     }
     constexpr std::uint32_t num_tiles = 8;
-    const auto r = RunComputeSemaphoreDatacopy(mesh_device, num_tiles, /*nosync=*/0);
+    const auto r = RunComputeSemaphoreDatacopy(*mesh_device, num_tiles, /*nosync=*/0);
     GTEST_LOG_(INFO) << "datacopy: packed=" << r.report[0] << " final_sem=" << r.report[2]
                      << " mismatched_tiles=" << r.mismatched_tiles;
     EXPECT_EQ(r.report[0], num_tiles) << "PACK did not finish every tile";
@@ -1548,7 +1546,7 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreDatacopyNoSyncControl) {
         GTEST_SKIP() << "Blackhole-only";
     }
     constexpr std::uint32_t num_tiles = 8;
-    const auto r = RunComputeSemaphoreDatacopy(mesh_device, num_tiles, /*nosync=*/1);
+    const auto r = RunComputeSemaphoreDatacopy(*mesh_device, num_tiles, /*nosync=*/1);
     GTEST_LOG_(INFO) << "datacopy no-sync control: packed=" << r.report[0] << " mismatched_tiles=" << r.mismatched_tiles
                      << " / " << num_tiles;
     EXPECT_EQ(r.report[0], num_tiles);

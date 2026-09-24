@@ -21,7 +21,6 @@
 #include <string>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -50,8 +49,6 @@ void RunApiTest(
         risc_names[(int)consumer_risc],
         use_remote_core ? ", different core" : "");
 
-    IDevice* device = mesh_device->get_devices()[0];
-
     CoreCoord producer_core = {0, 0};
     CoreCoord consumer_core = use_remote_core ? CoreCoord{1, 0} : CoreCoord{0, 0};
 
@@ -78,7 +75,7 @@ void RunApiTest(
 
     if (use_remote_core) {
         consumer_sem_id = CreateSemaphore(program, consumer_core, 0);
-        auto noc_coords = device->worker_core_from_logical_core(consumer_core);
+        auto noc_coords = mesh_device->worker_core_from_logical_core(consumer_core);
         remote_noc_x = noc_coords.x;
         remote_noc_y = noc_coords.y;
     }
@@ -176,8 +173,7 @@ int main(int argc, char* argv[]) {
         };
 
         // Check if running on Quasar (ckernel::Semaphore is Quasar-only)
-        IDevice* device = mesh_device->get_devices()[0];
-        bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+        bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
 
         TestConfig tests[] = {
             // Raw CB APIs
