@@ -430,8 +430,9 @@ class SpeculativeDecoder:
                     pt = installed[idx] if idx < len(installed) else None
                     if pt is not None and hasattr(pt, "dim"):
                         self._pv_pages_t[lt] = (pt[0] if pt.dim() > 1 else pt).to(torch.int64)
-        # 2. the packed per-layer tables, cached by (type, width)
-        for (lt, _w), dev in (getattr(self, "_pv_pt_cache", None) or {}).items():
+        # 2. the packed per-layer tables, cached by (type, width, batch)
+        for key, dev in (getattr(self, "_pv_pt_cache", None) or {}).items():
+            lt = key[0]
             self._restage(dev, self._pv_pages_t.get(lt, flat) if getattr(self, "_pv_pages_t", None) else flat)
         # 3. the drafter's shared-KV tables (per layer type)
         for out in (getattr(self, "_shared_pt_cache", None) or {}).values():
