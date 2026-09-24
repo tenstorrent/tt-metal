@@ -260,6 +260,16 @@ caller responsibilities, not an implicit host scan.
   selected exponential and state arithmetic. `fp32_state.hpp` is shared by
   attention and its independent component tests, not a separate test implementation.
 - `sdpa_input_preparation.cpp`, `compute/prepare_*`: explicit device preparation.
+- Ring and exp ring: B-E dispatch to `RingJointSDPARecipeProgramFactory` /
+  `ExpRingJointSDPARecipeProgramFactory` (`*_recipe_program_factory.cpp`), selected
+  by `select_program_factory`; precision unset and FAST keep the legacy factories.
+  Both share one program builder through a `ComputeVariant`
+  (`*_program_builder.hpp`: kernel sources, fixed CB indices, subblocks, L1 fit).
+  The recipe compute kernels are `compute/ring_joint_sdpa_recipe.cpp` and
+  `compute/exp_ring_joint_sdpa_recipe.cpp`; the readers/writers are thin
+  `*_recipe.cpp` policies over the shared transport bodies
+  `dataflow/{ring_joint,exp_ring_joint}_{reader,writer}_impl.hpp`. The legacy
+  ring kernels and factories contain no recipe code.
 - `tests/.../sdpa/recipe_accuracy_baseline.json`: compact frozen input/output
   digests and metrics, with source hashes; no experimental kernels or media.
 
