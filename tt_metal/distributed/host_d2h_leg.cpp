@@ -200,6 +200,18 @@ uint32_t D2HLeg::poll(const Sink& sink) {
                     "d2h: core {} page at ring offset {} has guard {:#x}, expected an armed frame", c, off, t->guard));
                 break;
             }
+            // forwarded has not counted this frame yet, so it IS the index the device stamped.
+            // Armed says a frame is here; the sequence says it is the one this ring expects.
+            if (const uint32_t want = static_cast<uint32_t>(im.core[c].forwarded);
+                tt_uva_frame_seq(t->guard) != want) {
+                im.fail(fmt::format(
+                    "d2h: core {} page at ring offset {} carries frame {} but this ring expects {}",
+                    c,
+                    off,
+                    tt_uva_frame_seq(t->guard),
+                    want));
+                break;
+            }
             // Subtract rather than add: t->length is device-written, and near UINT32_MAX
             // the addition wraps to a small number and passes. page_size > trailer always.
             if (t->length > im.page_size - kFrameTrailerBytes) {

@@ -91,7 +91,8 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     noc_async_write_barrier();
 
     volatile tt_l1_ptr FrameTrailer* t = reinterpret_cast<volatile tt_l1_ptr FrameTrailer*>(g_stage_addr);
-    t->guard = tt_uva_frame_guard(kFrameVersion);
+    // g_posted is this core's frame index and increments below, so it names THIS frame.
+    t->guard = tt_uva_frame_guard(kFrameVersion, g_posted);
     t->dst = tt_uva_bits(dst);
     t->length = bytes;
     t->origin = g_origin;
