@@ -8,8 +8,7 @@
 
 namespace ckernel::sfpu {
 
-inline void _lwt_scale_register_(
-    const std::uint32_t value_reg, const std::uint32_t scalar_reg) {
+inline void _lwt_scale_register_(const std::uint32_t value_reg, const std::uint32_t scalar_reg) {
     TTI_SFPMUL(value_reg, scalar_reg, p_sfpu::LCONST_0, value_reg, 0);
     TTI_SFPNOP;
 }

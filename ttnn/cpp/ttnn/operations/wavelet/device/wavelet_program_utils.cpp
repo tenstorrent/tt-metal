@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <limits>
 #include <utility>
@@ -30,6 +31,30 @@ uint32_t checked_u32(const size_t value, const char* label) {
     TT_FATAL(
         value <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()), "{} {} overflows uint32_t", label, value);
     return static_cast<uint32_t>(value);
+}
+
+std::vector<uint32_t> encode_compute_route_counts(
+    const std::span<const uint32_t> chunk_route_counts, const uint32_t route_count) {
+    TT_FATAL(
+        route_count > 0 && !chunk_route_counts.empty() && chunk_route_counts.size() % route_count == 0,
+        "LWT compute route counts must contain complete non-empty chunks");
+    const size_t chunk_count = chunk_route_counts.size() / route_count;
+    std::vector<uint32_t> encoded{checked_u32(chunk_count, "LWT chunks per sample")};
+    size_t run_end_index = 0;
+    for (size_t chunk = 0; chunk < chunk_count; ++chunk) {
+        const auto* counts = chunk_route_counts.data() + chunk * route_count;
+        const bool new_run =
+            chunk == 0 ||
+            !std::equal(counts, counts + route_count, chunk_route_counts.data() + (chunk - 1) * route_count);
+        if (new_run) {
+            run_end_index = encoded.size();
+            encoded.push_back(checked_u32(chunk + 1, "LWT route-count run end"));
+            encoded.insert(encoded.end(), counts, counts + route_count);
+        } else {
+            encoded[run_end_index] = checked_u32(chunk + 1, "LWT route-count run end");
+        }
+    }
+    return encoded;
 }
 
 uint32_t worker_core_count(tt::tt_metal::distributed::MeshDevice& mesh_device, const char* empty_grid_error) {

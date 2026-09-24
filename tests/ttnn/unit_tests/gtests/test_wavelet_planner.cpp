@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "ttnn/operations/wavelet/common/signal_extension.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
 #include "ttnn/operations/wavelet/generated/wavelet_schemes/bior3_9.hpp"
 #include "ttnn/operations/wavelet/generated/wavelet_schemes/coif17.hpp"
 #include "ttnn/operations/wavelet/generated/wavelet_schemes/db20.hpp"
@@ -393,9 +394,10 @@ void expect_chunks_eq(
 [[nodiscard]] wavelet::plan_2d_detail::Candidate oracle_best_candidate(
     const std::vector<wavelet::plan_2d_detail::Candidate>& candidates, const bool latency_oriented) {
     EXPECT_FALSE(candidates.empty());
-    const uint64_t minimum_cost = std::min_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
-                                      return a.estimated_cost < b.estimated_cost;
-                                  })->estimated_cost;
+    const uint64_t minimum_cost =
+        std::min_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+            return a.estimated_cost < b.estimated_cost;
+        })->estimated_cost;
     uint32_t anchor_cores = 0;
     for (const auto& candidate : candidates) {
         if (candidate.estimated_cost == minimum_cost) {
@@ -432,7 +434,6 @@ void expect_chunks_eq(
     const wavelet::LiftingForwardPlan& x_plan,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    const bool fuse_terminal_scale,
     const bool latency_oriented,
     const wavelet::Lwt2DRouteDomainPolicy route_domain) {
     const uint32_t band_tiles_y = static_cast<uint32_t>(
@@ -468,8 +469,7 @@ void expect_chunks_eq(
     std::vector<wavelet::plan_2d_detail::Candidate> candidates;
     for (uint32_t tiles_y = 1; tiles_y <= band_tiles_y; ++tiles_y) {
         for (uint32_t tiles_x = 1; tiles_x <= band_tiles_x; ++tiles_x) {
-            auto chunks = wavelet::plan_2d_detail::build_chunks(
-                y_plan, x_plan, tiles_y, tiles_x, fuse_terminal_scale, route_domain);
+            auto chunks = wavelet::plan_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x, route_domain);
             double max_dependency_overhead = 0.0;
             bool fits = oracle_uniform_allocation_fits(chunks, l1_budget_bytes);
             for (const auto& chunk : chunks) {
@@ -483,8 +483,7 @@ void expect_chunks_eq(
                 core_limit,
                 l1_budget_bytes,
                 [&](const wavelet::IndexRectangle output) {
-                    return wavelet::plan_2d_detail::build_chunk(
-                        y_plan, x_plan, output, fuse_terminal_scale, route_domain);
+                    return wavelet::plan_2d_detail::build_chunk(y_plan, x_plan, output, route_domain);
                 },
                 [&](const wavelet::Lwt2DChunkPlan& chunk) {
                     return wavelet::plan_2d_detail::estimate_chunk_cost(chunk, y_plan, x_plan);
@@ -599,9 +598,9 @@ void expect_forward_matches_exhaustive(
     const auto x_plan =
         wavelet::make_forward_lifting_plan<Scheme>(wavelet::SignalBuffer{.length = width}, boundary_mode);
     const auto expected =
-        exhaustive_forward_candidate(y_plan, x_plan, core_limit, l1_budget_bytes, true, latency_oriented, route_domain);
+        exhaustive_forward_candidate(y_plan, x_plan, core_limit, l1_budget_bytes, latency_oriented, route_domain);
     const auto actual = wavelet::make_lwt_2d_execution_plan(
-        y_plan, x_plan, core_limit, l1_budget_bytes, true, latency_oriented, route_domain);
+        y_plan, x_plan, core_limit, l1_budget_bytes, latency_oriented, route_domain);
 
     ASSERT_FALSE(actual.chunks.empty());
     EXPECT_EQ(
@@ -742,9 +741,8 @@ TEST(WaveletPlanner, InverseCandidateFitsUniformSlotAllocationAcrossOddPhases) {
         [&](const wavelet::IndexRectangle output) {
             wavelet::Lwt2DChunkPlan chunk;
             chunk.final_band_rect = output;
-            chunk.resources.plane_heights_elements = output.y.begin == 0
-                                                         ? std::array<uint32_t, 5>{32, 16, 0, 0, 0}
-                                                         : std::array<uint32_t, 5>{16, 32, 0, 0, 0};
+            chunk.resources.plane_heights_elements = output.y.begin == 0 ? std::array<uint32_t, 5>{32, 16, 0, 0, 0}
+                                                                         : std::array<uint32_t, 5>{16, 32, 0, 0, 0};
             chunk.resources.plane_widths_elements = {32, 32, 0, 0, 0};
             chunk.resources.total_l1_bytes = fixed_bytes + 48 * 32 * sizeof(float);
             return chunk;
@@ -760,8 +758,8 @@ TEST(WaveletPlanner, LatencyCandidateChoiceIsIndependentOfScanOrder) {
         {.chunk_tiles_y = 2, .chunk_tiles_x = 1, .active_core_count = 4, .estimated_cost = 108},
         {.chunk_tiles_y = 3, .chunk_tiles_x = 1, .active_core_count = 6, .estimated_cost = 115},
     }};
-    for (const auto& order : std::array<std::array<size_t, 3>, 6>{{
-             {0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}}) {
+    for (const auto& order :
+         std::array<std::array<size_t, 3>, 6>{{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}}) {
         std::vector<wavelet::plan_2d_detail::Candidate> permuted;
         for (const size_t index : order) {
             permuted.push_back(candidates[index]);
@@ -770,11 +768,58 @@ TEST(WaveletPlanner, LatencyCandidateChoiceIsIndependentOfScanOrder) {
     }
 }
 
-TEST(WaveletPlanner, ForwardPlannerRejectsUnfusedTerminalScale) {
-    EXPECT_ANY_THROW({
-        [[maybe_unused]] const auto plan = wavelet::make_lwt_2d_execution_plan<PlannerTestScheme>(
-            33, 35, 4, 768 * 1024, wavelet::BoundaryMode::kSymmetric, false);
-    });
+TEST(WaveletPlanner, LongSignalComputeRouteCountsFitRuntimeArgs) {
+    constexpr uint32_t l1_budget_bytes = 768 * 1024;
+    const auto check_plan = [](const auto& plan) {
+        const uint32_t route_count = plan.chunks.front().routes.size();
+        std::vector<uint32_t> group_counts;
+        for (const auto& chunk : plan.chunks) {
+            for (const auto& route : chunk.routes) {
+                group_counts.push_back(static_cast<uint32_t>(
+                    tt::div_up(route.output_length, size_t{wavelet::device_protocol::kLwtGroupOutputElements})));
+            }
+        }
+        ASSERT_GT(group_counts.size() + 3, 4094U);
+        const auto encoded = ttnn::prim::wavelet_program_utils::encode_compute_route_counts(group_counts, route_count);
+        ASSERT_LE(encoded.size() + 2, 4094U);
+        ASSERT_EQ(encoded.front(), plan.chunks.size());
+        size_t run_base = 1;
+        for (size_t chunk = 0; chunk < plan.chunks.size(); ++chunk) {
+            while (run_base < encoded.size() && chunk >= encoded[run_base]) {
+                run_base += route_count + 1;
+            }
+            ASSERT_LT(run_base + route_count, encoded.size());
+            for (size_t route = 0; route < route_count; ++route) {
+                EXPECT_EQ(encoded[run_base + route + 1], group_counts[chunk * route_count + route]);
+            }
+        }
+    };
+    constexpr std::array modes = {
+        wavelet::BoundaryMode::kZero,
+        wavelet::BoundaryMode::kConstant,
+        wavelet::BoundaryMode::kSymmetric,
+        wavelet::BoundaryMode::kPeriodic,
+        wavelet::BoundaryMode::kAntisymmetric,
+        wavelet::BoundaryMode::kSmooth,
+        wavelet::BoundaryMode::kAntireflect,
+        wavelet::BoundaryMode::kReflect};
+    for (const size_t signal_length : {10'000'000U, 10'000'001U}) {
+        const wavelet::SignalBuffer input{
+            .length = signal_length, .stick_width = 32, .element_size_bytes = sizeof(float)};
+        for (const auto mode : modes) {
+            SCOPED_TRACE("length=" + std::to_string(signal_length) + " mode=" + std::to_string(static_cast<int>(mode)));
+            const auto forward = wavelet::make_forward_lifting_plan<wavelet::schemes::coif17>(input, mode);
+            const size_t coefficient_length = forward.output_length;
+            check_plan(
+                wavelet::make_lwt_execution_plan(forward, 64, l1_budget_bytes, wavelet::WorkspaceLayout::kRowMajor));
+            check_plan(wavelet::make_ilwt_execution_plan(
+                wavelet::make_inverse_lifting_plan<wavelet::schemes::coif17>(signal_length, coefficient_length, mode),
+                64,
+                l1_budget_bytes,
+                wavelet::WorkspaceLayout::kRowMajor,
+                false));
+        }
+    }
 }
 
 TEST(WaveletPlanner, HaarSymmetricMatchesPyWaveletsAndRoundTripsEvenAndOddLengths) {
@@ -1135,7 +1180,6 @@ TEST(WaveletPlanner, OddRectangularPlansProduceBoundedSerializableChunks) {
         8,
         l1_budget_bytes,
         wavelet::BoundaryMode::kSymmetric,
-        true,
         true,
         wavelet::Lwt2DRouteDomainPolicy::kExact);
     ASSERT_FALSE(forward.chunks.empty());

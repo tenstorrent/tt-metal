@@ -26,8 +26,8 @@ using tt::tt_metal::GenericMeshDeviceFixture;
 class WaveletSfpuTest : public GenericMeshDeviceFixture {};
 
 TEST_F(WaveletSfpuTest, HorizontalStencilRotateGoldenVector) {
-    if (mesh_device_->arch() != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "The wavelet SFPU rotate golden vector is validated on Wormhole B0";
+    if (mesh_device_->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "The wavelet SFPU rotate golden vector supports Wormhole B0 and Blackhole";
     }
 
     constexpr uint32_t tile_side = 32;
@@ -35,7 +35,7 @@ TEST_F(WaveletSfpuTest, HorizontalStencilRotateGoldenVector) {
     constexpr uint32_t tile_bytes = tile_elements * sizeof(float);
     constexpr tt::CBIndex input_cb = tt::CBIndex::c_0;
     constexpr tt::CBIndex output_cb = tt::CBIndex::c_16;
-    const CoreCoord core{0, 0};
+    const tt::tt_metal::CoreCoord core{0, 0};
 
     std::vector<uint32_t> a(tile_elements);
     std::vector<uint32_t> b(tile_elements);

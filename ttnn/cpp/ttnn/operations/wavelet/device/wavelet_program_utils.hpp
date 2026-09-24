@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "tt-metalium/core_coord.hpp"
@@ -36,6 +37,9 @@ struct CoreChunkWork {
 };
 
 [[nodiscard]] uint32_t checked_u32(size_t value, const char* label);
+
+[[nodiscard]] std::vector<uint32_t> encode_compute_route_counts(
+    std::span<const uint32_t> chunk_route_counts, uint32_t route_count);
 
 [[nodiscard]] uint32_t worker_core_count(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const char* empty_grid_error);

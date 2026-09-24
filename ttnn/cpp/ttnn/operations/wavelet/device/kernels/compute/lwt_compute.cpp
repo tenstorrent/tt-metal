@@ -18,7 +18,7 @@
 // clang-format off
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "internal/compute/tile_move_copy.h"
+#include "api/compute/experimental/tile_move_copy_32x16.h"
 #include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
 #include "ttnn/operations/wavelet/planner/static_scheme.hpp"
 #include "../sfpi/horizontal_stencil_sfpi.h"
@@ -154,7 +154,8 @@ constexpr uint32_t maybe_inverse_scale_bits() noexcept {
         static_assert(first_step < Scheme::num_steps, "Inline inverse scaling requires a predict/update step");
         static_assert(
             scale_count_before<Scheme, first_step>() == 2, "Inline inverse scaling requires two leading scales");
-        static_assert(scale_count_before<Scheme, Scheme::num_steps>() == 2, "Inverse scaling requires exactly two scales");
+        static_assert(
+            scale_count_before<Scheme, Scheme::num_steps>() == 2, "Inverse scaling requires exactly two scales");
         constexpr uint32_t bits = terminal_scale_bits<Scheme, ScaleType>();
         static_assert(bits != 0, "Inline inverse scaling could not find the required reciprocal scale");
         return bits;
@@ -187,21 +188,21 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
 
         input0_buffer.wait_front(2);
         copy_init(cb_input0);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 0, kDstSource0);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 1, kDstSource1);
+        ckernel::copy_tile_to_dst_32x16(cb_input0, 0, kDstSource0);
+        ckernel::copy_tile_to_dst_32x16(cb_input0, 1, kDstSource1);
         input0_buffer.pop_front(2);
 
         input1_buffer.wait_front(2);
         copy_init(cb_input1);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 0, kDstSource2);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 1, kDstSource3);
+        ckernel::copy_tile_to_dst_32x16(cb_input1, 0, kDstSource2);
+        ckernel::copy_tile_to_dst_32x16(cb_input1, 1, kDstSource3);
         input1_buffer.pop_front(2);
 
         base_buffer.wait_front(device_protocol::kLwtOutputBlocksPerRow);
         copy_init(cb_base);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 0, kDstBase0);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 1, kDstBase1);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 2, kDstBase2);
+        ckernel::copy_tile_to_dst_32x16(cb_base, 0, kDstBase0);
+        ckernel::copy_tile_to_dst_32x16(cb_base, 1, kDstBase1);
+        ckernel::copy_tile_to_dst_32x16(cb_base, 2, kDstBase2);
         base_buffer.pop_front(device_protocol::kLwtOutputBlocksPerRow);
 
         hstencil_init();
@@ -250,9 +251,9 @@ inline void run_scale_step(
 
         tile_regs_acquire();
         copy_init(cb_input);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 0, kDstBase0);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 1, kDstBase1);
-        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 2, kDstBase2);
+        ckernel::copy_tile_to_dst_32x16(cb_input, 0, kDstBase0);
+        ckernel::copy_tile_to_dst_32x16(cb_input, 1, kDstBase1);
+        ckernel::copy_tile_to_dst_32x16(cb_input, 2, kDstBase2);
         scale_narrow_tile(kDstBase0, scalar_packed);
         scale_narrow_tile(kDstBase1, scalar_packed);
         scale_narrow_tile(kDstBase2, scalar_packed);
@@ -372,7 +373,8 @@ inline void run_static_steps(
                         ExecutableIndex>(cb_input0, cb_input1, cb_base, cb_output, runtime_arg_base);
                 } else {
                     static_assert(Step::k == 1, "Scale steps must have exactly one coefficient");
-                    const uint32_t output_group_count = get_common_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
+                    const uint32_t output_group_count =
+                        get_common_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
                     run_scale_step(cb_base, cb_output, Step::coeff_bits[0], output_group_count);
                     run_static_steps<
                         Scheme,
@@ -415,6 +417,11 @@ void lwt_compute() {
     const uint32_t chunks_per_sample = get_common_arg_val<uint32_t>(0);
 
     for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
+        const uint32_t sample_chunk = (chunk_begin + chunk) % chunks_per_sample;
+        uint32_t run_base = 1;
+        while (sample_chunk >= get_common_arg_val<uint32_t>(run_base)) {
+            run_base += route_count + 1;
+        }
         run_static_steps<
             Scheme,
             kInlineTerminalScale,
@@ -424,7 +431,7 @@ void lwt_compute() {
             inverse_even_scale,
             inverse_odd_scale,
             0,
-            0>(cb_input0, cb_input1, cb_base, cb_output, 1 + ((chunk_begin + chunk) % chunks_per_sample) * route_count);
+            0>(cb_input0, cb_input1, cb_base, cb_output, run_base + 1);
     }
 }
 

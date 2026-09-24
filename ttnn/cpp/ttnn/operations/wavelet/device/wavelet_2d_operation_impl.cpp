@@ -512,7 +512,6 @@ template <typename Scheme>
         l1_budget_bytes,
         boundary_mode,
         true,
-        true,
         Lwt2DRouteDomainPolicy::kExact);
     return plan;
 }

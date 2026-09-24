@@ -35,15 +35,9 @@ void kernel_main() {
                     constexpr auto b_reg = p_sfpu::LREG1;
                     const uint32_t offset = row + 2 * parity;
                     TT_SFPLOAD(
-                        a_reg,
-                        sfpi::SFPLOAD_MOD0_FMT_FP32,
-                        ADDR_MOD_3,
-                        ckernel::sfpu::_lwt_dst_base(0, face) + offset);
+                        a_reg, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, ckernel::sfpu::_lwt_dst_base(0, face) + offset);
                     TT_SFPLOAD(
-                        b_reg,
-                        sfpi::SFPLOAD_MOD0_FMT_FP32,
-                        ADDR_MOD_3,
-                        ckernel::sfpu::_lwt_dst_base(1, face) + offset);
+                        b_reg, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, ckernel::sfpu::_lwt_dst_base(1, face) + offset);
                     ckernel::sfpu::_horizontal_stencil_rotate_(a_reg, b_reg);
                     TT_SFPSTORE(
                         b_reg,

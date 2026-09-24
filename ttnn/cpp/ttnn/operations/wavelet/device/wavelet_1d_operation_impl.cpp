@@ -67,6 +67,7 @@ constexpr uint32_t kSyncCb = tt::CBIndex::c_5;
 constexpr uint32_t kReaderConfigCb = tt::CBIndex::c_6;
 constexpr uint32_t kWriterConfigCb = tt::CBIndex::c_7;
 constexpr size_t kTensixRuntimeArgWordLimit = 4096;
+constexpr size_t kTensixReservedRuntimeArgWords = 2;
 constexpr uint32_t kWorkspaceACb = tt::CBIndex::c_8;
 constexpr uint32_t kWorkspaceBCb = tt::CBIndex::c_9;
 constexpr uint32_t kWorkspaceScratchCb = tt::CBIndex::c_10;
@@ -216,15 +217,15 @@ struct Logical1DShape {
     const ArchitecturePolicy& policy,
     const bool hybrid_tile_mirror,
     const uint32_t interleave_batch_sticks) {
-    const uint64_t fixed_bytes = checked_l1_allocation_bytes(
-        0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
+    const uint64_t fixed_bytes =
+        checked_l1_allocation_bytes(0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
     constexpr uint64_t mirror_rounding_reserve = uint64_t{device_protocol::kLwtWorkspaceSlotCount} *
                                                  (device_protocol::kLwtGroupOutputElements - 1U) * sizeof(float);
     const uint64_t physical_workspace_multiplier = hybrid_tile_mirror ? 2U : 1U;
     const uint64_t rounding_reserve = hybrid_tile_mirror ? mirror_rounding_reserve : 0U;
     TT_FATAL(
-        available_bytes >= fixed_bytes + rounding_reserve +
-                               device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
+        available_bytes >=
+            fixed_bytes + rounding_reserve + device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
         "LWT requires at least {} bytes of free per-core L1 after external L1 tensor allocation, but only {} remain",
         fixed_bytes + rounding_reserve + device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
         available_bytes);
@@ -466,17 +467,17 @@ void add_narrow_tile_circular_buffer(
     return args;
 }
 
-[[nodiscard]] std::vector<uint32_t> compute_common_runtime_args(const LwtExecutionPlan& plan) {
+template <typename Plan>
+[[nodiscard]] std::vector<uint32_t> compute_common_runtime_args(const Plan& plan) {
     const size_t route_count = plan.chunks.front().routes.size();
-    std::vector<uint32_t> args;
-    args.reserve(1 + plan.chunks.size() * route_count);
-    args.push_back(checked_u32(plan.chunks.size(), "LWT chunks per sample"));
+    std::vector<uint32_t> counts;
+    counts.reserve(plan.chunks.size() * route_count);
     for (const auto& chunk : plan.chunks) {
         for (const auto& route : chunk.routes) {
-            args.push_back(output_group_count(route.output_length));
+            counts.push_back(output_group_count(route.output_length));
         }
     }
-    return args;
+    return wavelet_program_utils::encode_compute_route_counts(counts, checked_u32(route_count, "LWT route count"));
 }
 
 [[nodiscard]] tt::tt_metal::ProgramDescriptor create_forward_program_descriptor(
@@ -589,7 +590,8 @@ void add_narrow_tile_circular_buffer(
     };
     compute_descriptor.common_runtime_args = compute_common_runtime_args(plan);
     TT_FATAL(
-        compute_descriptor.common_runtime_args.size() + 2 <= kTensixRuntimeArgWordLimit,
+        compute_descriptor.common_runtime_args.size() + 2 + kTensixReservedRuntimeArgWords <=
+            kTensixRuntimeArgWordLimit,
         "LWT compute route table exceeds the Tensix runtime-argument limit");
 
     for (const auto& core_work : work) {
@@ -755,19 +757,6 @@ void add_narrow_tile_circular_buffer(
     return args;
 }
 
-[[nodiscard]] std::vector<uint32_t> inverse_compute_common_runtime_args(const IlwtExecutionPlan& plan) {
-    const size_t route_count = plan.chunks.front().routes.size();
-    std::vector<uint32_t> args;
-    args.reserve(1 + plan.chunks.size() * route_count);
-    args.push_back(checked_u32(plan.chunks.size(), "ILWT chunks per sample"));
-    for (const auto& chunk : plan.chunks) {
-        for (const auto& route : chunk.routes) {
-            args.push_back(output_group_count(route.output_length));
-        }
-    }
-    return args;
-}
-
 [[nodiscard]] tt::tt_metal::ProgramDescriptor create_inverse_program_descriptor(
     const tt::tt_metal::CoreRangeSet& cores,
     const tt::tt_metal::Buffer& approximation_buffer,
@@ -876,9 +865,10 @@ void add_narrow_tile_circular_buffer(
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
     };
-    compute_descriptor.common_runtime_args = inverse_compute_common_runtime_args(plan);
+    compute_descriptor.common_runtime_args = compute_common_runtime_args(plan);
     TT_FATAL(
-        compute_descriptor.common_runtime_args.size() + 2 <= kTensixRuntimeArgWordLimit,
+        compute_descriptor.common_runtime_args.size() + 2 + kTensixReservedRuntimeArgWords <=
+            kTensixRuntimeArgWordLimit,
         "ILWT compute route table exceeds the Tensix runtime-argument limit");
 
     for (const auto& core_work : work) {
@@ -983,8 +973,8 @@ template <typename Scheme>
 
     const uint32_t worker_cores =
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
-    const uint32_t max_cores = static_cast<uint32_t>(
-        std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
+    const uint32_t max_cores =
+        static_cast<uint32_t>(std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     constexpr WorkspaceLayout initial_layout = WorkspaceLayout::kRowMajor;
     const bool initial_hybrid_tile_mirror =
@@ -1029,8 +1019,8 @@ template <typename Scheme>
         available_l1_bytes, architecture_policy, initial_hybrid_tile_mirror, interleave_batch_sticks);
     const uint32_t worker_cores =
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
-    const uint32_t sample_cores = static_cast<uint32_t>(
-        std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
+    const uint32_t sample_cores =
+        static_cast<uint32_t>(std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
     IlwtExecutionPlan plan = make_ilwt_execution_plan(
         std::move(full_plan),
         sample_cores,

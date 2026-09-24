@@ -10,7 +10,7 @@
 //   LREG4: g_e (accumulator for even output)
 //   LREG5: g_o (accumulator for odd output)
 //   LREG6: tmp (broadcast coefficient)
-//   LREG7: temporary MAD result / Blackhole lane-position scratch
+//   LREG7: temporary MAD result / lane-position scratch
 #pragma once
 
 #include <algorithm>
@@ -37,13 +37,22 @@ inline void _horizontal_stencil_init() {
 
 inline void _horizontal_stencil_rotate_(std::uint32_t a_reg, std::uint32_t b_reg) {
 #if defined(ARCH_WORMHOLE)
-    // Wormhole SHFLSHR1 takes lane zero from the preceding ROR source; the device golden test pins this halo.
+    // Wormhole SHFLSHR1 lane zero is unpredictable; select the ROR halo explicitly.
     TTI_SFPSHFT2(0, a_reg, a_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
-    TTI_SFPSHFT2(0, b_reg, b_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLSHR1);
+    TTI_SFPSHFT2(0, b_reg, b_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG7, 0);
+    TTI_SFPSHFT(28, 0, p_sfpu::LREG7, sfpi::SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPMOV(0, a_reg, b_reg, 0);
+    TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
 #elif defined(ARCH_BLACKHOLE)
-    // Blackhole zeroes SHFLSHR1 lane zero, so select the ROR halo explicitly.
+    // Blackhole SFPSHFT2 defines SHFLSHR1 lane zero as zero; use ROR for both registers and select the halo explicitly.
+    // SFPAND MOD1_USE_VB is specified in
+    // tt-isa-documentation/BlackholeA0/TensixTile/TensixCoprocessor/SFPAND.md, Functional model.
+    // LTILEID is LREG15 with lane i equal to 2*i in
+    // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_rand.h.
     TTI_SFPSHFT2(0, a_reg, a_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
     TTI_SFPSHFT2(0, b_reg, b_reg, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -59,9 +68,7 @@ inline void _horizontal_stencil_rotate_(std::uint32_t a_reg, std::uint32_t b_reg
 }
 
 inline void _horizontal_stencil_mad_accumulate_(
-    const std::uint32_t source_reg,
-    const std::uint32_t coeff_reg,
-    const std::uint32_t accumulator_reg) {
+    const std::uint32_t source_reg, const std::uint32_t coeff_reg, const std::uint32_t accumulator_reg) {
     TTI_SFPMAD(source_reg, coeff_reg, accumulator_reg, accumulator_reg, 0);
     TTI_SFPNOP;
 }

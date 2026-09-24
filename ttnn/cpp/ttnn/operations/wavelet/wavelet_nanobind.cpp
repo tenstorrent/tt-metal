@@ -37,7 +37,8 @@ DRAM tensors and preserve the optional batch dimensions.
 ``wavelet`` names one of the 106 supported discrete wavelet schemes and
 ``boundary_mode`` is one of ``zero``, ``constant``, ``symmetric``,
 ``reflect``, ``periodic``, ``smooth``, ``antisymmetric``, or ``antireflect``.
-``periodic`` uses PyWavelets plain periodic wrapping, not ``periodization``.
+``periodic`` wraps across the signal boundary and is distinct from
+``periodization``.
 ``dmey`` executes but is excluded from numerical validation because its
 generated lifting factorization has a known error.
 
@@ -96,8 +97,8 @@ Compute one level of the FP32 separable 2D discrete wavelet transform.
 shape ``[H,W]`` or ``[B,1,H,W]`` in DRAM or L1 on one physical device. Outputs
 remain INTERLEAVED DRAM tensors and preserve the optional batch dimensions. The operation preserves
 the standalone vertical-first execution order and returns ``(LL, LH, HL, HH)``.
-``LH`` is vertical detail/horizontal approximation (PyWavelets ``cV``);
-``HL`` is vertical approximation/horizontal detail (PyWavelets ``cH``).
+``LH``/``cV`` is vertical detail and horizontal approximation;
+``HL``/``cH`` is vertical approximation and horizontal detail.
 ``periodic`` means plain periodic wrapping, not ``periodization``.
 ``dmey`` executes but is excluded from numerical validation because its
 generated lifting factorization has a known error.

@@ -225,7 +225,7 @@ def test_very_large_batch_compute_runtime_args_are_bounded(device: ttnn.MeshDevi
 
 @pytest.mark.parametrize("wavelet", ["db1", "coif17"])
 def test_large_batch_multiple_chunks_forward_inverse(device: ttnn.MeshDevice, wavelet: str) -> None:
-    batch, length = 113, 2049
+    batch, length = 32, 8193
     positions = torch.arange(length, dtype=torch.float32)
     signal = (torch.sin(positions * 0.013)[None, :] + torch.arange(batch, dtype=torch.float32)[:, None] * 0.01).reshape(
         batch, 1, 1, length

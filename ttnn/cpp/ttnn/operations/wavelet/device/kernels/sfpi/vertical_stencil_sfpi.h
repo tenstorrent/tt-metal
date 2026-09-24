@@ -67,7 +67,7 @@ inline void _vertical_stencil_rotate_() {
     TT_SFPTRANSP(0, 0, 0, 0);
 }
 
-template <uint8_t K, uint8_t OutputGroupCount = kSmallStencilOutputGroupCount>
+template <uint8_t K, uint8_t OutputGroupCount>
 inline void _vertical_stencil_block(
     const uint32_t h_packed[K],
     const uint32_t dst_f0,
@@ -81,9 +81,9 @@ inline void _vertical_stencil_block(
     const uint32_t dst_g0,
     const uint32_t dst_g1,
     const uint32_t dst_g2,
-    const uint32_t dst_base0 = kUnusedDstAddress,
-    const uint32_t dst_base1 = kUnusedDstAddress,
-    const uint32_t dst_base2 = kUnusedDstAddress) {
+    const uint32_t dst_base0,
+    const uint32_t dst_base1,
+    const uint32_t dst_base2) {
     static_assert(
         K > 0 && K <= ttnn::operations::wavelet::device_protocol::kStepCoeffCapacity,
         "Vertical stencil coefficient count exceeds device capacity");

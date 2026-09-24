@@ -45,8 +45,6 @@ struct Rect {
         x_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength]) {}
 };
 
-#define LWT_2D_BOUNDARY_FUNCTION __attribute__((noinline))
-
 [[nodiscard]] ALWI uint32_t aligned_begin(const uint32_t value) { return (value / kTileSide) * kTileSide; }
 
 [[nodiscard]] ALWI uint32_t aligned_end(const uint32_t begin, const uint32_t length) {
@@ -70,7 +68,7 @@ struct SourceAxisTileCollector {
     uint32_t& count;
     uint32_t capacity;
 
-    LWT_2D_BOUNDARY_FUNCTION void operator()(const uint32_t source_index) const {
+    __attribute__((noinline)) void operator()(const uint32_t source_index) const {
         const uint32_t source_tile = source_index / kTileSide;
         for (uint32_t index = 0; index < count; ++index) {
             if (tiles[index] == source_tile) {
@@ -105,7 +103,7 @@ template <uint32_t Capacity>
 }
 
 template <ttnn::operations::wavelet::BoundaryMode Mode>
-LWT_2D_BOUNDARY_FUNCTION void collect_boundary_source_axis_tiles(
+__attribute__((noinline)) void collect_boundary_source_axis_tiles(
     uint32_t* tiles, uint32_t& count, const uint32_t capacity, const int32_t raw_begin, const uint32_t logical_length) {
     if constexpr (Mode == ttnn::operations::wavelet::BoundaryMode::kSymmetric) {
         for (uint32_t offset = 0; offset < 2 * kTileSide; ++offset) {
@@ -214,7 +212,7 @@ struct StagedInputColumnReader {
     const SplitSourceTiles<Mode>& source_tiles;
     uint32_t scratch_addr;
 
-    LWT_2D_BOUNDARY_FUNCTION float operator()(const uint32_t source_x) const {
+    __attribute__((noinline)) float operator()(const uint32_t source_x) const {
         const uint32_t source_tile_y = find_index(source_tiles.rows, source_tiles.row_count, source_y / kTileSide);
         const uint32_t source_tile_x =
             find_index(source_tiles.columns, source_tiles.column_count, source_x / kTileSide);
@@ -249,7 +247,7 @@ struct StagedAntireflectInputRowReader {
     const SplitSourceTiles<ttnn::operations::wavelet::BoundaryMode::kAntireflect>& source_tiles;
     uint32_t scratch_addr;
 
-    LWT_2D_BOUNDARY_FUNCTION float operator()(const uint32_t source_y) const {
+    __attribute__((noinline)) float operator()(const uint32_t source_y) const {
         return ttnn::operations::wavelet::evaluate_antireflect_index_i32(
             x_extended,
             input_width,
@@ -266,7 +264,7 @@ struct StagedSmoothInputRowReader {
     const SplitSourceTiles<ttnn::operations::wavelet::BoundaryMode::kSmooth>& source_tiles;
     uint32_t scratch_addr;
 
-    LWT_2D_BOUNDARY_FUNCTION float operator()(const uint32_t source_y) const {
+    __attribute__((noinline)) float operator()(const uint32_t source_y) const {
         return ttnn::operations::wavelet::evaluate_smooth_index_i32(
             x_extended,
             StagedInputColumnReader<ttnn::operations::wavelet::BoundaryMode::kSmooth>{
@@ -337,19 +335,15 @@ template <ttnn::operations::wavelet::BoundaryMode Mode>
         });
 }
 
-#define LWT_2D_POLYPHASE_TEMPLATE template <bool Interior, ttnn::operations::wavelet::BoundaryMode Mode>
-#define LWT_2D_POLYPHASE_FUNCTION __attribute__((noinline))
-#define LWT_2D_POLYPHASE_PARITY_PARAMETERS const uint32_t parity_y, const uint32_t parity_x,
-#define LWT_2D_POLYPHASE_PARITY_Y parity_y
-#define LWT_2D_POLYPHASE_PARITY_X parity_x
-
-LWT_2D_POLYPHASE_TEMPLATE
-LWT_2D_POLYPHASE_FUNCTION void write_polyphase_tile(
+template <bool Interior, ttnn::operations::wavelet::BoundaryMode Mode>
+__attribute__((noinline)) void write_polyphase_tile(
     const uint32_t input_height,
     const uint32_t input_width,
     const uint32_t pad_y,
     const uint32_t pad_x,
-    LWT_2D_POLYPHASE_PARITY_PARAMETERS const Rect& rectangle,
+    const uint32_t parity_y,
+    const uint32_t parity_x,
+    const Rect& rectangle,
     const uint32_t plane_addr,
     const uint32_t plane_tile_columns,
     const uint32_t tile_y,
@@ -372,11 +366,11 @@ LWT_2D_POLYPHASE_FUNCTION void write_polyphase_tile(
     const uint32_t x_begin = std::max(rectangle.x_begin, tile_x);
     const uint32_t x_end = std::min(rectangle.x_begin + rectangle.x_length, tile_x + kTileSide);
     for (uint32_t polyphase_y = y_begin; polyphase_y < y_end; ++polyphase_y) {
-        const int32_t raw_y = 2 * static_cast<int32_t>(polyphase_y) + static_cast<int32_t>(LWT_2D_POLYPHASE_PARITY_Y) -
-                              static_cast<int32_t>(pad_y);
+        const int32_t raw_y =
+            2 * static_cast<int32_t>(polyphase_y) + static_cast<int32_t>(parity_y) - static_cast<int32_t>(pad_y);
         for (uint32_t polyphase_x = x_begin; polyphase_x < x_end; ++polyphase_x) {
-            const int32_t raw_x = 2 * static_cast<int32_t>(polyphase_x) +
-                                  static_cast<int32_t>(LWT_2D_POLYPHASE_PARITY_X) - static_cast<int32_t>(pad_x);
+            const int32_t raw_x =
+                2 * static_cast<int32_t>(polyphase_x) + static_cast<int32_t>(parity_x) - static_cast<int32_t>(pad_x);
             if constexpr (Interior) {
                 const uint32_t source_y = static_cast<uint32_t>(raw_y);
                 const uint32_t source_x = static_cast<uint32_t>(raw_x);
@@ -396,43 +390,6 @@ LWT_2D_POLYPHASE_FUNCTION void write_polyphase_tile(
         }
     }
 }
-
-#undef LWT_2D_POLYPHASE_TEMPLATE
-#undef LWT_2D_POLYPHASE_FUNCTION
-#undef LWT_2D_POLYPHASE_PARITY_PARAMETERS
-#undef LWT_2D_POLYPHASE_PARITY_Y
-#undef LWT_2D_POLYPHASE_PARITY_X
-
-template <bool Interior, ttnn::operations::wavelet::BoundaryMode Mode, uint32_t ParityY, uint32_t ParityX>
-ALWI void write_polyphase_tile_dispatch(
-    const uint32_t input_height,
-    const uint32_t input_width,
-    const uint32_t pad_y,
-    const uint32_t pad_x,
-    const Rect& rectangle,
-    const uint32_t plane_addr,
-    const uint32_t plane_tile_columns,
-    const uint32_t tile_y,
-    const uint32_t tile_x,
-    const SplitSourceTiles<Mode>& source_tiles,
-    const uint32_t scratch_addr) {
-    write_polyphase_tile<Interior, Mode>(
-        input_height,
-        input_width,
-        pad_y,
-        pad_x,
-        ParityY,
-        ParityX,
-        rectangle,
-        plane_addr,
-        plane_tile_columns,
-        tile_y,
-        tile_x,
-        source_tiles,
-        scratch_addr);
-}
-
-#undef LWT_2D_BOUNDARY_FUNCTION
 
 struct SplitSourceColumn {
     uint32_t scratch_tile_byte_offset;
@@ -563,11 +520,13 @@ ALWI void split_macro_tile(
         }
     }
 
-    write_polyphase_tile_dispatch<Interior, Mode, 0, 0>(
+    write_polyphase_tile<Interior, Mode>(
         input_height,
         input_width,
         pad_y,
         pad_x,
+        0,
+        0,
         rectangles[0],
         plane_addrs[0],
         plane_tile_columns[0],
@@ -575,11 +534,13 @@ ALWI void split_macro_tile(
         tile_x,
         source_tiles,
         scratch_addr);
-    write_polyphase_tile_dispatch<Interior, Mode, 0, 1>(
+    write_polyphase_tile<Interior, Mode>(
         input_height,
         input_width,
         pad_y,
         pad_x,
+        0,
+        1,
         rectangles[1],
         plane_addrs[1],
         plane_tile_columns[1],
@@ -587,11 +548,13 @@ ALWI void split_macro_tile(
         tile_x,
         source_tiles,
         scratch_addr);
-    write_polyphase_tile_dispatch<Interior, Mode, 1, 0>(
+    write_polyphase_tile<Interior, Mode>(
         input_height,
         input_width,
         pad_y,
         pad_x,
+        1,
+        0,
         rectangles[2],
         plane_addrs[2],
         plane_tile_columns[2],
@@ -599,11 +562,13 @@ ALWI void split_macro_tile(
         tile_x,
         source_tiles,
         scratch_addr);
-    write_polyphase_tile_dispatch<Interior, Mode, 1, 1>(
+    write_polyphase_tile<Interior, Mode>(
         input_height,
         input_width,
         pad_y,
         pad_x,
+        1,
+        1,
         rectangles[3],
         plane_addrs[3],
         plane_tile_columns[3],

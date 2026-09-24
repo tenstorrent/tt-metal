@@ -275,7 +275,7 @@ inline void append_axis_routes(
     const AxisConePlan& cone,
     const Lwt2DAxis axis,
     const IndexInterval transverse,
-    const TerminalScaleInline* terminal_scale,
+    const TerminalScaleInline& terminal_scale,
     AxisPairSlots& slots,
     std::vector<Lwt2DRoutePlan>& routes) {
     for (size_t route_index = 0; route_index < cone.routes.size(); ++route_index) {
@@ -301,14 +301,10 @@ inline void append_axis_routes(
         const bool scale_even = requirement.type == StepType::kScaleEven;
         const bool scale_odd = requirement.type == StepType::kScaleOdd;
         TT_FATAL(predict || update || scale_even || scale_odd, "Unsupported 2D LWT route type");
-        const bool fused_scale_route = terminal_scale != nullptr &&
-                                       route_index != terminal_scale->predict_update_route_index &&
-                                       requirement.type == terminal_scale->scale_type;
-        const Lwt2DPlaneSlot source_slot = predict      ? slots.even
-                                           : update     ? slots.odd
-                                           : scale_even ? slots.even
-                                                        : slots.odd;
-        const Lwt2DPlaneSlot base_slot = predict ? slots.odd : update ? slots.even : source_slot;
+        const bool fused_scale_route =
+            route_index != terminal_scale.predict_update_route_index && requirement.type == terminal_scale.scale_type;
+        const Lwt2DPlaneSlot source_slot = predict || scale_even ? slots.even : slots.odd;
+        const Lwt2DPlaneSlot base_slot = predict || scale_odd ? slots.odd : slots.even;
         const Lwt2DPlaneSlot output_slot = predict || update ? slots.free : source_slot;
         routes.push_back(Lwt2DRoutePlan{
             .axis = axis,
@@ -338,8 +334,8 @@ inline void append_axis_routes(
 [[nodiscard]] inline std::pair<std::vector<Lwt2DRoutePlan>, Lwt2DBandSlots> build_route_schedule(
     const AxisConePlan& y_cone,
     const AxisConePlan& x_cone,
-    const TerminalScaleInline* y_terminal_scale,
-    const TerminalScaleInline* x_terminal_scale) {
+    const TerminalScaleInline& y_terminal_scale,
+    const TerminalScaleInline& x_terminal_scale) {
     std::vector<Lwt2DRoutePlan> routes;
     routes.reserve(2 * y_cone.routes.size() + 2 * x_cone.routes.size());
 
@@ -394,7 +390,6 @@ inline void append_axis_routes(
     const LiftingForwardPlan& y_plan,
     const LiftingForwardPlan& x_plan,
     const IndexRectangle final_band_rect,
-    const bool fuse_terminal_scale,
     const Lwt2DRouteDomainPolicy route_domain) {
     const size_t y_tap_size = static_cast<size_t>(y_plan.preprocess_layout.pad_config.left) + 1;
     const size_t x_tap_size = static_cast<size_t>(x_plan.preprocess_layout.pad_config.left) + 1;
@@ -424,11 +419,7 @@ inline void append_axis_routes(
 
     const TerminalScaleInline y_terminal_scale = execution_detail::terminal_scale_inline(y_plan);
     const TerminalScaleInline x_terminal_scale = execution_detail::terminal_scale_inline(x_plan);
-    auto [routes, final_bands] = build_route_schedule(
-        y_cone,
-        x_cone,
-        fuse_terminal_scale ? &y_terminal_scale : nullptr,
-        fuse_terminal_scale ? &x_terminal_scale : nullptr);
+    auto [routes, final_bands] = build_route_schedule(y_cone, x_cone, y_terminal_scale, x_terminal_scale);
     const Lwt2DResourceModel resources = make_resource_model(initial, routes);
     const Lwt2DBandSourceRectangles final_band_sources{
         .ll = interval_product(exact_y_cone.final_even, exact_x_cone.final_even),
@@ -481,7 +472,6 @@ inline void append_axis_routes(
     const LiftingForwardPlan& x_plan,
     const uint32_t chunk_tiles_y,
     const uint32_t chunk_tiles_x,
-    const bool fuse_terminal_scale,
     const Lwt2DRouteDomainPolicy route_domain) {
     TT_FATAL(chunk_tiles_y > 0 && chunk_tiles_x > 0, "2D LWT chunk tile dimensions must be positive");
     const size_t chunk_height = static_cast<size_t>(chunk_tiles_y) * kTileHeight;
@@ -501,7 +491,6 @@ inline void append_axis_routes(
                     .y = IndexInterval{.begin = y, .end = y_end},
                     .x = IndexInterval{.begin = x, .end = x_end},
                 },
-                fuse_terminal_scale,
                 route_domain));
             x = x_end;
         }
@@ -720,8 +709,8 @@ template <typename ChunkBuilder, typename CostEstimator>
     const uint32_t chunk_tiles_x,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    ChunkBuilder&& build_chunk,
-    CostEstimator&& estimate_cost,
+    const ChunkBuilder& build_chunk,
+    const CostEstimator& estimate_cost,
     const uint64_t penalty_per_core) {
     const size_t class_columns = x_classes.representatives.size();
     std::vector<uint64_t> costs;
@@ -736,7 +725,8 @@ template <typename ChunkBuilder, typename CostEstimator>
                 return std::nullopt;
             }
             for (size_t slot = 0; slot < allocated_heights.size(); ++slot) {
-                allocated_heights[slot] = std::max(allocated_heights[slot], chunk.resources.plane_heights_elements[slot]);
+                allocated_heights[slot] =
+                    std::max(allocated_heights[slot], chunk.resources.plane_heights_elements[slot]);
                 allocated_widths[slot] = std::max(allocated_widths[slot], chunk.resources.plane_widths_elements[slot]);
             }
             max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
@@ -954,11 +944,10 @@ enum class AlignmentCostClass : uint8_t {
         return best;
     }
 
-    const uint64_t minimum_cost = std::min_element(
-                                      candidates.begin(), candidates.end(), [](const Candidate& lhs, const Candidate& rhs) {
-                                          return lhs.estimated_cost < rhs.estimated_cost;
-                                      })
-                                      ->estimated_cost;
+    const uint64_t minimum_cost =
+        std::min_element(candidates.begin(), candidates.end(), [](const Candidate& lhs, const Candidate& rhs) {
+            return lhs.estimated_cost < rhs.estimated_cost;
+        })->estimated_cost;
     uint32_t minimum_cost_cores = 0;
     for (const Candidate& candidate : candidates) {
         if (candidate.estimated_cost == minimum_cost) {
@@ -990,11 +979,9 @@ enum class AlignmentCostClass : uint8_t {
     LiftingForwardPlan x_plan,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    const bool fuse_terminal_scale = true,
     const bool latency_oriented_planner = false,
     const Lwt2DRouteDomainPolicy route_domain = Lwt2DRouteDomainPolicy::kExact) {
     TT_FATAL(core_limit > 0, "2D LWT requires at least one worker core");
-    TT_FATAL(fuse_terminal_scale, "2D LWT compute requires fused terminal scales");
     TT_FATAL(y_plan.preprocess_layout.input.length > 0, "2D LWT input height must be positive");
     TT_FATAL(x_plan.preprocess_layout.input.length > 0, "2D LWT input width must be positive");
     TT_FATAL(
@@ -1056,7 +1043,7 @@ enum class AlignmentCostClass : uint8_t {
                 core_limit,
                 l1_budget_bytes,
                 [&](const IndexRectangle output) {
-                    return plan_2d_detail::build_chunk(y_plan, x_plan, output, fuse_terminal_scale, route_domain);
+                    return plan_2d_detail::build_chunk(y_plan, x_plan, output, route_domain);
                 },
                 [&](const Lwt2DChunkPlan& chunk) { return plan_2d_detail::estimate_chunk_cost(chunk, y_plan, x_plan); },
                 0);
@@ -1075,8 +1062,7 @@ enum class AlignmentCostClass : uint8_t {
         x_plan.preprocess_layout.input.length);
     plan_2d_detail::Candidate best =
         plan_2d_detail::select_best_candidate(std::move(candidates), latency_oriented_planner);
-    best.chunks = plan_2d_detail::build_chunks(
-        y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x, fuse_terminal_scale, route_domain);
+    best.chunks = plan_2d_detail::build_chunks(y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x, route_domain);
     const size_t input_height = y_plan.preprocess_layout.input.length;
     const size_t input_width = x_plan.preprocess_layout.input.length;
     const size_t band_height = y_plan.output_length;
@@ -1136,7 +1122,6 @@ template <typename Scheme>
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
     const BoundaryMode boundary_mode = BoundaryMode::kSymmetric,
-    const bool fuse_terminal_scale = true,
     const bool latency_oriented_planner = false,
     const Lwt2DRouteDomainPolicy route_domain = Lwt2DRouteDomainPolicy::kExact) {
     TT_FATAL(input_height > 0 && input_width > 0, "2D LWT input dimensions must be positive");
@@ -1161,7 +1146,6 @@ template <typename Scheme>
         make_forward_lifting_plan<Scheme>(x_input, boundary_mode),
         core_limit,
         l1_budget_bytes,
-        fuse_terminal_scale,
         latency_oriented_planner,
         route_domain);
 }

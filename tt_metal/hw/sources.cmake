@@ -117,6 +117,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/sum_reduce_scalar.h
+    inc/api/compute/experimental/tile_move_copy_32x16.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
     inc/api/compute/isclose.h
@@ -183,7 +184,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/risc_attribs.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h
-    inc/internal/compute/tile_move_copy.h
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
     inc/internal/dataflow/dataflow_cmd_bufs.h
