@@ -145,7 +145,7 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t q_per_core = global_q_end - global_q_start;
+    [[maybe_unused]] const uint32_t q_per_core = global_q_end - global_q_start;
 
     const uint32_t ring_size_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
@@ -157,6 +157,10 @@ void kernel_main() {
     uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+
+    // Rotated Q split: first runtime arg past the scalars above. Captured here because argidx is
+    // final at this point; the compile-time sizes are derived below, next to the other CT args.
+    const uint32_t rotated_args_base = argidx;
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -200,6 +204,22 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
+
+    // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling. The factory
+    // appends only the remainder unit's starting flat ID per active ordinal.
+    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
+    // read it from there rather than tracking a per-kernel index into the block above.
+    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    constexpr uint32_t rotated_iter_stride = kRotatedComputeIterWords;
+    // Only sdpa_ring_v2 decodes the rotated schedule; the sdpa_ring branch below would keep using
+    // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
+    // latent-V with streaming compute, but only via a chain of implications, so pin it here.
+    static_assert(
+        !rotated_q_split_enabled || use_streaming_compute, "the rotated Q split requires the streaming compute path");
+    static_assert(
+        !rotated_q_split_enabled || rotated_max_slots >= 2,
+        "rotated_max_slots includes a base unit and a remainder unit");
 
     // Placeholder-derived defaults, overwritten from the CB on the tensor path. 0 gates the stamp off.
     uint32_t global_n_partial_col_live = global_n_partial_col;
@@ -280,6 +300,27 @@ void kernel_main() {
     bool seen_active_iter = false;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        // Read this iteration's remainder ID and derive its count from the fixed base range.
+        // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
+        // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
+        // it computes is identical to the reader's and the writer's.
+        //
+        // Unlike the reader and writer, this runs BEFORE the inactive-iteration `continue` below, so
+        // on a skipped iteration it computes an ordinal it will not use and reads rotated_my_count from
+        // that slot. That read is always in bounds: for a skipped iteration the ordinal equals the
+        // number of active iterations at or before it, and since at least one iteration is inactive
+        // that count is at most ring_size - 1 -- within the ring_size entries the host emits. Kept
+        // here rather than moved after the `continue` because rotated_my_count feeds the arg decode that
+        // the ring-id sequencing below is interleaved with.
+        uint32_t rotated_my_count = 0;
+        RotatedQSlots rotated_slots;
+        if constexpr (rotated_q_split_enabled) {
+            const uint32_t rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
+            const uint32_t rotated_iter_base =
+                ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
+            rotated_slots = {global_q_start, q_per_core, get_arg_val<uint32_t>(rotated_iter_base)};
+            rotated_my_count = rotated_slots.count(use_zigzag_balancing ? 2 : 1);
+        }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
         const uint32_t ring_id =
@@ -464,9 +505,12 @@ void kernel_main() {
                 use_attention_sink,
                 cb_attention_sink,
                 has_gathered_joint_k,
-                Lt_local>(
-                global_q_start,
-                global_q_end,
+                Lt_local,
+                rotated_q_split_enabled>(
+                // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
+                // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
+                rotated_q_split_enabled ? 0u : global_q_start,
+                rotated_q_split_enabled ? rotated_my_count : global_q_end,
                 iter_num_kv_chunks,
                 num_q_chunks,
                 ring_iter,
@@ -481,13 +525,18 @@ void kernel_main() {
                 joint_n_mask_chunk_id,
                 acc_state,
                 is_last_ring_iter,
-                q_per_core,
+                // Rotated: NOT this iteration's count. q_per_core only selects L1-persistent vs
+                // DRAM-round-trip accumulators, and that choice must be the same on every iteration
+                // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.
+                rotated_q_split_enabled ? rotated_max_slots : q_per_core,
                 lw_mask,
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                logical_lt);
+                logical_lt,
+                /*q_base_tiles=*/0,
+                rotated_slots);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
