@@ -35,7 +35,8 @@ CONFIGS = [
     ("libcxx", "out-libcxx", "clang++-20", ["-stdlib=libc++"], "clang-20 / libc++"),
 ]
 CANDIDATES = ["std", "zoo", "fu2"]
-COLUMNS = {"std": "StdFn", "zoo": "ZooFn", "fu2": "Fu2Fn"}
+RUNTIME_CANDIDATES = [*CANDIDATES, "ttsl"]
+COLUMNS = {"std": "StdFn", "zoo": "ZooFn", "fu2": "Fu2Fn", "ttsl": "TtslFn"}
 
 
 def run(cmd, **kw):
@@ -210,7 +211,7 @@ def main():
         for _, _, _, _, label in configs:
             got = per.get(label, {})
             cells = []
-            for c in CANDIDATES:
+            for c in RUNTIME_CANDIDATES:
                 col = COLUMNS[c]
                 if col in got:
                     v, cvv, al = got[col]
@@ -218,7 +219,7 @@ def main():
                 else:
                     cells.append("—")
             rows.append([label, *cells])
-        print(md_table(["config", "std", "zoo", "fu2"], rows) + "\n")
+        print(md_table(["config", *RUNTIME_CANDIDATES], rows) + "\n")
 
     print("### Item 6 — object size, `.text` bytes\n")
     print(

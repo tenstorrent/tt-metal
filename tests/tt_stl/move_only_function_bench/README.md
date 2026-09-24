@@ -3,26 +3,38 @@
 Standalone harness comparing **zoo** and **fu2** against a **`std::function`** baseline, to pick the
 backing implementation for `ttsl::move_only_function`.
 
+Runtime scenarios also measure the shipped wrapper as **`TtslFn`**, using its fixed two-pointer
+inline capacity. The historical tables below measure the raw candidates, not the wrapper; their
+timings must not be presented as measurements of `ttsl::move_only_function`. In particular, on
+libc++ the raw candidates have three inline pointers while `TtslFn` has two. `./reproduce.py` now
+includes a separate `ttsl` runtime column. The object-size and compile-time probes remain the
+original three-candidate evaluation.
+
 It is deliberately outside the tt-metal build: it needs only google-benchmark and the two candidate
 headers, so it configures in seconds and can be built with each supported compiler in turn.
 Building tt-metal itself twice to cover gcc and clang is not practical.
 
 ## Contenders
 
-All three are pinned to whatever inline capacity `std::function` has in the current configuration,
-so no side gets a bigger buffer than the baseline. That capacity varies by standard library; see
-`candidates.hpp`, and run `sbo_probe` to check it.
+The original three candidates are pinned to the expected inline capacity of `std::function` in
+each evaluated configuration, so no side gets a bigger buffer than the baseline. That capacity
+varies by standard library and ABI; see `candidates.hpp`, and run `sbo_probe` to check it. A different
+ABI can fail that probe (for example, Apple Clang 21's libc++ has a 16-byte buffer while the
+historical libc++ configuration here assumes 24 bytes); do not compare timings when it fails.
 
 | Name | Type |
 | --- | --- |
 | `StdFn` | `std::function<void()>` |
 | `ZooFn` | `zoo::Function<zoo::AnyContainer<zoo::Policy<void*[N], Destroy, Move, RTTI>>, void()>` — capacity is in **pointers** |
-| `Fu2Fn` | `fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, false, void()>` — `unique_function` with the capacity pinned rather than defaulted |
+| `Fu2Fn` | `fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, true, void()>` — move-only function with the capacity pinned rather than defaulted |
+| `TtslFn` | `ttsl::move_only_function<void()>` — shipped wrapper, fixed two-pointer capacity |
 
 ### Why this zoo spelling
 
-`zoo::VTableFunction` is the more obvious alias, but `AnyContainer` provides no `operator bool` and
-no `has_value()`, so it cannot stand in for `std::move_only_function`. Both live on `zoo::Function`.
+The raw candidate uses `zoo::Function` to supply callable dispatch and `operator bool`.
+The shipped wrapper instead uses zoo's `AnyContainer` for storage and provides its own constrained
+call operator, explicit bool conversion, and move/reset operations. Its storage policy includes
+`RTTI`, which supplies the `has_value()` query through `AnyContainer`.
 
 The `RTTI` affordance is what makes `operator bool` trustworthy: without it the fallback compares
 the vtable's destroy pointer against `Destroy::noOp`, and for a trivially destructible target — a
@@ -41,7 +53,7 @@ and clang even with a plain `Destroy, Move` policy.
 | Benchmark | Issue item | Measures |
 | --- | --- | --- |
 | `BM_ConstructInvokeDestroy<*, SmallCapture>` | 1 | Full lifecycle, capture fits inline (16 B) |
-| `BM_ConstructInvokeDestroy<*, BoundaryCapture>` | 1/2 | 24 B capture: inline under libc++, heap under libstdc++ |
+| `BM_ConstructInvokeDestroy<*, BoundaryCapture>` | 1/2 | 24 B capture: raw candidates inline under libc++, heap under libstdc++; `TtslFn` always heap |
 | `BM_ConstructInvokeDestroy<*, LargeCapture>` | 2 | Same, capture forced to the heap (64 B) |
 | `BM_MoveOnlyCapture_Std` / `BM_MoveOnlyCapture<*>` | 3 | `std::unique_ptr` capture. `std::function` cannot hold one, so its baseline uses the `shared_ptr` wrapper the codebase uses today — the very workaround this issue exists to remove |
 | `BM_MoveConstruct<*, *>`, `BM_MoveAssign<*, *>` | 4 | Move construction and move assignment, both capture sizes |
@@ -189,12 +201,11 @@ call site rather than silently. The alternative loses a guarantee that call site
 that the eventual `std::move_only_function` provides, so `false` would leave behind defensive code
 that migration does not automatically unwind.
 
-**A caveat on how zoo gets both columns.** `Move::VTableEntry` is declared
-`void (*mp)(void*, void*) noexcept` while zoo still accepts throwing-move targets, so a target whose
-move actually throws terminates. `std::move_only_function` earns the same guarantee honestly by
-heap-allocating such callables. fu2 with `true` is the honest form of the promise — it refuses the
-target rather than accepting it under a `noexcept` it cannot keep. Worth weighing: zoo's behaviour
-here is a latent `std::terminate`, not a compile error.
+Zoo also heap-allocates targets whose move constructor can throw, even when they fit its inline
+buffer: `BuilderDecider::SmallBufferSuitable` requires `is_nothrow_move_constructible_v`.
+Moving the wrapper transfers the allocation pointer without invoking the target's move
+constructor. An exception during initial target construction propagates normally; it does not
+cross the `noexcept` wrapper move. The `tt_stl` regression tests exercise both paths.
 
 ### Empty-call behaviour
 

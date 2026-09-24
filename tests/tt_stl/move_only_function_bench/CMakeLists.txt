@@ -34,6 +34,8 @@ FetchContent_Declare(
     zoo
     GIT_REPOSITORY https://github.com/thecppzoo/zoo
     GIT_TAG 7fb5eed6331651e9d94c0f7e9017f2d56ba4b993
+    GIT_SUBMODULES
+        ""
 )
 
 FetchContent_MakeAvailable(
@@ -48,6 +50,12 @@ endif()
 # zoo ships sources we do not want; only its headers are needed.
 add_library(zoo_headers INTERFACE)
 target_include_directories(zoo_headers INTERFACE ${zoo_SOURCE_DIR}/inc)
+
+# Measure the shipped wrapper as well as the raw candidates without configuring tt-metal.
+add_library(ttsl_headers INTERFACE)
+add_library(TTBench::STL ALIAS ttsl_headers)
+target_include_directories(ttsl_headers INTERFACE ${CMAKE_CURRENT_LIST_DIR}/../../../tt_stl)
+target_link_libraries(ttsl_headers INTERFACE zoo_headers)
 
 # Establishes std::function's real inline buffer for this configuration; the benchmark pins the
 # candidates to whatever it reports.
@@ -65,6 +73,7 @@ target_link_libraries(
     bench
     PRIVATE
         benchmark::benchmark
+        TTBench::STL
         function2
         zoo_headers
 )
