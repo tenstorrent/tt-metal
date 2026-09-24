@@ -228,18 +228,27 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    const std::uint32_t kt_pairs = kt_dim >> 1;
+    constexpr std::uint32_t mop_template_0 = 0;
+    constexpr std::uint32_t no_skip_zmask = 0;
+    constexpr std::uint32_t replay_buffer_size = 32;
+    constexpr std::uint32_t full_unpack_instruction_count = 5;
+    constexpr std::uint32_t reuse_instruction_count = 3;
+
+    const std::uint32_t kt_pairs = kt_dim / 2;
     if (kt_pairs > 0) {
-        TT_MOP(0, kt_pairs - 1, 0);
+        TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
     }
-    if (kt_dim & 1) {
-        const std::uint32_t first_half_iterations = (ct_dim + 1) >> 1;
-        const std::uint32_t second_half_iterations = ct_dim >> 1;
+    if (kt_dim % 2 != 0) {
+        const std::uint32_t first_half_tiles = (ct_dim + 1) / 2;
+        const std::uint32_t second_half_tiles = ct_dim / 2;
         // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
         // while post0's last instruction is a hazard NOP.
-        lltt::replay(0, 2 + first_half_iterations * 3);
-        if (second_half_iterations > 0) {
-            lltt::replay(32 - second_half_iterations * 3, second_half_iterations * 3);
+        const std::uint32_t first_half_instruction_count =
+            full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
+        lltt::replay(0, first_half_instruction_count);
+        if (second_half_tiles > 0) {
+            const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
+            lltt::replay(replay_buffer_size - second_half_instruction_count, second_half_instruction_count);
         }
     }
 
