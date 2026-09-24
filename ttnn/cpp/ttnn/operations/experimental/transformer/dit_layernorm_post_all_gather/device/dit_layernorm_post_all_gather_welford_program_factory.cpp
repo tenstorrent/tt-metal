@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include <optional>
 #include <string>

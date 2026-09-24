@@ -11,6 +11,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/distributed/types.hpp"
+
 namespace ttnn::experimental::prim {
 
 tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_descriptor(

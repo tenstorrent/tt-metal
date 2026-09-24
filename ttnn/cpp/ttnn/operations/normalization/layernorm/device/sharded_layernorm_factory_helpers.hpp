@@ -17,6 +17,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
