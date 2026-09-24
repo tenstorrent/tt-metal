@@ -41,13 +41,18 @@ namespace {
 
 constexpr int kDeviceId = 0;
 
-// `cores` must stay a single element: the region maps once per process.
 const std::vector<int64_t> kPageSizes = {16384};
-const std::vector<int64_t> kCores = {4};
+const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 const std::vector<int64_t> kRingPages = {8};
-const std::vector<int64_t> kIterations = {20000};
-const std::vector<int64_t> kWarmupPct = {10};
-const std::vector<int64_t> kVerify = {0};
+const std::vector<int64_t> kIterations = {2000, 20000, 200000};
+const std::vector<int64_t> kWarmupPct = {0, 10, 25};
+// Both: the verified case is the only correctness check this leg has, and it cannot be
+// the same case that reports bandwidth -- the full compare below is on the poll path.
+const std::vector<int64_t> kVerify = {0, 1};
+
+// The region maps once per process and reserved_base() refuses to resize, so the mapping
+// is sized for the sweep's largest case; provision() then pins only each case's prefix.
+const uint32_t kReservedCores = static_cast<uint32_t>(*std::max_element(kCores.begin(), kCores.end()));
 
 // Fail rather than spin: a kernel parked in socket_barrier makes Finish() unbounded.
 constexpr auto kStall = std::chrono::seconds(30);
@@ -204,7 +209,7 @@ public:
         try {
             // Kept for the verify path: reserved_base() is the only accessor for the
             // mapping's base, and the frame offsets the sink reports are relative to it.
-            region_base_ = region.reserved_base(cores_);
+            region_base_ = region.reserved_base(kReservedCores);
             dc.alias_region_base = region_base_;
             d2h_ = D2HLeg::create(mesh_, dc, err);
         } catch (const std::exception& ex) {
@@ -255,9 +260,11 @@ protected:
             return "core " + std::to_string(t.core) + " frame " + std::to_string(expect_iter) + " stamped " +
                    std::to_string(w[0]);
         }
+        // Every word, not a sample: a torn or short DMA lands as a run of stale bytes, and
+        // three probes at fixed positions is exactly the shape that misses one.
         const uint32_t want = pattern_word(t.core);
-        for (const uint32_t k : {1u, words / 2u, words - 1u}) {
-            if (k != 0 && k < words && w[k] != want) {
+        for (uint32_t k = 1; k < words; ++k) {
+            if (w[k] != want) {
                 return "core " + std::to_string(t.core) + " frame " + std::to_string(expect_iter) + " word " +
                        std::to_string(k) + " is " + std::to_string(w[k]) + ", want " + std::to_string(want);
             }
@@ -345,7 +352,9 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
             }
             ++pending[t.core];
             ++frames;
-            if (i >= warmup_iters_) {
+            // Bounded by the same cap the reserve uses: past it the percentiles have long
+            // converged, and the growth would realloc inside the window being timed.
+            if (i >= warmup_iters_ && issue_cycles.size() < kMaxSamples) {
                 issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
                 stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
             }
