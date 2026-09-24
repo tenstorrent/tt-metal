@@ -238,6 +238,34 @@ static void check_recipe_l1_fit(
         available);
 }
 
+void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, const PrecisionPolicy& policy) {
+    const auto& qs = q.logical_shape();
+    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "SDPA recipe attn_mask must be on device");
+    TT_FATAL(mask.device() == q.device(), "SDPA recipe attn_mask must be on the same device as Q");
+    TT_FATAL(mask.layout() == Layout::TILE, "SDPA recipe attn_mask must be tilized");
+    TT_FATAL(mask.tensor_spec().tile() == Tile({32, 32}), "SDPA recipe attn_mask requires 32x32 tiles");
+    TT_FATAL(
+        mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
+    TT_FATAL(
+        mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
+            mask.dtype() == DataType::BFLOAT4_B || (mask.dtype() == DataType::FLOAT32 && policy.fp32_destination),
+        "SDPA recipe attn_mask must be BF16, BFP8 or BFP4 (FP32 for FP32-state recipes)");
+    const auto& ms = mask.logical_shape();
+    TT_FATAL(ms.rank() == 4, "SDPA recipe attn_mask must be rank four");
+    TT_FATAL(
+        (ms[0] == 1 || ms[0] == qs[0]) && (ms[1] == 1 || ms[1] == qs[1]) && ms[2] == qs[2] &&
+            ms[3] == k.logical_shape()[2],
+        "SDPA recipe attn_mask must be [1|B, 1|H, Sq, Sk], got {} for Q {} and K {}",
+        ms,
+        qs,
+        k.logical_shape());
+    const auto& mp = mask.padded_shape();
+    TT_FATAL(
+        mp[0] == ms[0] && mp[1] == ms[1] && mp[2] == ((ms[2] + 31) / 32) * 32 &&
+            mp[3] == ((ms[3] + 31) / 32) * 32,
+        "SDPA recipe attn_mask only supports minimal tile padding");
+}
+
 // CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
 constexpr uint8_t kRecipeMaskCb = 15;
 
@@ -290,32 +318,8 @@ static std::vector<Tensor> run_recipe_segments(
         k_length += sk.padded_shape()[2];
     }
     if (attn_mask) {
-        const auto& mask = *attn_mask;
         TT_FATAL(segments.size() == 1, "SDPA recipe masks are supported on the dense (non-joint) path only");
-        TT_FATAL(mask.storage_type() == StorageType::DEVICE, "SDPA recipe attn_mask must be on device");
-        TT_FATAL(mask.device() == q.device(), "SDPA recipe attn_mask must be on the same device as Q");
-        TT_FATAL(mask.layout() == Layout::TILE, "SDPA recipe attn_mask must be tilized");
-        TT_FATAL(mask.tensor_spec().tile() == Tile({32, 32}), "SDPA recipe attn_mask requires 32x32 tiles");
-        TT_FATAL(
-            mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
-        TT_FATAL(
-            mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
-                mask.dtype() == DataType::BFLOAT4_B || (mask.dtype() == DataType::FLOAT32 && policy.fp32_destination),
-            "SDPA recipe attn_mask must be BF16, BFP8 or BFP4 (FP32 for FP32-state recipes)");
-        const auto& ms = mask.logical_shape();
-        TT_FATAL(ms.rank() == 4, "SDPA recipe attn_mask must be rank four");
-        TT_FATAL(
-            (ms[0] == 1 || ms[0] == qs[0]) && (ms[1] == 1 || ms[1] == qs[1]) && ms[2] == qs[2] &&
-                ms[3] == k.logical_shape()[2],
-            "SDPA recipe attn_mask must be [1|B, 1|H, Sq, Sk], got {} for Q {} and K {}",
-            ms,
-            qs,
-            k.logical_shape());
-        const auto& mp = mask.padded_shape();
-        TT_FATAL(
-            mp[0] == ms[0] && mp[1] == ms[1] && mp[2] == ((ms[2] + 31) / 32) * 32 &&
-                mp[3] == ((ms[3] + 31) / 32) * 32,
-            "SDPA recipe attn_mask only supports minimal tile padding");
+        validate_recipe_mask(q, k, *attn_mask, policy);
     }
     const uint32_t joint_q_rows = segments.size() == 2 ? segments[1][0].logical_shape()[2] : 0;
     const uint32_t joint_k_rows = segments.size() == 2 ? segments[1][1].logical_shape()[2] : 0;

@@ -68,6 +68,8 @@ ttnn::Tensor scaled_dot_product_attention(
         // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
         std::optional<ttnn::Tensor> recipe_mask = attn_mask;
         if (attn_mask) {
+            // Reject an unsupported mask before the pre-scale dispatches anything.
+            numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
             const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
             recipe_mask = ttnn::multiply(
                 policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32
