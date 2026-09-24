@@ -27,30 +27,43 @@ Two things to fix, tracked separately:
 2. **craq-sim (issue #401):** ttsim should surface/trap the `ILLEGAL_FORMAT_CONVERSION` like RTL instead of
    hanging; plus the separate `qsr_convert_pack_value` bf16→fp32 (`5→0`) gap.
 
-## Root cause (STRONG, VERIFIED CANDIDATE — ZEBU fix-test pending): missing Float32→Tf32 unpack substitution
+## Root cause: OPEN again. Leading lead = UnpackToDest ↔ ELWADD-datacopy mismatch (NOT a Float32→Tf32 relabel)
 
-Under `enable_32_bit_dest=true`, Float32 unpacked into the SrcA/SrcB registers must be declared as **`Tf32`**, not
-raw `Float32` — SrcA/SrcB are 19-bit registers that cannot legally hold Float32. The tt-llk **test harness already
-encodes this HW rule** (`tt_metal/tt-llk/tests/python_tests/helpers/data_format_inference.py:193-205`: `Float32`
-unpacked to src registers with `is_fp32_dest_acc_en == Yes` → `Tf32`), added by commit `87a43f86f16` ("stop Quasar
-tests passing by accident") precisely because the Quasar Verilog model's X-optimism absorbed this format-rule
-violation while real hardware (ZEBU) traps it.
+> **The earlier "missing Float32→Tf32 unpack substitution" candidate is CONTRADICTED by PR #50728 + the tilize
+> config — do NOT implement that fix.** It is aimed at the wrong unpack route and would be lossy.
 
-**Production tilize never applies the substitution.** Every Quasar tilize factory sets the input DFB format to
-`datatype_to_dataformat_converter(a.dtype())` = raw `Float32` (e.g.
-`tilize_multi_core_default_program_factory.cpp:33,89`), and there is no Tf32 fallback in `tilize_helpers.inl`,
-`api/compute/tilize.h`, or the Quasar ckernel LLK. Declaring the unpack format `Float32` while `EN_32BIT_DEST` is
-set is a direct match for `UNPACKER_0 ILLEGAL_FORMAT_CONVERSION`.
+**Why the Tf32-substitution candidate is wrong for tilize:**
+- The harness Tf32 substitution (`data_format_inference.py`, `infer_unpack_out`) is gated on
+  **`not unpacking_to_dest and not unpacking_to_srcs`** — i.e. it applies only on the unpack-to-**SrcA/B** route.
+  On the unpack-to-**DEST** route, `Float32` falls through to `return input_format` → **stays Float32**.
+- **PR #50728** ("Add missing dest-format configs to stop Quasar tests passing by accident", merged 2026-07-27)
+  says its Tf32 rule is for **Float16/Float16_b** inputs ("the HW unpacker has no fp16→Float32 conversion; Tf32 is
+  the correct widened SrcS format") and explicitly: **"Native Float32 input stays Float32 (direct passthrough)."**
+- **tilize is configured for unpack-to-DEST** for fp32: `tilize_multi_core_default_program_factory.cpp:152` sets
+  `UnpackMode::UnpackToDest` (gated on `fp32_llk_acc`; `:149` `enable_32_bit_dest`, `:160` copied to Gen2). So by
+  the harness's own logic tilize's `Float32` is the **correct** declared format — a relabel to `Tf32` is both the
+  wrong route and **lossy** (it truncates, defeating the lossless path's whole purpose: exact fp32 before the
+  bf16 typecast).
 
-**Candidate fix (tt-metal / LLK side, verify on ZEBU):** apply the harness's Tf32 substitution for the Quasar
-tilize unpack path when `enable_32_bit_dest` (in the factory's format setup, or the compute-API/LLK
-`tilize_init`). **Open loose end:** the rule is Float32-specific — **uint8 also faults** and has no documented
-Tf32 equivalent (likely needs an analogous Int32/Int16 promotion; unconfirmed). Not yet implemented/verified.
+So the declared format is what the harness itself would infer as correct → the fault is probably **not** a missing
+relabel. Leading remaining lead: a **route-vs-math mismatch** — tilize unpacks to **DEST**, but under
+`enable_32_bit_dest` its "unary datacopy" (`llk_math_eltwise_unary_datacopy`) compiles to an **`ELWADD`**, a math op
+that reads the **source** registers → data in DEST, math reading SRC. The harness file also notes Quasar unpacker
+conversions are under-tested ("for now only conversions performed by the packer are tested"). **uint8 also faults**
+(no Tf32 rule applies to it at all) — consistent with the bug being about the DEST/ELWADD path, not a Float32 format
+label. Not yet confirmed; needs ZEBU to disambiguate.
 
-### Earlier hypotheses (checked + refuted, kept for the record)
+### Earlier hypotheses (checked + refuted / contradicted, kept for the record)
 
-The fault is in the `enable_32_bit_dest=true` tilize path; before the format-rule finding, two source-reading
-hypotheses were checked against working references and **refuted**:
+- **CONTRADICTED — "missing Float32→Tf32 unpack substitution"** (see above: wrong route — tilize uses UnpackToDest
+  where Float32 stays Float32 per PR #50728; and lossy).
+- **REFUTED — "fast vs slow path":** on Quasar `fast_tilize_block` aliases `tilize_block`; there is no separate
+  fast path.
+- **REFUTED — "binary-ELWADD MOP wired for tilize's unary consumer":** with 32-bit-dest,
+  `llk_math_eltwise_unary_datacopy` compiles to an `ELWADD`, and `_llk_unpack_tilize_mop_config_`
+  (`llk_unpack_tilize.h`, `EN_32BIT_DEST` branch) pokes a dvalid onto the opposite unpacker to feed it. This
+  looked like a unary-op-wired-as-binary mismatch — but the codebase's **validated** datacopy reference
+  `llk_unpack_unary_operand.h` (the exact case that branch's comment calls out as known-good) uses the
 
 - **REFUTED — "fast vs slow path":** on Quasar `fast_tilize_block` aliases `tilize_block`; there is no separate
   fast path.
