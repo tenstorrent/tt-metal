@@ -151,3 +151,29 @@ def test_nlp_concat_heads_boltz_sharded_rejects_partial_head_shard(device, expec
     )
     with expect_error(RuntimeError, "rows per head"):
         ttnn.experimental.nlp_concat_heads_boltz(in0_t, memory_config=output_mem_config)
+
+
+def test_nlp_concat_heads_boltz_sharded_rejects_interleaved_output(device, expect_error):
+    num_heads, seq_len, head_dim = 4, 32, 64
+    grid_size = (1, 4)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    num_cores = grid_size[0] * grid_size[1]
+    torch_input = torch.randn([num_heads, seq_len, seq_len, head_dim]).bfloat16().float()
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    in0_t = ttnn.Tensor(torch_input, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, interleaved_mem_config)
+    in0_t = ttnn.interleaved_to_sharded(
+        in0_t,
+        grid_size,
+        [num_heads * seq_len * seq_len // num_cores, head_dim],
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+    with expect_error(RuntimeError, "Sharded input requires a sharded output"):
+        ttnn.experimental.nlp_concat_heads_boltz(in0_t, memory_config=interleaved_mem_config)
