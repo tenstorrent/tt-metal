@@ -24,19 +24,22 @@ inline void group2_initialize_root(uint32_t root_cb, uint32_t tiles) {
     CircularBuffer(root_cb).push_back(tiles);
 }
 
+// Row layouts: root and scratch rows hold two dh-tile planes (root: high/low; scratch:
+// PV/local), so a row spans 2 * dh tiles. dh is the head dim in tiles.
 inline void group2_bootstrap_row(
-    uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row, uint32_t rows = 2) {
+    uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row, uint32_t rows = 2, uint32_t dh = 4) {
+    const uint32_t row_stride = 2 * dh;
     // K0 has no correction-CB publication, so explicitly publish preceding PV.
     group2_pack_visibility_fence();
     PACK((llk_pack_reconfig_l1_acc(0)));
-    configure_pack_width(root_cb, 4);
+    configure_pack_width(root_cb, dh);
     for (uint32_t i = 0; i < rows; ++i) {
         tile_regs_acquire();
         copy_init(scratch_cb);
-        copy_block(scratch_cb, 8 * (read_row + i), 0, 4);
+        copy_block(scratch_cb, row_stride * (read_row + i), 0, dh);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile<true>(0, root_cb, 8 * (global_row + i));
+        pack_tile<true>(0, root_cb, row_stride * (global_row + i));
         tile_regs_release();
     }
 }
@@ -53,7 +56,9 @@ inline void group2_numerator_row(
     bool boundary,
     bool odd,
     bool has_local,
-    uint32_t rows = 2) {
+    uint32_t rows = 2,
+    uint32_t dh = 4) {
+    const uint32_t row_stride = 2 * dh;
     // Original correction-CB push already publishes PV. Protected/local
     // updates are in-place; the subsequent scratch publication drains them.
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -61,7 +66,7 @@ inline void group2_numerator_row(
         // Odd PV is already local. No data copy, no arithmetic, no lost term.
         return;
     }
-    const uint32_t chunk_plane = odd ? 4 : 0;
+    const uint32_t chunk_plane = odd ? dh : 0;
     if (!has_local) {
         // No unmerged local contribution: canonical paired compensated update,
         // with distinct source-chunk and destination-root CBs. Physical local
@@ -69,12 +74,12 @@ inline void group2_numerator_row(
         PACK((ckernel::sfpu::init_sdpa_compensated_block_macros()));
         configure_pack_width(root_cb, 2);
         for (uint32_t i = 0; i < rows; ++i) {
-            for (uint32_t j = 0; j < 4; j += 2) {
+            for (uint32_t j = 0; j < dh; j += 2) {
                 tile_regs_acquire();
                 copy_init(root_cb);
-                copy_block(root_cb, 8 * (root_read_row + i) + j, 0, 2);
-                copy_block(root_cb, 8 * (root_read_row + i) + 4 + j, 2, 2);
-                copy_block(scratch_cb, 8 * (scratch_read_row + i) + chunk_plane + j, 4, 2);
+                copy_block(root_cb, row_stride * (root_read_row + i) + j, 0, 2);
+                copy_block(root_cb, row_stride * (root_read_row + i) + dh + j, 2, 2);
+                copy_block(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 4, 2);
                 if (!identity) {
                     unary_bcast_init<BroadcastType::COL>(correction_cb);
                     unary_bcast<BroadcastType::COL>(correction_cb, i, 6);
@@ -91,8 +96,8 @@ inline void group2_numerator_row(
                     VectorMode::None,
                     identity)));
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                pack_tile<true>(0, root_cb, 8 * (root_write_row + i) + j);
-                pack_tile<true>(2, root_cb, 8 * (root_write_row + i) + 4 + j);
+                pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
+                pack_tile<true>(2, root_cb, row_stride * (root_write_row + i) + dh + j);
                 tile_regs_release();
             }
         }
@@ -104,15 +109,15 @@ inline void group2_numerator_row(
         }
         configure_pack_width(root_cb, 2);
         for (uint32_t i = 0; i < rows; ++i) {
-            for (uint32_t j = 0; j < 4; j += 2) {
+            for (uint32_t j = 0; j < dh; j += 2) {
                 tile_regs_acquire();
                 copy_init(root_cb);
-                copy_block(root_cb, 8 * (root_read_row + i) + j, 0, 2);
-                copy_block(root_cb, 8 * (root_read_row + i) + 4 + j, 2, 2);
+                copy_block(root_cb, row_stride * (root_read_row + i) + j, 0, 2);
+                copy_block(root_cb, row_stride * (root_read_row + i) + dh + j, 2, 2);
                 if (!odd) {
-                    copy_block(scratch_cb, 8 * (scratch_read_row + i) + 4 + j, 4, 2);
+                    copy_block(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 4, 2);
                 }
-                copy_block(scratch_cb, 8 * (scratch_read_row + i) + chunk_plane + j, 6, 2);
+                copy_block(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 6, 2);
                 tile_regs_commit();
                 tile_regs_wait();
                 if (odd) {
@@ -123,10 +128,10 @@ inline void group2_numerator_row(
                         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_identity_replay, 0, VectorMode::None)));
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                pack_tile<true>(0, root_cb, 8 * (root_write_row + i) + j);
-                pack_tile<true>(2, root_cb, 8 * (root_write_row + i) + 4 + j);
+                pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
+                pack_tile<true>(2, root_cb, row_stride * (root_write_row + i) + dh + j);
                 if (odd) {
-                    pack_tile<true>(4, scratch_cb, 8 * (scratch_write_row + i) + 4 + j);
+                    pack_tile<true>(4, scratch_cb, row_stride * (scratch_write_row + i) + dh + j);
                 }
                 tile_regs_release();
             }
@@ -136,15 +141,15 @@ inline void group2_numerator_row(
     // Max changes force a fold, independently of the fixed group boundary.
     configure_single_tile_pack(root_cb);
     for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < 4; ++j) {
+        for (uint32_t j = 0; j < dh; ++j) {
             tile_regs_acquire();
             copy_init(root_cb);
-            copy_tile(root_cb, 8 * (root_read_row + i) + j, 0);
-            copy_tile(root_cb, 8 * (root_read_row + i) + 4 + j, 1);
+            copy_tile(root_cb, row_stride * (root_read_row + i) + j, 0);
+            copy_tile(root_cb, row_stride * (root_read_row + i) + dh + j, 1);
             if (!odd) {
-                copy_tile(scratch_cb, 8 * (scratch_read_row + i) + 4 + j, 2);
+                copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 2);
             }
-            copy_tile(scratch_cb, 8 * (scratch_read_row + i) + chunk_plane + j, 3);
+            copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 3);
             unary_bcast_init<BroadcastType::COL>(correction_cb);
             unary_bcast<BroadcastType::COL>(correction_cb, i, 4);
             unary_bcast_uninit<BroadcastType::COL>(correction_cb);
@@ -158,10 +163,10 @@ inline void group2_numerator_row(
                     DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_changed_fold, 0, VectorMode::None)));
             }
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            pack_tile<true>(0, root_cb, 8 * (root_write_row + i) + j);
-            pack_tile<true>(1, root_cb, 8 * (root_write_row + i) + 4 + j);
+            pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
+            pack_tile<true>(1, root_cb, row_stride * (root_write_row + i) + dh + j);
             if (odd) {
-                pack_tile<true>(2, scratch_cb, 8 * (scratch_write_row + i) + 4 + j);
+                pack_tile<true>(2, scratch_cb, row_stride * (scratch_write_row + i) + dh + j);
             }
             tile_regs_release();
         }

@@ -1,19 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""D64 recipes (SD3.5, Motif, LTX-2 audio): FAST, BALANCED and ACCURATE.
-
-The compensated BF16 state (COMPENSATED, LOW_PRECISION) is laid out for D128
-and rejects D64 on the host. Gated on determinism and FP64 accuracy.
-"""
+"""D64 recipes (SD3.5, Motif, LTX-2 audio), gated on determinism and FP64
+accuracy relative to the qualified D128 recipe on the same generator."""
 
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from .sdpa_recipe_test_utils import PRECISIONS, digest, make_inputs, metrics
-
-D64_VARIANTS = ("A", "C", "D")
+from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare
 
 
 def reference(q, k, v):
@@ -33,8 +28,8 @@ def options(variant, grid, q_chunk, k_chunk):
     )
 
 
-def upload(device, host):
-    return [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host]
+def upload(device, host, variant="A"):
+    return prepare([ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host], variant)
 
 
 def run(segments, variant, grid, q_chunk, k_chunk):
@@ -48,7 +43,7 @@ def run(segments, variant, grid, q_chunk, k_chunk):
     return torch.cat([ttnn.to_torch(x) for x in outputs], dim=2)
 
 
-@pytest.mark.parametrize("variant", D64_VARIANTS)
+@pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("q_chunk,k_chunk", [(256, 512), (128, 256), (224, 384)], ids=lambda x: str(x))
 @pytest.mark.parametrize(
     "q_length,k_length,heads,grid,distribution,joint_rows",
@@ -71,12 +66,12 @@ def test_recipe_d64_accuracy(
 
     def segments_of(values):
         if joint_rows is None:
-            return [upload(device, values)]
+            return [upload(device, values, variant)]
         q_rows, kv_rows = joint_rows
         split = list(zip(values, (q_rows, kv_rows, kv_rows)))
         return [
-            upload(device, [x[..., :-rows, :].contiguous() for x, rows in split]),
-            upload(device, [x[..., -rows:, :].contiguous() for x, rows in split]),
+            upload(device, [x[..., :-rows, :].contiguous() for x, rows in split], variant),
+            upload(device, [x[..., -rows:, :].contiguous() for x, rows in split], variant),
         ]
 
     segments = segments_of(host)
@@ -99,16 +94,9 @@ def test_recipe_d64_accuracy(
         assert observed["l2_pct"] <= d128["l2_pct"] * 1.5 + 0.05, (observed["l2_pct"], d128["l2_pct"])
 
 
-@pytest.mark.parametrize("variant", ["B", "E_bf16"])
-def test_recipe_d64_rejects_compensated(device, variant):
+def test_recipe_rejects_unsupported_head_dim(device):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
-    host = [x[..., :64].contiguous() for x in make_inputs(512, "normal", q_length=256)]
-    inputs = upload(device, host)
-    if variant.startswith("E_"):
-        # Preparation itself is D128-only; the attention call must reject D64 either way.
-        with pytest.raises(RuntimeError):
-            ttnn.transformer.prepare_sdpa_input(inputs[0], is_query=True)
-        return
-    with pytest.raises(RuntimeError, match="require head dim 128"):
-        run([inputs], variant, (1, 1), 256, 512)
+    host = [x[..., :96].contiguous() for x in make_inputs(512, "normal", q_length=256)]
+    with pytest.raises(RuntimeError, match="head dims 64 and 128"):
+        run([upload(device, host)], "D", (1, 1), 256, 512)

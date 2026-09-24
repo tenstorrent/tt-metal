@@ -256,9 +256,6 @@ static std::vector<Tensor> run_recipe_segments(
     const uint32_t k_chunk = k_tiles * 32;
     TT_FATAL(qs[3] == 64 || qs[3] == 128, "SDPA recipes support head dims 64 and 128, got {}", qs[3]);
     const uint32_t d_tiles = qs[3] / 32;
-    TT_FATAL(
-        d_tiles == 4 || policy.recurrent_state != RecurrentState::CompensatedBF16,
-        "COMPENSATED and LOW_PRECISION recipes currently require head dim 128; FAST, BALANCED and ACCURATE support D64");
     if (program_config) {
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
         TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");

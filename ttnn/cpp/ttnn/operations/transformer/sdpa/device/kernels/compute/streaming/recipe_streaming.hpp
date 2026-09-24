@@ -888,7 +888,7 @@ void salad_correct_fused(
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row * sdpa_sum_stride);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
-    static_assert((sbh_t == 1 || sbh_t == 2) && sbw_t == 4 && dst_size == 8);
+    static_assert((sbh_t == 1 || sbh_t == 2) && (sbw_t == 2 || sbw_t == 4) && dst_size == 8);
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -901,7 +901,8 @@ void salad_correct_fused(
         group_boundary,
         group_odd,
         group_has_local,
-        tiles_per_row);
+        tiles_per_row,
+        tiles_per_column);
     PACK((ckernel::sfpu::init_sdpa_compensated_block_macros()));
 
     configure_single_tile_pack(sum_out_cb);
@@ -1067,7 +1068,7 @@ static void sdpa_inner_loop_step(
 #else
     // Row groups pair two query tile rows; an odd Q chunk ends with a single-row group.
     static_assert(
-        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt == 4 &&
+        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && (vDHt == 2 || vDHt == 4) &&
         qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
@@ -1588,7 +1589,7 @@ static void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
 #ifndef SDPA_RECIPE_FP32
             if (is_first_iter) {
-                group2_bootstrap_row(prev.out, out_cb, pushed * qktv_h, 0, sbh);
+                group2_bootstrap_row(prev.out, out_cb, pushed * qktv_h, 0, sbh, vDHt);
             }
 #endif
             CircularBuffer(cur.sum).push_back(sbh * sdpa_sum_stride);
@@ -1820,7 +1821,7 @@ static void sdpa_inner_loop_step(
                 normalize_row(pushed_rows, qktv_h);
             } else {
 #ifndef SDPA_RECIPE_FP32
-                group2_bootstrap_row(prev.out, out_cb, salad_row * qktv_h, salad_row * qktv_h);
+                group2_bootstrap_row(prev.out, out_cb, salad_row * qktv_h, salad_row * qktv_h, qktv_h, vDHt);
 #endif
                 CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                 CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
@@ -1842,7 +1843,8 @@ static void sdpa_inner_loop_step(
                         normalize_row(pushed_rows, drain_h);
                     } else {
 #ifndef SDPA_RECIPE_FP32
-                        group2_bootstrap_row(prev.out, out_cb, last_group * qktv_h, last_group * qktv_h, drain_h);
+                        group2_bootstrap_row(
+                            prev.out, out_cb, last_group * qktv_h, last_group * qktv_h, drain_h, vDHt);
 #endif
                         CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
@@ -1884,11 +1886,7 @@ template <
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
         Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        (DHt == 4
-#ifdef SDPA_RECIPE_FP32
-         || DHt == 2  // FP32 recipes are width-generic; compensated BF16 state is laid out for D128.
-#endif
-         ));
+        (DHt == 2 || DHt == 4));
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;

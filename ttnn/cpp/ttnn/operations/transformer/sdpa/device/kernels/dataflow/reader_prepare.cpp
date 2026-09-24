@@ -23,7 +23,7 @@ void kernel_main() {
 #ifdef SDPA_PREPARE_ROWS
         constexpr uint32_t rows = (SDPA_PREPARE_ROWS + 31) / 32;
         for (uint32_t j = 0; j < batch; ++j) {
-            if (((start + i + j) / 4) % rows == rows - 1) {
+            if (((start + i + j) / SDPA_PREPARE_DHT) % rows == rows - 1) {
                 zero_tile_padding<2048>(cb.get_write_ptr() + j * bytes, SDPA_PREPARE_ROWS % 32);
             }
         }
