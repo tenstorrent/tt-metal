@@ -34,8 +34,10 @@
  * eltwise binary SFPU LLK uses), so the pass works with fp32 dest on or off.
  */
 
-// Opt-in only: the LUT epilogue runs when the kernel is compiled with -DSWIGLU_LUT_SILU (a program-factory define).
-// Nothing sets it today, so both SwiGLU kernels keep the exact silu_tile + mul_binary_tile epilogue by default.
+// Opt-in only: the LUT epilogue runs when the kernel is compiled with -DSWIGLU_LUT_SILU. The fused-SwiGLU program
+// factories set it when the env var TT_MM_SWIGLU_LUT_SILU=1 is present (compute_throttle_utils.cpp,
+// add_swiglu_lut_silu_define_if_needed); otherwise both SwiGLU kernels keep the exact silu_tile + mul_binary_tile
+// epilogue.
 #if defined(SWIGLU_LUT_SILU)
 constexpr bool kSwigluLutSilu = true;
 #else

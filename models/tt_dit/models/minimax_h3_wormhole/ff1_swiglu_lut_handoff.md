@@ -19,7 +19,11 @@ pack. Verified after the last edit with the model's exact config (HiFi2, fp32 de
 Identical numerics to the last digit; the host time is within the run-to-run band (15.97-16.08 ms across four runs).
 `test_linear_swiglu` 4/4 at PCC 0.99998.
 
-**The LUT silu is in the tree but compiled out.** It is selected by a compile define that no program factory sets:
+**The LUT silu is in the tree but compiled out by default.** It is selected by a compile define; since 2026-09-24 the three
+fused-SwiGLU program factories set it when `TT_MM_SWIGLU_LUT_SILU=1` is in the environment (`compute_throttle_utils.cpp`,
+`add_swiglu_lut_silu_define_if_needed`; the define is part of the kernel hash, so LUT and exact builds coexist in the kernel
+cache). Block profile and a 50-step 15 s video with it on: [README.md](README.md) Part 2, *Roofline with every optimization on*
+(ff1 15.70 -> 12.11 ms with fp32 dest off as well; CLIP 35.90). What follows describes the tree as paused on 2026-09-21:
 
 - `ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_lut.hpp` (new, untracked): `swiglu_lut_tile_init()`
   programs the 6-segment fp16 sigmoid table into LReg0-2 / LReg4-6; `swiglu_lut_tile(gate_idst)` computes
@@ -91,7 +95,9 @@ Recovery if a ring run hangs (none did in this session): ff1.md §6.
 
 ## 4. Decisions still open, and what was tried for the switch
 
-1. **How the LUT is enabled.** The session first tied it to the compute config's `math_approx_mode` (`APPROX`), which
+1. **How the LUT is enabled.** *Resolved 2026-09-24 as an env-var opt-in, `TT_MM_SWIGLU_LUT_SILU=1`, read by the program factories
+   next to the other `TT_MM_*` matmul switches; a host-side op argument remains the cleaner long-term route if it is adopted.*
+   The session first tied it to the compute config's `math_approx_mode` (`APPROX`), which
    the model sets to `True` (`transformer_block_minimax_h3.py:149`) — semantically right (silu ignored the flag before)
    and zero plumbing, but it would have flipped the model's epilogue on the spot, so it was replaced by the inert
    define before pausing. If the approx-mode route is taken later: `APPROX` is emitted by the JIT descriptors for the

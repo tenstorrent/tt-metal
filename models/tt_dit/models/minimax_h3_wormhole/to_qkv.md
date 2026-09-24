@@ -83,7 +83,14 @@ Per forward: 1.0 ms per call is 50 ms of the 12.4 s (0.4%).
 
 ## 5. What is left
 
-- **fp32 dest off with (8,7,12) 4x2**: -8.7% at 2.4x the accumulator error, the same precision decision as ff1's, to
+- **fp32 dest off: measured in the block on 2026-09-24, -0.35 ms per layer of device wall time, secondary candidate.** The
+  op itself gains 0.2-0.4 ms per call in the block ((12,7,8) 4x2 or the production (8,7,12) 2x2), less than exp 17's -8.7% because
+  the alternating K loop already took part of it. to_out's *kernel duration* grows by 0.2-0.5 ms at the same time, but that is
+  the FSDP weight gather that runs concurrently inside to_out's window being re-apportioned, not work: the union of device
+  intervals per layer (`tools/block_device_busy.py`) drops by 0.33-0.39 ms, and by 1.22 with ff1 off as well (additive). It
+  doubles the model's output shift at 10 steps (33 vs 16 of 255 with ff1 alone) and has no CLIP run yet, for a third of ff1's
+  gain. Switch: `MINIMAX_H3_MM_FP32_DEST=qkv`, `MINIMAX_H3_QKV_BLOCKS`. Details in [ff1.md](ff1.md) §3.4.
+- *(superseded by the above)* **fp32 dest off with (8,7,12) 4x2**: -8.7% at 2.4x the accumulator error, the same precision decision as ff1's, to
   be taken for the two ops together (`ParallelFeedForward` / `Attention` hand one compute config to their linears;
   give the AGMMs their own). Validate at the model level.
 - **Padding**: the N padding (21 -> 24 tiles per core) is 1.1 ms of issued MACs. An N_block of 7 (3 blocks, 21
