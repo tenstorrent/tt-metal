@@ -109,7 +109,7 @@ def test_recipe_sdpa_kwargs_replace_compute_config(precision):
 @pytest.mark.parametrize(
     "precision, kv_dtype, head_dim",
     [
-        (ACCURATE, None, 64),  # recipes are D128 only
+        (ACCURATE, None, 96),  # not a recipe head dim (64/128/256 are)
         (COMPENSATED, ttnn.bfloat8_b, 128),  # packed KV needs LOW_PRECISION
         (None, ttnn.bfloat8_b, 128),  # KV dtype without a recipe
         (LOW, ttnn.float32, 128),  # unsupported KV storage

@@ -41,6 +41,8 @@ class SD35TransformerBlock(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
         super().__init__()
 
@@ -104,6 +106,8 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -338,8 +342,8 @@ class SD35Transformer2DModel(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
-        """``sdpa_precision``/``sdpa_kv_dtype`` exist for API parity with the recipe-wired denoisers;
-        SD3.5 attention is D64, so any named SDPA recipe is rejected (ValueError). ``None`` keeps the
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt every joint attention (joint SDPA, or ring joint SDPA
+        with sequence parallelism) into a named SDPA recipe (D64 is supported); ``None`` keeps the
         existing attention configuration."""
         self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=attention_head_dim)
         super().__init__()
@@ -403,6 +407,8 @@ class SD35Transformer2DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             self.transformer_blocks.append(block)
 
@@ -428,10 +434,8 @@ class SD35Transformer2DModel(Module):
     def validate_sdpa_recipe(
         sdpa_precision: ttnn.SDPAPrecision | None, sdpa_kv_dtype: ttnn.DataType | None, *, head_dim: int
     ) -> None:
-        """Reject any named SDPA recipe: SD3.5 joint attention (D64) is not wired for recipes."""
+        """Raise ValueError for an unsupported named SDPA recipe / KV dtype (before any device work)."""
         validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="SD3.5")
-        if sdpa_precision is not None:
-            raise ValueError("SD3.5: named SDPA recipes are not wired for this model")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "norm_out_linear")

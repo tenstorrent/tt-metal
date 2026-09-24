@@ -1200,6 +1200,8 @@ class LTXPipeline:
                     skip_cross_attn=skip_ca,
                     skip_self_attn_blocks=skip_sa_blocks,
                     audio_attn_mask=tt_attn_mask,
+                    # Real audio length: a named SDPA recipe slices K/V to it instead of the key mask.
+                    audio_attn_kv_len=audio_N_real,
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
                     video_padding_mask=tt_v_pad_mask_sp,

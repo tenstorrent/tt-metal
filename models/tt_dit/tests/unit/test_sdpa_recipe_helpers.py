@@ -12,15 +12,17 @@ FAST, COMPENSATED, LOW = ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.COMPENSATED
 
 def test_validate_legacy_and_recipe():
     assert recipe.validate_recipe_args(None, None, head_dim=64, model="m") == ttnn.bfloat16
-    assert recipe.validate_recipe_args(FAST, None, head_dim=128, model="m") == ttnn.bfloat16
+    for head_dim in (64, 128, 256):
+        assert recipe.validate_recipe_args(FAST, None, head_dim=head_dim, model="m") == ttnn.bfloat16
+    assert recipe.exp_ring_supports(128) and not recipe.exp_ring_supports(64) and not recipe.exp_ring_supports(256)
     assert recipe.validate_recipe_args(LOW, ttnn.bfloat4_b, head_dim=128, model="m") == ttnn.bfloat4_b
 
 
 @pytest.mark.parametrize(
     "precision, kv_dtype, head_dim, blackhole",
     [
-        (FAST, None, 64, True),  # D64 (SD3.5 / Motif / audio)
-        (FAST, None, 256, True),  # D256 (Ideogram4)
+        (FAST, None, 96, True),  # D96 is not a recipe head dim
+        (FAST, None, 512, True),
         (FAST, None, 128, False),  # not Blackhole
         (COMPENSATED, ttnn.bfloat8_b, 128, True),  # packed KV needs LOW_PRECISION
         (LOW, ttnn.float32, 128, True),  # unsupported storage

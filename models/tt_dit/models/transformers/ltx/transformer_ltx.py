@@ -153,6 +153,8 @@ class LTXTransformerBlock(Module):
             "apply_gated_attention": apply_gated_attention,
             "quant_config": quant_config,
             "lora_enabled": lora_enabled,
+            "sdpa_precision": sdpa_precision,
+            "sdpa_kv_dtype": sdpa_kv_dtype,
         }
 
         # FFN precision: the profile supplies the ff dtypes + casts; no quant_config leaves the
@@ -166,18 +168,17 @@ class LTXTransformerBlock(Module):
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         self.norm1 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
-        # The SDPA recipe applies to the D128 video attentions only (video self-attn, ring or dense, and
-        # the unmasked video<->text cross-attn). The D64 audio attentions and the audio<->video
-        # cross-attentions below never receive it and keep their legacy SDPA configuration.
-        video_attn_kwargs = {**attn_kwargs, "sdpa_precision": sdpa_precision, "sdpa_kv_dtype": sdpa_kv_dtype}
-        self.attn1 = LTXAttention(dim=video_dim, num_heads=video_num_heads, is_self=True, **video_attn_kwargs)
+        # The SDPA recipe (attn_kwargs) applies to every attention: the D128 video self/text attentions and
+        # the D64 audio self/text, A2V and V2A attentions. The padded audio self-attn's key mask becomes a
+        # K/V slice to audio_attn_kv_len under a recipe (see LTXAttention._recipe_mask_kv_len).
+        self.attn1 = LTXAttention(dim=video_dim, num_heads=video_num_heads, is_self=True, **attn_kwargs)
         self.norm2 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
         self.attn2 = LTXAttention(
             dim=video_dim,
             num_heads=video_num_heads,
             is_self=False,
             context_dim=video_cross_attention_dim,
-            **video_attn_kwargs,
+            **attn_kwargs,
         )
         self.norm3 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
         self.ffn = ParallelFeedForward(
@@ -374,7 +375,10 @@ class LTXTransformerBlock(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        audio_attn_kv_len: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``audio_attn_kv_len`` is the real (unpadded) audio length ``audio_attn_mask`` masks keys to
+        (``audio_N_real`` of ``build_audio_masks``); only an SDPA recipe reads it (slice instead of mask)."""
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
         chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
@@ -449,6 +453,7 @@ class LTXTransformerBlock(Module):
             addcmul_gate=a_gate_sa,
             skip_qk=skip_self_attn,
             attn_mask=audio_attn_mask,
+            attn_kv_len=audio_attn_kv_len,
         )
 
         # Audio text cross-attention
@@ -579,9 +584,10 @@ class LTXTransformerModel(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt the D128 video attentions (video self-attn and
-        video<->text cross-attn) into a named SDPA recipe; audio (D64) and audio<->video attentions
-        stay legacy. ``None`` keeps the existing attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt every attention (D128 video self/text, D64 audio
+        self/text, A2V, V2A) into a named SDPA recipe. With padded audio a recipe needs
+        ``audio_attn_kv_len`` (= audio_N_real) alongside ``audio_attn_mask`` at forward time.
+        ``None`` keeps the existing attention configuration."""
         super().__init__()
 
         self.inner_dim = num_attention_heads * attention_head_dim
@@ -814,6 +820,7 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        audio_attn_kv_len: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Host entry: upload torch latents/timestep, then run the device-only inner_step."""
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -862,6 +869,7 @@ class LTXTransformerModel(Module):
             audio_padding_mask=audio_padding_mask,
             audio_padding_mask_full=audio_padding_mask_full,
             video_padding_mask=video_padding_mask,
+            audio_attn_kv_len=audio_attn_kv_len,
         )
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
@@ -895,6 +903,7 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        audio_attn_kv_len: int | None = None,
         gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Device-only, trace-capturable denoising step. All tensor args are ttnn (no torch).
@@ -1045,6 +1054,7 @@ class LTXTransformerModel(Module):
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
                 video_padding_mask=video_padding_mask,
+                audio_attn_kv_len=audio_attn_kv_len,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result

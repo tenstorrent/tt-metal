@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device smoke tests: opt-in SDPA recipes wired into the Mochi, Wan2.2 and LTX-2 video attentions.
+"""Device smoke tests: opt-in SDPA recipes wired into the Mochi, Wan2.2 and LTX-2 video attentions
+(LTX-2 audio: test_sdpa_recipe_model_smoke_ltx_audio.py).
 
 Random weights (no checkpoints). Each case builds a fresh tt module per variant (legacy, FAST, ACCURATE,
 LOW_PRECISION with bfp8 K/V) from the SAME torch state dict and inputs and compares every output with the
@@ -473,12 +474,13 @@ def test_ltx_video_text_cross_attention_recipes_1x1(mesh_device, prompt_seq_len,
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-def test_ltx_recipe_rejects_mask_and_audio_d64_stays_legacy(mesh_device, record_property) -> None:
+def test_ltx_recipe_rejects_non_key_length_mask(mesh_device) -> None:
+    """A recipe plus a mask it can't turn into a K/V slice is rejected (no attn_kv_len; any cross mask).
+    The D64 audio attentions (incl. the padded audio self-attn key-length slice) are covered by
+    test_sdpa_recipe_model_smoke_ltx_audio.py."""
     from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
 
     ccl_manager, parallel_config, _ = _parallel(mesh_device, 0, 1)
-
-    # 1) A recipe plus an attention mask is rejected (video D128 self-attention).
     heads, head_dim, seq_len = 2, 128, 256
     dim = heads * head_dim
     tt_model = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, True, P.FAST)
@@ -490,28 +492,6 @@ def test_ltx_recipe_rejects_mask_and_audio_d64_stays_legacy(mesh_device, record_
     with pytest.raises(ValueError, match="unmasked"):
         tt_model(spatial_1BND=tt_x, N=seq_len, attn_mask=tt_mask)
 
-    # 2) Audio attention (D64) cannot opt in, and still runs on the legacy path without a recipe.
-    a_heads, a_head_dim, a_seq = 4, 64, 256
-    a_dim = a_heads * a_head_dim
-    with pytest.raises(ValueError, match="D128"):
-        _ltx_model(mesh_device, ccl_manager, parallel_config, a_dim, a_heads, True, P.FAST)
-
-    torch.manual_seed(7)
-    torch_model = bf16_weights(LTX2Attention(query_dim=a_dim, heads=a_heads, kv_heads=a_heads, dim_head=a_head_dim))
-    context = randn_bf16(1, 32, a_dim)
-    x = randn_bf16(1, a_seq, a_dim)
-    with torch.no_grad():
-        torch_out = torch_model(x, encoder_hidden_states=context)
-    # Build as a cross-attention module (audio->text path, no RoPE) with the same weights.
-    tt_audio = _ltx_model(mesh_device, ccl_manager, parallel_config, a_dim, a_heads, False)
-    tt_audio.load_torch_state_dict(dict(torch_model.state_dict()))
-    out = tt_audio(
-        spatial_1BND=bf16_tensor(x.unsqueeze(0), device=mesh_device),
-        N=a_seq,
-        prompt_1BLP=bf16_tensor(context.unsqueeze(0), device=mesh_device),
-    )
-    out = _gather(mesh_device, out, 0, 1).squeeze(0)
-    l2 = rel_l2(out, torch_out)
-    record_property("ltx_audio_d64_legacy.l2_vs_torch", round(l2, 4))
-    logger.info(f"LTX audio D64 legacy cross-attention: L2 vs torch {l2:.4f}%")
-    assert l2 < 3.0
+    tt_cross = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, False, P.FAST)
+    with pytest.raises(ValueError, match="unmasked"):
+        tt_cross(spatial_1BND=tt_x, N=seq_len, prompt_1BLP=tt_x, attn_mask=tt_mask, attn_kv_len=128)

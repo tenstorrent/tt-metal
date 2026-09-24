@@ -70,7 +70,7 @@ def test_validate_head_dim_and_kv_dtype():
     assert MochiAttention._validate_sdpa_recipe(None, None, head_dim=64, blackhole=False) == ttnn.bfloat16
     assert MochiAttention._validate_sdpa_recipe(LOW, ttnn.bfloat4_b, head_dim=128, blackhole=True) == ttnn.bfloat4_b
     for precision, kv_dtype, head_dim, bh in [
-        (FAST, None, 64, True),  # D64 unsupported
+        (FAST, None, 96, True),  # D96 is not a recipe head dim
         (FAST, None, 128, False),  # Wormhole unsupported
         (FAST, ttnn.bfloat8_b, 128, True),  # packed KV needs LOW_PRECISION
         (None, ttnn.bfloat8_b, 128, True),  # KV dtype without a recipe

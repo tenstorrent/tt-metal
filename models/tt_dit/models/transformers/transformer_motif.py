@@ -150,7 +150,7 @@ class MotifTransformer(Module):
     ) -> None:
         super().__init__()
 
-        # Fail fast, before any device allocation: Motif is D64, which no named SDPA recipe supports.
+        # Fail fast, before any device allocation, on an invalid SDPA recipe / KV dtype request.
         self.validate_sdpa_recipe(config, sdpa_precision, sdpa_kv_dtype)
 
         in_channels = self.LATENT_CHANNELS
@@ -270,7 +270,7 @@ class MotifTransformer(Module):
         sdpa_precision: ttnn.SDPAPrecision | None,
         sdpa_kv_dtype: ttnn.DataType | None,
     ) -> None:
-        """Raise ValueError for a named SDPA recipe on unsupported attention (Motif-6B is D64)."""
+        """Raise ValueError for an invalid named SDPA recipe / KV dtype (Motif-6B is D64, supported)."""
         validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=config.head_dim, model="Motif")
 
     @classmethod
