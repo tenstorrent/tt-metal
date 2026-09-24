@@ -306,7 +306,7 @@ def test_ones_give_constant_k(device):
 
 
 def test_zeros_give_exact_zero(device):
-    """in0 = 0: every output element is exactly 0; stale ring entries or unclipped subblock padding
+    """in0 = 0: every output element is exactly 0; stale DFB entries or unclipped subblock padding
     leak nonzeros here (the 2x3 C slice forces a padded auto subblock)."""
     gx, gy = _grid(device)
     M, K, N = 5 * TILE, 6 * TILE, 7 * TILE
@@ -428,7 +428,7 @@ def test_dram_sharded_in1(device):
 
 
 def test_borrowed_B_over_several_K_chunks(device):
-    """B width-sharded in L1 on the row of cores that own the C slices: its shard is bound as the B slice ring
+    """B width-sharded in L1 on the row of cores that own the C slices: its shard is bound as the B slice DFB
     (no copy) and consumed one K chunk at a time; four K chunks here."""
     gx, gy = _grid(device)
     if gx < 4:
@@ -462,7 +462,7 @@ def test_borrowed_A_wins_over_subblock_padding(device):
 
 
 def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
-    """K = 100 is not a tile multiple, so A's padding has to be zeroed in the ring: A cannot be borrowed and is
+    """K = 100 is not a tile multiple, so A's padding has to be zeroed in the DFB: A cannot be borrowed and is
     copied even though its shard matches the C slices."""
     gx, gy = _grid(device)
     if gy < 4:
@@ -500,7 +500,7 @@ def test_sharded_C_with_narrow_subblock_takes_the_copy_path(device):
 
 
 def test_single_core_all_operands_borrowed(device):
-    """One core, A / B / C all L1-sharded on it: every ring is a resident shard, so the reader reads nothing
+    """One core, A / B / C all L1-sharded on it: every DFB is a resident shard, so the reader reads nothing
     and the writer writes nothing."""
     M, K, N = 3 * TILE, 4 * TILE, 2 * TILE
     core = _rect(0, 0, 0, 0)
@@ -582,7 +582,7 @@ def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles):
 )
 def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
     """packer_l1_acc engages when there are more than 2 K steps (K_chunk_tiles=1 on K_tiles=6 gives 6);
-    the padded case must keep the accumulation ring's credits balanced over padded subblocks."""
+    the padded case must keep the C_partials DFB's credits balanced over padded subblocks."""
     M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
     torch.manual_seed(11)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
