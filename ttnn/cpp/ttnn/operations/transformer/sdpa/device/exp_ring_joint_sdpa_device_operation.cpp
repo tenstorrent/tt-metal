@@ -25,6 +25,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+ExpRingJointSDPADeviceOperation::program_factory_t ExpRingJointSDPADeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+        return ExpRingJointSDPARecipeMeshWorkloadFactory{};
+    }
+    return ExpRingJointSDPAMeshWorkloadFactory{};
+}
+
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
@@ -369,7 +377,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         total_segments);
 
     // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
-    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_builder.cpp
     // (L1-bound).
     constexpr uint32_t kMaxPasses = 3;
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;

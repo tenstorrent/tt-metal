@@ -124,4 +124,35 @@ struct ExpRingJointSDPAMeshWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<ExpRingJointSDPAMeshWorkloadFactory>);
 
+// Named precision recipes B-E (precision set and not FAST): recipe-owned compute, reader and writer kernels on
+// the shared exp-ring transport (exp_ring_joint_sdpa_program_builder.hpp).
+struct ExpRingJointSDPARecipeProgramFactory {
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const ExpRingJointSDPAParams& operation_attributes,
+        const ExpRingJointSDPAInputs& tensor_args,
+        ExpRingJointSDPAResult& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct ExpRingJointSDPARecipeMeshWorkloadFactory {
+    using descriptor_adapter_t =
+        ttnn::device_operation::MeshDeviceOperationAdapter<detail::ExpRingJointSDPADescriptorAdapterOperation>::
+            DescriptorMeshWorkloadAdapter<ExpRingJointSDPARecipeProgramFactory>;
+    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const ExpRingJointSDPAParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const ExpRingJointSDPAInputs& tensor_args,
+        ExpRingJointSDPAResult& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const ExpRingJointSDPAParams& operation_attributes,
+        const ExpRingJointSDPAInputs& tensor_args,
+        ExpRingJointSDPAResult& tensor_return_value);
+};
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<ExpRingJointSDPARecipeMeshWorkloadFactory>);
+
 }  // namespace ttnn::prim

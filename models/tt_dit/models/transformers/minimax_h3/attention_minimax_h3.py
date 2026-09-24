@@ -201,7 +201,7 @@ class MiniMaxH3Attention(Module):
         # balances 14 local heads over 10 rows: segs=1 gives 2 passes of 10-tile chunks with 6 rows
         # idle on the second pass, while segs=2 gives 3 passes of 5-tile chunks on every core --
         # 15 Q tile-rows per core instead of 20 on the bottleneck cores.
-        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_builder.cpp
         self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
@@ -339,7 +339,7 @@ class MiniMaxH3Attention(Module):
         return sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     # One accumulator entry and one Q chunk per pass, in tiles of `_EXP_L1_TILE_BYTES`. Mirrors the
-    # CB table in exp_ring_joint_sdpa_program_factory.cpp; reproduces its measured 1,302,528 B at
+    # CB table in exp_ring_joint_sdpa_program_builder.cpp; reproduces its measured 1,302,528 B at
     # (224, 512) exactly. Nothing in the op validates this, so an oversized shape would only surface
     # as a CB allocation failure at program build.
     _EXP_L1_TILE_BYTES = 2048  # bf16 and Float16_b tiles are both 2 KiB
@@ -360,7 +360,7 @@ class MiniMaxH3Attention(Module):
     def _exp_streaming_compute_enabled(self, sq_t: int, sk_t: int) -> bool:
         """Whether the op picks its streaming compute path for a chunk shape.
 
-        Mirrors `use_streaming_compute` in exp_ring_joint_sdpa_program_factory.cpp. The exp compute
+        Mirrors `use_streaming_compute` in exp_ring_joint_sdpa_program_builder.cpp. The exp compute
         kernel `static_assert`s on it, so a shape the factory judges ineligible does not fall back --
         it fails to build the kernel. The binding term in practice is `sk_t % (dst / h) == 0`: it
         rejects k=320 at q=320 (h=1, so sk_t must be a multiple of 8, and 10 is not).
