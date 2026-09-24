@@ -15,6 +15,7 @@ Three tiers, cheapest first:
 """
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
@@ -211,3 +212,52 @@ def test_device_estimator_matches_golden(device, call):
     print(f"  PCC {p:.10f}  max|d| {(got - want).abs().max():.3e}")
     assert got.shape == want.shape, (got.shape, want.shape)
     assert p >= 0.99, p
+
+
+@needs_weights
+@pytest.mark.parametrize("length", [449, 450, 897])
+def test_device_attention_ignores_tile_padding(device, length):
+    """The estimator's attention must not depend on what its inputs' tile padding holds.
+
+    `ttnn.transformer.scaled_dot_product_attention` masks padded key columns itself, yet
+    when the padding of both k and v holds huge or non-finite values its output is
+    garbage -- PCC ~0, at any length that is not a tile multiple. The estimator's
+    convolutions leave such values in their output padding, and whenever a UNet level's
+    length was 1 mod 32 they reached k and v as NaN: zero-shot ja at 332 tokens
+    (T = 897, then 449 after the downsample) came out with half its mel Inf/NaN. The golden
+    geometry, 282 and 141, never trips it, which is why every other test passed.
+
+    NaN written into the input's padding rows is carried into k and v by the QKV
+    projection, which is the model's own path. Only the logical rows are scored.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.flow.estimator import TtAttention
+    from models.demos.cosyvoice.tt.hifigan.conv import accurate_compute_config
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    sub = WeightBag.load(FLOW_WEIGHTS).sub(PREFIX).sub("mid_blocks.0.1.0.attn1")
+    attn = TtAttention(device, sub, heads=8, dim_head=64, cc=accurate_compute_config(device))
+
+    torch.manual_seed(0)
+    x = torch.randn(2, length, 256)
+    padded = math.ceil(length / ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # rounded up to whole tiles
+    host = torch.full((2, padded, 256), float("nan"))
+    host[:, :length] = x
+    xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # A view at the logical length; `skip_padding_fill` keeps the NaN rows in the padding.
+    xt = ttnn.reshape(xt, ttnn.Shape([2, length, 256]), ttnn.Shape([2, padded, 256]), skip_padding_fill=True)
+    got = ttnn.to_torch(attn(xt)).float()
+
+    xb = x.bfloat16().float()
+    q, k, v = (
+        (xb @ sub.sub(n).tensor("weight").float().t()).reshape(2, length, 8, 64).transpose(1, 2)
+        for n in ("to_q", "to_k", "to_v")
+    )
+    ctx = (torch.softmax(q @ k.transpose(-1, -2) / 8.0, dim=-1) @ v).transpose(1, 2).reshape(2, length, 512)
+    out = sub.sub("to_out.0")
+    want = ctx @ out.tensor("weight").float().t() + out.tensor("bias").float()
+
+    p = pcc(got, want)
+    print(f"\n  attention, T={length}, NaN in the input's tile padding: PCC {p:.6f}")
+    assert bool(torch.isfinite(got).all()), "non-finite values reached the logical rows"
+    assert p >= 0.999, p

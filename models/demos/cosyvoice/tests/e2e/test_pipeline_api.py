@@ -38,7 +38,7 @@ import os
 import pytest
 import torch
 
-from models.demos.cosyvoice.tt.common import GOLDEN_DIR
+from models.demos.cosyvoice.tt.common import GOLDEN_DIR, pcc
 from models.demos.cosyvoice.tt.weights import default_weights_path
 
 HIFT_WEIGHTS = default_weights_path()
@@ -232,3 +232,96 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch)
         f"batched synthesis diverges from one-at-a-time: worst token agreement {100 * worst:.2f} %, "
         "below the 95 % the scope sets for token accuracy"
     )
+
+
+@pytest.mark.timeout(1800)
+@needs_weights
+@needs_inputs
+@needs_device
+def test_device_consecutive_utterances_with_one_flow_length(device):
+    """A second utterance with the same flow length as the one before it completes.
+
+    The CFM solver keeps its trace across calls, and replays it when the next call has
+    the same mel length. Between two utterances the vocoder creates per-length state
+    and the LLM captures a trace of its own, both after the flow's capture, so a replay
+    by the second utterance can overwrite what the vocoder then reads. In a five-language
+    sweep that is Korean after Cantonese -- both 328 tokens -- and the device stalled at
+    the first read of Korean's waveform in every run. The pipeline now releases the
+    flow's trace once each utterance's mel is out (`TtMaskedDiffWithXvec.release_trace`).
+
+    This drives that sequence through the public stages: one utterance end to end, then
+    a second prompt's tokens cut to the first's count so the flow length repeats, with
+    the LLM running in between as it would for a real second utterance. The second
+    utterance's audio is compared with the same utterance synthesised after an explicit
+    release, with the same draws.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.pipeline import PromptContext, RandomSources
+
+    (ctx_a, _), (ctx_b, _) = (PromptContext.from_npz(p) for p in _cases(2))
+    assert ctx_a.mel_len1 == ctx_b.mel_len1, "the two prompts must share a prompt length for the flow lengths to match"
+    model = _model(device)
+
+    def to_wav(tokens, ctx, seed):
+        torch.manual_seed(seed)
+        rng = RandomSources()
+        mel, frames = model.tokens_to_mel(tokens, ctx, rng)
+        assert model.flow.decoder._trace_id is None, "the flow's trace outlived the utterance that captured it"
+        wav = model.mel_to_wav(mel, frames, rng)
+        ttnn.deallocate(mel)
+        out = ttnn.to_torch(wav).float().reshape(-1)
+        ttnn.deallocate(wav)
+        return out
+
+    tokens_a = model.text_to_tokens(ctx_a, sampler="greedy", max_tokens=MAX_TOKENS)
+    wav_a = to_wav(tokens_a, ctx_a, 1)
+
+    tokens_b = model.text_to_tokens(ctx_b, sampler="greedy", max_tokens=MAX_TOKENS)
+    tokens_b = (tokens_b * (len(tokens_a) // max(len(tokens_b), 1) + 1))[: len(tokens_a)]
+    wav_b = to_wav(tokens_b, ctx_b, 2)
+
+    model.flow.release_trace()
+    wav_b_again = to_wav(tokens_b, ctx_b, 2)
+
+    p = pcc(wav_b, wav_b_again)
+    print(
+        f"\n  two utterances at one flow length: {len(tokens_a)} tokens each, {wav_a.numel()} samples"
+        f"\n  second utterance vs itself after an explicit release: PCC {p:.10f}"
+        f"  max|d| {(wav_b - wav_b_again).abs().max():.3e}"
+    )
+    for name, w in (("first", wav_a), ("second", wav_b)):
+        assert w.numel() > 0 and bool(torch.isfinite(w).all()), f"{name} utterance produced empty or non-finite audio"
+    assert p >= 0.9999, p
+
+
+@pytest.mark.timeout(1800)
+@needs_weights
+@needs_inputs
+@needs_device
+def test_device_stream_leaves_no_flow_trace(device):
+    """A stream releases the flow's trace when it ends, and a batch call after it completes.
+
+    `synthesize_streaming` runs the flow once per chunk through its own path, not
+    `tokens_to_mel`, so the last chunk's trace used to outlive the stream. A later call
+    whose flow length matched that chunk's would have replayed it after the stream's
+    vocoder and the next LLM capture had allocated beside it -- the shape of the Korean
+    stall (`test_device_consecutive_utterances_with_one_flow_length`).
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.pipeline import PromptContext
+
+    (ctx_a, _), (ctx_b, _) = (PromptContext.from_npz(p) for p in _cases(2))
+    model = _model(device)
+
+    res = model.synthesize_streaming(ctx_a, sampler="greedy", max_tokens=MAX_TOKENS, seed=1986)
+    n_chunks = res.n_chunks
+    res.free()
+    assert model.flow.decoder._trace_id is None, "the last chunk's flow trace outlived the stream"
+
+    wav, tokens = model.synthesize(ctx_b, sampler="greedy", max_tokens=MAX_TOKENS)
+    w = ttnn.to_torch(wav).float().reshape(-1)
+    ttnn.deallocate(wav)
+    print(f"\n  stream of {n_chunks} chunks, then a batch call: {len(tokens)} tokens, {w.numel()} samples")
+    assert w.numel() > 0 and bool(
+        torch.isfinite(w).all()
+    ), "the batch call after a stream produced empty or non-finite audio"

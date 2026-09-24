@@ -12,9 +12,15 @@ from __future__ import annotations
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from models.demos.cosyvoice.tt.common import pcc
-from models.demos.cosyvoice.tt.hifigan.conv import TtConv1d, extract_conv_weights, fold_weight_norm
+from models.demos.cosyvoice.tt.hifigan.conv import (
+    TtConv1d,
+    extract_conv_weights,
+    fold_weight_norm,
+    prepare_weights_default,
+)
 from models.demos.cosyvoice.tt.hifigan.resblock import TtResBlock, get_padding
 
 GATE = 0.99
@@ -67,6 +73,16 @@ def test_fold_weight_norm_matches_torch_norm_semantics():
     for oc in range(4):
         want = g[oc] * v[oc] / v[oc].norm(2)
         assert torch.allclose(got[oc], want, atol=1e-6), (got[oc] - want).abs().max()
+
+
+def test_vocoder_verifies_prepared_weights_by_default(monkeypatch):
+    """The vocoder checks each prepared conv geometry against the op once, on every
+    architecture. Blackhole used to skip the check, and there `Conv1d(256 -> 256, k=7)` at
+    length 8264 returned `inf`: a 1033-frame mel came out as a railed waveform."""
+    monkeypatch.delenv("COSYVOICE_CONV_PREPARE", raising=False)
+    assert prepare_weights_default(None) is False
+    monkeypatch.setenv("COSYVOICE_CONV_PREPARE", "1")
+    assert prepare_weights_default(None) is True
 
 
 # --------------------------------------------------------------------------
@@ -125,3 +141,35 @@ def test_device_resblock_matches_torch(device, kernel):
     print(f"\n  resblock k={kernel} PCC {p:.8f}  max|d| {(got - want).abs().max():.3e}")
     assert got.shape == want.shape, (got.shape, want.shape)
     assert p >= GATE, p
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}, {"l1_small_size": 524288}], indirect=True)
+@pytest.mark.parametrize("channels,kernel,length", [(80, 3, 1895), (256, 7, 8264), (256, 11, 8264)])
+def test_device_verified_conv1d_matches_torch(device, channels, kernel, length):
+    """A verified conv matches torch where prepared weights do not on Blackhole.
+
+    Prepared weights at (80, k=3, 1895) return values of the right size in the wrong places
+    (PCC 0.35). At (256, k=7 or 11, 8264) they return `inf` or values off by 1e4, but only
+    with the 512 KB L1_SMALL reservation; with the usual 32 KB that geometry is exact.
+    Verification has to catch both kinds, the first only
+    by comparing outputs element by element, and fall back to the op's own preparation.
+    """
+    import ttnn
+
+    g = torch.Generator().manual_seed(length + kernel)
+    w = torch.randn(channels, channels, kernel, generator=g) / (channels * kernel) ** 0.5
+    b = torch.randn(channels, generator=g) * 0.1
+    pad = get_padding(kernel, 1)
+    conv = TtConv1d(device, w, b, padding=pad)
+    conv._verify = True  # what the vocoder sets on each of its convolutions
+    xt = ttnn.from_torch(
+        torch.randn(1, length, channels, generator=g), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    out, n = conv(xt, length)
+    got = ttnn.to_torch(out).float().reshape(1, n, channels)
+    want = F.conv1d(ttnn.to_torch(xt).float().transpose(1, 2), w, b, padding=pad).transpose(1, 2)
+
+    p = pcc(got, want)
+    print(f"\n  Conv1d({channels}, k={kernel}) at {length}, verified: PCC {p:.6f}")
+    assert got.shape == want.shape, (got.shape, want.shape)
+    assert p >= 0.999, p

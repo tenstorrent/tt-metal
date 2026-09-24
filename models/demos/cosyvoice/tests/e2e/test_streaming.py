@@ -62,6 +62,30 @@ needs_golden = pytest.mark.skipif(
 # --------------------------------------------------------------------------
 # host tier
 # --------------------------------------------------------------------------
+def test_session_pauses_the_vocoder_weight_check_until_closed():
+    """A stream runs the vocoder with its prepared-weight check off, and close restores it.
+
+    The check can switch a geometry to the op's own weight preparation, which allocates on
+    every call, and an interleaved stream calls the vocoder with the LLM's decode trace
+    live. No device: only the flags on the generator's convolutions are exercised.
+    """
+    from models.demos.cosyvoice.tt.hifigan.conv import TtConv1d
+    from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
+    from models.demos.cosyvoice.tt.streaming import StreamSession
+
+    hift = TtHiFTGenerator.__new__(TtHiFTGenerator)
+    convs = [TtConv1d.__new__(TtConv1d) for _ in range(3)]
+    for c in convs:
+        c._verify = True
+    hift.stages = [convs[0], (convs[1], [convs[2]])]  # nested, as the real ones are
+    synth = SimpleNamespace(cfg=StreamConfig(), hift=hift)
+
+    with StreamSession(synth, None, None) as session:
+        assert not any(c._verify for c in convs)
+        session.close()  # a second close must not flip anything
+    assert all(c._verify for c in convs)
+
+
 def test_incremental_session_cuts_the_same_chunks_as_the_batch_loop():
     """Pushing tokens one at a time must schedule exactly the batch loop's chunks.
 

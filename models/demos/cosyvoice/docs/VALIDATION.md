@@ -300,18 +300,30 @@ happens inside the traced body. Ending the traced body with a `ttnn.copy` into a
 allocated before capture has no effect on replay (the solver reads back zeros), so the
 trace owns its output instead (`TtConditionalCFM._capture`).
 
-### `ttnn.conv1d` with prepared weights on Wormhole
+### `ttnn.conv1d` with prepared weights
 
-For input lengths 8193–8704 on Wormhole, `ttnn.conv1d` with weights from
-`ttnn.prepare_conv_weights` disagrees with the op's own weight preparation, by up to
-`1e37` for the vocoder's `Conv1d(128 → 128, k=11, pad=5)`. Blackhole agrees at every
-length tested. Wormhole therefore verifies each `(input_length, batch)` geometry once,
-running prepared and unprepared weights and keeping the prepared one only where they
-agree (`TtConv1d._prepared`, `prepare_weights_default`). `COSYVOICE_CONV_PREPARE`
-overrides the verdict either way; turning preparation off makes the traced vocoder and
-flow-estimator convolutions uncapturable. Reported upstream as
-[tenstorrent/tt-metal#55545](https://github.com/tenstorrent/tt-metal/issues/55545).
-`scripts/repro_conv1d_wormhole.py` reproduces it without the model, and
+`ttnn.conv1d` with weights from `ttnn.prepare_conv_weights` disagrees with the op's own weight
+preparation at some input lengths, on both architectures, and nothing is raised. On Wormhole,
+lengths 8193–8704 are off by up to `1e37` for the vocoder's `Conv1d(128 → 128, k=11, pad=5)`. On
+Blackhole (p150a), the vocoder's `Conv1d(256 → 256, k=7)` and `k=11` return `inf` at length 8264
+with a 512 KB L1_SMALL reservation and are exact with 32 KB (other sizes are not measured); the
+length regulator's `Conv1d(80 → 80, k=3, pad=1)` scores PCC 0.32–0.41 against torch at
+T = 1717–1910 with either reservation. Cross-lingual flows run at those lengths, because the
+flow length includes the 1289-frame prompt: four of five cross-lingual utterances came out as
+the right voice saying nothing, and the fifth, at 1033 mel frames, as a railed waveform.
+
+The vocoder therefore verifies each `(input_length, batch)` geometry once on both
+architectures, running prepared and unprepared weights and keeping the prepared one only where
+the two outputs agree element by element (`TtConv1d._verify_prepared`,
+`prepare_weights_default`); `COSYVOICE_CONV_PREPARE=1` skips the check. The regulator never runs
+inside a trace and takes the op's own preparation. The flow estimator's convolutions have to
+stay prepared, since they run inside the CFM trace; its nine geometries matched torch at every
+length from 97 to 2659 in steps of 61, at batch 2 with the 512 KB reservation, on p150a.
+Reported upstream as
+[tenstorrent/tt-metal#55545](https://github.com/tenstorrent/tt-metal/issues/55545): the Wormhole
+case in the issue body, the Blackhole cases in a comment on it.
+`scripts/repro_conv1d_wormhole.py` reproduces the Wormhole case without the model, and with
+`IN_C = OUT_C` set to 80 or 256 the Blackhole ones (the comment has the arguments);
 `scripts/probe_prepared_weights.py` is the check to run once it is fixed.
 
 ### `ttnn.cumsum` accuracy in fp32

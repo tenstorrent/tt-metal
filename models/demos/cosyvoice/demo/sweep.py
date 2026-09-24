@@ -121,6 +121,9 @@ def synth(device, models, case, meta, seed, max_tokens):
         dev(case["flow_embedding"].reshape(1, 1, -1)),
         dev(z),
     )
+    # The next utterance with this flow length would otherwise replay this trace after
+    # the vocoder and the LLM have allocated beside it; see `release_trace`.
+    flow.release_trace()
     flow_s = time.perf_counter() - t0
 
     # ---- vocoder. phase and unit noise drawn here; see the module docstring.

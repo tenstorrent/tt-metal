@@ -325,6 +325,20 @@ class TtAttention:
             #
             # `scale=1.0` because `1/sqrt(d)` is already folded into the q half of the
             # fused weight; letting SDPA apply its default would scale twice.
+            #
+            # The padding fill is not optional. SDPA masks padded key columns itself, but
+            # its output is still wrong (PCC ~0 against torch) when the tile padding of
+            # BOTH k and v holds huge or non-finite values, at any T that is not a tile
+            # multiple. The estimator's convolutions leave exactly such values in their
+            # output padding, and when a UNet level's length is 1 mod 32 they reach k and v
+            # as NaN: three flow lengths in every 64 gave a mel about half Inf/NaN and a
+            # waveform pinned to the vocoder's clamp (zero-shot ja at 332 tokens is
+            # T = 897 -> 449, both levels 1 mod 32). Zeroing in place costs ~6 ms of a
+            # 0.33 s traced flow stage on p150a; the explicit chain below is immune but
+            # 1.55x slower there.
+            if t % ttnn.TILE_SIZE:
+                k = ttnn.fill_implicit_tile_padding(k, 0.0)
+                v = ttnn.fill_implicit_tile_padding(v, 0.0)
             ctx = ttnn.transformer.scaled_dot_product_attention(
                 q, k, v, is_causal=False, scale=1.0, compute_kernel_config=self.cc
             )
