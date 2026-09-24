@@ -126,3 +126,93 @@ ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)
+
+
+def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, *args, **kwargs):
+    slices = tuple(slice(int(begin), int(stop), int(stride)) for begin, stop, stride in zip(start, end, step))
+    # Mutate the destination golden so callers retaining output_tensor observe each write.
+    output_tensor[slices] = input_tensor
+    return output_tensor
+
+
+ttnn.attach_golden_function(ttnn.experimental.slice_write, _slice_write_golden_function)
+
+
+def _broadcast_to_golden_function(input, output_shape, *args, output=None, **kwargs):
+    result = input.broadcast_to(tuple(output_shape))
+    if output is not None:
+        # Mirror output= writes so retained local and global destination goldens stay current.
+        output.copy_(result)
+        return output
+    return result
+
+
+ttnn.attach_golden_function(ttnn.experimental.broadcast_to, _broadcast_to_golden_function)
+
+
+def _indexed_fused_update_cache_golden_function(
+    cache_tensor1,
+    input_tensor1,
+    cache_tensor2,
+    input_tensor2,
+    physical_update_idxs_tensor,
+):
+    output_tensor1 = cache_tensor1.clone()
+    output_tensor2 = cache_tensor2.clone()
+    rows_per_page = cache_tensor1.shape[2]
+    total_cache_rows = cache_tensor1.shape[0] * rows_per_page
+
+    for source_row, physical_row in enumerate(physical_update_idxs_tensor.reshape(-1)[: input_tensor1.shape[2]]):
+        physical_row = int(physical_row)
+        if physical_row < 0 or physical_row >= total_cache_rows:
+            continue
+        physical_page, row_in_page = divmod(physical_row, rows_per_page)
+        output_tensor1[physical_page, :, row_in_page, :] = input_tensor1[0, :, source_row, :]
+        output_tensor2[physical_page, :, row_in_page, :] = input_tensor2[0, :, source_row, :]
+
+    return output_tensor1, output_tensor2
+
+
+ttnn.attach_golden_function(
+    ttnn.experimental.indexed_fused_update_cache,
+    _indexed_fused_update_cache_golden_function,
+)
+
+
+def _composite_example_golden_function(input_tensor, *args, **kwargs):
+    # composite_example applies the example copy op twice; the value is the input unchanged.
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.composite_example, _composite_example_golden_function)
+
+
+def _composite_example_multiple_return_golden_function(
+    input_tensor, return_output1=True, return_output2=True, *args, **kwargs
+):
+    # Each requested output is a copy of the input; unrequested outputs are None.
+    return [
+        input_tensor if return_output1 else None,
+        input_tensor if return_output2 else None,
+    ]
+
+
+ttnn.attach_golden_function(ttnn.composite_example_multiple_return, _composite_example_multiple_return_golden_function)
+
+
+def _dram_prefetcher_golden_function(tensors, *args, **kwargs):
+    import torch
+
+    # dram_prefetcher returns an otherwise unspecified 32x32 synchronization tensor.
+    output = torch.empty((32, 32), dtype=tensors[0].dtype)
+    ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
+    return output
+
+
+ttnn.attach_golden_function(ttnn.dram_prefetcher, _dram_prefetcher_golden_function)
+
+# generic_op executes a user-supplied program descriptor; it has no fixed semantics to reference.
+ttnn.attach_golden_function(ttnn.generic_op, golden_function=None)
+
+# test_hang_device_operation intentionally hangs the device for testing; it has no value golden.
+ttnn.attach_golden_function(ttnn.test_hang_device_operation, golden_function=None)

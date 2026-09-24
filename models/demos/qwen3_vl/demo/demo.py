@@ -63,6 +63,14 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    # NOTE: no warm-ttnn-cache skip here -- this fork always loads the real weights.
+    # The skip was gated on text_only, but every caller builds the vision tower, so the branch was
+    # unreachable and the model never actually saved anything. Enabling it needs the multimodal
+    # weight set identified first: the "a placeholder is safe because the vision path uses a
+    # separate live HF reference" reasoning was disproved on qwen36, where the same comment held and
+    # vision_demo.py still generated token soup from a dataless state_dict (CI run 31503881448) --
+    # the multimodal splice reads weights the placeholder cannot supply. Until the equivalent weight
+    # here is found and sidecarred (as gemma3-vision does), cold-load. (#45400 review)
     state_dict = tt_model_args.load_state_dict()
 
     paged_attention_config = (

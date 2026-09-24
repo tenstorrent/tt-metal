@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <map>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -14,6 +15,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/allocator.hpp>
@@ -30,7 +32,9 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "hostdev/remote_dfb_config_layout.h"  // PREFETCHER_PIPE_MAX_CREDIT_LANES
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -65,10 +69,26 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<PrefetcherPipeParamName, const PrefetcherPipeParameter*> prefetcher_pipe_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
     std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
+
+    // PrefetcherPipe parameter usage. A pipe parameter is used either by a kernel that binds it
+    // (KernelAdvancedOptions::prefetcher_pipe_bindings; the kernel is a sender or receiver of the pipe) or by a
+    // relay DFB that aliases its ring (DFBAdvancedOptions::prefetcher_pipe_relays). A kernel binds a
+    // given pipe at most once, through one accessor (enforced during collection); the binder record
+    // keeps that accessor so role checks can reason about the whole pipe group it names.
+    struct PrefetcherPipeBinderRecord {
+        const KernelSpec* kernel;
+        const KernelAdvancedOptions::PrefetcherPipeBinding* binding;
+    };
+    struct PrefetcherPipeUsers {
+        std::vector<PrefetcherPipeBinderRecord> binders;
+        std::vector<const DataflowBufferSpec*> relays;
+    };
+    std::unordered_map<PrefetcherPipeParamName, PrefetcherPipeUsers> prefetcher_pipe_users;
 
     // Scratchpad binders (derived from kernel scratchpad bindings).
     // Tracks which kernels bind a given ScratchpadSpec. More than one may, provided their node sets
@@ -161,12 +181,10 @@ using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 // Basic Utility Helpers
 // ============================================================================
 
-inline tt::ARCH get_arch() { return tt::tt_metal::hal::get_arch(); }
+inline bool is_gen2_arch(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
 
-inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
-
-inline bool is_gen1_arch() {
-    tt::ARCH arch = get_arch();
+inline bool is_gen1_arch(const Hal& hal) {
+    tt::ARCH arch = hal.get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
@@ -190,6 +208,26 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);
     NodeRangeSet b_set = to_node_range_set(b);
     return a_set.intersects(b_set);
+}
+
+// Set equality that is independent of how the two sets decompose into ranges (NodeRangeSet's
+// operator== compares the range lists, so equal sets with different range splits compare unequal).
+bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
+    return a.num_cores() == b.num_cores() && a.intersection(b).num_cores() == a.num_cores();
+}
+
+// Role of a kernel binding a PrefetcherPipe accessor group, from its nodes and the group's receiver
+// sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The kernel is
+// the group's receiver when its nodes are exactly the union of the receiver sets, and its sender
+// when its nodes avoid every receiver and number one per pipe (which node hosts which pipe is
+// settled when the pipes are supplied). ValidateProgramSpec and ReservePrefetcherPipeSlots both
+// derive the role through these two definitions.
+bool is_prefetcher_pipe_receiver_role(const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers) {
+    return same_node_set(kernel_nodes, group_receivers);
+}
+bool is_prefetcher_pipe_sender_role(
+    const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers, size_t num_pipes) {
+    return !kernel_nodes.intersects(group_receivers) && kernel_nodes.num_cores() == num_pipes;
 }
 
 // Helper: return a DFB's alias-with list.
@@ -246,6 +284,18 @@ bool IsValidCppIdentifier(std::string_view s) {
 
     // If we got this far, and the name doesn't match any keywords, it's valid.
     return !kCppKeywords.contains(s);
+}
+
+template <typename KernelId>
+void ValidateAccessorNameLength(const KernelId& kernel_id, std::string_view kind, std::string_view name) {
+    TT_FATAL(
+        name.size() <= MAX_ACCESSOR_NAME_LENGTH,
+        "Kernel '{}' {} accessor_name '{}' is {} characters; an accessor_name must be at most {} characters",
+        kernel_id,
+        kind,
+        name,
+        name.size(),
+        MAX_ACCESSOR_NAME_LENGTH);
 }
 
 // ============================================================================
@@ -327,6 +377,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                     "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
                     kernel.unique_id,
                     dfb_binding.accessor_name);
+                ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name);
             } else {
                 TT_FATAL(
                     info.dfb_spec_name == dfb_binding.dfb_spec_name,
@@ -430,6 +481,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "semaphore", binding.accessor_name);
             TT_FATAL(
                 collected.semaphore_by_name.contains(binding.semaphore_spec_name),
                 "Kernel '{}' references unknown semaphore '{}'",
@@ -470,6 +522,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name);
             TT_FATAL(
                 collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
                 "Kernel '{}' references unknown scratchpad '{}'",
@@ -525,6 +578,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name);
             TT_FATAL(
                 collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
                 "Kernel '{}' references unknown TensorParameter '{}'",
@@ -532,6 +586,55 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 binding.tensor_parameter_name);
 
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+        }
+
+        std::unordered_set<std::string> reserved_type_aliases;
+        reserved_type_aliases.reserve(accessor_names.size());
+        for (const auto& binding_name : accessor_names) {
+            reserved_type_aliases.insert(binding_name + "_t");
+        }
+
+        std::unordered_set<std::string> sequence_names;
+        for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
+            TT_FATAL(
+                IsValidCppIdentifier(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !accessor_names.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !reserved_type_aliases.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
+                kernel.unique_id,
+                sequence.sequence_name,
+                sequence.sequence_name);
+            auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
+                kernel.unique_id,
+                sequence.sequence_name);
+
+            std::unordered_set<std::string> member_names;
+            for (const auto& member : sequence.members) {
+                TT_FATAL(
+                    accessor_names.contains(member),
+                    "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+                auto [mit, minserted] = member_names.insert(member);
+                TT_FATAL(
+                    minserted,
+                    "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+            }
         }
     }
 
@@ -555,6 +658,95 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
             "TensorParameter '{}' is defined but not bound by any kernel",
             tensor_parameter.unique_id);
+    }
+
+    // Collect PrefetcherPipeParameters
+    for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
+        auto [it, inserted] = collected.prefetcher_pipe_by_name.try_emplace(pipe_parameter.unique_id, &pipe_parameter);
+        TT_FATAL(inserted, "Duplicate PrefetcherPipeParameter name '{}'", pipe_parameter.unique_id);
+    }
+
+    // Validate kernel PrefetcherPipe bindings (structural). Kernel-kind and role checks need the
+    // derived node sets and live in ValidateProgramSpec.
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        std::unordered_set<PrefetcherPipeParamName> bound_pipes;
+        for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate PrefetcherPipe accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' PrefetcherPipe accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "PrefetcherPipe", binding.accessor_name);
+            TT_FATAL(
+                !binding.pipe_parameter_names.empty(),
+                "Kernel '{}' PrefetcherPipe accessor '{}' names no PrefetcherPipeParameter",
+                kernel.unique_id,
+                binding.accessor_name);
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                TT_FATAL(
+                    collected.prefetcher_pipe_by_name.contains(pipe_name),
+                    "Kernel '{}' accessor '{}' references unknown PrefetcherPipeParameter '{}'",
+                    kernel.unique_id,
+                    binding.accessor_name,
+                    pipe_name);
+                // One binding per pipe per kernel, within and across accessors: a second binding
+                // would be a second device object over the same credit counters (two names for one
+                // pipe is a handle alias, not a binding).
+                auto [pit, pinserted] = bound_pipes.insert(pipe_name);
+                TT_FATAL(
+                    pinserted,
+                    "Kernel '{}' binds PrefetcherPipeParameter '{}' more than once (latest under accessor_name '{}'). "
+                    "A kernel may bind a given pipe at most once.",
+                    kernel.unique_id,
+                    pipe_name,
+                    binding.accessor_name);
+                collected.prefetcher_pipe_users[pipe_name].binders.push_back({&kernel, &binding});
+            }
+        }
+    }
+
+    // Collect relay DFBs: each named pipe must exist and be named once per DFB. (Geometry checks
+    // against the pipe are in ValidateProgramSpec.) Only local DFBs can relay: the ring lives in
+    // receiver-node L1.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        std::unordered_set<PrefetcherPipeParamName> relayed;
+        for (const auto& pipe_name : dfb.advanced_options.prefetcher_pipe_relays) {
+            TT_FATAL(
+                collected.prefetcher_pipe_by_name.contains(pipe_name),
+                "DFB '{}' relays unknown PrefetcherPipeParameter '{}'",
+                dfb.unique_id,
+                pipe_name);
+            auto [it, inserted] = relayed.insert(pipe_name);
+            TT_FATAL(
+                inserted,
+                "DFB '{}' lists PrefetcherPipeParameter '{}' more than once in prefetcher_pipe_relays",
+                dfb.unique_id,
+                pipe_name);
+            collected.prefetcher_pipe_users[pipe_name].relays.push_back(&dfb);
+        }
+    }
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        TT_FATAL(
+            cross_node_dfb.dfb_spec.advanced_options.prefetcher_pipe_relays.empty(),
+            "CrossNodeDataflowBufferSpec '{}' sets prefetcher_pipe_relays; only a local DFB can relay a "
+            "PrefetcherPipe",
+            cross_node_dfb.dfb_spec.unique_id);
+    }
+
+    // Referential integrity: every declared PrefetcherPipeParameter must be used by a kernel binding
+    // or a relay DFB. (An unused pipe parameter would demand a run arg nothing reads.)
+    for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
+        TT_FATAL(
+            collected.prefetcher_pipe_users.contains(pipe_parameter.unique_id),
+            "PrefetcherPipeParameter '{}' is defined but not bound by any kernel or relay DFB",
+            pipe_parameter.unique_id);
     }
 
     // Build WorkUnitSpec membership for each kernel, validating references along the way.
@@ -622,12 +814,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
 // representative of every device in the mesh.
 
-void ValidateNodeBounds(const ProgramSpec& spec) {
-
-    MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(metal_ctx.get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
-    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    const bool is_mock = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
     // from the YAML descriptor, and both are available in mock mode.
@@ -638,7 +829,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // But, best get the real dispatch_core_config and num_hw_cqs
     // (Makes no difference now, but hardbaking that assumption could be brittle)
     if (!is_mock) {
-        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+        auto& dispatch_mgr = metal_ctx.get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
         num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     }
@@ -647,31 +838,33 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const Nodes& target_nodes,
-                                  std::string_view entity_type,
-                                  std::string_view entity_name) {
-        const NodeRangeSet range_set = to_node_range_set(target_nodes);
-        for (const NodeRange& range : range_set.ranges()) {
-            for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    node.x < compute_grid.x && node.y < compute_grid.y,
-                    "{} '{}' targets node ({},{}), which is out of bounds. "
-                    "The compute worker grid on this device is {}x{}.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y,
-                    compute_grid.x,
-                    compute_grid.y);
+    auto check_target_nodes =
+        [&](const Nodes& target_nodes, std::string_view entity_type, std::string_view entity_name) {
+            const NodeRangeSet range_set = to_node_range_set(target_nodes);
+            for (const NodeRange& range : range_set.ranges()) {
+                for (const NodeCoord& node : range) {
+                    TT_FATAL(
+                        node.x < compute_grid.x && node.y < compute_grid.y,
+                        "{} '{}' targets node ({},{}), which is out of bounds. "
+                        "The compute worker grid on this device is {}x{}.",
+                        entity_type,
+                        entity_name,
+                        node.x,
+                        node.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                }
             }
-        }
-    };
+        };
 
     for (const auto& work_unit : spec.work_units) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
+    }
+    for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
+        check_target_nodes(pipe.receivers, "PrefetcherPipeParameter", pipe.unique_id.get());
     }
 }
 
@@ -688,6 +881,311 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
+//////////////////////////////////////////////////
+// Validate PrefetcherPipeParameters and relay DFBs
+//////////////////////////////////////////////////
+//
+// Everything here is decidable from the spec alone (geometry and kernel placement); the pipe
+// object arrives later via ProgramRunArgs and is reconciled against this geometry then.
+//
+// The spec never names a pipe's sender: that is the pipe object's (a consumer Program need not
+// know it, and a DRAM-resident sender has no worker node to name). A Program that runs the sender
+// kernel places it through a WorkUnitSpec; the supplied pipe's sender must be one of those nodes,
+// which is checked when the pipe is bound.
+//
+// Rules per parameter:
+//  1. Geometry: non-empty receivers, ring_size > 0, entry_size > 0, L1-aligned and <= ring_size.
+// Rules per accessor group (one KernelAdvancedOptions::PrefetcherPipeBinding; its pipes share one device
+// slot on every node the kernel runs on, so one binary serves them all):
+//  2. The binding kernel is a data-movement kernel (compute reaches the ring via a relay DFB).
+//  3. Tiling: the group's pipes agree on ring_size / entry_size and their receiver sets are
+//     pairwise disjoint. The kernel's nodes equal EITHER the union of the receiver sets
+//     (receiver role) OR avoid every receiver and number one per pipe (sender role); mixed or
+//     partial coverage is rejected. Per pipe, at most one kernel plays sender and at most one
+//     plays receiver, so exactly one kernel instance owns the credit counters on each node. Roles
+//     may be split across Programs (sender op vs consumer op).
+//  4. Receiver-side credit lanes P: the receiver kernel's num_threads (and, with a relay, the
+//     relay's PRODUCER kernels' num_threads) must agree, fit the architecture's lane capacity,
+//     and, when P > 1, divide the ring's entry count.
+// Rules per relay DFB:
+//  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
+//     entry_size equals it and entry_size * num_entries == ring_size (the DFB is exactly the ring).
+//  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
+//     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
+//     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
+void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData& collected, const Hal& hal) {
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    const uint32_t lane_capacity = is_gen2_arch(hal) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u;
+
+    std::unordered_map<PrefetcherPipeParamName, NodeRangeSet> pipe_receiver_set;
+    for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
+        // Rule 1: geometry.
+        const NodeRangeSet receivers = to_node_range_set(pipe.receivers);
+        TT_FATAL(receivers.num_cores() > 0, "PrefetcherPipeParameter '{}' has no receiver nodes", pipe.unique_id);
+        TT_FATAL(pipe.ring_size > 0, "PrefetcherPipeParameter '{}' has ring_size = 0", pipe.unique_id);
+        TT_FATAL(pipe.entry_size > 0, "PrefetcherPipeParameter '{}' has entry_size = 0", pipe.unique_id);
+        TT_FATAL(
+            pipe.entry_size % l1_alignment == 0,
+            "PrefetcherPipeParameter '{}' entry_size {} must be a multiple of the L1 alignment ({})",
+            pipe.unique_id,
+            pipe.entry_size,
+            l1_alignment);
+        TT_FATAL(
+            pipe.entry_size <= pipe.ring_size,
+            "PrefetcherPipeParameter '{}' entry_size {} exceeds ring_size {}",
+            pipe.unique_id,
+            pipe.entry_size,
+            pipe.ring_size);
+        pipe_receiver_set.emplace(pipe.unique_id, receivers);
+    }
+
+    // Rules 2 and 3: per accessor group. Derive each group's role once, then record the
+    // sender / receiver kernel of every pipe in it.
+    std::unordered_map<PrefetcherPipeParamName, const KernelSpec*> sender_kernel_of;
+    std::unordered_map<PrefetcherPipeParamName, const KernelSpec*> receiver_kernel_of;
+    for (const auto& kernel : spec.kernels) {
+        if (kernel.advanced_options.prefetcher_pipe_bindings.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            kernel.is_data_movement_kernel(),
+            "Kernel '{}' binds PrefetcherPipeParameter(s) (accessor '{}') but is a compute kernel. Only "
+            "data-movement kernels bind a pipe; compute consumes through a relay DFB "
+            "(DFBAdvancedOptions::prefetcher_pipe_relays).",
+            kernel.unique_id,
+            kernel.advanced_options.prefetcher_pipe_bindings[0].accessor_name);
+        const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
+        TT_FATAL(
+            nodes.num_cores() > 0,
+            "Kernel '{}' binds PrefetcherPipeParameter(s) but its WorkUnitSpecs place it on no nodes",
+            kernel.unique_id);
+
+        for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
+            const PrefetcherPipeParameter* first =
+                collected.prefetcher_pipe_by_name.at(binding.pipe_parameter_names[0]);
+            NodeRangeSet group_receivers;
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                TT_FATAL(
+                    pipe->ring_size == first->ring_size && pipe->entry_size == first->entry_size,
+                    "Kernel '{}' accessor '{}' names PrefetcherPipeParameters '{}' (ring_size {}, entry_size {}) "
+                    "and '{}' (ring_size {}, entry_size {}); pipes sharing an accessor must share ring_size and "
+                    "entry_size (one compiled kernel, one geometry)",
+                    kernel.unique_id,
+                    binding.accessor_name,
+                    first->unique_id,
+                    first->ring_size,
+                    first->entry_size,
+                    pipe->unique_id,
+                    pipe->ring_size,
+                    pipe->entry_size);
+                const NodeRangeSet& receivers = pipe_receiver_set.at(pipe_name);
+                TT_FATAL(
+                    !receivers.intersects(group_receivers),
+                    "Kernel '{}' accessor '{}' names PrefetcherPipeParameter '{}' whose receiver nodes overlap "
+                    "another pipe's in the same accessor; pipes sharing an accessor must occupy disjoint nodes (one "
+                    "pipe per node, so the accessor resolves to exactly one pipe on every node)",
+                    kernel.unique_id,
+                    binding.accessor_name,
+                    pipe_name);
+                group_receivers = group_receivers.merge(receivers);
+            }
+
+            // Role: the kernel's nodes are exactly the group's receivers, or one sender node per
+            // pipe, none of them a receiver.
+            const size_t num_pipes = binding.pipe_parameter_names.size();
+            const bool is_receiver_role = is_prefetcher_pipe_receiver_role(nodes, group_receivers);
+            const bool is_sender_role =
+                !is_receiver_role && is_prefetcher_pipe_sender_role(nodes, group_receivers, num_pipes);
+            if (!is_sender_role && !is_receiver_role) {
+                const uint32_t on_receivers = nodes.intersection(group_receivers).num_cores();
+                TT_THROW(
+                    "Kernel '{}' accessor '{}' ({} pipe(s)): the kernel's WorkUnitSpec nodes must equal either the "
+                    "union of the group's receiver nodes (receiver role) or be {} node(s) outside them, one per pipe "
+                    "(sender role). Kernel covers {} node(s): {} of the {} receiver node(s), {} outside the "
+                    "receivers. A role cannot be partial, mixed with the other role, or spill onto extra nodes.",
+                    kernel.unique_id,
+                    binding.accessor_name,
+                    num_pipes,
+                    num_pipes,
+                    nodes.num_cores(),
+                    on_receivers,
+                    group_receivers.num_cores(),
+                    nodes.num_cores() - on_receivers);
+            }
+
+            auto& role_map = is_sender_role ? sender_kernel_of : receiver_kernel_of;
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                auto [it, inserted] = role_map.try_emplace(pipe_name, &kernel);
+                if (!inserted) {
+                    TT_THROW(
+                        "Kernels '{}' and '{}' both bind PrefetcherPipeParameter '{}' as its {}. Only one "
+                        "data-movement kernel may own a pipe's {} credits.",
+                        it->second->unique_id,
+                        kernel.unique_id,
+                        pipe_name,
+                        is_sender_role ? "sender" : "receiver",
+                        is_sender_role ? "sender" : "receiver");
+                }
+            }
+        }
+    }
+
+    for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
+        const auto& users = collected.prefetcher_pipe_users.at(pipe.unique_id);
+        auto receiver_it = receiver_kernel_of.find(pipe.unique_id);
+        const KernelSpec* receiver_kernel = receiver_it == receiver_kernel_of.end() ? nullptr : receiver_it->second;
+
+        // Rule 4: receiver-side credit lanes. Sources: the receiver binding kernel and every
+        // relay's PRODUCER kernels (uniform per role by the DFB checks above).
+        std::optional<uint32_t> lanes;
+        const KernelSpec* lanes_source = nullptr;
+        auto take_lanes = [&](const KernelSpec* kernel) {
+            if (!lanes.has_value()) {
+                lanes = kernel->num_threads;
+                lanes_source = kernel;
+                return;
+            }
+            TT_FATAL(
+                *lanes == kernel->num_threads,
+                "PrefetcherPipeParameter '{}' receiver-side kernels disagree on thread count: '{}' has {} "
+                "threads, '{}' has {}. The receiver kernel and every relay DFB producer must use the same "
+                "num_threads (this is the pipe's credit lane count).",
+                pipe.unique_id,
+                lanes_source->unique_id,
+                *lanes,
+                kernel->unique_id,
+                kernel->num_threads);
+        };
+        if (receiver_kernel != nullptr) {
+            take_lanes(receiver_kernel);
+        }
+        for (const DataflowBufferSpec* relay : users.relays) {
+            for (const auto& rec : collected.dfb_endpoints.at(relay->unique_id).producers) {
+                take_lanes(rec.kernel);
+            }
+        }
+        if (lanes.has_value() && *lanes > 1) {
+            TT_FATAL(
+                *lanes <= lane_capacity,
+                "PrefetcherPipeParameter '{}' receiver kernel '{}' has {} threads, but a pipe supports at most {} "
+                "credit lanes on this architecture",
+                pipe.unique_id,
+                lanes_source->unique_id,
+                *lanes,
+                lane_capacity);
+            TT_FATAL(
+                pipe.ring_size % pipe.entry_size == 0,
+                "PrefetcherPipeParameter '{}' with {} credit lanes requires entry_size {} to divide ring_size {}",
+                pipe.unique_id,
+                *lanes,
+                pipe.entry_size,
+                pipe.ring_size);
+            TT_FATAL(
+                (pipe.ring_size / pipe.entry_size) % *lanes == 0,
+                "PrefetcherPipeParameter '{}' ring holds {} entries of {} bytes, which is not a multiple of {} "
+                "credit lanes (receiver kernel '{}' num_threads)",
+                pipe.unique_id,
+                pipe.ring_size / pipe.entry_size,
+                pipe.entry_size,
+                *lanes,
+                lanes_source->unique_id);
+        }
+    }
+
+    // Rules 5 and 6: relay DFBs.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            !dfb.borrowed_from.has_value(),
+            "DFB '{}' sets both prefetcher_pipe_relays and borrowed_from; a relay DFB's backing memory is the "
+            "pipe ring",
+            dfb.unique_id);
+
+        const PrefetcherPipeParameter* first =
+            collected.prefetcher_pipe_by_name.at(dfb.advanced_options.prefetcher_pipe_relays[0]);
+        NodeRangeSet relayed_receivers;
+        for (const auto& pipe_name : dfb.advanced_options.prefetcher_pipe_relays) {
+            const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+            TT_FATAL(
+                pipe->ring_size == first->ring_size && pipe->entry_size == first->entry_size,
+                "DFB '{}' relays PrefetcherPipeParameters '{}' (ring_size {}, entry_size {}) and '{}' (ring_size "
+                "{}, entry_size {}); every pipe relayed by one DFB must share ring_size and entry_size",
+                dfb.unique_id,
+                first->unique_id,
+                first->ring_size,
+                first->entry_size,
+                pipe->unique_id,
+                pipe->ring_size,
+                pipe->entry_size);
+            const NodeRangeSet& receivers = pipe_receiver_set.at(pipe_name);
+            TT_FATAL(
+                !relayed_receivers.intersects(receivers),
+                "DFB '{}' relays PrefetcherPipeParameter '{}' whose receiver nodes overlap another relayed pipe's; "
+                "relayed pipes must have disjoint receivers",
+                dfb.unique_id,
+                pipe_name);
+            relayed_receivers = relayed_receivers.merge(receivers);
+        }
+
+        TT_FATAL(
+            dfb.entry_size == first->entry_size,
+            "DFB '{}' entry_size {} differs from relayed PrefetcherPipeParameter '{}' entry_size {}",
+            dfb.unique_id,
+            dfb.entry_size,
+            first->unique_id,
+            first->entry_size);
+        TT_FATAL(
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == first->ring_size,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover relayed "
+            "PrefetcherPipeParameter '{}' ring_size {}",
+            dfb.unique_id,
+            dfb.entry_size,
+            dfb.num_entries,
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries,
+            first->unique_id,
+            first->ring_size);
+
+        const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
+        TT_FATAL(
+            dfb_nodes == relayed_receivers,
+            "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
+            "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
+            dfb.unique_id);
+
+        // Every PRODUCER must be the relayed pipes' receiver kernel: it binds exactly this pipe
+        // set under one accessor. (Binding implies data-movement by rule 2; the tiling rule then
+        // makes its nodes the receiver union, i.e. the DFB's nodes.) Without the binding the
+        // producer could not drive the pipe protocol the relay depends on.
+        const std::unordered_set<PrefetcherPipeParamName> relayed_set(
+            dfb.advanced_options.prefetcher_pipe_relays.begin(), dfb.advanced_options.prefetcher_pipe_relays.end());
+        for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
+            const bool binds_relayed_set = std::any_of(
+                rec.kernel->advanced_options.prefetcher_pipe_bindings.begin(),
+                rec.kernel->advanced_options.prefetcher_pipe_bindings.end(),
+                [&](const KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
+                    return binding.pipe_parameter_names.size() == relayed_set.size() &&
+                           std::all_of(
+                               binding.pipe_parameter_names.begin(),
+                               binding.pipe_parameter_names.end(),
+                               [&](const PrefetcherPipeParamName& n) { return relayed_set.contains(n); });
+                });
+            TT_FATAL(
+                binds_relayed_set,
+                "Kernel '{}' is a PRODUCER of relay DFB '{}' but has no PrefetcherPipe accessor naming exactly the "
+                "relayed pipe set ({} pipe(s), first '{}'). A relay's producer is the relayed pipes' receiver "
+                "data-movement kernel; it must bind them (KernelAdvancedOptions::prefetcher_pipe_bindings) under one "
+                "accessor.",
+                rec.kernel->unique_id,
+                dfb.unique_id,
+                relayed_set.size(),
+                first->unique_id);
+        }
+    }
+}
+
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -698,16 +1196,17 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 //   - Target node constraints (work_unit overlap, node coverage, node validity)
 //
 // Assumes CollectedSpecData is already built.
-
-void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+void ValidateProgramSpec(
+    const ProgramSpec& spec, const CollectedSpecData& collected, MetalContext& metal_ctx, const Allocator& allocator) {
+    const Hal& hal = metal_ctx.hal();
     // Sanity check for supported architecture.
-    TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
+    TT_FATAL(is_gen1_arch(hal) || is_gen2_arch(hal), "Unsupported architecture.");
 
     //////////////////////////////
     // Node bounds checks
     //////////////////////////////
 
-    ValidateNodeBounds(spec);
+    ValidateNodeBounds(spec, metal_ctx);
 
     //////////////////////////////
     // Validate KernelSpecs
@@ -752,7 +1251,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
                     "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
@@ -774,7 +1273,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
         if (kernel.is_data_movement_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
                     "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
@@ -798,7 +1297,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
@@ -818,7 +1317,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
                     kernel.unique_id,
                     static_cast<int>(processor));
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen2Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
@@ -830,13 +1329,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_compute_kernel()) {
             const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen1Config>(compute_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
                     "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
                     kernel.unique_id);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen2Config>(compute_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
@@ -863,7 +1362,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
     //      intentionally share a NOC, freeing the other NOC for fabric.
     // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
-    if (is_gen1_arch()) {
+    if (is_gen1_arch(hal)) {
         // (node, processor) -> the kernel that already claimed it.
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
         // node -> (noc mode, the kernel that first set it) — all DM kernels on a node must agree.
@@ -1078,14 +1577,68 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Compute kernels cannot have any semaphore bindings.
-    // (There's no use case for ever wanting this, so best just forbid it.)
+    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Wormhole has no compute implementation and Quasar compute remains out of scope.
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || hal.get_arch() == tt::ARCH::BLACKHOLE,
             "KernelSpec '{}' has semaphore bindings. "
-            "Semaphore bindings are not supported for compute kernels.",
+            "Semaphore bindings on compute kernels are supported only on Blackhole.",
             kernel.unique_id);
+    }
+
+    // A compute semaphore is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore, driven by
+    // Tensix instructions a DM core cannot issue) and may not be shared with a DM kernel. Reject it
+    // here rather than resolve a scope that cannot serve both.
+    {
+        std::unordered_set<std::string_view> sem_has_compute;
+        std::unordered_set<std::string_view> sem_has_dm;
+        for (const auto& kernel : spec.kernels) {
+            for (const auto& binding : kernel.semaphore_bindings) {
+                (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(*binding.semaphore_spec_name);
+            }
+        }
+        for (const auto& name : sem_has_compute) {
+            TT_FATAL(
+                !sem_has_dm.contains(name),
+                "SemaphoreSpec '{}' is bound by both a compute kernel and a data-movement kernel. "
+                "Compute semaphores synchronize UNPACK and PACK with each other and cannot be shared "
+                "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
+                name);
+        }
+        // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+        // one program would alias the same hardware state.
+        TT_FATAL(
+            sem_has_compute.size() <= 1,
+            "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
+            "(Blackhole has a single free Tensix hardware semaphore).",
+            sem_has_compute.size());
+        // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
+        // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.
+        // Its capacity (max_value) is a 4-bit hardware field and has no meaning for a DM semaphore.
+        for (const auto& sem : spec.semaphores) {
+            const bool compute_bound = sem_has_compute.contains(std::string_view{*sem.unique_id});
+            const uint32_t init_value = sem.advanced_options.initial_value;
+            const uint32_t max_value = sem.advanced_options.max_value;
+            TT_FATAL(
+                !compute_bound || init_value == 0,
+                "SemaphoreSpec '{}' is bound by a compute kernel but has initial_value={}. Compute "
+                "semaphores always start at 0 (seeded by compute_kernel_hw_startup on the device).",
+                sem.unique_id,
+                init_value);
+            TT_FATAL(
+                !compute_bound || max_value <= 15,
+                "SemaphoreSpec '{}' has max_value={}; a compute semaphore's capacity is at most 15 (4-bit "
+                "Tensix hardware semaphore).",
+                sem.unique_id,
+                max_value);
+            TT_FATAL(
+                compute_bound || max_value == 0,
+                "SemaphoreSpec '{}' has max_value={} but is not bound by a compute kernel; max_value is the "
+                "capacity of a compute semaphore and has no effect on a data-movement semaphore.",
+                sem.unique_id,
+                max_value);
+        }
     }
 
     // Validate DM kernel disable_dfb_implicit_sync_for entries.
@@ -1175,10 +1728,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
-                                                ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                : tt::tt_metal::hal::get_arch_num_circular_buffers();
+        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
+                                                                             : hal.get_arch_num_circular_buffers();
 
         std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
@@ -1191,7 +1742,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (count <= max_slots_per_core) {
                 continue;
             }
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
                     "supports at most {} device slots per core (disjoint cores may reuse slots).",
@@ -1200,7 +1751,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     node.x,
                     node.y,
                     max_slots_per_core);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
                     "target architecture supports at most {} device slots per core. The true "
@@ -1234,7 +1785,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
     // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
     // is actually multi-bound — a Gen2 spec carrying it is never valid.
-    if (is_gen2_arch()) {
+    if (is_gen2_arch(hal)) {
         for (const auto& dfb : spec.dataflow_buffers) {
             TT_FATAL(
                 !dfb.advanced_options.allow_instance_multi_binding,
@@ -1431,7 +1982,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
             // always legal: they lower to the intra-Tensix packer->unpacker flow.)
             TT_FATAL(
-                !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel()),
+                !(is_gen2_arch(hal) && self_loop_kernel->is_data_movement_kernel()),
                 "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
                 "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
                 "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
@@ -1519,6 +2070,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    //////////////////////////////////////////////////
+    // Validate PrefetcherPipeParameters and relay DFBs
+    //////////////////////////////////////////////////
+
+    ValidatePrefetcherPipeSpec(spec, collected, hal);
+
     // Validate borrowed-memory DFBs.
     //
     // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
@@ -1548,17 +2105,28 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "required). Both L1 and L1_SMALL are accepted.",
             dfb.unique_id,
             tp_name);
-        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
-        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
-        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
-        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
-        // here against the full-tensor size and still fail per-bank later. By design.
+        // Spec-time sizing check. A borrowed DFB lives in ONE core's slice of the backing buffer,
+        // so the bound is that buffer's per-bank allocation.
+        //
+        // TensorSpec yields the per-bank figure without a Buffer: sharded specs take pages-per-bank
+        // from the shard spec or the distribution spec, interleaved specs divide their page count by
+        // num_banks.
+        // The attach-time check in AttachBorrowedDFBBuffers (program_run_args.cpp) stays
+        // authoritative; this one just stops deferring a rejection it can already make.
+        //
+        // Caveat: this is the default allocator, which has no sub-device context. A sub-device
+        // allocator owns fewer banks, so an interleaved tensor allocated there has a LARGER per-bank
+        // slice than what we compute, and a DFB sized to it would be rejected here even though
+        // attach time would take it. Sharded specs ignore num_banks and so are unaffected. Thread a
+        // SubDeviceId in here if that combination ever shows up.
+        const uint32_t num_banks = allocator.get_num_banks(tensor_spec.memory_config().buffer_type());
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
-        const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+        const size_t tensor_bytes =
+            tensor_spec.compute_consumed_memory_bytes_per_bank(hal.get_alignment(HalMemType::L1), num_banks);
         TT_FATAL(
             dfb_bytes <= tensor_bytes,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
-            "({} bytes).",
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than the per-bank allocation of its "
+            "borrowed TensorParameter '{}' ({} bytes).",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
@@ -1627,7 +2195,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1671,7 +2242,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Data format must be valid for the architecture
-    const tt::ARCH arch = get_arch();
+    const tt::ARCH arch = hal.get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
             TT_FATAL(
@@ -1689,7 +2260,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     for (const auto& sem : spec.semaphores) {
         const uint32_t init_value = sem.advanced_options.initial_value;
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 init_value == 0,
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
@@ -1714,10 +2285,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.name,
-                    other_work_unit.name);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
@@ -1740,7 +2308,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
@@ -1754,7 +2322,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed,
                 QUASAR_USER_DM_CORES_PER_NODE);
         }
-        if (is_gen1_arch()) {
+        if (is_gen1_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= 1,
                 "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
@@ -2258,22 +2826,33 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const BufferType buffer_type = memory_config.buffer_type();
     const bool is_dram = (buffer_type == BufferType::DRAM);
     const bool is_sharded = memory_config.is_sharded();
-    // dynamic_tensor_shape is only meaningful on sharded tensors: for interleaved
-    // tensors the CTA payload never carried tensor_shape in the first place (and
-    // the device-side accessor doesn't read it), so the flag is a pure host-side
-    // validation loosening and has no effect on the CTA/CRTA layout.
+    // The tensor SHAPE only rides the CTA/CRTA payload for a sharded tensor: an interleaved payload
+    // never carried it in the first place, and the device-side accessor doesn't read it. So this
+    // particular induction is sharded-only.
+    //
+    // That is a statement about the shape words, NOT about the flag. dynamic_tensor_shape is a
+    // dynamic relaxation on every layout -- see dyn_page immediately below, which moves an
+    // interleaved ROW-MAJOR page size out of the CTAs. (match_padded_shape_only is the flag that is
+    // purely a host-side validation loosening with no CTA/CRTA effect; do not transplant its
+    // description onto this one.)
     const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
-    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
-    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
-    // the width without varying the logical shape), so there is no "page size varies but shape
-    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
-    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
-    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
-    const bool dyn_page =
-        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+    // accessor strides by the wrong number of bytes. We induce that here rather than expose a flag
+    // for it: a useful page-size change is ALWAYS a shape change on row-major (you can't vary the
+    // width without varying the logical shape), so there is no "page size varies but shape doesn't"
+    // case to give a flag to. Tiled page size is dtype-fixed and sharded page size is spec-fixed, so
+    // neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages words instead
+    // (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    //
+    // match_page_size opts out of the induction, for the CONVERSE case: shape varies, width does
+    // not. That implication runs only one way, so the flag does not reopen the reasoning above --
+    // it declares a narrower equivalence class in which the page size is pinned, and the match
+    // enforces it (tensor_spec_relaxations.cpp), so the CTA below cannot go stale.
+    const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
+                          !tensor_parameter.relaxations.match_page_size && !is_sharded &&
+                          spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2485,8 +3064,15 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
+// `dfb_name_to_is_relay` marks CrossNode/PrefetcherPipe relay locals so codegen emits
+// RelayDFBBindingToken instead of DFBBindingToken.
+// `dfb_name_to_prefetcher_pipe_id` carries the PrefetcherPipe slot for PrefetcherPipe relays (0xFF
+// otherwise) so TRISC construction can align to the durable checkpoint.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec,
+    const DFBNameToSlotMap& dfb_name_to_slot,
+    const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -2497,14 +3083,25 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
+        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        out.emplace(
+            dfb_binding.accessor_name,
+            tt::tt_metal::DataflowBufferBindingHandle{
+                .logical_dfb_id = static_cast<uint16_t>(slot),
+                .is_relay = is_relay,
+                .prefetcher_pipe_id = prefetcher_pipe_id});
     }
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id
+// Create map of accessor name -> semaphore handle: the logical id, the resolved scope,
+// and the binder hart count for local cached semaphores.
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
-    const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    const KernelSpec& kernel_spec,
+    const sem_solver::SemaphoreBinderCensus& semaphore_binders,
+    const SemaphoreNameToIdMap& semaphore_name_to_id,
+    const sem_solver::SemaphoreNameToScopeMap& semaphore_name_to_scope) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2515,7 +3112,19 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
-        out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
+        const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
+        const uint32_t total_binder_harts =
+            scope == SemScope::DM_LOCAL_CACHED
+                ? sem_solver::BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
+                : 0u;
+        TT_FATAL(
+            total_binder_harts <= 0x7FFFu,
+            "Semaphore '{}' has {} binder harts; the cached seed protocol supports at most 32767",
+            semaphore_binding.semaphore_spec_name,
+            total_binder_harts);
+        out.emplace(
+            semaphore_binding.accessor_name,
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
     }
     return out;
 }
@@ -2612,8 +3221,12 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
-        // The actual backing memory L1 address is attached at runtime.
-        .borrows_memory = dfb_spec->borrowed_from.has_value()};
+        // The actual backing memory L1 address is attached at runtime: from the borrowed
+        // TensorParameter's MeshTensor, or (relay) from the PrefetcherPipe ring the relay aliases.
+        .borrows_memory =
+            dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+        // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
+        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
 }
 
 // ----------------------------------------------------------------------------
@@ -2646,8 +3259,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgs& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
@@ -2693,8 +3305,8 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot) {
-    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
+    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
@@ -2720,7 +3332,8 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+ComputeConfig MakeGen1ComputeConfig(
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
@@ -2730,7 +3343,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot, hal);
 
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
@@ -2770,7 +3384,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
@@ -2779,7 +3393,8 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot, hal);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -2788,7 +3403,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !gen2.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
-        .enable_2x_src_format = gen2.enable_2x_src_register,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2842,22 +3456,154 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 
 namespace {
 
+// ----------------------------------------------------------------------------
+// ReservePrefetcherPipeSlots: PrefetcherPipeParameters -> Program slots
+// ----------------------------------------------------------------------------
+//
+// One Program slot per accessor group (a KernelAdvancedOptions::PrefetcherPipeBinding), reserved on the
+// kernel's nodes from spec geometry alone. The group's role (sender / receiver; validated exact
+// by ValidateProgramSpec) decides the slot's receiver cores and credit lanes P (the receiver
+// kernel's num_threads). A relay DFB whose prefetcher_pipe_relays equals the group's pipe set is
+// registered against the slot (its base address is supplied when the pipe binds).
+//
+// Every parameter named by the group is recorded with the slot and the cores it owns inside the
+// kernel's nodes (its sender node or its receivers -- the group tiles the nodes, so this is one
+// pipe per node). SetProgramRunArgs later binds the supplied pipe object onto exactly those cores,
+// so a multi-pipe accessor resolves per node on the host and the kernel binary sees one slot.
+using PrefetcherPipeHandlesByKernel =
+    std::unordered_map<const KernelSpec*, std::vector<tt::tt_metal::PrefetcherPipeBindingHandle>>;
+
+PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    const CollectedSpecData& collected,
+    detail::ProgramImpl& program_impl,
+    const DFBNameToIdMap& dfb_name_to_id) {
+    PrefetcherPipeHandlesByKernel handles;
+    if (spec.advanced_options.prefetcher_pipe_parameters.empty()) {
+        return handles;
+    }
+
+    // Per-parameter placement, accumulated across the accessor groups that name it.
+    std::unordered_map<PrefetcherPipeParamName, detail::ProgramImpl::PrefetcherPipeParameterBinding> placements;
+    for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
+        placements[pipe.unique_id] = detail::ProgramImpl::PrefetcherPipeParameterBinding{
+            .device = &mesh_device,
+            .receivers = to_node_range_set(pipe.receivers),
+            .ring_size = pipe.ring_size,
+            .slots = {},
+            .bound_pipe = nullptr};
+    }
+
+    // Relay DFBs keyed by their (sorted) relayed pipe set, so a group can find its relay.
+    auto sorted_names = [](std::vector<PrefetcherPipeParamName> names) {
+        std::sort(names.begin(), names.end());
+        return names;
+    };
+    std::map<std::vector<PrefetcherPipeParamName>, const DataflowBufferSpec*> relay_by_pipe_set;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        auto [it, inserted] =
+            relay_by_pipe_set.try_emplace(sorted_names(dfb.advanced_options.prefetcher_pipe_relays), &dfb);
+        TT_FATAL(
+            inserted,
+            "DFBs '{}' and '{}' both relay the same PrefetcherPipe set; a pipe set has at most one relay DFB",
+            it->second->unique_id,
+            dfb.unique_id);
+    }
+    std::unordered_set<const DataflowBufferSpec*> relays_registered;
+
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.advanced_options.prefetcher_pipe_bindings.empty()) {
+            continue;
+        }
+        const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
+        for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
+            const PrefetcherPipeParameter* first =
+                collected.prefetcher_pipe_by_name.at(binding.pipe_parameter_names[0]);
+            NodeRangeSet group_receivers;
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                group_receivers = group_receivers.merge(to_node_range_set(pipe->receivers));
+            }
+            const bool is_sender_role =
+                !is_prefetcher_pipe_receiver_role(nodes, group_receivers) &&
+                is_prefetcher_pipe_sender_role(nodes, group_receivers, binding.pipe_parameter_names.size());
+
+            const NodeRangeSet receiver_cores = is_sender_role ? NodeRangeSet() : nodes;
+            const uint32_t num_credit_lanes = is_sender_role ? 1u : kernel.num_threads;
+            const uint8_t prefetcher_pipe_id = program_impl.reserve_prefetcher_pipe_slot(
+                nodes, receiver_cores, first->ring_size, first->entry_size, num_credit_lanes);
+            handles[&kernel].push_back(
+                {.accessor_name = binding.accessor_name, .prefetcher_pipe_id = prefetcher_pipe_id});
+
+            // Sender role: the spec does not say which of the kernel's nodes hosts which pipe, so
+            // every pipe's placement names all of them; the bind narrows it to the pipe's sender.
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                placements.at(pipe_name).slots.push_back(
+                    {.prefetcher_pipe_id = prefetcher_pipe_id,
+                     .cores = is_sender_role ? nodes : to_node_range_set(pipe->receivers),
+                     .sender_role = is_sender_role});
+            }
+
+            // A relay over exactly this group's pipes hangs off the receiver kernel's slot.
+            if (!is_sender_role) {
+                auto relay_it = relay_by_pipe_set.find(sorted_names(binding.pipe_parameter_names));
+                if (relay_it != relay_by_pipe_set.end()) {
+                    const DataflowBufferSpec* relay = relay_it->second;
+                    TT_FATAL(
+                        relays_registered.insert(relay).second,
+                        "Relay DFB '{}' matches PrefetcherPipe accessor groups in more than one receiver kernel",
+                        relay->unique_id);
+                    program_impl.register_prefetcher_pipe_relay_dfb(
+                        prefetcher_pipe_id, dfb_name_to_id.at(relay->unique_id));
+                }
+            }
+        }
+    }
+
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.advanced_options.prefetcher_pipe_relays.empty()) {
+            TT_FATAL(
+                relays_registered.contains(&dfb),
+                "Relay DFB '{}' has no data-movement kernel binding its relayed PrefetcherPipe set as receiver; the "
+                "relay's PRODUCER must bind those pipes under one accessor",
+                dfb.unique_id);
+        }
+    }
+
+    for (auto& [pipe_name, placement] : placements) {
+        program_impl.register_prefetcher_pipe_parameter(pipe_name.get(), std::move(placement));
+    }
+    return handles;
+}
+
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
+    const Hal& hal = metal_ctx.hal();
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1b: Census the semaphore binders, using the kernel node sets from Step 1a. Runs
+    // unconditionally because it also rejects a kernel that binds the same semaphore twice.
+    const sem_solver::SemaphoreBinderCensus semaphore_binders =
+        sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
+
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
-        ValidateProgramSpec(spec, collected);
+        ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
     }
 
     // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
     //  - Gen1: processor is user-specified in Gen1Config
     KernelRiscMaskMap kernel_to_risc_mask =
-        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+        is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
     // Step 2b: For multi-binding DFBs, all KernelSpecs on the same role must end up with
     // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
@@ -2893,7 +3639,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 if (mask == first_mask) {
                     continue;
                 }
-                if (is_gen2_arch()) {
+                if (is_gen2_arch(hal)) {
                     TT_THROW(
                         "Internal error: Gen2 solver produced disagreeing risc_masks for DFB '{}' "
                         "{} bindings ('{}' = 0x{:x} vs '{}' = 0x{:x}). The coupling-group solver "
@@ -2957,6 +3703,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
     DFBNameToSlotMap dfb_name_to_slot;
+    std::unordered_map<DFBSpecName, bool> dfb_name_to_is_relay;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
@@ -2970,7 +3717,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+        const auto& created_config = program_impl->get_dataflow_buffer(dfb_id)->config;
         dfb_name_to_slot[dfb_name] = program_impl->get_dataflow_buffer(dfb_id)->device_slot;
+        dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
@@ -2978,6 +3727,19 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
+    }
+
+    // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
+    // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
+    // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
+    // a relay DFB's `dfb::` token.
+    const PrefetcherPipeHandlesByKernel prefetcher_pipe_handles =
+        ReservePrefetcherPipeSlots(mesh_device, spec, collected, *program_impl, dfb_name_to_id);
+
+    std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
+    for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
+        dfb_name_to_prefetcher_pipe_id[dfb_name] =
+            program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(0xFF);
     }
 
     // Wire alias groups: for each DFB that has alias_with entries, make the first
@@ -3007,7 +3769,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
-    // Create Semaphores and build name -> ID map.
+    // Create Semaphores and build the name -> ID map.
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
@@ -3019,16 +3781,21 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
+    // Pick each semaphore's access mechanism. Resolve against this program's context Hal (the mesh
+    // device's), not the default context, so a non-default-context device resolves its own arch.
+    const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, hal);
+
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
         // Make the local accessor name -> DFB device slot map for this kernel
-        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
-            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
+        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
@@ -3073,7 +3840,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
         constexpr bool is_metal2_kernel = true;
 
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
@@ -3093,7 +3860,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
@@ -3127,8 +3894,27 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
+                // Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the
+                // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
+                // (ValidateProgramSpec), so at most one define.
+                for (const auto& binding : kernel_spec.semaphore_bindings) {
+                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+                        continue;
+                    }
+                    const auto sem =
+                        std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
+                            return s.unique_id == binding.semaphore_spec_name;
+                        });
+                    // The host option is the source of truth: always bake the resolved capacity, overriding
+                    // any user-supplied COMPUTE_SEMAPHORE_MAX define. max_value 0 means the default (the 4-bit
+                    // hardware ceiling, 15), which is what the kernel assumes when the define is absent.
+                    const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
+                                                  ? sem->advanced_options.max_value
+                                                  : 15u;
+                    config.defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
+                }
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
@@ -3148,6 +3934,19 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
+        if (auto pipe_it = prefetcher_pipe_handles.find(&kernel_spec); pipe_it != prefetcher_pipe_handles.end()) {
+            kernel->set_prefetcher_pipe_binding_handles(pipe_it->second);
+        }
+
+        std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
+        tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());
+        for (const auto& sequence : kernel_spec.advanced_options.tensor_binding_sequences) {
+            tensor_binding_sequences.push_back(
+                TensorBindingSequenceHandle{.sequence_name = sequence.sequence_name, .members = sequence.members});
+        }
+        kernel->set_tensor_binding_sequences(std::move(tensor_binding_sequences));
 
         // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
         kernel->set_compile_time_vararg_count(vararg_cta_count);

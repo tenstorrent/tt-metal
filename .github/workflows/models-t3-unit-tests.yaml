@@ -30,6 +30,7 @@ on:
           - gemma-2-9b
           - gemma-4-e2b
           - gemma-4-e4b
+          - hunyuan-image-3.0
           - panoptic-deeplab
           - bevformer
           - mistral-small-3.1-24b
@@ -37,6 +38,14 @@ on:
           - mochi
           - bert-large
           - tt-model-sampling
+          - efficientdet-d0
+          - mobilenetv3
+          - retinanet
+          - ssd512
+          - vadv2
+          - openpdn-mnist
+          - yunet
+          - xtts-v2
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -45,6 +54,7 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
+          - "wh_n150_civ2 (N150 CIv2)"
           - "wh_n300 (N300)"
           - "wh_llmbox (T3000)"
           - "wh_llmbox_perf (T3000 perf)"
@@ -103,7 +113,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n150_civ2,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -133,9 +143,36 @@ jobs:
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+  # Bakes the source tree and this run's build output into one image the test legs
+  # run in, so they need no artifact download and no recursive checkout.
+  # PROFILE=full because the legs read /work/build; the dev base is the same image
+  # docker-image resolves to, so the image path and the fallback path agree.
+  bake-env-dev-full:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref, so the producer's default (its own
+      # commit) is already the commit build-artifact built.
   models-unit-tests:
-    needs: [check-harbor, build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus, bake-env-dev-full]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the legs fall back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
     secrets: inherit
     # OIDC only on this caller (multihost-ci runner chart may need it), not workflow-wide.
     # Job-level permissions replace inherited defaults, so restate what tests need.
@@ -146,6 +183,7 @@ jobs:
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}

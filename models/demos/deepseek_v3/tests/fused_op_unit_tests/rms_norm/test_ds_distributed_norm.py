@@ -384,7 +384,7 @@ def test_ds_distributed_norm(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    request,
     is_ci_env,
 ):
     # CI skip logic: keep only decode/1/trace and prefill/128/eager in CI with program_cache and real_weights
@@ -415,7 +415,7 @@ def test_ds_distributed_norm(
         use_real_weights,
         mode,
         seq_len,
-        state_dict if use_real_weights else None,
+        request.getfixturevalue("state_dict") if use_real_weights else None,
         reference_layernorm_path,
     )
     _run_ds_distributed_norm_test(

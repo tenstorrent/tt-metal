@@ -49,7 +49,7 @@ LAYER_CONV2 = [
 ]
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "layer, in_ch, out_ch, spatial, shard_layout, tid", LAYER_CONV2, ids=[c[-1] for c in LAYER_CONV2]

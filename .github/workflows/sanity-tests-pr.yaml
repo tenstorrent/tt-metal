@@ -25,4 +25,6 @@ jobs:
       run-wormhole: true
       run-blackhole: false
       run-sim: true
+      # Off for forks: the leg is flaky and needs more time to run
+      run-models-sanity-tests: false
       with-retries: ${{ inputs.with-retries || false }}

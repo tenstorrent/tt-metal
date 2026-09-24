@@ -26,6 +26,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
    | mold | Fast linker |
    | doxygen | Documentation generator |
    | clangbuildanalyzer | ClangBuildAnalyzer for build profiling |
+   | iwyu | include-what-you-use; include analysis. Pinned to the Clang major version |
    | gdb | GNU Debugger |
    | cmake | Build system generator |
    | yq | YAML processor |
@@ -78,7 +79,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 | `install-curl.sh` | Build and install curl from source |
 | `install-doxygen.sh` | Build and install doxygen from source |
 | `install-gdb.sh` | Build and install GDB from source |
-| `install-iwyu.sh` | Build and install Include What You Use (not currently in Docker image) |
+| `install-iwyu.sh` | Build and install include-what-you-use |
 | `install-mold.sh` | Install mold linker binary release |
 | `install-openmpi.sh` | Build and install OpenMPI with ULFM support |
 | `install-sfpi.sh` | Install SFPI compiler tools |

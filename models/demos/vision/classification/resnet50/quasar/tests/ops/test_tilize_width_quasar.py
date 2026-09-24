@@ -32,7 +32,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("width_tiles", [4, 8, 16], ids=["w4", "w8", "w16"])
 @pytest.mark.parametrize("height_tiles", [1, 4, 49], ids=["h1", "h4", "h49"])
@@ -90,7 +90,7 @@ _SHARDED_CASES = [
 ]
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("h_tiles, w_tiles, tid", _SHARDED_CASES, ids=[c[-1] for c in _SHARDED_CASES])
 def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):

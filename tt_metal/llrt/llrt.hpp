@@ -21,6 +21,11 @@
 
 // clang-format on
 
+namespace tt::tt_metal {
+class MetalContext;
+class MetalEnvImpl;
+}  // namespace tt::tt_metal
+
 // llrt = lower-level runtime
 namespace tt::llrt {
 
@@ -31,13 +36,16 @@ const ll_api::memory& get_risc_binary(
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     const std::function<void(ll_api::memory&)>& update_callback = nullptr);
 
-tt::tt_metal::CoreCoord logical_core_from_ethernet_core(ChipId chip_id, tt::tt_metal::CoreCoord& ethernet_core);
+tt::tt_metal::CoreCoord logical_core_from_ethernet_core(
+    tt::tt_metal::MetalEnvImpl& env, ChipId chip_id, const tt::tt_metal::CoreCoord& ethernet_core);
 
-tt_metal::HalProgrammableCoreType get_core_type(ChipId chip_id, const tt::tt_metal::CoreCoord& virtual_core);
+tt_metal::HalProgrammableCoreType get_core_type(
+    tt::tt_metal::MetalEnvImpl& env, ChipId chip_id, const tt::tt_metal::CoreCoord& virtual_core);
 
-void send_reset_go_signal(ChipId chip, const tt::tt_metal::CoreCoord& virtual_core);
+void send_reset_go_signal(tt::tt_metal::MetalEnvImpl& env, ChipId chip, const tt::tt_metal::CoreCoord& virtual_core);
 
 void write_launch_msg_to_core(
+    tt::tt_metal::MetalEnvImpl& env,
     ChipId chip,
     tt::tt_metal::CoreCoord core,
     tt_metal::dev_msgs::launch_msg_t::View msg,
@@ -45,6 +53,7 @@ void write_launch_msg_to_core(
     bool send_go = true);
 
 bool test_load_write_read_risc_binary(
+    tt::tt_metal::MetalEnvImpl& env,
     const ll_api::memory& mem,
     ChipId chip_id,
     const tt::tt_metal::CoreCoord& core,
@@ -53,6 +62,7 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx);
 
 bool test_load_multicast_write_risc_binary(
+    tt::tt_metal::MetalEnvImpl& env,
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const tt::tt_metal::CoreCoord& start_core,
@@ -61,25 +71,39 @@ bool test_load_multicast_write_risc_binary(
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
 
-void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const tt::tt_metal::CoreCoord& core, uint32_t address);
+void write_binary_to_address(
+    tt::tt_metal::MetalEnvImpl& env,
+    const ll_api::memory& mem,
+    ChipId chip_id,
+    const tt::tt_metal::CoreCoord& core,
+    uint32_t address);
 
 namespace internal_ {
 
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
+    tt::tt_metal::MetalContext& context,
+    ChipId device_id,
+    int run_state,
+    std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores,
+    int timeout_ms = 0);
 
-void wait_for_idle(ChipId device_id, const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores);
+void wait_for_idle(
+    tt::tt_metal::MetalContext& context,
+    ChipId device_id,
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores);
 
 // In test mode, return a watcher fault message if one was recorded, so host waits can unwind.
-std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id);
+std::optional<std::string> get_watcher_error_message_in_test_mode(
+    tt::tt_metal::MetalContext& context, ChipId device_id);
 
 // In test mode, throw if watcher detected a device-side fault so host waits can unwind.
-void throw_if_watcher_tripped_in_test_mode(ChipId device_id);
+void throw_if_watcher_tripped_in_test_mode(tt::tt_metal::MetalContext& context, ChipId device_id);
 
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
 // Maximum number of args depends on the architecture. Args not provided will be set to zero.
 void send_msg_to_eth_mailbox(
+    tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
@@ -91,9 +115,13 @@ void send_msg_to_eth_mailbox(
 // Return to base firmware and wait for a heartbeat from the active ethernet core, if supported
 // Default timeout time empirically chosen to be 20 seconds to avoid timeouts
 void return_to_base_firmware_and_wait_for_heartbeat(
-    ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, int timeout_ms = 20000);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    int timeout_ms = 20000);
 
-void set_metal_eth_fw_run_flag(ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, bool enable);
+void set_metal_eth_fw_run_flag(
+    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, bool enable);
 
 }  // namespace internal_
 

@@ -17,26 +17,22 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
 
-# The production chunk width on the target 8x4 mesh (sp=8 -> chunk_local=640), same literal as
-# test_mla.py:558's `chunk_size_global=5120` default. There is no config constant for it.
-CHUNK_GLOBAL = 5120
+# The production chunk width: 5120 global, 640 per chip on the target 8x4 mesh (sp=8).
+CHUNK_GLOBAL = PREFILL_CHUNK_TOKENS
 
 # Per-user cache depth
 MAX_SEQ_LEN = 11 * CHUNK_GLOBAL
-
-_FABRIC_2D = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-    "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-}
 
 
 def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> torch.Tensor:
@@ -48,6 +44,17 @@ def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> 
     natural = torch.zeros_like(rotated)
     natural[:, :, p, :] = rotated
     return natural
+
+
+def _reshuffle_k_to_interleaved_layout(rk: torch.Tensor, cfg) -> torch.Tensor:
+    """Reindex the HALF-SPLIT HF reference K (``rk``) to the drafter's persisted-K convention before the PCC
+    compare. ``hf_context_kv`` ropes K half-split; the meta-rope drafter persists K interleaved (the same K
+    with its head_dim ``src``-permuted, ``interleaved[j] == halfsplit[src[j]]``), so under ``"interleaved"``
+    reindex the reference by ``src`` to compare like with like. V never touches rope, so it is untouched."""
+    if cfg.rope_convention == "interleaved":
+        src = torch.argsort(interleaved_to_halfsplit_perm(cfg.head_dim))
+        return rk[..., src]
+    return rk
 
 
 def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: int, num_layers: int, out_len: int):
@@ -74,15 +81,14 @@ def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: i
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            _FABRIC_2D,
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -91,7 +97,6 @@ def test_dflash_pcc(
     mesh_device,
     device_params,
     num_links,
-    topology,
     ctx_len,
     n_chunks,
     use_pretrained,
@@ -99,6 +104,7 @@ def test_dflash_pcc(
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     logger.info(f"weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}  n_chunks={n_chunks}")
     cfg = drafter_cfg
     sd = drafter_state_dict
@@ -125,6 +131,7 @@ def test_dflash_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=ctx_len,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )
@@ -162,6 +169,7 @@ def test_dflash_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
@@ -184,15 +192,14 @@ _MULTITURN_ITERS = [
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("iters_isl", _MULTITURN_ITERS)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            _FABRIC_2D,
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -201,13 +208,13 @@ def test_dflash_multiturn_pcc(
     mesh_device,
     device_params,
     num_links,
-    topology,
     iters_isl,
     use_pretrained,
     drafter_cfg,
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     cfg = drafter_cfg
     sd = drafter_state_dict
 
@@ -252,6 +259,7 @@ def test_dflash_multiturn_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=cache_seq,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )
@@ -306,6 +314,7 @@ def test_dflash_multiturn_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")

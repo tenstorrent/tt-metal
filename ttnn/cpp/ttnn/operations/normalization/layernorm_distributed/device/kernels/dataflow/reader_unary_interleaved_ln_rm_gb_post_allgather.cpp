@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -44,6 +45,11 @@ void async_read_row_to_tile(
     } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
         noc.async_read_barrier();
         // L1→L1 copy: move the second half of the row (datums 16..31) into the second face
+#ifdef ARCH_QUASAR
+        // Quasar: a same-core NoC loopback read spins/drops on the emulator; the row above is already
+        // barriered, so relocate the bytes with a scalar copy instead (see local_l1_copy).
+        local_l1_copy(L1_dst_addr + face_bytes, L1_dst_addr + half_row_bytes, row_bytes);
+#else
         UnicastEndpoint self;
         noc.async_read(
             self,
@@ -51,6 +57,7 @@ void async_read_row_to_tile(
             row_bytes,
             {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = L1_dst_addr + half_row_bytes},
             {});
+#endif
     } else {
         static_assert(t == 0 || t == 1, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
     }

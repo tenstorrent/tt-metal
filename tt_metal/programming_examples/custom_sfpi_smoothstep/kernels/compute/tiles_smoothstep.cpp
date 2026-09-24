@@ -41,7 +41,8 @@ void kernel_main() {
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     // Initialize SFPU for computation using cb_in0 and cb_out0
-    init_sfpu(cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
 
     // precompute inverse of (edge1 - edge0) for efficiency
     constexpr float edge0 = 0.0f;

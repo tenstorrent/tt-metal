@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -28,6 +29,86 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # self-consistent Meta-style cos/sin so the test validates the per-device indexing/offset logic
 # (the new behavior) -- the rotary math itself is already covered by test_rope_prefill.py.
 ROPE_HEAD_DIM = 64
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
+@pytest.mark.parametrize("sp_axis", [0, 1])
+def test_rotary_embedding_indexed_sequence_subshards(mesh_device, sp_axis, expect_error):
+    """Early TP partition must commute with RoPE, including rotated starts and metadata replay.
+
+    Cos/sin retain the original SP slabs. Compare against full-slab RoPE then partition, and retain
+    one captured metadata program while changing chunk starts. Both mesh-axis orientations are used.
+    """
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    chunk_local = 128 * tp
+    chunk_global = chunk_local * sp
+    cos, sin = _make_cos_sin(4 * chunk_global, ROPE_HEAD_DIM)
+    dims = [None, None]
+    dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+
+    def upload(tensor, mesh_mapper=mapper):
+        return ttnn.from_torch(
+            tensor, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper
+        )
+
+    cos_tt = upload(block_cyclic_reorder(cos, chunk_local, sp, seq_dim=2))
+    sin_tt = upload(block_cyclic_reorder(sin, chunk_local, sp, seq_dim=2))
+    trans_tt = upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device))
+    torch.manual_seed(42)
+    full_q = upload(torch.randn(1, 8, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16))
+    local_q = ttnn.mesh_partition(full_q, dim=2, cluster_axis=tp_axis)
+    metadata = ttnn.from_torch(
+        torch.zeros((1, 1, 1, 1), dtype=torch.int64),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    def local_rope(start):
+        return rope(local_q, cos_tt, sin_tt, trans_tt, start, sp_axis, seq_subshard_axis=tp_axis)
+
+    with expect_error(RuntimeError, "different mesh axis"):
+        rope(local_q, cos_tt, sin_tt, trans_tt, 0, sp_axis, seq_subshard_axis=sp_axis)
+
+    # Warm the exact metadata program before capturing. The captured output owns its allocation
+    # through all replays; only the metadata value changes in place.
+    warm = local_rope(metadata)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warm)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced_out = local_rope(metadata)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    entries = None
+    try:
+        # Include a TP window crossing a block-cyclic slab boundary at a rotated chunk start.
+        for start in (0, chunk_global, chunk_local + 32, 2 * chunk_global + chunk_local - 32):
+            full_out = rope(full_q, cos_tt, sin_tt, trans_tt, start, sp_axis)
+            expected = ttnn.mesh_partition(full_out, dim=2, cluster_axis=tp_axis)
+            scalar_out = local_rope(start)
+            host_start = ttnn.from_torch(
+                torch.tensor([start], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_start, metadata)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            reference = ttnn.to_torch(expected, mesh_composer=composer)
+            assert torch.equal(reference, ttnn.to_torch(scalar_out, mesh_composer=composer))
+            assert torch.equal(reference, ttnn.to_torch(traced_out, mesh_composer=composer))
+            if entries is None:
+                entries = mesh_device.num_program_cache_entries()
+            assert mesh_device.num_program_cache_entries() == entries
+            for tensor in (full_out, expected, scalar_out):
+                ttnn.deallocate(tensor)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(traced_out)
 
 
 def _make_cos_sin(max_seq, head_dim):
@@ -264,9 +345,9 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     [
         pytest.param(
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -381,3 +462,249 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
         f"{mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} chunks")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
+@pytest.mark.parametrize("rotary_offset", [0, 32])
+@pytest.mark.parametrize(
+    "subshard, reuse_cos_sin", [(False, False), (True, False), (True, True)], ids=["keys", "queries", "queries-reuse"]
+)
+def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, reuse_cos_sin, expect_error):
+    """Partial RoPE matches slice/rotate/concat and copies other channels exactly on replay."""
+    sp, tp = mesh_device.shape
+    # Keep each TP query shard tile-aligned on both meshes.
+    chunk_local, width, rotary_dim = 160 * tp, 128, 64
+    chunk_global = chunk_local * sp
+    capacity = 4 * chunk_global
+    positions = torch.arange(capacity).float()
+    frequencies = 1.0 / (10000 ** (torch.arange(0, rotary_dim, 2).float() / rotary_dim))
+    angles = torch.outer(positions, frequencies).repeat_interleave(2, dim=-1)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None))
+
+    def upload(x, mapper=mapper):
+        return ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+
+    cos = upload(block_cyclic_reorder(angles.cos().reshape(1, 1, capacity, rotary_dim), chunk_local, sp, seq_dim=2))
+    sin = upload(block_cyclic_reorder(angles.sin().reshape(1, 1, capacity, rotary_dim), chunk_local, sp, seq_dim=2))
+    trans = upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device))
+    torch.manual_seed(56)
+    num_heads = 4 if subshard else 1
+    if reuse_cos_sin:
+        grid = mesh_device.compute_with_storage_grid_size()
+        seq_tiles = chunk_local // tp // 32
+        num_cores = grid.x * grid.y
+        if num_cores < seq_tiles:
+            pytest.skip("Cos/sin reuse coverage requires one core per sequence tile row")
+        # Two heads per core and one row per head force RELOAD_IMPL=0 with shared cos/sin.
+        # On an 80-core grid this matches GLM's 32 heads and five local sequence tile rows.
+        num_heads = 2 * (num_cores // seq_tiles)
+    x = upload(torch.randn(1, num_heads, chunk_global, width, dtype=torch.bfloat16))
+    if subshard:
+        full = x
+        x = ttnn.mesh_partition(x, dim=2, cluster_axis=1)
+        ttnn.deallocate(full)
+    local_rows = chunk_local // tp if subshard else chunk_local
+    heads = x.shape[1]
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(2, 1))
+    input_host = ttnn.to_torch(x, mesh_composer=composer)
+    metadata = ttnn.from_torch(
+        torch.zeros(1, 1, 1, 1, dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    opts = {"seq_subshard_axis": 1 if subshard else None}
+
+    def partial(start):
+        return rope(x, cos, sin, trans, start, 0, rotary_dim=rotary_dim, rotary_offset=rotary_offset, **opts)
+
+    with expect_error(RuntimeError, "rotary"):
+        rope(x, cos, sin, trans, 0, 0, rotary_dim=64, rotary_offset=16, **opts)
+    with expect_error(RuntimeError, "rotary"):
+        rope(x, cos, sin, trans, 0, 0, rotary_dim=64, rotary_offset=96, **opts)
+    with expect_error(RuntimeError, "rotary"):
+        rope(x, cos, sin, trans, 0, 0, rotary_dim=32, **opts)
+
+    warmed = partial(metadata)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warmed)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = partial(metadata)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        for start in (0, chunk_global, chunk_local + 32, 2 * chunk_global + chunk_local - 32):
+            pe = ttnn.slice(x, [0, 0, 0, rotary_offset], [1, heads, local_rows, rotary_offset + rotary_dim])
+            expected = rope(pe, cos, sin, trans, start, 0, **opts)
+            expected_host = ttnn.to_torch(expected, mesh_composer=composer)
+            scalar = partial(start)
+            scalar_host = ttnn.to_torch(scalar, mesh_composer=composer)
+            for t in (pe, expected, scalar):
+                ttnn.deallocate(t)
+            host_start = ttnn.from_torch(
+                torch.tensor([start], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_start, metadata)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            replay_host = ttnn.to_torch(out, mesh_composer=composer)
+            for result in (scalar_host, replay_host):
+                assert_with_pcc(expected_host, result[..., rotary_offset : rotary_offset + rotary_dim], 0.9999)
+                assert torch.equal(input_host[..., :rotary_offset], result[..., :rotary_offset])
+                assert torch.equal(
+                    input_host[..., rotary_offset + rotary_dim :], result[..., rotary_offset + rotary_dim :]
+                )
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(out)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize("subshard", [False, True], ids=["keys", "queries"])
+def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
+    """The unfused DeepSeek path preserves half-split rotary semantics and the nonrotary half."""
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+
+    sp, tp = mesh_device.shape
+    # Keep each TP query shard tile-aligned on both meshes.
+    rows, width = 160 * tp, 128
+    capacity = 4 * rows * sp
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(2, None))
+
+    def upload(x, mapper=mapper):
+        return ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+
+    cos, sin = _make_cos_sin(capacity, 64)
+    rope = {
+        "cos_matrix": upload(block_cyclic_reorder(cos, rows, sp, seq_dim=2)),
+        "sin_matrix": upload(block_cyclic_reorder(sin, rows, sp, seq_dim=2)),
+        "trans_matrix": upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device)),
+    }
+    perm = interleaved_perm_matrix(64).to(torch.bfloat16)
+    indexer = SimpleNamespace(
+        sp_axis=0,
+        index_args=SimpleNamespace(index_head_dim=width),
+        _rope_perm=upload(perm, ttnn.ReplicateTensorToMesh(mesh_device)),
+        hifi4_fp32_compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+    torch.manual_seed(57)
+    x_host = torch.randn(1, 4 if subshard else 1, rows * sp, width, dtype=torch.bfloat16)
+    x = upload(x_host)
+    if subshard:
+        full = x
+        x = ttnn.mesh_partition(full, dim=2, cluster_axis=1)
+        ttnn.deallocate(full)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(2, 1))
+    for start in (0, rows + 32, 2 * rows * sp):
+        positions = torch.tensor(_rotated_chip_positions(start, sp, rows)).flatten()
+        # Rotate in DeepSeek's half-split basis, then permute to the stored interleaved basis.
+        pe = x_host[..., :64].float()
+        cs = cos[0, 0, positions, ::2].float().repeat(1, 2)
+        sn = sin[0, 0, positions, ::2].float().repeat(1, 2)
+        rotated = (pe * cs + rotate_half(pe) * sn) @ perm.float()
+        expected = torch.cat((rotated, x_host[..., 64:].float()), dim=-1)
+        expected = torch.cat(
+            [
+                torch.cat(
+                    [
+                        expected[
+                            :,
+                            :,
+                            s * rows
+                            + (t * rows // tp if subshard else 0) : s * rows
+                            + ((t + 1) * rows // tp if subshard else rows),
+                        ]
+                        for t in range(tp)
+                    ],
+                    dim=1,
+                )
+                for s in range(sp)
+            ],
+            dim=2,
+        )
+        for use_metadata in (False, True):
+            meta = None
+            if use_metadata:
+                actual_start = ttnn.from_torch(
+                    torch.tensor([start], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                meta = (None, actual_start)
+            out = TtIndexer._bc_rope_pe(
+                indexer, x, rope, start, metadata=meta, seq_subshard_axis=1 if subshard else None
+            )
+            actual = ttnn.to_torch(out, mesh_composer=composer).float()
+            assert_with_pcc(expected[..., :64], actual[..., :64], 0.9999)
+            assert torch.equal(expected[..., 64:], actual[..., 64:])
+            ttnn.deallocate(out)
+            if use_metadata:
+                ttnn.deallocate(actual_start)
+
+
+@pytest.mark.parametrize("use_metadata", [False, True], ids=["scalar", "metadata"])
+def test_rotary_embedding_indexed_padded_default(device, use_metadata, expect_error):
+    """Omission and None preserve padded full-width RoPE, including both Python overloads."""
+    device.enable_program_cache()
+    torch.manual_seed(0)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    source = torch.randn(1, 2, 32, 80, dtype=torch.bfloat16)
+    cos = torch.randn(1, 1, 32, 80, dtype=torch.bfloat16)
+    sin = torch.randn_like(cos)
+    x, c, s = upload(source), upload(cos), upload(sin)
+    trans = upload(get_rot_transformation_mat())
+    start = 0
+    if use_metadata:
+        start = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int64),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    # Compare to the same physical data with padding made explicit in the logical shape.
+    padded = [upload(torch.nn.functional.pad(t, (0, 16))) for t in (source, cos, sin)]
+    expected_out = rope(*padded, trans, start, 0, rotary_dim=96)
+    expected = ttnn.to_torch(expected_out)[..., :80]
+    ttnn.deallocate(expected_out)
+    for options in ({}, {"rotary_dim": None}):
+        out = rope(x, c, s, trans, start, 0, **options)
+        actual = ttnn.to_torch(out)
+        assert actual.shape == source.shape
+        assert torch.equal(actual, expected)
+        ttnn.deallocate(out)
+    with expect_error(RuntimeError, "rotary region must fit"):
+        rope(x, c, s, trans, start, 0, rotary_dim=96)
+
+
+@pytest.mark.parametrize("cos_width, sin_width", [(33, 64), (64, 33), (33, 33)])
+def test_rotary_embedding_indexed_logical_frequency_width(device, cos_width, sin_width, expect_error):
+    """Explicit dimensions reject padded frequency columns even after warming the legacy program."""
+    device.enable_program_cache()
+    torch.manual_seed(0)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    x = upload(torch.randn(1, 2, 32, 64))
+    cos = upload(torch.ones(1, 1, 32, cos_width))
+    sin = upload(torch.zeros(1, 1, 32, sin_width))
+    trans = upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    warmed = rope(x, cos, sin, trans, 0, 0)
+    ttnn.deallocate(warmed)
+    with expect_error(RuntimeError, "rotary_dim must match logical cos and sin head dims"):
+        rope(x, cos, sin, trans, 0, 0, rotary_dim=64)

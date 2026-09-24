@@ -32,6 +32,7 @@ template <NumNocAddrs N>
 using RemoteNocCoords = RemoteNocCoord[N];
 
 using L1Ptr = volatile tt_l1_ptr uint32_t*;
+using ConstL1Ptr = const volatile tt_l1_ptr uint32_t*;
 
 /**
  * @brief Compute NOC coordinates for a two-stage reduce.
@@ -62,13 +63,14 @@ template <bool row_major, NumNocAddrs num_remote_workers_first_stage, NumNocAddr
 inline void compute_two_stage_noc_addrs(
     RemoteNocCoords<num_remote_workers_first_stage>& remote_coords_first_stage,
     RemoteNocCoords<num_remote_workers_second_stage>& remote_coords_second_stage,
-    L1Ptr p_remote_noc_x,
-    L1Ptr p_remote_noc_y,
+    ConstL1Ptr p_remote_noc_x,
+    ConstL1Ptr p_remote_noc_y,
     uint32_t start_core_x,
     uint32_t start_core_y,
     uint32_t num_cores_x,
     uint32_t num_cores_y) {
-    uint32_t x = start_core_x, y = start_core_y;
+    uint32_t x = start_core_x;
+    uint32_t y = start_core_y;
     for (uint32_t i = 0; i < num_remote_workers_first_stage; ++i) {
         remote_coords_first_stage[i] = {p_remote_noc_x[x], p_remote_noc_y[y]};
         if constexpr (row_major) {
@@ -120,13 +122,14 @@ inline void compute_two_stage_noc_addrs(
 template <bool row_major, NumNocAddrs num_remote_workers>
 inline void compute_single_stage_noc_addrs(
     RemoteNocCoords<num_remote_workers>& remote_coords,
-    L1Ptr p_remote_noc_x,
-    L1Ptr p_remote_noc_y,
+    ConstL1Ptr p_remote_noc_x,
+    ConstL1Ptr p_remote_noc_y,
     uint32_t start_core_x,
     uint32_t start_core_y,
     uint32_t num_cores_x,
     uint32_t num_cores_y) {
-    uint32_t x = start_core_x, y = start_core_y;
+    uint32_t x = start_core_x;
+    uint32_t y = start_core_y;
     for (uint32_t i = 0; i < num_remote_workers; ++i) {
         remote_coords[i] = {p_remote_noc_x[x], p_remote_noc_y[y]};
         if constexpr (row_major) {
@@ -153,7 +156,7 @@ inline void compute_single_stage_noc_addrs(
 
 /**
  * @brief Read a block of tiles from remote memory
- * to L1 for an input CB. Reserves space for a full
+ * to L1 for an input buffer. Reserves space for a full
  * block of tiles for synchronization purposes, but
  * only reads tiles that contain data
  *
@@ -167,7 +170,7 @@ inline void compute_single_stage_noc_addrs(
  * @param block Block object that defines the number of tiles to read
  */
 template <typename T, typename Block>
-inline void read_block_to_cb(
+inline void read_block_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb,
     const T& addr,
@@ -175,16 +178,16 @@ inline void read_block_to_cb(
     const uint32_t offset,
     const Block& block) {
     // Need to reserve/push on intervals that nicely
-    // divide the CB size. The CB and block size has been
+    // divide the buffer size. The buffer and block size has been
     // configured to ensure this in the program setup
-    dfb.reserve_back(block.full_block_size());
+    dfb.reserve_back(static_cast<uint16_t>(block.full_block_size()));
     uint32_t idx = 0;
     for (auto r : block.local()) {
         noc.async_read(addr, dfb, tile_bytes, {.page_id = offset + r}, {.offset_bytes = idx * tile_bytes});
         idx++;
     }
     noc.async_read_barrier();
-    dfb.push_back(block.full_block_size());
+    dfb.push_back(static_cast<uint16_t>(block.full_block_size()));
 }
 
 /**
@@ -196,7 +199,7 @@ inline void read_block_to_cb(
  * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
-inline void read_row_major_block_to_cb(
+inline void read_row_major_block_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb_in_rm,
     const T& src_a,
@@ -215,7 +218,7 @@ inline void read_row_major_block_to_cb(
             src_a,
             dfb_in_rm,
             row_read_bytes,
-            {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
+            {.page_id = (curr_tile_row * TILE_H) + row, .offset_bytes = col_byte_offset},
             {.offset_bytes = l1_offset});
         l1_offset += rm_row_stride_bytes;
     }
@@ -224,10 +227,10 @@ inline void read_row_major_block_to_cb(
 }
 
 /**
- * @brief Write one column block of row-major output data from a CB to DRAM.
+ * @brief Write one column block of row-major output data from a buffer to DRAM.
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
-inline void write_row_major_block_from_cb(
+inline void write_row_major_block_from_dfb(
     Noc& noc,
     DataflowBuffer& dfb_out_rm,
     const T& dst_a,
@@ -265,7 +268,7 @@ inline void write_row_major_block_from_cb(
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
-inline void push_row_major_blocks_to_cb(
+inline void push_row_major_blocks_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb_in_rm,
     const T& src_a,
@@ -291,7 +294,7 @@ inline void push_row_major_blocks_to_cb(
         const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
         const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
 
-        dfb_in_rm.reserve_back(block.full_block_size());
+        dfb_in_rm.reserve_back(static_cast<uint16_t>(block.full_block_size()));
 
         uint32_t l1_offset = 0;
         for (uint32_t row = 0; row < num_valid_rows; ++row) {
@@ -299,13 +302,13 @@ inline void push_row_major_blocks_to_cb(
                 src_a,
                 dfb_in_rm,
                 row_read_bytes,
-                {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
+                {.page_id = (curr_tile_row * TILE_H) + row, .offset_bytes = col_byte_offset},
                 {.offset_bytes = l1_offset});
             l1_offset += rm_row_stride_bytes;
         }
         noc.async_read_barrier();
 
-        dfb_in_rm.push_back(block.full_block_size());
+        dfb_in_rm.push_back(static_cast<uint16_t>(block.full_block_size()));
     }
 }
 

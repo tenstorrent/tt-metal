@@ -123,6 +123,7 @@ private:
 
     // Storage for trace ids that are currently being recorded
     std::unordered_set<uint32_t> traces_being_recorded;
+    std::unordered_set<uint32_t> named_lane_threads;
 
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
@@ -300,6 +301,9 @@ public:
     // Freshen device logs
     void freshDeviceLog();
 
+    // Get the output dir for noc trace data
+    const std::filesystem::path& getNocTraceDataOutputDir() const { return noc_trace_data_output_dir; }
+
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
 
@@ -320,10 +324,6 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {},
         const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
-
-    void dumpRoutingInfo() const;
-
-    void dumpClusterCoordinates() const;
 
     // Dump device results to files and tracy
     void dumpDeviceResults(bool is_mid_run_dump = false);

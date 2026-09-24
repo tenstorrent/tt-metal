@@ -36,7 +36,7 @@ inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     // out = in0 - in1. sfpi's `a - b` lowers to the same SFPIADD that 2's-complements the subtrahend,
     // matching the original TTI_SFPIADD(..., imod 6). The load/store DataLayout is chosen so its SFP
     // load/store format byte equals the original InstrModLoadStore value:
-    //   INT32 (4) -> I32 (sign-mag<->2's-comp conversion), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (raw).
+    //   INT32 (4) -> I32 (raw), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (sign-mag<->2's-comp conversion).
     constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::LO16)             ? sfpi::DataLayout::U16
                                         : (sfpload_instr_mod == InstrModLoadStore::INT32_2S_COMP)  ? sfpi::DataLayout::SM32
                                                                                                   : sfpi::DataLayout::I32;

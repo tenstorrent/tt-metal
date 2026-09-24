@@ -63,19 +63,19 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
  * Return value: None
  */
 // clang-format on
-template <PoolType reduce_type = PoolType::SUM>
+template <PoolType reduce_type = PoolType::SUM, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
-        MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY>(i, icb0)));
+        MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, MATH_FIDELITY>(i, icb0)));
     }
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
-    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
     // Move dest[0] (first multiply result) to srcA
@@ -84,7 +84,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     // Populate srcB with the scaler value
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_fill_,
         (APPROX, 2 /*ITERATIONS*/),
         0 /*dst_index*/,
@@ -95,7 +95,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_fill_,
         (APPROX, 2 /*ITERATIONS*/),
         0 /*dst_index*/,
