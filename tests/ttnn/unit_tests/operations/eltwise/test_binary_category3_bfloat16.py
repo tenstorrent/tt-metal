@@ -9,6 +9,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     pairwise_inputs,
     run_binary,
+    generate_bfloat16_binary_grid,
     to_tt_tensor,
 )
 
@@ -71,8 +72,9 @@ def test_logical_ops_scalar(device, ttnn_op, scalar):
     (and their inplace variants): the stratified bfloat16 grid against a scalar
     spanning every truth-value / special-value class.
 
-    Reuses the 2048x2048 pairwise_inputs grid (rather than the underlying 1-D
-    2048-value grid) so operand A spans many tile rows/columns -- a 1-D
+    Broadcasts the 1-D 2048-value grid to (2048, 2048) directly (each row a
+    copy of the same 2048 values) so operand A spans many tile rows/columns
+    without materializing or uploading an unused second operand -- a 1-D
     [2048] tensor in tile layout would sit in a single tile band with 31/32
     of it padding, never reaching the multi-tile part of the scalar path.
 
@@ -80,7 +82,8 @@ def test_logical_ops_scalar(device, ttnn_op, scalar):
     tensor of the same dtype instead -- equivalent to the TT path, just
     without uploading a second full-size tensor to device.
     """
-    input_a, _ = pairwise_inputs(include_spl_values=True)
+    values = generate_bfloat16_binary_grid(include_spl_values=True)
+    input_a = values.unsqueeze(1).expand(values.numel(), values.numel()).contiguous()
     tt_a = to_tt_tensor(input_a, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
