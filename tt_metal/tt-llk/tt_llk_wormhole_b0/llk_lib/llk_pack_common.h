@@ -345,9 +345,9 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
         cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format));
     }
 
-    // Tiles shorter than 32 rows pack BFP through packer 0 alone (see _llk_pack_mop_config_),
+    // Partial faces pack BFP through packer 0 alone (see _llk_pack_mop_config_),
     // so the per-packer selectors above cannot separate faces; select the row table per face instead.
-    if (pack_mode == PackMode::Default && IS_BFP_FORMAT(pack_dst_format) && tensor_shape.num_faces_r_dim == 1)
+    if (pack_mode == PackMode::Default && IS_BFP_FORMAT(pack_dst_format) && tensor_shape.face_r_dim < FACE_R_DIM)
     {
         // 2-bit row-table selectors repeated across all face-table entries: 0x55555555 = [1], 0x11111111 = [1,0].
         const std::uint32_t face_set_mapping = (tensor_shape.num_faces_c_dim == 1 || dim == ReduceDim::REDUCE_COL) ? 0x55555555 : 0x11111111;
