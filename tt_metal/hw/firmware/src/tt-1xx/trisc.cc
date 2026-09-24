@@ -36,6 +36,8 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+// Semaphore words, for SemScope::DM_COMPUTE_ATOMICS (an L1 word shared with DM kernels).
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 uint32_t rta_count __attribute__((used));
@@ -181,6 +183,9 @@ int main(int argc, char* argv[]) {
         crta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base +
                                   launch_msg->kernel_config.rta_offset[internal_::get_hw_thread_idx()].crta_offset);
+        sem_l1_base[ProgrammableCoreType::TENSIX] =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.sem_offset[ProgrammableCoreType::TENSIX]);
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
         // Initialize RTA count from L1 memory
         // Set to 0 if: 1. offset is sentinel (no args set)

@@ -28,6 +28,10 @@ enum class SemScope : uint8_t {
     // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
     // unlinked mirrors.
     COMPUTE_ATOMIC = 3,
+    // Blackhole DM <-> compute scope: the host-allocated L1 semaphore word, updated only by L1 atomics
+    // (NoC atomics from DM, ThCon ATINCGET from UNPACK/PACK). Produced for a Blackhole semaphore bound by
+    // both DM and compute kernels.
+    DM_COMPUTE_ATOMICS = 4,
 };
 
 namespace tt::tt_metal {
@@ -47,6 +51,7 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
         case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
         case SemScope::EXTERNAL: return "EXTERNAL";
         case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
+        case SemScope::DM_COMPUTE_ATOMICS: return "DM_COMPUTE_ATOMICS";
     }
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }

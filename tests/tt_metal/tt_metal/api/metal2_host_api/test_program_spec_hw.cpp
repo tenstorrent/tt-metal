@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -1474,6 +1475,22 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreSelfCheckPack) {
 // kernel's kDInOffset/kDMidOffset/kDOutOffset. Returns the number of output tiles that differ from input.
 namespace {
 
+// num_tiles 32x32 Float16_b tiles: tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F). Normal positive
+// values (exact through a bf16 datacopy); t wraps mod 64 so they stay normal, so tiles are distinct 64 apart, enough
+// for a stale read of a 4-slot ring.
+std::vector<std::uint32_t> MakeDistinctBf16Tiles(std::uint32_t num_tiles) {
+    constexpr std::uint32_t kTileWords = 32 * 32 * 2 / 4;
+    std::vector<std::uint32_t> in(num_tiles * kTileWords);
+    for (std::uint32_t t = 0; t < num_tiles; ++t) {
+        for (std::uint32_t w = 0; w < kTileWords; ++w) {
+            const std::uint32_t lo = 0x4000u + ((t % 64) << 7) + ((2 * w) & 0x7Fu);
+            const std::uint32_t hi = 0x4000u + ((t % 64) << 7) + ((2 * w + 1) & 0x7Fu);
+            in[t * kTileWords + w] = (hi << 16) | lo;
+        }
+    }
+    return in;
+}
+
 struct DatacopyResult {
     std::uint32_t mismatched_tiles = 0;
     std::vector<std::uint32_t> report;
@@ -1497,16 +1514,7 @@ DatacopyResult RunComputeSemaphoreDatacopy(
     Program program = MakeComputeSemaphoreProgram(
         *mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
 
-    // Input: tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F). Normal positive values (exact through a
-    // bf16 datacopy) and distinct per tile, so a stale ring read (the previous tile) is detected.
-    std::vector<std::uint32_t> in(num_tiles * kTileWords);
-    for (std::uint32_t t = 0; t < num_tiles; ++t) {
-        for (std::uint32_t w = 0; w < kTileWords; ++w) {
-            const std::uint32_t lo = 0x4000u + (t << 7) + ((2 * w) & 0x7Fu);
-            const std::uint32_t hi = 0x4000u + (t << 7) + ((2 * w + 1) & 0x7Fu);
-            in[t * kTileWords + w] = (hi << 16) | lo;
-        }
-    }
+    std::vector<std::uint32_t> in = MakeDistinctBf16Tiles(num_tiles);
     std::vector<std::uint32_t> zero_report(64, 0u);
     std::vector<std::uint32_t> poison((kDepth + kMaxTiles) * kTileWords, 0xDEADBEEFu);
     detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
@@ -1616,6 +1624,464 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreBoundedProducerNoWaitControl) {
     EXPECT_GT(r[2], kSemDepth) << "ungated producer never exceeded the capacity -- the positive test cannot "
                                   "tell wait_not_full() from nothing";
     EXPECT_LT(r[1], num_iters) << "every post survived without back-pressure -- saturation was not reached";
+}
+
+// ============================================================================
+// DM <-> compute semaphore (SemScope::DM_COMPUTE_ATOMICS): one L1 semaphore word bound by BRISC and NCRISC
+// (test_dm_compute_semaphore_dm.cpp) and a compute kernel (test_dm_compute_semaphore.cpp). DM updates by
+// NoC atomic, UNPACK/PACK by ThCon ATINCGET. Roles: BRISC 0, NCRISC 1, UNPACK 2, PACK 3. Report layout
+// mirrors the kernels: role r's log at word r * 16 ([0] = done, [1..] = observed values), then BRISC's
+// final value / timeout / word address at words 69 / 70 / 71.
+// ============================================================================
+namespace {
+
+constexpr std::uint32_t kDmcSlotWords = 16;
+constexpr std::uint32_t kDmcFinalWord = 69;
+constexpr std::uint32_t kDmcTimeoutWord = 70;
+constexpr std::uint32_t kDmcAddrWord = 71;
+constexpr std::uint32_t kDmcReportWords = 72;
+
+struct DmComputeSemaphoreRun {
+    std::uint32_t pattern = 0;
+    std::uint32_t active = 0;  // pattern A: the one role that runs
+    std::uint32_t num_iters = 0;
+    std::uint32_t plain_rmw = 0;  // pattern D negative control: DM does a plain RMW instead of up()
+    std::uint32_t initial_value = 0;
+};
+
+// Zero the report, launch BRISC + NCRISC + compute all bound to one semaphore, return the report words.
+std::vector<std::uint32_t> RunDmComputeSemaphore(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DmComputeSemaphoreRun& run) {
+    IDevice* device = mesh_device->get_devices()[0];
+    const SemaphoreBinding binding{.semaphore_spec_name = SemaphoreSpecName{"sem"}, .accessor_name = "sem"};
+    const std::vector<std::string> arg_names = {"num_iters", "report_addr"};
+
+    std::vector<KernelSpec> kernels;
+    for (const auto& [name, proc] :
+         {std::pair{"brisc", tt::tt_metal::DataMovementProcessor::RISCV_0},
+          std::pair{"ncrisc", tt::tt_metal::DataMovementProcessor::RISCV_1}}) {
+        auto dm = MakeMinimalGen1DMKernel(name, proc);
+        dm.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/test_dm_compute_semaphore_dm.cpp";
+        dm.runtime_arg_schema.runtime_arg_names = arg_names;
+        dm.compile_time_args = {
+            {"pattern", run.pattern},
+            {"role", proc == tt::tt_metal::DataMovementProcessor::RISCV_0 ? 0u : 1u},
+            {"active", run.active},
+            {"plain_rmw", run.plain_rmw}};
+        dm.semaphore_bindings.push_back(binding);
+        kernels.push_back(dm);
+    }
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/test_dm_compute_semaphore.cpp";
+    compute.runtime_arg_schema.runtime_arg_names = arg_names;
+    compute.compile_time_args = {{"pattern", run.pattern}, {"active", run.active}};
+    compute.semaphore_bindings.push_back(binding);
+    kernels.push_back(compute);
+
+    SemaphoreSpec sem{.unique_id = SemaphoreSpecName{"sem"}, .target_nodes = kSemNode};
+    sem.advanced_options.initial_value = run.initial_value;
+    ProgramSpec spec{
+        .name = "dm_compute_semaphore",
+        .kernels = kernels,
+        .semaphores = {sem},
+        .work_units =
+            std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", kSemNode, {"brisc", "ncrisc", "compute"})},
+    };
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs args;
+    for (const char* name : {"brisc", "ncrisc", "compute"}) {
+        args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{name},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(kSemNode, {{"num_iters", run.num_iters}, {"report_addr", kSemReportAddr}}),
+        });
+    }
+    SetProgramRunArgs(program, args);
+
+    std::vector<std::uint32_t> zero_report(kDmcReportWords, 0u);
+    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> r;
+    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, kDmcReportWords * sizeof(std::uint32_t), r);
+    return r;
+}
+
+// PATTERN A: the one active role's log must be exactly this (initial_value = 5). 0x12345 catches a 16-bit set().
+void CheckDmComputeSelfCheck(const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t role) {
+    const auto r = RunDmComputeSemaphore(mesh_device, {.pattern = 0, .active = role, .initial_value = 5});
+    const std::vector<std::uint32_t> log(r.begin() + role * kDmcSlotWords, r.begin() + role * kDmcSlotWords + 7);
+    GTEST_LOG_(INFO) << "role " << role << " self-check log: " << ::testing::PrintToString(log);
+    EXPECT_THAT(log, ::testing::ElementsAre(1u, 5u, 8u, 6u, 0x12345u, 0x12346u, 0u));
+    for (std::uint32_t other = 0; other < 4; ++other) {
+        if (other != role) {
+            EXPECT_EQ(r[other * kDmcSlotWords], 0u) << "idle role " << other << " ran";
+        }
+    }
+}
+
+}  // namespace
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsSelfCheckBrisc) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeSelfCheck(devices_.at(0), 0);
+}
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsSelfCheckNcrisc) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeSelfCheck(devices_.at(0), 1);
+}
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsSelfCheckUnpack) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeSelfCheck(devices_.at(0), 2);
+}
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsSelfCheckPack) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeSelfCheck(devices_.at(0), 3);
+}
+
+// PATTERN D: BRISC and NCRISC (NoC atomics) and UNPACK and PACK (ATINCGET), released together, each do
+// kDmcIters x up(1) on the same word. Returns the final value (BRISC's value(), checked against a host read).
+namespace {
+
+constexpr std::uint32_t kDmcIters = 20000;
+constexpr std::uint32_t kDmcInitial = 7;
+
+std::uint32_t RunDmComputeContention(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t plain_rmw) {
+    const auto start = std::chrono::steady_clock::now();
+    const auto r = RunDmComputeSemaphore(
+        mesh_device, {.pattern = 3, .num_iters = kDmcIters, .plain_rmw = plain_rmw, .initial_value = kDmcInitial});
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    std::vector<std::uint32_t> word;
+    detail::ReadFromDeviceL1(mesh_device->get_devices()[0], kSemNode, r[kDmcAddrWord], sizeof(std::uint32_t), word);
+    GTEST_LOG_(INFO) << "contention" << (plain_rmw ? " (plain-RMW control)" : "") << ": N=" << kDmcIters
+                     << " expected=" << kDmcInitial + 4 * kDmcIters << " final=" << r[kDmcFinalWord]
+                     << " host_read=" << word[0] << " per-role value() at finish: " << r[1] << ' '
+                     << r[kDmcSlotWords + 1] << ' ' << r[2 * kDmcSlotWords + 1] << ' ' << r[3 * kDmcSlotWords + 1]
+                     << " wall=" << ms << "ms";
+    EXPECT_EQ(r[kDmcTimeoutWord], 0u) << "a ready/go/done handshake timed out";
+    for (std::uint32_t role = 0; role < 4; ++role) {
+        EXPECT_EQ(r[role * kDmcSlotWords], 1u) << "role " << role << " did not finish";
+    }
+    EXPECT_EQ(word[0], r[kDmcFinalWord]) << "host read of the word disagrees with BRISC's final value()";
+    return r[kDmcFinalWord];
+}
+
+}  // namespace
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsContention) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    const std::uint32_t final_value = RunDmComputeContention(devices_.at(0), /*plain_rmw=*/0);
+    EXPECT_EQ(final_value, kDmcInitial + 4 * kDmcIters) << "an update was lost: NoC atomic vs ATINCGET not atomic";
+}
+
+// Negative control: the DM side does a plain RISC read-modify-write instead of up(). It must lose updates;
+// if it does not, the harness is not creating contention and the positive test proves nothing.
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsContentionPlainRmwControl) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    const std::uint32_t final_value = RunDmComputeContention(devices_.at(0), /*plain_rmw=*/1);
+    GTEST_LOG_(INFO) << "plain-RMW control deficit: " << (kDmcInitial + 4 * kDmcIters) - final_value;
+    EXPECT_LT(final_value, kDmcInitial + 4 * kDmcIters) << "plain RMW lost nothing -- no real contention";
+}
+
+// ============================================================================
+// DM <-> compute rings (patterns B, C, E): BRISC and a compute kernel share a kDmcDepth-slot ring of Float16_b tiles,
+// handed over with two DM_COMPUTE_ATOMICS semaphores, `sem` (full slots, starts 0) and `free` (free slots, starts
+// kDmcDepth); the compute kernel also binds `csem`, a compute-only COMPUTE_ATOMIC semaphore (used by E only).
+// Region offsets from kSemReportAddr mirror the kernels; the host writes in, poisons ring/mid/out, and checks
+// out == in bit for bit. Report: [0] BRISC done, [1] PACK done, [2]/[3] the sem/free words' L1 addresses.
+// ============================================================================
+namespace {
+
+constexpr std::uint32_t kDmcDepth = 4;
+constexpr std::uint32_t kDmcMaxTiles = 256;
+constexpr std::uint32_t kDmcTileWords = 32 * 32 * 2 / 4;
+constexpr std::uint32_t kDmcInOffset = 0x40000;
+constexpr std::uint32_t kDmcRingOffset = kDmcInOffset + kDmcMaxTiles * kDmcTileWords * 4;
+constexpr std::uint32_t kDmcOutOffset = kDmcRingOffset + 2 * kDmcDepth * kDmcTileWords * 4;  // past ring + mid
+// 8 laps of the ring.
+constexpr std::uint32_t kDmcRingTiles = 32;
+
+struct DmcRingResult {
+    std::uint32_t mismatched_tiles = 0;
+    std::uint32_t brisc_done = 0;
+    std::uint32_t pack_done = 0;
+    std::uint32_t full_final = 0;  // `sem` after the run
+    std::uint32_t free_final = 0;  // `free` after the run
+};
+
+DmcRingResult RunDmComputeRing(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t pattern, std::uint32_t nosync) {
+    constexpr std::uint32_t num_tiles = kDmcRingTiles;
+    IDevice* device = mesh_device->get_devices()[0];
+    const std::vector<std::string> arg_names = {"num_iters", "report_addr"};
+    const auto bind = [](const char* name) {
+        return SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{name}, .accessor_name = name};
+    };
+
+    auto brisc = MakeMinimalGen1DMKernel("brisc", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    brisc.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/test_dm_compute_semaphore_dm.cpp";
+    brisc.runtime_arg_schema.runtime_arg_names = arg_names;
+    brisc.compile_time_args = {
+        {"pattern", pattern}, {"role", 0u}, {"active", 0u}, {"plain_rmw", 0u}, {"nosync", nosync}};
+    brisc.compiler_options.defines = {{"DMC_RING", "1"}};
+    brisc.semaphore_bindings = {bind("sem"), bind("free")};
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/test_dm_compute_semaphore.cpp";
+    compute.runtime_arg_schema.runtime_arg_names = arg_names;
+    compute.compile_time_args = {{"pattern", pattern}, {"active", 0u}, {"nosync", nosync}};
+    compute.compiler_options.defines = {{"DMC_RING", "1"}};
+    compute.semaphore_bindings = {bind("sem"), bind("free"), bind("csem")};
+
+    SemaphoreSpec full{.unique_id = SemaphoreSpecName{"sem"}, .target_nodes = kSemNode};
+    SemaphoreSpec free_slots{.unique_id = SemaphoreSpecName{"free"}, .target_nodes = kSemNode};
+    free_slots.advanced_options.initial_value = kDmcDepth;
+    SemaphoreSpec csem{.unique_id = SemaphoreSpecName{"csem"}, .target_nodes = kSemNode};
+    csem.advanced_options.max_value = kDmcDepth;  // E: PACK's wait_not_full() on the mid ring
+    std::vector<SemaphoreSpec> sems = {full, free_slots, csem};
+    ProgramSpec spec{
+        .name = "dm_compute_ring",
+        .kernels = {brisc, compute},
+        .semaphores = sems,
+        .work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", kSemNode, {"brisc", "compute"})},
+    };
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    ProgramRunArgs args;
+    for (const char* name : {"brisc", "compute"}) {
+        args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{name},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(kSemNode, {{"num_iters", num_tiles}, {"report_addr", kSemReportAddr}}),
+        });
+    }
+    SetProgramRunArgs(program, args);
+
+    std::vector<std::uint32_t> in = MakeDistinctBf16Tiles(num_tiles);
+    std::vector<std::uint32_t> zero_report(16, 0u);
+    std::vector<std::uint32_t> poison((2 * kDmcDepth + num_tiles) * kDmcTileWords, 0xDEADBEEFu);  // ring, mid, out
+    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
+    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kDmcInOffset, in);
+    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kDmcRingOffset, poison);
+    LaunchProgram(*mesh_device, std::move(program));
+
+    DmcRingResult res;
+    std::vector<std::uint32_t> r;
+    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, 4 * sizeof(std::uint32_t), r);
+    res.brisc_done = r[0];
+    res.pack_done = r[1];
+    std::vector<std::uint32_t> word;
+    detail::ReadFromDeviceL1(device, kSemNode, r[2], sizeof(std::uint32_t), word);
+    res.full_final = word[0];
+    detail::ReadFromDeviceL1(device, kSemNode, r[3], sizeof(std::uint32_t), word);
+    res.free_final = word[0];
+    std::vector<std::uint32_t> out;
+    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr + kDmcOutOffset, num_tiles * kDmcTileWords * 4, out);
+    for (std::uint32_t t = 0; t < num_tiles; ++t) {
+        if (!std::equal(
+                out.begin() + t * kDmcTileWords,
+                out.begin() + (t + 1) * kDmcTileWords,
+                in.begin() + t * kDmcTileWords)) {
+            ++res.mismatched_tiles;
+        }
+    }
+    GTEST_LOG_(INFO) << "ring pattern " << pattern << (nosync ? " (no-sync control)" : "")
+                     << ": brisc_done=" << res.brisc_done << " pack_done=" << res.pack_done
+                     << " full_final=" << res.full_final << " free_final=" << res.free_final
+                     << " mismatched_tiles=" << res.mismatched_tiles << " / " << num_tiles;
+    return res;
+}
+
+void CheckDmComputeRing(const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t pattern) {
+    const auto r = RunDmComputeRing(mesh_device, pattern, /*nosync=*/0);
+    EXPECT_EQ(r.brisc_done, kDmcRingTiles);
+    EXPECT_EQ(r.pack_done, kDmcRingTiles);
+    EXPECT_EQ(r.full_final, 0u) << "full-slot credits unbalanced";
+    EXPECT_EQ(r.free_final, kDmcDepth) << "free-slot credits unbalanced";
+    EXPECT_EQ(r.mismatched_tiles, 0u) << "output != input: a ring slot was read before its data landed, or "
+                                         "overwritten before it was read";
+}
+
+// Negative control: nosync = 1 drops every `sem`/`free` call (the producer laps the consumer / the consumer reads
+// poison), 2 (E) every `csem` call. The output must NOT equal the input; if it does, the positive test is not a
+// detector.
+void CheckDmComputeRingNoSync(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t pattern, std::uint32_t nosync = 1) {
+    const auto r = RunDmComputeRing(mesh_device, pattern, nosync);
+    EXPECT_EQ(r.brisc_done, kDmcRingTiles);
+    EXPECT_EQ(r.pack_done, kDmcRingTiles);
+    EXPECT_GT(r.mismatched_tiles, 0u) << "unsynchronized ring came out correct -- the positive test cannot "
+                                         "distinguish a working semaphore from no semaphore";
+}
+
+}  // namespace
+
+// PATTERN B: BRISC produces (NoC copy + write barrier, then up), UNPACK consumes through copy_tile.
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsDmToCompute) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRing(devices_.at(0), 1);
+}
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsDmToComputeNoSyncControl) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRingNoSync(devices_.at(0), 1);
+}
+
+// PATTERN C: PACK produces (pack_tile, then up), BRISC consumes (NoC copy + barrier, then down + free credit).
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsComputeToDm) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRing(devices_.at(0), 2);
+}
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsComputeToDmNoSyncControl) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRingNoSync(devices_.at(0), 2);
+}
+
+// PATTERN E: pattern C behind the compute-only datacopy hop, so one program runs a COMPUTE_ATOMIC ring (UNPACK <->
+// PACK, Sync Unit semaphore) and two DM_COMPUTE_ATOMICS semaphores at once; out == in needs both hops correct.
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsWithComputeAtomic) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRing(devices_.at(0), 4);
+}
+
+// Negative control for E's COMPUTE_ATOMIC half: the DM_COMPUTE_ATOMICS ring stays synchronized, the csem hop does not.
+// (ComputeToDmNoSyncControl is the control for the DM_COMPUTE_ATOMICS half.)
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsWithComputeAtomicNoSyncControl) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    CheckDmComputeRingNoSync(devices_.at(0), 4, /*nosync=*/2);
+}
+
+// ============================================================================
+// PATTERN F: remote updates into another node's DM_COMPUTE_ATOMICS words. Four semaphores on nodes X and Y, bound by
+// a BRISC kernel on X and a compute kernel on Y (so DM_COMPUTE_ATOMICS on both). X: num_iters x sem.up(noc, Y, 1),
+// num_iters x rmc.inc_multicast(Y..Y, 1), msem.relay_unicast into Y's rdst, msem.set_multicast into Y's msem.
+// Y's UNPACK polls each word to its expected value and logs what it saw: report on Y [0] done, [1..4] values.
+// ============================================================================
+namespace {
+
+constexpr std::uint32_t kDmcRemoteIters = 100;
+constexpr std::uint32_t kDmcRelayValue = 0xA5A5A;  // mirrors the kernels
+constexpr std::uint32_t kDmcMcastValue = 0x5A5A5;
+
+// Returns Y's report words [done, sem, rmc, rdst, msem]; also expects X to have finished.
+std::vector<std::uint32_t> RunDmComputeRemote(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t nosync) {
+    IDevice* device = mesh_device->get_devices()[0];
+    const NodeCoord x_node{0, 0};
+    const NodeCoord y_node{1, 0};
+    const CoreCoord y_virtual = mesh_device->worker_core_from_logical_core(y_node);
+    const std::vector<const char*> names = {"sem", "rmc", "rdst", "msem"};
+
+    auto sender = MakeMinimalGen1DMKernel("sender", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    sender.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/test_dm_compute_semaphore_dm.cpp";
+    sender.runtime_arg_schema.runtime_arg_names = {"num_iters", "report_addr", "peer_x", "peer_y"};
+    sender.compile_time_args = {{"pattern", 5u}, {"role", 0u}, {"active", 0u}, {"plain_rmw", 0u}, {"nosync", nosync}};
+    sender.compiler_options.defines = {{"DMC_REMOTE", "1"}};
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/test_dm_compute_semaphore.cpp";
+    compute.runtime_arg_schema.runtime_arg_names = {"num_iters", "report_addr"};
+    compute.compile_time_args = {{"pattern", 5u}, {"active", 0u}};
+    compute.compiler_options.defines = {{"DMC_REMOTE", "1"}};
+    std::vector<SemaphoreSpec> sems;
+    for (const char* name : names) {
+        const SemaphoreBinding binding{.semaphore_spec_name = SemaphoreSpecName{name}, .accessor_name = name};
+        sender.semaphore_bindings.push_back(binding);
+        compute.semaphore_bindings.push_back(binding);
+        sems.push_back({.unique_id = SemaphoreSpecName{name}, .target_nodes = NodeRange{x_node, y_node}});
+    }
+    ProgramSpec spec{
+        .name = "dm_compute_remote",
+        .kernels = {sender, compute},
+        .semaphores = sems,
+        .work_units =
+            std::vector<WorkUnitSpec>{
+                MakeMinimalWorkUnit("work_unit_x", x_node, {"sender"}),
+                MakeMinimalWorkUnit("work_unit_y", y_node, {"compute"})},
+    };
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    ProgramRunArgs args;
+    args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"sender"},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                x_node,
+                {{"num_iters", kDmcRemoteIters},
+                 {"report_addr", kSemReportAddr},
+                 {"peer_x", static_cast<std::uint32_t>(y_virtual.x)},
+                 {"peer_y", static_cast<std::uint32_t>(y_virtual.y)}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"compute"},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(y_node, {{"num_iters", kDmcRemoteIters}, {"report_addr", kSemReportAddr}}),
+        }};
+    SetProgramRunArgs(program, args);
+
+    std::vector<std::uint32_t> zero(8, 0u);
+    detail::WriteToDeviceL1(device, x_node, kSemReportAddr, zero);
+    detail::WriteToDeviceL1(device, y_node, kSemReportAddr, zero);
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> x_report;
+    std::vector<std::uint32_t> y_report;
+    detail::ReadFromDeviceL1(device, x_node, kSemReportAddr, sizeof(std::uint32_t), x_report);
+    detail::ReadFromDeviceL1(device, y_node, kSemReportAddr, 5 * sizeof(std::uint32_t), y_report);
+    GTEST_LOG_(INFO) << "remote" << (nosync ? " (no-send control)" : "") << ": X done=" << x_report[0]
+                     << ", Y saw [done, up, inc_multicast, relay_unicast, set_multicast] = "
+                     << ::testing::PrintToString(y_report);
+    EXPECT_EQ(x_report[0], 1u) << "sender on X did not finish";
+    return y_report;
+}
+
+}  // namespace
+
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsRemote) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    EXPECT_THAT(
+        RunDmComputeRemote(devices_.at(0), /*nosync=*/0),
+        ::testing::ElementsAre(1u, kDmcRemoteIters, kDmcRemoteIters, kDmcRelayValue, kDmcMcastValue))
+        << "a remote update did not reach Y's compute view of its word";
+}
+
+// Negative control: X sends nothing. Y's polls must time out at the initial 0, so the positive test's values
+// can only have come from X's remote updates.
+TEST_F(ProgramSpecHWTest, DmComputeAtomicsRemoteNoSendControl) {
+    if (devices_.at(0)->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only";
+    }
+    EXPECT_THAT(RunDmComputeRemote(devices_.at(0), /*nosync=*/1), ::testing::ElementsAre(1u, 0u, 0u, 0u, 0u));
 }
 
 }  // namespace

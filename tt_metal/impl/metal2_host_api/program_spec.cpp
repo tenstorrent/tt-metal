@@ -1587,9 +1587,10 @@ void ValidateProgramSpec(
             kernel.unique_id);
     }
 
-    // A compute semaphore is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore, driven by
-    // Tensix instructions a DM core cannot issue) and may not be shared with a DM kernel. Reject it
-    // here rather than resolve a scope that cannot serve both.
+    // A semaphore bound only by compute kernels is COMPUTE_ATOMIC: the Tensix hardware semaphore, an UNPACK <-> PACK
+    // mechanism a DM core cannot reach. One also bound by a DM kernel is DM_COMPUTE_ATOMICS: the host-initialized
+    // L1 word, updated by L1 atomics on both sides (semaphore_scope.hpp). Only compute-bound kernels on Blackhole
+    // get this far (checked above).
     {
         std::unordered_set<std::string_view> sem_has_compute;
         std::unordered_set<std::string_view> sem_has_dm;
@@ -1598,44 +1599,43 @@ void ValidateProgramSpec(
                 (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(*binding.semaphore_spec_name);
             }
         }
+        std::unordered_set<std::string_view> compute_only;
         for (const auto& name : sem_has_compute) {
-            TT_FATAL(
-                !sem_has_dm.contains(name),
-                "SemaphoreSpec '{}' is bound by both a compute kernel and a data-movement kernel. "
-                "Compute semaphores synchronize UNPACK and PACK with each other and cannot be shared "
-                "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
-                name);
+            if (!sem_has_dm.contains(name)) {
+                compute_only.insert(name);
+            }
         }
-        // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
-        // one program would alias the same hardware state.
+        // Every compute-only semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+        // one program would alias the same hardware state. DM_COMPUTE_ATOMICS semaphores are L1 words and
+        // do not count.
         TT_FATAL(
-            sem_has_compute.size() <= 1,
-            "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
-            "(Blackhole has a single free Tensix hardware semaphore).",
-            sem_has_compute.size());
-        // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
+            compute_only.size() <= 1,
+            "{} semaphores are bound only by compute kernels; a program may bind at most one compute semaphore "
+            "(Blackhole has a single free Tensix hardware semaphore); DM_COMPUTE_ATOMICS semaphores do not count.",
+            compute_only.size());
+        // The compute-only semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
         // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.
-        // Its capacity (max_value) is a 4-bit hardware field and has no meaning for a DM semaphore.
+        // Its capacity (max_value) is a 4-bit hardware field and has no meaning for any other semaphore.
         for (const auto& sem : spec.semaphores) {
-            const bool compute_bound = sem_has_compute.contains(std::string_view{*sem.unique_id});
+            const bool is_compute_only = compute_only.contains(std::string_view{*sem.unique_id});
             const uint32_t init_value = sem.advanced_options.initial_value;
             const uint32_t max_value = sem.advanced_options.max_value;
             TT_FATAL(
-                !compute_bound || init_value == 0,
-                "SemaphoreSpec '{}' is bound by a compute kernel but has initial_value={}. Compute "
+                !is_compute_only || init_value == 0,
+                "SemaphoreSpec '{}' is bound only by compute kernels but has initial_value={}. Compute "
                 "semaphores always start at 0 (seeded by compute_kernel_hw_startup on the device).",
                 sem.unique_id,
                 init_value);
             TT_FATAL(
-                !compute_bound || max_value <= 15,
+                !is_compute_only || max_value <= 15,
                 "SemaphoreSpec '{}' has max_value={}; a compute semaphore's capacity is at most 15 (4-bit "
                 "Tensix hardware semaphore).",
                 sem.unique_id,
                 max_value);
             TT_FATAL(
-                compute_bound || max_value == 0,
-                "SemaphoreSpec '{}' has max_value={} but is not bound by a compute kernel; max_value is the "
-                "capacity of a compute semaphore and has no effect on a data-movement semaphore.",
+                is_compute_only || max_value == 0,
+                "SemaphoreSpec '{}' has max_value={} but is not bound by a compute kernel only; max_value is the "
+                "capacity of a compute-only semaphore and has no effect on any other semaphore.",
                 sem.unique_id,
                 max_value);
         }

@@ -9,7 +9,9 @@
 #include <utility>
 
 #include "ckernel_common_ops.h"
+#include "ckernel_defs.h"
 #include "ckernel_fence.h"
+#include "ckernel_gpr_map.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "internal/risc_attribs.h"
@@ -333,6 +335,40 @@ inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_v
     }
 
     TTI_SEMINIT(max_value, min_value, semaphore::t6_sem(index));
+}
+
+// Write a full 32-bit value into this thread's GPR (two SETDMAREG halves, in order with later ThCon instructions).
+template <std::uint32_t Gpr>
+inline void t6_gpr_write32(const std::uint32_t value)
+{
+    TT_SETDMAREG(0, LOWER_HALFWORD(value), 0, LO_16(Gpr));
+    TT_SETDMAREG(0, UPPER_HALFWORD(value), 0, HI_16(Gpr));
+}
+
+// Atomically add `delta` (mod 2^32) to the 32-bit L1 word at byte address `l1_addr` (16B aligned) with ThCon
+// ATINCGET, after the WaitRes condition. ATINCGET is performed at the L1 bank, so it is atomic against NoC atomics
+// and RISC-V AMOs on the same word. It returns once the request is sent; other clients see the change only when it
+// reaches L1 (tensix_sync() retires it). Its later write-back of the old value lands in DataGpr, so the STALLWAIT's
+// THCON term (C0) keeps the previous call's write-back ahead of this call's re-arm of DataGpr.
+template <std::uint32_t AddrGpr, std::uint32_t DataGpr, std::uint32_t WaitRes = p_stall::NONE>
+inline void t6_atomic_add_l1(const std::uint32_t l1_addr, const std::uint32_t delta)
+{
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::THCON | WaitRes);
+    t6_gpr_write32<AddrGpr>(l1_addr >> 4);
+    t6_gpr_write32<DataGpr>(delta);
+    TTI_ATINCGET(0, 31 /* full 32-bit wrap */, 0 /* word 0 of the 16B line */, DataGpr, AddrGpr);
+}
+
+// Plain (non-atomic) 32-bit ThCon store of `value` to the L1 word at byte address `l1_addr` (16B aligned) with
+// STOREIND, after the WaitRes condition. Size bits 22:21 = 0b10 is the 32-bit L1 store (SizeSel=1, RegSizeSel=0);
+// 0b01 is 16-bit. The offset half-register is GPR 0 (p_gpr::ZERO), so the address is AddrGpr * 16.
+template <std::uint32_t AddrGpr, std::uint32_t DataGpr, std::uint32_t WaitRes = p_stall::NONE>
+inline void t6_store_l1_32(const std::uint32_t l1_addr, const std::uint32_t value)
+{
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::THCON | WaitRes);
+    t6_gpr_write32<AddrGpr>(l1_addr >> 4);
+    t6_gpr_write32<DataGpr>(value);
+    TTI_STOREIND(1 /* L1 */, 1, 0 /* 32-bit */, LO_16(p_gpr::ZERO), 0 /* no auto-inc */, DataGpr, AddrGpr);
 }
 
 inline void t6_mutex_acquire(const std::uint8_t index)

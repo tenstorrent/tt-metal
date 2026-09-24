@@ -108,13 +108,19 @@ inline SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreB
     // Gen1 (Wormhole/Blackhole)
     if (!is_gen2_target(hal)) {
         // COMPUTE_ATOMIC is a Blackhole UNPACK <-> PACK mechanism (the Tensix hardware semaphore)
-        // and nothing else, so it applies only when EVERY binder is a compute kernel. A mixed
-        // compute/DM binding is rejected by ValidateProgramSpec (program_spec.cpp), since a DM core
-        // cannot reach that semaphore. One compute binding compiles into three TRISC binaries with two
-        // writers (UNPACK and PACK), so a compute-bound word must never take the non-atomic path.
-        // Wormhole has no compute implementation; its compute bindings are rejected on the host.
-        if (all_binders_are_compute(binders) && hal.get_arch() == tt::ARCH::BLACKHOLE) {
-            return SemScope::COMPUTE_ATOMIC;
+        // and nothing else, so it applies only when EVERY binder is a compute kernel. A DM core cannot
+        // reach that semaphore, so a binding that mixes compute and DM kernels takes DM_COMPUTE_ATOMICS
+        // (the L1 word, L1 atomics on both sides). One compute binding compiles into three TRISC
+        // binaries with two writers (UNPACK and PACK), so a compute-bound word must never take the
+        // non-atomic path. Wormhole has no compute implementation; its compute bindings are rejected
+        // on the host.
+        if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
+            if (all_binders_are_compute(binders)) {
+                return SemScope::COMPUTE_ATOMIC;
+            }
+            if (!all_binders_are_dm(binders)) {
+                return SemScope::DM_COMPUTE_ATOMICS;
+            }
         }
         return SemScope::LOCAL_NONATOMIC;
     }

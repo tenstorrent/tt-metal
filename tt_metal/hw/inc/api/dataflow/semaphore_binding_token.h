@@ -13,7 +13,7 @@
  *        the fastest path that keeps the semaphore's operations atomic.
  *        The cached and NoC tiers are Quasar (tt-2xx) only. Gen1 (Wormhole, Blackhole) DM
  *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole compute binding resolves to
- *        COMPUTE_ATOMIC.
+ *        COMPUTE_ATOMIC, and a Blackhole binding shared by DM and compute to DM_COMPUTE_ATOMICS.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
  *                     one binder instance exists.
@@ -27,6 +27,9 @@
  *  - COMPUTE_ATOMIC:  Blackhole only. The Tensix hardware (Sync Unit) semaphore, updated atomically
  *                     by SEMPOST/SEMGET. Picked when every binder is a compute kernel (UNPACK <-> PACK
  *                     only, core-local). Rules and limits: api/semaphore.h.
+ *  - DM_COMPUTE_ATOMICS: Blackhole only. The L1 semaphore word, updated only by L1 atomics: NoC
+ *                     atomics from DM, ThCon ATINCGET from UNPACK/PACK (mutually atomic at the L1
+ *                     bank). Picked when the binders mix DM and compute kernels. Rules: api/semaphore.h.
  *
  * @note Never access a bound semaphore's word directly (get_semaphore(), the noc_semaphore_*
  *       free functions, raw pointers), always go through the Semaphore class. A raw access is
@@ -37,6 +40,7 @@ enum class SemScope : uint8_t {
     DM_LOCAL_CACHED = 1,
     EXTERNAL = 2,
     COMPUTE_ATOMIC = 3,
+    DM_COMPUTE_ATOMICS = 4,
 };
 
 namespace semaphore_detail {

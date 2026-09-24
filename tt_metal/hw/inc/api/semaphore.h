@@ -22,9 +22,23 @@
  *
  * DM builds expose local operations plus the NoC operations (remote up, set/relay/inc multicast).
  *
- * Blackhole UNPACK/PACK builds expose the local operations only, on the Tensix hardware (Sync Unit)
- * semaphore, and require SemScope::COMPUTE_ATOMIC; any other scope is a compile error, so a compute
- * kernel cannot reach a semaphore through a non-atomic path. Compute rules a kernel author must know:
+ * Blackhole UNPACK/PACK builds expose the local operations only, and require SemScope::COMPUTE_ATOMIC
+ * (compute-only binders) or SemScope::DM_COMPUTE_ATOMICS (binders mix DM and compute); any other scope
+ * is a compile error, so a compute kernel cannot reach a semaphore through a non-atomic path.
+ *
+ * DM_COMPUTE_ATOMICS rules (the L1 word; DM updates by NoC atomic, compute by ThCon ATINCGET):
+ *  - 32-bit, starts at SemaphoreSpec initial_value; several per program. No capacity (max_value must be 0,
+ *    and wait_not_full() does not exist for it).
+ *  - One decrementer per semaphore: down() is not a conditional atomic on either side.
+ *  - One acquire/release pattern on both sides: `wait_min(n); <read slot>; down(n)`. Compute down() does
+ *    not wait (as COMPUTE_ATOMIC); DM down() blocks too, but after wait_min() it passes at once.
+ *  - Publish-after-data: compute up() is ordered after its packer/unpacker work; a DM producer whose data
+ *    went by NoC write must noc_async_write_barrier() before up().
+ *  - set(), set_multicast() and the relays are plain stores: use them only while nothing else updates the
+ *    target word. inc_multicast() and remote up() are NoC atomics and safe at any time.
+ *  - Never touch the word with a plain RISC read-modify-write.
+ *
+ * COMPUTE_ATOMIC is the Tensix hardware (Sync Unit) semaphore. Compute rules a kernel author must know:
  *  - The value is 0..15. More than 15 outstanding credits lose posts silently; a producer that gates
  *    each up() with wait_not_full() can never get there.
  *  - Its capacity (hardware Max) is SemaphoreAdvancedOptions::max_value, the ring depth in credits;
@@ -85,6 +99,8 @@ public:
      * COMPUTE_ATOMIC:  `value` SEMPOSTs, each ordered after this thread's packer/unpacker work, so a
      *                  consumer that sees the credit also sees the data (publish-after-data). Value +
      *                  outstanding credits must stay <= 15; a bounded producer pairs up(n) with wait_not_full(n).
+     * DM_COMPUTE_ATOMICS: DM: self-targeted NoC atomic increment. Compute: one ATINCGET ordered after this
+     *                  thread's packer/unpacker work (publish-after-data).
      *
      * @param value The value to increment the semaphore by.
      */
@@ -103,6 +119,8 @@ public:
      *                  NOT wait for sufficiency (SEMGET floors at 0): the wait belongs before the engine
      *                  reads the slot and the decrement after, so pair it with wait_min() --
      *                  `wait_min(n); <engine reads slot>; down(n)`.
+     * DM_COMPUTE_ATOMICS: single decrementer. DM: spin until sufficient, then NoC atomic add of -value.
+     *                  Compute: one ATINCGET of -value, no wait, as COMPUTE_ATOMIC; pair with wait_min().
      *
      * @param value The value to decrement the semaphore by.
      */
@@ -113,7 +131,8 @@ public:
     /**
      * @brief Block until the semaphore equals `value`. Does not modify it.
      *
-     * DM: RISC poll. COMPUTE_ATOMIC: retires this thread's own posted up()/down() first, then RISC-polls.
+     * DM: RISC poll. COMPUTE_ATOMIC and DM_COMPUTE_ATOMICS on compute: retires this thread's own posted
+     * up()/down() first, then RISC-polls.
      *
      * @param value The value to wait for.
      */
@@ -126,7 +145,7 @@ public:
      *
      * DM: RISC poll. COMPUTE_ATOMIC with value == 1: Tensix-side SEMWAIT -- the RISC returns at once
      * and this thread's next engine instructions (UNPACR/PACR) are held until the value is nonzero;
-     * the fastest form. Other values: as wait().
+     * the fastest form. Other values, and DM_COMPUTE_ATOMICS on compute: as wait().
      *
      * @param value The minimum value to wait for.
      */
@@ -136,7 +155,7 @@ public:
 
 #ifdef COMPILE_FOR_TRISC
     /**
-     * @brief Producer back-pressure (compute only). Wait until the semaphore has room for `n` more credits
+     * @brief Producer back-pressure (COMPUTE_ATOMIC only). Wait until the semaphore has room for `n` more credits
      * below its capacity, SemaphoreAdvancedOptions::max_value; pair it with the up(n) that follows.
      * Canonical producer loop: `wait_not_full(); pack_tile(ring, slot); up(1);`.
      *
@@ -156,7 +175,7 @@ public:
      *
      * @note A non-atomic destructive store under every scope; requires a quiescent protocol.
      * DM: plain store. COMPUTE_ATOMIC: SEMINIT (Max = capacity) ordered after this thread's engine work;
-     * `value` <= 15.
+     * `value` <= 15. DM_COMPUTE_ATOMICS on compute: 32-bit ThCon store ordered after this thread's engine work.
      *
      * @param value The value to set the semaphore to.
      */
@@ -167,6 +186,7 @@ public:
      *
      * DM: a fresh (cache-invalidated) read; a RISC-side write has already retired. COMPUTE_ATOMIC: first
      * retires this thread's own posted SEMPOST/SEMGET (tensix_sync), then reads the Sync Unit.
+     * DM_COMPUTE_ATOMICS on compute: tensix_sync, then a fresh read of the L1 word.
      *
      * @return Current semaphore value.
      */
@@ -301,8 +321,8 @@ public:
 #endif
 
 private:
-    // DM: the semaphore word's L1 offset. Compute: the Tensix hardware semaphore index (see
-    // semaphore_compute_impl.h::sem_l1_offset).
+    // DM and compute DM_COMPUTE_ATOMICS: the semaphore word's L1 offset. Compute COMPUTE_ATOMIC: the Tensix
+    // hardware semaphore index (see semaphore_compute_impl.h::sem_l1_offset).
     std::uintptr_t handle_;
 };
 

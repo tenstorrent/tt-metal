@@ -3294,15 +3294,56 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreResolvesToComputeAtomi
     EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
 }
 
-// A compute semaphore synchronizes UNPACK with PACK and may not be shared with a DM kernel: it is
-// a Tensix hardware (Sync Unit) semaphore that a DM core cannot reach, so there is no scope that
-// can serve both binders. Rejected at validation rather than resolved into a mechanism only one
-// side can drive.
-TEST_F(ProgramSpecTestBlackhole, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
+// A DM core cannot reach the Tensix hardware semaphore, so a semaphore shared by compute and DM
+// takes the L1 word updated by L1 atomics on both sides (DM_COMPUTE_ATOMICS).
+TEST_F(ProgramSpecTestBlackhole, CPU_SemaphoreSharedByComputeAndDMResolvesToDmComputeAtomics) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_EQ(ResolveScopeFor(spec, "shared_sem"), SemScope::DM_COMPUTE_ATOMICS);
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// max_value is the Tensix hardware semaphore's capacity; a DM_COMPUTE_ATOMICS semaphore is an L1 word.
+TEST_F(ProgramSpecTestBlackhole, CPU_DmComputeAtomicsSemaphoreWithMaxValueIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+    spec.semaphores.back().advanced_options.max_value = 4;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not bound by a compute kernel only")));
+}
+
+// The host initializes the L1 word, so unlike a compute-only semaphore any initial value is honored.
+TEST_F(ProgramSpecTestBlackhole, CPU_DmComputeAtomicsSemaphoreNonzeroInitialValueSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+    spec.semaphores.back().advanced_options.initial_value = 7;
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// DM_COMPUTE_ATOMICS semaphores do not use the single Tensix hardware semaphore, so they do not count
+// against the one-compute-semaphore limit.
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeAtomicAndDmComputeAtomicsInOneProgramSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+    EXPECT_EQ(ResolveScopeFor(spec, "shared_sem"), SemScope::DM_COMPUTE_ATOMICS);
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_TwoDmComputeAtomicsSemaphoresSucceed) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem_a", {"dm_kernel", "compute_kernel"});
+    BindSemaphoreToKernels(spec, "shared_sem_b", {"dm_kernel", "compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "shared_sem_a"), SemScope::DM_COMPUTE_ATOMICS);
+    EXPECT_EQ(ResolveScopeFor(spec, "shared_sem_b"), SemScope::DM_COMPUTE_ATOMICS);
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // The compute semaphore is seeded to 0 on the device by compute_kernel_hw_startup; the host cannot
@@ -4009,6 +4050,17 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Semaphore bindings on compute kernels are supported only on Blackhole.")));
+}
+
+// DM_COMPUTE_ATOMICS is Blackhole-only: a Wormhole semaphore shared by compute and DM is still rejected.
+TEST_F(ProgramSpecTestGen1, CPU_WormholeSemaphoreSharedByComputeAndDMIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },

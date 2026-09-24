@@ -59,6 +59,8 @@ struct p_gpr_unpack
     constexpr static std::uint32_t SR_UNPACK_UNTILIZER_STATE_1 = 57;
     constexpr static std::uint32_t SR_UNPACK_UNTILIZER_STATE_2 = 58;
     constexpr static std::uint32_t SR_UNPACK_UNTILIZER_STATE_3 = 59;
+    constexpr static std::uint32_t SEM_ADDR                    = 60; // L1 semaphore word address (16B units), tt-metal DM_COMPUTE_ATOMICS
+    constexpr static std::uint32_t SEM_DATA                    = 61; // L1 semaphore increment / store data (ATINCGET writes back here)
 };
 
 // Math GPR thread
@@ -104,9 +106,11 @@ struct p_gpr_pack
     constexpr static std::uint32_t EXP1_SEC_SIZE_BFP8  = 53; // pack1 exp section size for bfp8
     constexpr static std::uint32_t EXP2_SEC_SIZE_BFP8  = 54; // pack2 exp section size for bfp8
     constexpr static std::uint32_t EXP3_SEC_SIZE_BFP8  = 55; // pack2 exp section size for bfp8
+    constexpr static std::uint32_t SEM_ADDR            = 56; // L1 semaphore word address (16B units), tt-metal DM_COMPUTE_ATOMICS
     constexpr static std::uint32_t EXP1_SEC_SIZE_BFP4  = 57; // pack1 exp section size for bfp4
     constexpr static std::uint32_t EXP2_SEC_SIZE_BFP4  = 58; // pack2 exp section size for bfp4
     constexpr static std::uint32_t EXP3_SEC_SIZE_BFP4  = 59; // pack3 exp section size for bfp4
+    constexpr static std::uint32_t SEM_DATA            = 60; // L1 semaphore increment / store data (ATINCGET writes back here)
     constexpr static std::uint32_t EXP1_SEC_SIZE_BFP2  = 61; // pack1 exp section size for bfp2
     constexpr static std::uint32_t EXP2_SEC_SIZE_BFP2  = 62; // pack2 exp section size for bfp2
     constexpr static std::uint32_t EXP3_SEC_SIZE_BFP2  = 63; // pack3 exp section size for bfp2

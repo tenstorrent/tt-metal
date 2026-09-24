@@ -12,6 +12,12 @@
 
 namespace semaphore_detail {
 
+// Scopes whose DM updates must be NoC atomics: EXTERNAL, and DM_COMPUTE_ATOMICS (Blackhole), whose word is also
+// updated by compute's ThCon ATINCGET. Both are L1-bank atomics, so they interleave safely; a RISC
+// read-modify-write would not.
+template <SemScope scope>
+inline constexpr bool uses_noc_atomics = scope == SemScope::EXTERNAL || scope == SemScope::DM_COMPUTE_ATOMICS;
+
 template <ProgrammableCoreType core_type, SemScope scope>
 __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t id) {
     // COMPUTE_ATOMIC is the Blackhole Tensix hardware semaphore, which a DM core cannot reach; the host
@@ -85,7 +91,7 @@ __attribute__((always_inline)) inline void up(std::uintptr_t l1_offset, std::uin
 #else
         ASSERT(false);  // the host census never bakes DM_LOCAL_CACHED for this platform
 #endif
-    } else if constexpr (scope == SemScope::EXTERNAL) {
+    } else if constexpr (uses_noc_atomics<scope>) {
         noc_semaphore_inc(::get_noc_addr(l1_offset), value);
         noc_async_atomic_barrier();
     } else {
@@ -116,7 +122,7 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, std::u
 #else
         ASSERT(false);  // the host census never bakes DM_LOCAL_CACHED for this platform
 #endif
-    } else if constexpr (scope == SemScope::EXTERNAL) {
+    } else if constexpr (uses_noc_atomics<scope>) {
 #if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL) && !defined(NOC_API_V1)
         noc_async_atomic_barrier();
         const std::uint64_t sem_noc = ::get_noc_addr(l1_offset);
