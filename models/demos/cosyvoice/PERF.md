@@ -83,8 +83,7 @@ does not, the run fails and both are updated together.
 Best of each configuration; §3 breaks them out. The steady state scales one decode step
 by the token count and replays the flow's trace. The `RTF < 0.5` requirement is judged
 instead on `synthesize`'s per-utterance figure, measured after this run (§3.5): ❌ on
-`p150a` in every configuration, not measured on `p150b`, and asserted above `0.5` on
-n300. On the steady state, `RTF < 0.5` is the only verdict that differs by
+both Blackhole boards in every configuration, and asserted above `0.5` on n300. On the steady state, `RTF < 0.5` is the only verdict that differs by
 architecture, and the gap is the compute grid: 64 cores against 130.
 `RTF < 0.2` has a floor rather than being simply unmet (§3.4).
 
@@ -154,26 +153,32 @@ until this table moves with it.
 ### 3.5 What `synthesize` costs per utterance
 
 `test_device_synthesize_rtf` times `synthesize`'s three stages on the zero-shot Chinese
-example sentence from `COSYVOICE_INPUTS` (355 tokens, 7.09 s of audio; RAS, seed 1986), on
-the second call of the same utterance, so neither compilation nor first-use state is in
-the figure. Against the steady state, `p150a`, 2026-09-24, two runs per configuration:
+example sentence from `COSYVOICE_INPUTS` (RAS, seed 1986), on the second call of the same
+utterance, so neither compilation nor first-use state is in the figure. RAS diverges once
+the logits differ in their last bits, so the utterance's length depends on the board and
+the configuration: 311 to 355 tokens below. Against the steady state, 2026-09-24, two runs
+per configuration on `p150a` and one on `p150b`:
 
-| configuration | steady state | `synthesize` |
-|---|---:|---:|
-| default | `0.381` / `0.379` | `0.538` / `0.534` |
-| `COSYVOICE_FF2_GRID=8x2` | `0.357` / `0.357` | `0.512` / `0.512` |
-| `COSYVOICE_KV_INPLACE=1` | `0.345` / `0.346` | `0.732` / `0.736` |
+| configuration | `p150a` steady state | `p150a` `synthesize` | `p150b` steady state | `p150b` `synthesize` |
+|---|---:|---:|---:|---:|
+| default | `0.381` / `0.379` | `0.538` / `0.534` | `0.396` | `0.600` |
+| `COSYVOICE_FF2_GRID=8x2` | `0.357` / `0.357` | `0.512` / `0.512` | `0.381` | `0.592` |
+| `COSYVOICE_KV_INPLACE=1` | `0.345` / `0.346` | `0.732` / `0.736` | `0.379` | `0.914` |
 
-At the default the LLM takes `3.10`–`3.12 s` (114 tok/s), the flow `0.62 s` and the vocoder
-`0.07 s`. About `1.1 s` of the LLM's share is paid once per utterance, for the prompt
-prefill and the decode-trace capture, and the steady state's per-step scaling leaves it
-out. The in-place KV cache has the fastest steady state and the slowest `synthesize`: it
-captures 65 decode traces per utterance, a cost the steady state never pays.
+At the default on `p150a` the utterance is 355 tokens and 7.09 s of audio: the LLM takes
+`3.10`–`3.12 s` (114 tok/s), the flow `0.62 s` and the vocoder `0.07 s`. On `p150b` it is
+346 tokens and 6.92 s: `3.39 s` (102 tok/s), `0.68 s` and `0.09 s`. About `1.1 s` of the
+LLM's share on `p150a` is paid once per utterance, for the prompt prefill and the
+decode-trace capture, and the steady state's per-step scaling leaves it out. The in-place
+KV cache has the fastest steady state and the slowest `synthesize`: it captures a decode
+trace many times per utterance (65 in the `p150a` run), a cost the steady state never
+pays, and its LLM stage drops to 64 tok/s on `p150b`.
 
-An utterance at a length new to the process costs more: `0.75`–`0.91` on `p150a` across
-three cases, measured with a probe and not asserted. `p150b` is not measured. On n300 the
-test asserts only that the figure stays above `0.5`, which the steady state there (§3.2)
-already implies.
+Per utterance, `p150b` is 12–25 % slower than `p150a`, against 4–10 % on the steady state in
+the same table. An utterance at a length new to the process costs
+more again: `0.75`–`0.91` on `p150a` across three cases, measured with a probe and not
+asserted. On n300 the test asserts only that the figure stays above `0.5`, which the steady
+state there (§3.2) already implies.
 
 ## 4. Batched decode
 

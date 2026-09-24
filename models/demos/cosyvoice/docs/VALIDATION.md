@@ -79,7 +79,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Valid audio, 5 languages | ✅ zero-shot and cross-lingual 5/5 · SFT and instruct not re-run on this tree | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
 | Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
 | `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
-| `RTF < 0.5` | ❌ per utterance on `p150a`, every configuration · `p150b` not measured · ❌ n300 | `test_device_synthesize_rtf`, against a recorded band on Blackhole; the steady state (✅ Blackhole, ❌ n300) stays checked by `test_device_end_to_end_rtf` | *What `synthesize` costs per utterance* |
+| `RTF < 0.5` | ❌ per utterance on both Blackhole boards, every configuration · ❌ n300 | `test_device_synthesize_rtf`, against a recorded band on Blackhole; the steady state (✅ Blackhole, ❌ n300) stays checked by `test_device_end_to_end_rtf` | *What `synthesize` costs per utterance* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
 | WER `< 3.0`, speaker similarity `> 60` | ✅ English WER, both measured modes | `scripts/eval_wer_sim.py`, reference venv; `test_scoring.py` checks its English normaliser | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
@@ -138,8 +138,8 @@ fails the test until the published figure moves with it.
 
 Unmet per utterance, the figure the requirement is judged on. `synthesize` pays the
 prompt prefill, the decode-trace capture and the flow's trace capture once per
-utterance, which puts a repeated sentence above `0.5` on `p150a` in every configuration,
-and a length new to the process higher still. The in-place KV cache is the slowest there,
+utterance, which puts a repeated sentence above `0.5` on both Blackhole boards in every
+configuration, and a length new to the process higher still. The in-place KV cache is the slowest there,
 because it captures a decode trace many times per utterance. Keeping the flow's trace
 across utterances safely would save only the flow's capture, and only when a length
 repeats; the larger fixed cost is the LLM's. `PERF.md` §3.5 has the figures.
