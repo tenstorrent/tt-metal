@@ -395,8 +395,9 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                     const uint32_t rows = p.exp_mux_on_bottom_row ? p.grid.y - 2 : p.grid.y;
                     const uint32_t q_chunks = div_up(p.q_rows, q_chunk) + p.joint_q_rows / q_chunk;
                     const uint32_t k_blocks = p.ring_size * div_up(p.k_rows, k_chunk) + div_up(p.joint_k_rows, k_chunk);
-                    // An explicit Q chunk keeps the caller's grid; otherwise the op may narrow it.
-                    const uint32_t min_cols = p.fixed_q_tiles != 0 ? max_cols : 2;
+                    // An explicit Q chunk keeps the caller's grid; otherwise the op may narrow it, down
+                    // to the factory's minimum of 3 SDPA columns (one pure SDPA plus two MUX writers).
+                    const uint32_t min_cols = p.fixed_q_tiles != 0 ? max_cols : 3;
                     for (uint32_t cols = max_cols; cols >= std::max(min_cols, 1u); --cols) {
                         if (q_chunks % cols != 0) {
                             continue;

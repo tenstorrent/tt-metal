@@ -163,7 +163,7 @@ def test_exp_ring_choice(name, heads, local, ring, variant):
     assert supported("exp_ring", variant, q, k) and k == 512 and minimum <= PIPELINE_L1
     cols = gx - 1
     chunks = math.ceil(local / q)
-    assert gy == GRID[1] and 2 <= cols <= GRID[0] - 1 and chunks % cols == 0
+    assert gy == GRID[1] and 3 <= cols <= GRID[0] - 1 and chunks % cols == 0
     segments = heads * (chunks // cols)
     assert segments >= gy and passes == math.ceil(segments / gy) <= 3
 
