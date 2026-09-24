@@ -310,7 +310,11 @@ class TtChronos:
             b=batch_size,
             q=self.config.num_quantiles,
         )
-        quantile_preds = instance_norm_inverse(quantile_preds, loc_scale)
+        quantile_preds = instance_norm_inverse(
+            quantile_preds,
+            loc_scale,
+            use_arcsinh=self.config.use_arcsinh,
+        )
         return rearrange(quantile_preds, "b (q h) -> b q h", q=self.config.num_quantiles)
 
     @staticmethod
@@ -421,7 +425,11 @@ class TtChronos:
             p=cfg.output_patch_size,
         )
         quantile_preds = rearrange(quantile_preds, "b q h -> b (q h)", b=batch_size, q=cfg.num_quantiles)
-        quantile_preds = instance_norm_inverse(quantile_preds, loc_scale)
+        quantile_preds = instance_norm_inverse(
+            quantile_preds,
+            loc_scale,
+            use_arcsinh=cfg.use_arcsinh,
+        )
         return rearrange(quantile_preds, "b (q h) -> b q h", q=cfg.num_quantiles)
 
     def __call__(self, *args, **kwargs):
