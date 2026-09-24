@@ -3,7 +3,7 @@
 # Keys per entry:
 #   id: Stable slug for workflow_dispatch / tooling (optional).
 #   name: Job display name.
-#   model: Filter for workflow_dispatch / pipeline-select-galaxy (fabric, multiprocess, …).
+#   model: Filter for workflow_dispatch / galaxy-tests (fabric, multiprocess, …).
 #   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
 #   team: Required for time_budget verification.
 #   skus: SKU -> { timeout } (minutes).

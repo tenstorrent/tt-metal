@@ -235,7 +235,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 125
+    bh_galaxy: 150
     bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
@@ -407,7 +407,7 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 33
+    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
     bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 25
@@ -467,3 +467,8 @@ syseng:
     wh_n300_civ2: 36
     bh_p100: 18
     bh_p150b_civ2: 18
+
+gtm:
+  e2e:
+    wh_galaxy: 135
+    bh_galaxy: 135
