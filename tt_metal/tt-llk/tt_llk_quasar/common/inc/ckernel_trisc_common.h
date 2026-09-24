@@ -61,7 +61,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
+constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
 typedef struct
 {
@@ -139,6 +139,26 @@ constexpr std::uint32_t get_dest_max_tiles()
                                                      : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
     return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
+}
+
+/**
+ * @brief Runtime variant of @ref get_dest_max_tiles for assert sites.
+ *
+ * Reads the Dest accumulation mode from ALU_ACC_CTRL_Fp32_enabled, the bit
+ * _configure_default_alu_data_format_state_ programs, instead of taking it as a template parameter.
+ * Only ever evaluated inside LLK_ASSERT, which compiles out in production builds.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam TILE_SHAPE: Destination tile shape
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
+inline std::uint32_t get_dest_max_tiles_rt()
+{
+    const bool accum_mode                  = (cfg[ALU_ACC_CTRL_Fp32_enabled_ADDR32] & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    const std::uint32_t dest_register_size = SYNC_MODE == ckernel::DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                                     : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    return dest_register_size >> get_dest_tile_size_log2(TILE_SHAPE);
 }
 
 /**
