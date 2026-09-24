@@ -593,7 +593,9 @@ class MiniMaxH3Pipeline:
         self.dit_fsdp = preset.get("dit_fsdp", False) if dit_fsdp is None else dit_fsdp
         env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
         if env_dit_fsdp is not None:
-            self.dit_fsdp = env_dit_fsdp not in ("0", "false", "False")
+            if env_dit_fsdp not in ("0", "1"):
+                raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
+            self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
 
         self._host_log("building the Qwen3-VL text encoder")
