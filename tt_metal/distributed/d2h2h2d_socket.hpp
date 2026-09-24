@@ -31,6 +31,9 @@ public:
         HostTopology topo{};
         uint32_t chip = 0;
         uint32_t cores = 0;
+        // 0 => cores. A sweep sets this to its largest case: the region maps once per process
+        // and reserved_base() refuses to resize, while provision() pins only this run's prefix.
+        uint32_t reserved_cores = 0;
         uint32_t grid_width = 0;
         uint32_t grid_height = 0;
         // One size for the socket's life: the ring is ring_pages x (payload + trailer).
