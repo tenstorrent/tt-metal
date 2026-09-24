@@ -16,6 +16,8 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
+from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
+
 
 def make_expect_error():
     """The per-module ``expect_error`` fixture body.
@@ -129,7 +131,7 @@ class Decoder:
         self.replays = 0
 
     def width_for(self, start):
-        need = int(start) + self.P_v + 64
+        need = int(start) + self.P_v + VERIFY_WIDTH_MARGIN
         fits = [w for w, r in self._pv_widths.items() if r["trace"] is not None and w >= need]
         return min(fits) if fits else None
 
