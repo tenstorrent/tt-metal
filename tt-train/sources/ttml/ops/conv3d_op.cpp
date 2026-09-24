@@ -102,6 +102,30 @@ std::vector<ttnn::Tensor> map_groups(uint32_t groups, MakeGroup&& make_group) {
     return parts;
 }
 
+// Every tensor crossing the public boundary is an allocated device tensor of a kernel-supported dtype.
+void require_device_tensor(const ttnn::Tensor& tensor, const std::string& name) {
+    if (!ttnn::is_device_tensor(tensor) || !tensor.is_allocated()) {
+        throw std::invalid_argument(fmt::format("conv3d: {} must be an allocated device tensor", name));
+    }
+    if (tensor.dtype() != ttnn::DataType::BFLOAT16 && tensor.dtype() != ttnn::DataType::FLOAT32) {
+        throw std::invalid_argument(
+            fmt::format("conv3d: {} dtype must be bfloat16 or float32, got {}", name, tensor.dtype()));
+    }
+}
+
+// Same as above, plus the tensor lives on the reference's device with the reference's dtype.
+void require_device_tensor_like(
+    const ttnn::Tensor& tensor, const std::string& name, const ttnn::Tensor& reference, const char* reference_name) {
+    require_device_tensor(tensor, name);
+    if (tensor.device() != reference.device()) {
+        throw std::invalid_argument(fmt::format("conv3d: {} must be on the same device as {}", name, reference_name));
+    }
+    if (tensor.dtype() != reference.dtype()) {
+        throw std::invalid_argument(fmt::format(
+            "conv3d: {} dtype {} must match {} dtype {}", name, tensor.dtype(), reference_name, reference.dtype()));
+    }
+}
+
 ttnn::Tensor to_row_major(const ttnn::Tensor& tensor) {
     if (tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return tensor;
@@ -453,18 +477,8 @@ Conv3dGeometry validate_and_build_geometry(
         throw std::invalid_argument(fmt::format(
             "conv3d: weight must have rank 5 with layout [C_out, C_in, kD, kH, kW], got shape {}", weight_shape));
     }
-    if (!ttnn::is_device_tensor(input_value) || !input_value.is_allocated() || !ttnn::is_device_tensor(weight_value) ||
-        !weight_value.is_allocated()) {
-        throw std::invalid_argument("conv3d:: input and weight must be allocated on device");
-    }
-    if (input_value.dtype() != ttnn::DataType::BFLOAT16 && input_value.dtype() != ttnn::DataType::FLOAT32) {
-        throw std::invalid_argument(
-            fmt::format("conv3d: input dtype must be bfloat16 or float32, got {}", input_value.dtype()));
-    }
-    if (weight_value.dtype() != input_value.dtype()) {
-        throw std::invalid_argument(fmt::format(
-            "conv3d: weight dtype {} must match input dtype {}", weight_value.dtype(), input_value.dtype()));
-    }
+    require_device_tensor(input_value, "input");
+    require_device_tensor_like(weight_value, "weight", input_value, "input");
     if (groups == 0U) {
         throw std::invalid_argument("conv3d: groups must be non-zero");
     }
@@ -532,19 +546,13 @@ Conv3dGeometry validate_and_build_geometry(
     if (bias != nullptr) {
         const auto& bias_value = bias->get_value();
         const auto& bias_shape = bias_value.logical_shape();
+        require_device_tensor_like(bias_value, "bias", input_value, "input");
         if (bias_shape.volume() != geometry.C_out || bias_shape[-1] != geometry.C_out) {
             throw std::invalid_argument(fmt::format(
                 "conv3d: bias must have volume {} with last dimension {}, got shape {}",
                 geometry.C_out,
                 geometry.C_out,
                 bias_shape));
-        }
-        if (bias_value.dtype() != input_value.dtype()) {
-            throw std::invalid_argument(fmt::format(
-                "conv3d: bias dtype {} must match input dtype {}", bias_value.dtype(), input_value.dtype()));
-        }
-        if (!ttnn::is_device_tensor(bias_value)) {
-            throw std::invalid_argument("conv3d: bias must be on device");
         }
     }
 
@@ -632,11 +640,12 @@ void validate_prepared_weight(
     const GroupGeometry group = geometry.per_group();
     const uint32_t kvol = geometry.kernel_volume();
     auto check_form = [&](const ttnn::Tensor& tensor, uint32_t rows, uint32_t cols, const char* form, size_t g) {
+        require_device_tensor_like(
+            tensor, fmt::format("prepared {} weight for group {}", form, g), weight_value, "weight");
         const auto& shape = tensor.logical_shape();
-        if (!ttnn::is_device_tensor(tensor) || tensor.layout() != ttnn::Layout::TILE || shape.rank() != 2U ||
-            shape[0] != rows || shape[1] != cols) {
+        if (tensor.layout() != ttnn::Layout::TILE || shape.rank() != 2U || shape[0] != rows || shape[1] != cols) {
             throw std::invalid_argument(fmt::format(
-                "conv3d: prepared {} weight for group {} must be a device TILE tensor of shape [{}, {}], got shape {} "
+                "conv3d: prepared {} weight for group {} must be a TILE tensor of shape [{}, {}], got shape {} "
                 "layout {}",
                 form,
                 g,
@@ -779,9 +788,7 @@ Conv3dPreparedWeight prepare_conv3d_weight(const ttnn::Tensor& weight, uint32_t 
         throw std::invalid_argument(
             fmt::format("conv3d: out_channels {} must be divisible by groups {} (groups >= 1)", shape[0], groups));
     }
-    if (!ttnn::is_device_tensor(weight)) {
-        throw std::invalid_argument("conv3d: weight must be on device");
-    }
+    require_device_tensor(weight, "weight");
     Conv3dGeometry geometry;
     geometry.C_in = shape[1] * groups;
     geometry.C_out = shape[0];
