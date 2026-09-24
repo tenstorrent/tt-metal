@@ -13,30 +13,39 @@ Current kernel: ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp
 ```
 
 The **craq-sim functional simulator does not model that trap** — instead of faulting it stalls forever (reader
-NTW / compute WFW). So on craq-sim it looks like a hang; on RTL it's an illegal format conversion. `bf16` works
-(it takes the `fast_tilize` path); the fault is on the **generic/slow tilize path** that fp32-lossless and uint8
-fall through to (both fail `can_use_fast_tilize()`).
+NTW / compute WFW). So on craq-sim it looks like a hang; on RTL it's an illegal format conversion. The real
+differentiator is **`enable_32_bit_dest=true`**: fp32-lossless and uint8 both enable it and fault; `bf16` does
+not enable it and works. (NB: on Quasar there is **no separate fast tilize path** — `fast_tilize_block` is a
+literal alias for `tilize_block` — so this is not a "fast vs slow path" distinction; it is purely 32-bit-dest.)
 
 Two things to fix, tracked separately:
-1. **The real bug (tt-metal / tt-llk):** the generic tilize path's Gen2 unpacker config for `enable_32_bit_dest`
-   is invalid for tilize's *unary* consumer (details below). Reproduced on the emulator via three paths — mainline
-   `ttnn.tilize` (uint8 and fp32→bf16) and the canonical `ttnn.experimental.quasar.tilize` (fp32, config built via
-   `to_compute_hardware_config`, byte-identical compute kernel) — so it is shared LLK/`compute_kernel_lib` code,
-   not a factory-specific config bug (rules out the mainline factory's `TODO(#52269)` manual Gen1→Gen2 copy).
+1. **The real bug (tt-llk):** the Quasar tilize LLK path with `enable_32_bit_dest=true` produces an
+   `ILLEGAL_FORMAT_CONVERSION` on real RTL. Reproduced on the emulator via three paths — mainline `ttnn.tilize`
+   (uint8 and fp32→bf16) and the canonical `ttnn.experimental.quasar.tilize` (fp32, config built via
+   `to_compute_hardware_config`, byte-identical compute kernel) — so it is shared `tt_llk_quasar` LLK code, not a
+   factory-specific config bug (rules out the mainline factory's `TODO(#52269)` manual Gen1→Gen2 copy).
 2. **craq-sim (issue #401):** ttsim should surface/trap the `ILLEGAL_FORMAT_CONVERSION` like RTL instead of
    hanging; plus the separate `qsr_convert_pack_value` bf16→fp32 (`5→0`) gap.
 
-## Leading root-cause hypothesis (tt-llk boundary — UNDER VERIFICATION via the tt-llk `debug-kernel` skill)
+## Root-cause status: layer-localized (tt-llk), NOT line-localized — needs waveform debug
 
-`_llk_unpack_tilize_mop_config_` in `tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_unpack_tilize.h` has an
-`EN_32BIT_DEST` branch commented *"exclusively for FP32 datacopy via math thread (ELWADD on SrcA+SrcB), not for
-UNP_DEST"* — it configures the MOP to also set dvalid on the **opposite** unpacker, i.e. for an ELWADD-style
-**binary** (SrcA+SrcB) consumer. But tilize's Quasar math is `llk_math_eltwise_unary_datacopy(0, icb)`
-(`api/compute/tilize.h`) — a genuinely **unary** datacopy that never touches SrcB. So enabling 32-bit-dest for
-tilize wires a binary-consumer MOP for a unary op → format-conversion mismatch the RTL rejects. The defect is
-introduced at the **compute-API boundary**: `tilize.h`'s Quasar branch forwards `is_fp32_dest_acc_en` into
-`llk_unpack_tilize_init` without accounting for tilize's unary consumer. (Hypothesis pending `debug-kernel`
-verification; not yet fixed.)
+The fault is in `tt_metal/tt-llk/tt_llk_quasar/` LLK code on the `enable_32_bit_dest=true` tilize path, but the
+exact defective line is **not** yet pinned. Source-reading hypotheses were checked against working references and
+**refuted**:
+
+- **REFUTED — "fast vs slow path":** on Quasar `fast_tilize_block` aliases `tilize_block`; there is no separate
+  fast path.
+- **REFUTED — "binary-ELWADD MOP wired for tilize's unary consumer":** with 32-bit-dest,
+  `llk_math_eltwise_unary_datacopy` compiles to an `ELWADD`, and `_llk_unpack_tilize_mop_config_`
+  (`llk_unpack_tilize.h`, `EN_32BIT_DEST` branch) pokes a dvalid onto the opposite unpacker to feed it. This
+  looked like a unary-op-wired-as-binary mismatch — but the codebase's **validated** datacopy reference
+  `llk_unpack_unary_operand.h` (the exact case that branch's comment calls out as known-good) uses the
+  byte-identical `TT_OP_UNPACR_NOP` and **also** never programs the opposite unpacker's buffer descriptor. So
+  tilize matches the known-working pattern; this is not the difference.
+
+Whatever differs is more subtle (init ordering, tilize's MOP loop structure vs. plain datacopy, or a genuinely
+unvalidated RTL gap). Pinning it needs waveform-level diagnosis (the tt-llk `llk-wave-debug` skill / `llk-debugger`,
+Quasar-only, requires the RTL simulator or emulator with waveform dumps — not doable from a craq-sim / WH host).
 
 This branch exists only to hand a self-contained reproducer + the localization done so far. Nothing here is meant
 to merge.
