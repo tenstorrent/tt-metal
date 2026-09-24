@@ -35,9 +35,9 @@ void kernel_main() {
     constexpr uint32_t pooled_cb = get_compile_time_arg_val(2);
     constexpr uint32_t ca_bias_cb = get_compile_time_arg_val(3);
     constexpr uint32_t cb_bias_cb = get_compile_time_arg_val(4);
-    const uint32_t output_tiles = get_arg_val<uint32_t>(rt::index(rt::Compute::OutputTiles));
 
     compute_kernel_hw_startup(candidate_score_cb, candidate_kv_cb, pooled_cb);
+    const uint32_t output_tiles = get_arg_val<uint32_t>(rt::index(rt::Compute::OutputTiles));
     DataflowBuffer candidate_kv(candidate_kv_cb);
     DataflowBuffer candidate_score(candidate_score_cb);
     DataflowBuffer ca_bias(ca_bias_cb);
