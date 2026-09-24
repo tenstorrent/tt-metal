@@ -20,7 +20,7 @@ def inputs(where, dtype):
     return (torch.rand([1, 1, 32, 32]) * 8 - 4).to(dtype)
 
 
-@pytest.mark.parametrize("ttnn_op, torch_op, domain", OPS)
+@pytest.mark.parametrize("ttnn_op, torch_op, domain", OPS, ids=["erfinv", "erf", "reciprocal"])
 @pytest.mark.parametrize("which_grad", ["ones", "mixed", "negative"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_backward_matches_torch(device, ttnn_op, torch_op, domain, which_grad, dtype):

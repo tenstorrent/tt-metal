@@ -24,6 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tilize.h"
+#include "api/compute/transpose_wh.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/experimental/generalized_moe_gate.h"
