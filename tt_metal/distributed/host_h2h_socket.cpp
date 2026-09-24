@@ -18,6 +18,22 @@ namespace {
 
 // A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
 // fields after the guard that vouches for them.
+// Every field both hosts must lay out identically, mixed so a differing one changes the sum.
+// Not region_bytes: each host pins its own prefix, and the bound on it is checked locally.
+uint64_t geometry_fingerprint(const H2HSocket::Config& cfg) {
+    uint64_t h = 1469598103934665603ull;
+    for (const uint64_t v :
+         {static_cast<uint64_t>(cfg.cores),
+          static_cast<uint64_t>(cfg.page_bytes),
+          static_cast<uint64_t>(cfg.ring_pages),
+          static_cast<uint64_t>(cfg.rx_data_offset),
+          static_cast<uint64_t>(cfg.topo.num),
+          static_cast<uint64_t>(cfg.topo.chips_per_host)}) {
+        h = (h ^ v) * 1099511628211ull;
+    }
+    return h;
+}
+
 uint64_t load_acquire(const volatile uint64_t* p) {
     return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
 }
@@ -181,6 +197,22 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     Impl& im = *s->impl_;
     im.cfg = cfg;
     im.window_cap = cfg.send_window != 0 ? cfg.send_window : cfg.cores * cfg.ring_pages;
+
+    // Every guard above is local, but the offsets they bound are displacements into the PEER's
+    // window: a peer that provisioned fewer cores or a different ring faults on the first put.
+    if (!RdmaWindow::agree_value(geometry_fingerprint(cfg), err)) {
+        if (err.empty()) {
+            err = fmt::format(
+                "H2HSocket: the peer's layout differs from this host's (cores {}, page {} B, ring {}, "
+                "rx_data_offset {}, chips_per_host {}); both hosts must provision identically",
+                cfg.cores,
+                cfg.page_bytes,
+                cfg.ring_pages,
+                cfg.rx_data_offset,
+                cfg.topo.chips_per_host);
+        }
+        return nullptr;
+    }
 
     im.win = RdmaWindow::create(cfg.region_base, cfg.region_bytes, cfg.topo.ident, cfg.topo.num, err);
     if (!im.win) {
