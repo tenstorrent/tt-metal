@@ -13,7 +13,8 @@
 #include "tt_metal/distributed/host_uva_layout.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <internal/cluster_noc_helpers.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
@@ -25,15 +26,14 @@ namespace {
 
 namespace dist = tt::tt_metal::distributed;
 
-ttsl::Span<const std::byte> byte_span(const void* p, std::size_t n) {
-    return ttsl::Span<const std::byte>(static_cast<const std::byte*>(p), n);
-}
-
 }  // namespace
 
 struct H2DLeg::Impl {
     Config cfg{};
     uint32_t device_id = 0;
+    // The mesh's own cluster, not MetalContext::instance(): a leg built from a
+    // non-default context must not write control words through the default one.
+    const Cluster* cluster = nullptr;
     uint32_t fifo_bytes = 0;
 
     // Everything one core owns, in one place. `connector`/`bytes_acked` point into the alias.
@@ -88,7 +88,15 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
     Impl& im = *leg->impl_;
     im.cfg = cfg;
     im.fifo_bytes = static_cast<uint32_t>(fifo64);
-    im.device_id = static_cast<uint32_t>(mesh->get_devices()[0]->id());
+    // Empty is legal, not malformed: a mesh whose slots are all remote has no local device
+    // (mesh_device.cpp:839), and this leg needs one to ring the doorbell on.
+    const std::vector<IDevice*> devices = mesh->get_devices();
+    if (devices.empty()) {
+        err = "H2DLeg::create: the mesh has no local device";
+        return nullptr;
+    }
+    im.device_id = static_cast<uint32_t>(devices.front()->id());
+    im.cluster = &mesh->impl().metal_context().get_cluster();
 
     const uint32_t n = cfg.cores;
     im.core.resize(n);
@@ -97,7 +105,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
         for (uint32_t i = 0; i < n; ++i) {
             const CoreCoord logical{i % cfg.grid_width, i / cfg.grid_width};
             // Logical here: H2DSocket translates. The virtual coords are for the doorbell.
-            im.core[i].virt = mesh->get_devices()[0]->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
+            im.core[i].virt = devices.front()->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
             im.core[i].socket = std::make_unique<dist::H2DSocket>(
                 mesh,
                 dist::MeshCoreCoord{dist::MeshCoordinate(0, 0), logical},
@@ -162,12 +170,11 @@ bool H2DLeg::publish(const DeliverTask& task) {
         im.core[c].connector->bytes_sent = im.core[c].sent;
     }
     const auto& v = im.core[c].virt;
-    tt::tt_metal::internal::noc_write_immediate(
-        im.device_id,
-        static_cast<uint32_t>(v.x),
-        static_cast<uint32_t>(v.y),
-        im.core[c].cfg_addr + offsetof(receiver_socket_md, bytes_sent),
-        byte_span(&im.core[c].sent, sizeof(uint32_t)));
+    im.cluster->write_core_immediate(
+        &im.core[c].sent,
+        sizeof(uint32_t),
+        tt_cxy_pair(im.device_id, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)),
+        im.core[c].cfg_addr + offsetof(receiver_socket_md, bytes_sent));
     return true;
 }
 
