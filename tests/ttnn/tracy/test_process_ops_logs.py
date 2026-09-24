@@ -200,3 +200,53 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def _host_op(op_id, trace_id):
+    return {
+        "global_call_count": op_id,
+        "device_id": 0,
+        "metal_trace_id": trace_id,
+        "host_time": {"ns_since_start": op_id, "exec_time_ns": 1},
+    }
+
+
+def _perf_row(op_id, trace_id, session_id):
+    return {
+        "GLOBAL CALL COUNT": op_id,
+        "METAL TRACE ID": trace_id,
+        "METAL TRACE REPLAY SESSION ID": session_id,
+        "CORE COUNT": 8,
+    }
+
+
+def test_enrich_ops_from_perf_csv_leaves_out_ops_of_a_never_replayed_trace():
+    # Trace 0 was replayed once (host marker + device rows); trace 1 was only captured.
+    host_ops = {0: [_host_op(10, 0), _host_op(11, 0), _host_op(20, 1), _host_op(21, 1)]}
+    device_rows = {0: {(10, 0, 1): _perf_row(10, 0, 1), (11, 0, 1): _perf_row(11, 0, 1)}}
+    trace_replays = {0: {0: [12345]}}
+
+    enriched = process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
+
+    assert [op["global_call_count"] for op in enriched[0]] == [10, 11]
+    assert all(op["tracy_time"] == 12345 for op in enriched[0])
+
+
+def test_enrich_ops_from_perf_csv_still_asserts_on_a_replayed_trace_missing_one_row():
+    host_ops = {0: [_host_op(10, 0), _host_op(11, 0)]}
+    device_rows = {0: {(10, 0, 1): _perf_row(10, 0, 1)}}
+    trace_replays = {0: {0: [12345]}}
+
+    with pytest.raises(AssertionError, match="Op 11 not present"):
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
+
+
+def test_enrich_ops_from_perf_csv_still_asserts_when_a_host_replayed_trace_has_no_device_rows():
+    # The host replayed trace 1 (REPLAY marker present) but the device report has no row for it:
+    # that is lost device data, not a never-replayed trace, so it must not be dropped silently.
+    host_ops = {0: [_host_op(10, 0), _host_op(20, 1)]}
+    device_rows = {0: {(10, 0, 1): _perf_row(10, 0, 1)}}
+    trace_replays = {0: {0: [12345], 1: [23456]}}
+
+    with pytest.raises(AssertionError, match="host replayed this trace"):
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
