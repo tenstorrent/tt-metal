@@ -53,3 +53,22 @@ Workflow for any agent picking up a step:
 - Gotcha: pre-commit autoflake strips imports unused *at commit time*, which bit `tt/moe.py`.
 - Gotcha: `run_safe_pytest.sh` runs a fake-tensor collect pass first. `bringup.metrics.record` ignores it.
 - P2.11 results: final hidden 0.9983, worst layer 0.9985, worst KV 0.9979, top-1 98.7%, top-5 100%, about 0.9 s per 2k chunk.
+
+## P1.6, P2.12-P2.16 (2026-09-24): 55k chunked prefill E2E + prefill-server contract. PASS
+- P1.6 55k golden: 61 min on CPU (3-7.5 min per 5k chunk). Per-layer dumps for the last chunk only; KV for all 56320.
+- P2.13 (b): golden KV prefix [0, 51200) loaded (`TtKVCache.load_prefix`), device prefills 51200->56320. Final 0.9982, top-5 100%.
+- P2.14 (a): all 11 x 5120 chunks on device. Final hidden 0.9984, worst layer 0.9987, worst KV (28 layers x 56320)
+  0.9960, top-1 97.7%, top-5 100%. Chunks take 2.9 -> 4.0 s (attention grows with context), about 36 s for 56k tokens
+  (dense-EP MoE, untraced, bf16).
+- P2.15 contract: reuses `gpt_oss_d_p` `allocate_kv_cache` / `write_kv_chunk` / `build_kv_chunk_address_table` directly
+  (sp=1, tp=4 = KV heads). Every 32-token chunk read back through `table.read_device_chunk` is byte-identical to the
+  device tensor. bf8 contract KV vs golden: 0.9979.
+- P2.16 engine: `ernie45_d_p` registered in `common/prefill/adapter.py`. The producer GQA reader skips the HF->Meta K
+  permutation via `golden_k_rope_layout = "interleaved"`. Driven only through the adapter/runtime API (slot 1 of 2); layer acks are
+  global and in order. Gotchas (both fixed in the gate): precompile-mode `comp_pcc` stub (0.999999) leaking into the producer's
+  real-pass check, and ambient PYTHONPATH -> ../tt-metal. Hence `--no-precompile` + pinned PYTHONPATH + an independent PCC.
+- Replay the whole ladder: `python models/demos/ernie45_d_p/bringup/gate.py --sweep` (P1.6 alone is about 1 h CPU; use
+  `--sweep P2` to replay only the device side against the stored goldens).
+- Next steps (not gated yet): sparse_matmul experts (about 2.7x fewer expert FLOPs; needs a tile-aligned 16-expert routing slice),
+  trace capture, bf8 weights, attention from the contract bf8 cache (ring_joint SDPA) instead of the extra bf16 attention cache,
+  two-process runner + producer over H2D sockets (`PREFILL_MOCK_MIGRATION=1` / `PREFILL_PRODUCER_CHECK_PCC=1`).
