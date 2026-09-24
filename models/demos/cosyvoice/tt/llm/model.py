@@ -142,13 +142,18 @@ class TtTransformerLM:
             parts.append(spk_emb)
         parts.append(text_enc)
         parts.append(task)
+        prompt_emb = None
         if prompt_speech_tokens is not None and prompt_speech_tokens.shape[1] > 0:
-            parts.append(ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT))
+            prompt_emb = ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT)
+            parts.append(prompt_emb)
         out = ttnn.concat(parts, dim=1)
         ttnn.deallocate(sos)
         ttnn.deallocate(task)
-        if len(parts) > 4 and parts[-1] is not text_enc:
-            ttnn.deallocate(parts[-1])
+        # The prompt embedding is the only other tensor this method allocates. Tracking it
+        # directly, rather than inferring it from the length of `parts`, frees it whether
+        # or not a speaker row was inserted (the demo passes no `spk_emb`).
+        if prompt_emb is not None:
+            ttnn.deallocate(prompt_emb)
         return out
 
     # ----------------------------------------------------------------------
@@ -238,6 +243,12 @@ class TtTransformerLM:
             for t in cache.values():
                 ttnn.deallocate(t)
             cache.clear()
+        # Each attention layer also caches its widened positional projection, keyed on
+        # (window, batch), which grows the same way across a sweep. `generate` and
+        # `generate_batch` release their decode trace before returning, so by the time a
+        # caller is between utterances no trace references these tensors and dropping
+        # them is safe (see `TtRelPosAttention.release_pos_proj_cache`).
+        self.decoder.release_pos_proj_cache()
 
     # ----------------------------------------------------------------------
     def generate(

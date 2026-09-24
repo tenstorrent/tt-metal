@@ -535,6 +535,7 @@ class CosyVoiceTTNN:
             # are covered by the warm-up chunk above. See
             # `TtMaskedDiffWithXvec.release_trace`.
             self.flow.release_trace()
+            synth.release_carry()
 
     # ----------------------------------------------------------------------
     @staticmethod

@@ -118,7 +118,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* | — |
 | `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
 | `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
-| Streaming inference | ✅ content and schedule · the interleaved stream's audio is wrong at its chunk geometry, see *Open defects* | `test_device_streamed_matches_non_streamed` (content, 120-token chunks), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved tokens and peak) | *Streaming* |
+| Streaming inference | ✅ content and schedule on Blackhole · ❌ content on Wormhole at `e0de3009` · the interleaved stream's audio is wrong at its chunk geometry (*Streaming content on Wormhole* and *Streamed audio at the stream's chunk geometry*, under Open defects) | `test_device_streamed_matches_non_streamed` (content, 120-token chunks), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved tokens and peak) | *Streaming* |
 | Efficient multi-lingual switching | ✅ zero-shot and cross-lingual, 5 languages per sweep · SFT and instruct not re-run on this tree | `demo/sweep.py` | *Speech quality* |
 
 ---
@@ -209,6 +209,22 @@ JIT cache and 273.8 s with a cleared one, 248 s of that compiling kernels under 
 trace. It is untested on n300, where the next step is to run `test_streaming_perf`
 unskipped.
 
+### Streaming content on Wormhole
+
+At `e0de3009`, on tt-metal main `86d0bdb8ccbe` (2026-09-24), `tests/e2e/test_streaming.py::test_device_streamed_matches_non_streamed`
+fails on n300: mel PCC `0.21` against the `0.85` gate, streamed RMS `0.633` against `0.049`
+for the non-streamed run of the same tokens and seed
+(https://github.com/tenstorrent/tt-metal/actions/runs/35976068834). At `a7c8416d3` the same
+test passed on n300 with RMS `0.052`, and its log shows `_verify_prepared` rejecting the
+prepared weight of `Conv1d(128->128, k=11)` at length 8321, inside the Wormhole `ttnn.conv1d`
+defect range. `TtStreamingSynthesizer` now pauses that check for the length of a stream
+(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry runs its
+prepared weight unchecked and the chunk comes out wrong; `0.21` is the figure §3.2 of PERF.md
+records for exactly that case. Blackhole is unaffected at this utterance length. Not fixed:
+the geometries a stream will use need their verification before the decode trace goes
+live (the warm-up chunk is the place), or Wormhole streams need the op's own preparation
+for the vocoder convs.
+
 ### A longer streamed utterance wedges the board
 
 `test_device_streaming_first_audio_latency` measures one utterance length. Run at a
@@ -257,8 +273,9 @@ and streaming peaks (`0.001` each), while n300 gives batch `0.001` and streaming
 near-silence and `0.660` a plausible speech peak, so the batch path may be the
 degenerate one on a capped greedy run. Ruled out: the live trace, and the Wormhole
 `ttnn.conv1d` defect below (`COSYVOICE_CONV_PREPARE=0` gives the same figure).
-`test_device_streamed_matches_non_streamed` passes on n300; it uses the golden's own
-prompt and full token list rather than this case.
+`test_device_streamed_matches_non_streamed` passed on n300 while the stream still
+verified prepared conv weights; at `e0de3009` it fails there (below). It uses the golden's
+own prompt and full token list rather than this case.
 
 ### Dependency advisories — disposition requested
 

@@ -77,10 +77,14 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # Skipped on Wormhole: this test wedges n300, cause not established.
-    # `docs/VALIDATION.md` has what is ruled out and what to try next.
-    if "WORMHOLE" in str(device.arch()).upper():
-        pytest.skip("hangs Wormhole n300, cause not established; see docs/VALIDATION.md and PERF.md, Known limitations")
+    # Opt-in on every architecture. On Wormhole it wedges n300, cause not established
+    # (`docs/VALIDATION.md` has what is ruled out). On Blackhole it ran to completion on the
+    # author's p150a/p150b, but two consecutive attempts on Blackhole CI VMs lost the runner
+    # about twelve minutes into the perf suite with this test in it, and the suite completed
+    # once it was excluded (tt-metal PR #52540 review). Until that is understood it must not
+    # run by default anywhere; set COSYVOICE_RUN_STREAMING_PERF=1 to run it.
+    if os.environ.get("COSYVOICE_RUN_STREAMING_PERF") != "1":
+        pytest.skip("opt-in: wedges Wormhole n300 and took down Blackhole CI VMs; set COSYVOICE_RUN_STREAMING_PERF=1")
 
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
