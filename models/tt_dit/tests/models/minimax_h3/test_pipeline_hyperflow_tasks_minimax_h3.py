@@ -39,6 +39,7 @@ from loguru import logger
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....utils.video import Audio, export_video_audio_yuv
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
@@ -142,7 +143,14 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
     partition = "transformer_ref" if task == "ref2va" else "transformer"
     weights = weights_dir(partition, "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_hyperflow_artifacts")
-    pytest.importorskip("open_clip", reason="the CLIP measurement needs open_clip, which is not installed")
+    # The serving readback. `to_uint8_frames` and everything downstream of it -- CLIP, the frame
+    # sanity checks, the artifact writer -- read the `rgb_float` layout, so a yuv420 sweep reports
+    # the total the serving path pays and drops the pixel measurements, exactly the split
+    # `test_zz_hyperflow_yuv_minimax_h3.py` makes at its single working point.
+    output_type = os.environ.get("MINIMAX_H3_VAE_OUTPUT", "float")
+    yuv = output_type == "yuv420"
+    if not yuv:
+        pytest.importorskip("open_clip", reason="the CLIP measurement needs open_clip, which is not installed")
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
@@ -157,6 +165,7 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
         task="ref2va" if task == "ref2va" else "t2va",  # `t2va` serves fl2va too
         lora_path=lora_path,
         lora_strength=strength,
+        vae_output_type=output_type,
     )
 
     contract = pipeline.hyperflow
@@ -165,7 +174,7 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
         f"points; point {LORA_PATH_ENV} at a two-time adapter"
     )
     num_forwards = contract.num_forwards
-    stem = f"{task}_hyperflow_{width}x{height}_{duration_s}s_{num_forwards}fwd"
+    stem = f"{task}_hyperflow{'_yuv420' if yuv else ''}_{width}x{height}_{duration_s}s_{num_forwards}fwd"
     logger.info(f"adapter {lora_path} at strength {strength}: {contract.identity()}")
     logger.info(f"{task}: {width}x{height}, {num_frames} frames, {num_forwards} forwards, partition {partition}/")
 
@@ -184,16 +193,28 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
     )
 
     expected_frames = align_num_frames(num_frames)
-    frames = to_uint8_frames(output)
-    check_output_sanity(frames, num_frames=expected_frames, height=height, width=width)
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=output.video_seconds)
-    check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=MINIMAX_H3_FPS)
 
-    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
-    check_written_file(paths, expected_frames, height=height, width=width)
+    if yuv:
+        assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
+        mp4 = artifacts / f"{stem}.mp4"
+        export_video_audio_yuv(
+            output.video,
+            str(mp4),
+            fps=output.fps,
+            audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
+        )
+        paths, alignment = {"mp4": mp4}, None
+    else:
+        frames = to_uint8_frames(output)
+        check_output_sanity(frames, num_frames=expected_frames, height=height, width=width)
+        check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=MINIMAX_H3_FPS)
 
-    alignment = clip_prompt_alignment(frames, PROMPT)
-    logger.info(f"{stem} CLIP prompt alignment (RECORDED not gated): {alignment}")
+        paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+        check_written_file(paths, expected_frames, height=height, width=width)
+
+        alignment = clip_prompt_alignment(frames, PROMPT)
+        logger.info(f"{stem} CLIP prompt alignment (RECORDED not gated): {alignment}")
 
     seconds_per_video_second = total_s / output.video_seconds
     assert seconds_per_video_second < MAX_S_PER_VIDEO_SECOND, (
@@ -215,6 +236,7 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
         "partition": partition,
         "padded_len": pipeline.last_padded_len,
         "mesh": list(pipeline.mesh_device.shape),
+        "video_format": output_type,
         "adapter": Path(lora_path).name,
         "adapter_identity": contract.identity(),
         "timings_s": {label: seconds for label, seconds in pipeline.last_timings},
