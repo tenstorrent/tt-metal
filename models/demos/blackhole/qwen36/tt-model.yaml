@@ -92,7 +92,12 @@ serve_profiles:
       - [--max-num-batched-tokens, "65536"]
     env:
       MESH_DEVICE: P150x2
-      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
+      # 2-channel (1,2) descriptor shipped in the model dir (header comment = the argument): channels.count is the MINIMUM
+      # number of trained eth links the control plane accepts under the plugin's default STRICT_INIT (control_plane.cpp
+      # "Expected {} eth links"), and the fabric then uses every live link. So this file boots a one-cable pair (2 links)
+      # AND a two-cable pair (4 links, 4 routing planes); the stock p150_x2 descriptor (count 4) refuses a one-cable pair at
+      # mesh open. Every validated tp2 run used a byte-equivalent 2-channel descriptor (profiles/thatch_adopt/laneG_RESULTS.md).
+      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto
       # The plugin registers the checkpoint arch under its TT-prefixed name (platform.py: "TT" + arch, the bundle too), so the
       # override MUST be keyed on TTQwen3_5ForConditionalGeneration to beat the bundle's DFlash main_class; the raw arch is kept
       # for the plain lookup path. (Keyed on the raw arch alone, the container resolved Qwen36DFlashForCausalLM: boot 1 of step 3.)
@@ -153,7 +158,7 @@ serve_profiles:
       - --no-async-scheduling
     env:
       MESH_DEVICE: P150x2
-      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
+      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto   # = tp2 (2-channel floor, see there)
       QWEN36_DRAFTER: dflash2
       QWEN36_DFLASH_TP: "1"                # the TP drafter (the class default; the replicated oracle is test-only)
       QWEN36_GDN_SPEC_FUSED: "0"           # composite verify: the fused gdn_spec_step needs 2*Nv <= 32 (Nv=24 at TP=2)
@@ -177,7 +182,7 @@ verify:
   - "import importlib.resources as r; assert r.files('vllm_tt_plugin.kv_transfer.launch').joinpath('data/pd_two_p150_mesh_graph_descriptor.textproto').is_file()"
   - "import importlib; importlib.import_module('ttnn.distributed.ttrun')"
   - "from pathlib import Path; assert Path('/opt/openmpi-v5.0.7-ulfm/bin/mpirun').is_file()"
-  - "from pathlib import Path; assert Path('/opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto').is_file()"
+  - "from pathlib import Path; p = Path('/opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto'); assert p.is_file(); assert 'count: 2' in p.read_text(), p"
   - "import os, subprocess, sys; os.environ.update(TT_PD_CHIPS='0,1', TT_METAL_CACHE='/tmp/c', TT_CACHE_PATH='/tmp/t'); subprocess.run([sys.executable, '-m', 'vllm_tt_plugin.kv_transfer.launch.pd_container', 'Qwen/Qwen3.8-27B', '--max-model-len', '65536', '--max-num-seqs', '8', '--block-size', '64', '--port', '20000', '--dry-run'], check=True)"
   - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_batched']"
   - "import json; m=json.load(open('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json')); assert m['main_class'].endswith(':Qwen36DFlashForCausalLM'), m"
@@ -288,6 +293,6 @@ card:
 
     ### Notes
 
-    * Not yet run on real p150a cards: the package ships the p150 x2 defaults (chips 0 and 1, 4-channel ethernet descriptor); all numbers above come from the P300x2 emulation.
+    * Not yet run on real p150a cards: all numbers above come from the P300x2 emulation (two chips on different cards, one ethernet cable = 2 links). `tp2` and `tp2-dflash2` ship a 2-channel mesh descriptor (`models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto`): the channel count is the minimum number of trained links the fabric requires and it uses every link it finds, so a pair joined by one cable (2 links) or two cables (4 links) both boot. tt-metal's stock `p150_x2` descriptor asks for 4 links and refuses a one-cable pair at start-up (`Expected 4 eth links`). `p1d1` uses a separate two-mesh descriptor whose link count is `TT_PD_CONNS` (default 2 = one cable).
     * `tp2-dflash2` produces greedy output only and serves at most 4 users; `tp2` and `p1d1` support every vLLM sampling option.
     * Speculative decoding is not available in `p1d1`.
