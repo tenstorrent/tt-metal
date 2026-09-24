@@ -450,6 +450,7 @@ changing the frozen Q256/K512/D128 outputs.
 | Continuation | 162 passed |
 | Watcher subset: odd Q (B/E), D64/D256, K256/K384 | 12 + 31 + 35 passed; L1 skips only |
 | After barrier change: regression / exp ring / geometry | 565 / 131 / 418 + 105 passed |
+| Final consolidated run @63de9dff: dense+joint / ring+continuation+mesh / exp ring / model smoke / model host | 960 (+1 stale prep expectation, fixed) / 817 / 131 / 68 / 103 passed |
 | Joint, tails, GQA, preparation, FP32 state | 595 passed (combined regression) |
 | Model device smoke (random weights; FLUX.1/2, Qwen path, Mochi, Wan, LTX-2 video/audio, MiniMax H3, SD3.5, Motif, Ideogram4) | all passed; 1x1 and 1x2 |
 
@@ -484,6 +485,26 @@ FAST was 12% slower than legacy at Q256 and 30% slower at Q128; 1- and 4-core
 timings are unchanged). FAST and LOW_PRECISION now match or beat legacy at matched
 blocking; BALANCED and ACCURATE cost 1.8-2.6x legacy, which is their HiFi4/FP32
 arithmetic, not dataflow.
+
+### Ring and exp-ring timing (1x2, 2026-09-24)
+
+FAST matches legacy on ring and exp ring within about 1-3%; no dataflow
+bottleneck remained after the reader barrier change. BF16 recipe compute kernels
+had been built at -Os on every TRISC to fit the kernel config buffer. They now
+size-optimize only the pack thread (unpack/math at O2), which fits every ring,
+exp-ring and odd-chunk case and recovers most of the O2 speed. Trace-wall
+milliseconds (10 heads, 4096 rows/device, D128; exp ring 20 Q chunks/head):
+
+| Case | Legacy | A | B | E_bf16 | E_bfp8 | E_bfp4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ring Q256/K512 (before -> after) | 1.53 | 1.55 | 2.11 -> 1.87 | 2.01 -> 1.81 | 2.08 -> 1.53 | 2.08 -> 1.52 |
+| ring Q256/K256 | 1.56 | 1.56 | 2.67 -> 2.12 | 2.59 -> 1.96 | 2.77 -> 1.93 | 2.76 -> 1.95 |
+| exp ring Q256 two-pass | 1.48 | 1.48 | 2.42 -> 1.83 | 2.32 -> 1.55 | 2.45 -> 1.55 | 2.44 -> 1.54 |
+| exp ring Q224 two-pass | 1.15 | 1.15 | 2.09 -> 1.64 | 2.03 -> 1.44 | 2.11 -> 1.44 | 2.10 -> 1.43 |
+| dense Q224/K512 | 1.14 | 1.30 | 2.08 -> 1.71 | 2.05 -> 1.53 | 2.11 -> 1.50 | 2.14 -> 1.47 |
+
+C/D keep O2 and cost 1.6-2.4x legacy (HiFi4/FP32 arithmetic). At the H3
+worker L1 budget, C/D ring at Q256/K512 and Q320/K384 exceed L1 by about 1 KB.
 
 ## Continuous coverage
 
