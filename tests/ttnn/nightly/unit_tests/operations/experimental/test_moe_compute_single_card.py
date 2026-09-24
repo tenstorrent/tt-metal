@@ -1170,7 +1170,7 @@ def _minimal_rejection_inputs(mesh_device):
     return (tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2)
 
 
-def _call_moe_compute_for_rejection(mesh_device, **overrides):
+def _call_moe_compute_for_rejection(mesh_device, inputs=None, **overrides):
     kwargs = dict(
         layer_id=0,
         output_height_shard_dim=4,
@@ -1186,7 +1186,9 @@ def _call_moe_compute_for_rejection(mesh_device, **overrides):
         compute_only=False,
     )
     kwargs.update(overrides)
-    return ttnn.experimental.moe_compute(*_minimal_rejection_inputs(mesh_device), **kwargs)
+    return ttnn.experimental.moe_compute(
+        *(_minimal_rejection_inputs(mesh_device) if inputs is None else inputs), **kwargs
+    )
 
 
 # Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
@@ -1221,6 +1223,48 @@ def test_moe_compute_local_axis_rejects_width_sharded_output(mesh_device, mesh_s
     )
     with expect_error(RuntimeError, r"does not split a row across column pages"):
         _call_moe_compute_for_rejection(mesh_device, cluster_axis=0, output_memory_config=width_sharded)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "sharded_input", ["expert indices", "expert scores", "expert mapping"], ids=["indices", "scores", "mapping"]
+)
+def test_moe_compute_local_axis_rejects_sharded_routing_metadata(mesh_device, mesh_shape, expect_error, sharded_input):
+    """On a multi-device mesh the local output path reads the token set and its routing metadata
+    (expert indices, scores and mapping) as the same full set at every coordinate, so each of the
+    four must be fully replicated, not only the activations: a dim-0-sharded copy of one of the
+    three routing tensors with replicated activations is rejected before any kernel launch, naming
+    the tensor. Shapes are those of _minimal_rejection_inputs (T=32, k=8, 8 experts); a 1x1 mesh has
+    no topology to check, so the mesh_device fixture skips this on a single card."""
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("a 1x1 mesh has no sharded topology to reject")
+    num_devices = mesh_device.get_num_devices()
+    tokens_per_device, selected_experts_k, experts = 32, 8, 8
+    tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2 = _minimal_rejection_inputs(mesh_device)
+
+    def dim0_sharded(torch_tensor, tt_dtype):
+        return ttnn.from_torch(
+            torch_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=tt_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+    if sharded_input == "expert indices":
+        tt_indices = dim0_sharded(
+            torch.zeros(num_devices, tokens_per_device, selected_experts_k, dtype=torch.uint16), ttnn.uint16
+        )
+    elif sharded_input == "expert scores":
+        tt_scores = dim0_sharded(
+            torch.zeros(num_devices, tokens_per_device, selected_experts_k, dtype=torch.bfloat16), ttnn.bfloat16
+        )
+    else:
+        tt_mapping = dim0_sharded(torch.zeros(num_devices, experts, dtype=torch.uint16), ttnn.uint16)
+    with expect_error(RuntimeError, rf"fully replicated {sharded_input} topology"):
+        _call_moe_compute_for_rejection(
+            mesh_device, inputs=(tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2), cluster_axis=0
+        )
 
 
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])

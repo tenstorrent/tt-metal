@@ -18,6 +18,9 @@
 
 #include <umd/device/types/arch.hpp>
 
+#include <array>
+#include <utility>
+
 namespace ttnn::experimental::prim {
 namespace detail {
 
@@ -165,8 +168,10 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     //   optional_output_tensor is allowed as the combine output sink (6 outputs, no CCL).
     // - LocalOutput: combine_params describes the final [k, T, H] output (6 outputs, no combine
     //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
-    //   that leaves one partial per coordinate for the caller to reduce, so the token set must be
-    //   replicated (every coordinate sees the same tokens). The output is written one token row
+    //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
+    //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
+    //   scores and mapping). Rows of experts a coordinate does not own are written as zero, so
+    //   the partials sum directly. The output is written one token row
     //   (2 x H bytes) at a time through a TensorAccessor page, so its memory config must give
     //   one-row pages: row-major INTERLEAVED or HEIGHT_SHARDED with whole rows per shard (see
     //   detail::validate_local_output_memory_config). The optional_output_tensor, when given, is
@@ -211,12 +216,27 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
                 "got num_shared_experts_per_device={}",
                 args.num_shared_experts_per_device.value_or(0));
             if (mesh_device->num_devices() > 1) {
-                const auto& input_topology = tensor_args.tilize_input_tensor.tensor_topology();
-                for (const auto& placement : input_topology.placements()) {
-                    TT_FATAL(
-                        std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
-                        "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully replicated "
-                        "input topology; the caller reduces the per-device partials");
+                // Every coordinate runs the tilize stage over the whole token set: the input rows,
+                // the expert indices and scores that route them and the expert mapping are all
+                // read as the full set, and dm1 addresses page k * T + t of the output by the
+                // global token id. A sharded copy of any of the four would give the coordinates
+                // different token numberings or partial routing tables, so all four must be
+                // fully replicated. A 1x1 mesh has nothing to check.
+                const std::array<std::pair<const char*, const ttnn::Tensor*>, 4> replicated_inputs{{
+                    {"input", &tensor_args.tilize_input_tensor},
+                    {"expert indices", &tensor_args.tilize_expert_indices_tensor},
+                    {"expert scores", &tensor_args.tilize_expert_scores_tensor},
+                    {"expert mapping", &tensor_args.tilize_expert_mapping_tensor},
+                }};
+                for (const auto& [what, tensor] : replicated_inputs) {
+                    for (const auto& placement : tensor->tensor_topology().placements()) {
+                        TT_FATAL(
+                            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
+                            "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully "
+                            "replicated {} topology (every coordinate reads the whole token set and its routing); "
+                            "the caller reduces the per-device partials",
+                            what);
+                    }
                 }
             }
             const auto& output_memory_config = args.combine_params->output_memory_config;
