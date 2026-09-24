@@ -71,6 +71,24 @@
   "rc": 0,
   "status": "PASS"
  },
+ "P1.3": {
+  "duration_s": 110.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:29:47"
+   }
+  ],
+  "last_run": "2026-09-24T19:29:47",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.3.log",
+  "metrics": {
+   "pcc_hidden": 0.9999999999990485,
+   "pcc_kv_k": 0.9999999999997627,
+   "pcc_kv_v": 0.999999999998518
+  },
+  "rc": 0,
+  "status": "PASS"
+ },
  "P2.1": {
   "duration_s": 10.9,
   "history": [
