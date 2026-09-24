@@ -16,8 +16,6 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
-// fields after the guard that vouches for them.
 // Every field both hosts must lay out identically, mixed so a differing one changes the sum.
 // Not region_bytes: each host pins its own prefix, and the bound on it is checked locally.
 uint64_t geometry_fingerprint(const H2HSocket::Config& cfg) {
@@ -34,6 +32,8 @@ uint64_t geometry_fingerprint(const H2HSocket::Config& cfg) {
     return h;
 }
 
+// A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
+// fields after the guard that vouches for them.
 uint64_t load_acquire(const volatile uint64_t* p) {
     return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
 }
@@ -53,10 +53,20 @@ struct H2HSocket::Impl {
     // outstanding one on another core, and the D2H FIFO is freed per core anyway.
     struct InFlight {
         RdmaWindow::Op op{};
+        // Kept so the trailer can be put in a later pass: the payload put does not carry
+        // the guard, so everything needed to publish it has to survive until then.
+        uint32_t host = 0;
+        uint32_t dest_core = 0;
+        uint32_t slot = 0;
+        uint64_t src_off = 0;
     };
     // 1 tx_queue per core. A shared tx_queue lets a core waiting on credit park every other
     // core's sends behind it, which is the stall the previous design fixed the same way.
     std::vector<std::deque<SendTask>> tx_queue;
+    // Three stages per frame: payload put (tx_payload), then -- once a flush has made it
+    // remotely visible -- the trailer put (tx_flight), then retire on its completion.
+    std::vector<std::deque<InFlight>> tx_payload;
+    std::vector<std::deque<InFlight>> tx_trailer;
     std::vector<std::deque<InFlight>> tx_flight;
     uint64_t in_flight = 0;
     uint64_t tx_queued = 0;
@@ -150,6 +160,13 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
               " hosts is not supported; the RX ring is not partitioned per origin (2 max)";
         return nullptr;
     }
+    // Not just non-zero: the payload put is page_bytes - kFrameTrailerBytes, which wraps
+    // below that and would ask MPI for a nearly 2^64 transfer.
+    if (cfg.page_bytes != 0 && cfg.page_bytes <= kFrameTrailerBytes) {
+        err = "H2HSocket: page_bytes " + std::to_string(cfg.page_bytes) + " leaves no room for the " +
+              std::to_string(kFrameTrailerBytes) + " B trailer";
+        return nullptr;
+    }
     if (cfg.cores == 0 || cfg.page_bytes == 0 || cfg.region_base == nullptr) {
         err = "H2HSocket: cores, page_bytes and region_base are all required";
         return nullptr;
@@ -226,6 +243,8 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.rx_pending.assign(cfg.cores, {});
     im.next_slot.assign(cfg.cores, 0);
     im.tx_queue.assign(cfg.cores, {});
+    im.tx_payload.assign(cfg.cores, {});
+    im.tx_trailer.assign(cfg.cores, {});
     im.tx_flight.assign(cfg.cores, {});
     im.dirty.assign(cfg.topo.num, false);
     return s;
@@ -260,10 +279,43 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         return 0;
     }
 
-    // Retire first, so a completed put frees its slot before the start pass looks. Front
-    // only, per core: bytes_acked is one counter and can only cross a contiguous prefix.
-    // LOAD-BEARING: flush_dirty() below ran a pass earlier, so a put that tests complete here
-    // is already remotely complete. tt_uva_quiet()'s guarantee is exactly that ordering.
+    // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
+    // test(), is the license. test() is still required: it is what returns the request slot.
+    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
+        while (!im.tx_payload[c].empty() && im.win->test(im.tx_payload[c].front().op)) {
+            im.tx_trailer[c].push_back(im.tx_payload[c].front());
+            im.tx_payload[c].pop_front();
+        }
+    }
+
+    // Publish the guard, now that the payload under it is visible. The trailer is one 64 B
+    // line at the slot's tail, so nothing can observe an armed guard over stale bytes.
+    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
+        while (!im.tx_trailer[c].empty()) {
+            Impl::InFlight f = im.tx_trailer[c].front();
+            const uint64_t tail = im.cfg.page_bytes - kFrameTrailerBytes;
+            if (const std::string e = im.win->put(
+                    im.cfg.region_base + f.src_off + tail,
+                    kFrameTrailerBytes,
+                    f.host,
+                    rx_slot_offset(f.dest_core, f.slot, im.cfg.page_bytes, im.cfg.rx_data_offset) + tail,
+                    f.op);
+                !e.empty()) {
+                im.fail("h2h: " + e);
+                break;
+            }
+            im.dirty[f.host] = true;
+            im.tx_flight[c].push_back(f);
+            im.tx_trailer[c].pop_front();
+            ++progress;
+        }
+    }
+    if (im.broken) {
+        return progress;
+    }
+
+    // Retire on the TRAILER's completion: the frame is not delivered until the guard is out,
+    // and the D2H page behind it must outlive both puts. Front only, per core.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
         while (!im.tx_flight[c].empty() && im.win->test(im.tx_flight[c].front().op)) {
             im.tx_flight[c].pop_front();
@@ -311,9 +363,15 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
         const uint32_t slot = static_cast<uint32_t>(im.posted_at(dest_core, host) % im.cfg.ring_pages);
         Impl::InFlight f;
+        f.host = host;
+        f.dest_core = dest_core;
+        f.slot = slot;
+        f.src_off = t.page_offset;
+        // Payload WITHOUT the trailer: one put carrying both lets the peer's ordinary load
+        // see an armed guard before the bytes under it, which MPI nowhere forbids.
         if (const std::string e = im.win->put(
                 im.cfg.region_base + t.page_offset,
-                t.page_bytes,
+                t.page_bytes - kFrameTrailerBytes,
                 host,
                 rx_slot_offset(dest_core, slot, im.cfg.page_bytes, im.cfg.rx_data_offset),
                 f.op);
@@ -323,7 +381,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         }
         im.posted_at(dest_core, host)++;
         im.dirty[host] = true;
-        im.tx_flight[t.core].push_back(f);
+        im.tx_payload[t.core].push_back(f);
         ++im.in_flight;
         im.tx_queue[c].pop_front();
         --im.tx_queued;
@@ -339,8 +397,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // acked frame mean "in the peer's window" rather than "handed to MPI" -- see tt_uva_quiet().
     im.flush_dirty();
 
-    // Harvest arrivals. The trailer is the last thing the peer's put writes, so an armed
-    // guard means the payload ahead of it landed -- see the trailing-flag note.
+    // Harvest arrivals. The peer puts the trailer in a pass AFTER the payload it describes,
+    // with a flush between, so an armed guard means those bytes are already visible.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
         // The whole ring, not one slot: at depth > 1 a later arrival is otherwise invisible
         // until every poll before it has run.
