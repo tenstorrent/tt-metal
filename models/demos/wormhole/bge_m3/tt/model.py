@@ -17,6 +17,20 @@ from models.demos.wormhole.bge_m3.tt.weight_adapter import (
 )
 
 
+def _embedding_output_memcfg(args, mesh_device):
+    """L1 for the embedding lookups at B8/B16/B32 S512 on a grid narrower than 13
+    columns (Galaxy): the embedding LayerNorm then reads them from L1, not DRAM.
+    Other shapes keep DRAM.
+    """
+    if mesh_device is None or args.max_seq_len != 512 or args.max_batch_size not in (8, 16, 32):
+        return None
+    if getattr(args, "data_parallel", False) or not ttnn.device.is_blackhole(mesh_device):
+        return None
+    if int(mesh_device.compute_with_storage_grid_size().x) >= 13:
+        return None
+    return ttnn.L1_MEMORY_CONFIG
+
+
 class BgeM3Model(LightweightModule):
     """
     End-to-end BGE-M3 encoder returning last hidden state [B, 1, S, D].
@@ -56,6 +70,7 @@ class BgeM3Model(LightweightModule):
                 pad_token_id=args.pad_token_id,
                 mesh_device=mesh_device,
                 embedding_dtype=ttnn.bfloat16,
+                output_memcfg=_embedding_output_memcfg(args, mesh_device),
             )
         )
         self.embedding_norm = _build_optional_layer_norm(
@@ -263,6 +278,10 @@ class BgeM3Model(LightweightModule):
                 )
             else:
                 hidden_states = self.embedding_norm(main, residual_input_tensor=position)
+            # Free the lookups now: on the L1 path (_embedding_output_memcfg) they would
+            # stay resident under every layer.
+            ttnn.deallocate(main)
+            ttnn.deallocate(position)
         else:
             hidden_states = self.embeddings(
                 input_ids=input_ids,
