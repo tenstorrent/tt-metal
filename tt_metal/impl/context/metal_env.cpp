@@ -22,6 +22,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
+#include <experimental/mock_device/mock_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
@@ -34,22 +35,37 @@
 
 namespace tt::tt_metal {
 
-// ─── MetalEnvDescriptor ───────────────────────────────────────────────────────
+// ─── MetalEnvTarget ───────────────────────────────────────────────────────────
+
+MetalEnvTarget MetalEnvTarget::silicon() { return MetalEnvTarget(); }
+
+MetalEnvTarget MetalEnvTarget::mock(std::string cluster_desc) {
+    TT_FATAL(!cluster_desc.empty(), "Mock MetalEnvTarget requires a non-empty cluster descriptor");
+    MetalEnvTarget target;
+    target.mock_cluster_desc_ = std::move(cluster_desc);
+    return target;
+}
+
+MetalEnvTarget MetalEnvTarget::mock(tt::ARCH arch, uint32_t num_chips) {
+    auto cluster_desc = experimental::get_mock_cluster_desc_name(arch, num_chips);
+    TT_FATAL(
+        cluster_desc.has_value(),
+        "No mock cluster descriptor for {} with {} chip(s)",
+        tt::arch_to_str(arch),
+        num_chips);
+    return mock(std::move(*cluster_desc));
+}
+
+const std::string& MetalEnvTarget::mock_cluster_desc() const {
+    TT_FATAL(mock_cluster_desc_.has_value(), "MetalEnvTarget is not a mock target");
+    return *mock_cluster_desc_;
+}
+
+// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 std::mutex MetalEnvImpl::s_registry_mutex_;
 std::set<MetalEnvImpl*> MetalEnvImpl::s_registry_;
 std::once_flag MetalEnvImpl::s_atfork_registered_;
-
-MetalEnvDescriptor::MetalEnvDescriptor(const std::string& mock_cluster_desc_path) :
-    mock_cluster_desc_path_(
-        mock_cluster_desc_path.empty() ? std::nullopt : std::optional<std::string>(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(
-    std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)), fabric_config_desc_(fabric_config_desc) {}
-
-// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 void MetalEnvImpl::prefork_check_all() {
     std::lock_guard<std::mutex> lock(s_registry_mutex_);
@@ -63,7 +79,7 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     verify_fw_capabilities();
 
     // Apply fabric config from descriptor
-    const auto& fc = descriptor_.fabric_config_descriptor();
+    const auto& fc = descriptor_.fabric;
     fabric_config_ = fc.fabric_config;
     fabric_reliability_mode_ = fc.reliability_mode;
     fabric_tensix_config_ = fc.fabric_tensix_config;
@@ -161,9 +177,10 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
 void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
-    if (descriptor_.is_mock_device()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", descriptor_.mock_cluster_desc_path());
-        this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
+    if (descriptor_.target.is_mock()) {
+        log_info(
+            tt::LogMetal, "Using programmatically configured mock mode: {}", descriptor_.target.mock_cluster_desc());
+        this->rtoptions_->set_mock_cluster_desc(descriptor_.target.mock_cluster_desc());
     }
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);

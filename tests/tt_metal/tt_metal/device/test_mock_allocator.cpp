@@ -34,8 +34,8 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
-        mock_env_ = std::make_unique<MetalEnv>(
-            MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
+        mock_env_ =
+            std::make_unique<MetalEnv>(MetalEnvDescriptor{.target = MetalEnvTarget::mock(tt::ARCH::WORMHOLE_B0, 1)});
         auto mesh_shape = mock_env_->get_system_mesh().shape();
         mock_device_ = mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mesh_shape));
         ASSERT_GT(mock_device_->num_devices(), 0u);

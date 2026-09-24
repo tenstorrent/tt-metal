@@ -30,29 +30,40 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricRouterConfig router_config = {};
 };
 
-// Configuration for a MetalEnv.
+// The cluster a MetalEnv binds to.
 //
-// The default descriptor discovers and connects to the physical cluster present in the system.
-// A custom MetalEnvDescriptor can be supplied to target a mock/simulated cluster instead.
-//
-// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations.
-class MetalEnvDescriptor {
+// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations. There is no limit on
+// the number of mock clusters.
+class MetalEnvTarget {
 public:
-    MetalEnvDescriptor() = default;
+    // The physical cluster present in the system.
+    static MetalEnvTarget silicon();
 
-    explicit MetalEnvDescriptor(const std::string& mock_cluster_desc_path);
+    // A mock cluster described by a cluster descriptor YAML: either a path, or a bare filename that is searched for
+    // in the known cluster descriptor directories. Fatal if `cluster_desc` is empty.
+    static MetalEnvTarget mock(std::string cluster_desc);
 
-    explicit MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
+    // A mock cluster of `num_chips` chips of `arch`. Fatal if no cluster descriptor exists for the combination.
+    static MetalEnvTarget mock(tt::ARCH arch, uint32_t num_chips);
 
-    MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc);
+    bool is_mock() const { return mock_cluster_desc_.has_value(); }
 
-    bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
-    const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
-    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_config_desc_; }
+    // Fatal if this is not a mock target.
+    const std::string& mock_cluster_desc() const;
 
-protected:
-    std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
-    FabricConfigDescriptor fabric_config_desc_;
+private:
+    MetalEnvTarget() = default;
+
+    std::optional<std::string> mock_cluster_desc_;
+};
+
+// Configuration for a MetalEnv. The default targets the physical cluster with fabric disabled.
+//
+//     MetalEnv env({.target = MetalEnvTarget::mock(tt::ARCH::BLACKHOLE, 2),
+//                   .fabric = {.fabric_config = tt_fabric::FabricConfig::FABRIC_2D}});
+struct MetalEnvDescriptor {
+    MetalEnvTarget target = MetalEnvTarget::silicon();
+    FabricConfigDescriptor fabric = {};
 };
 
 class MetalEnvImpl;
