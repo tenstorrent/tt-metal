@@ -12,7 +12,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <internal/cluster_noc_helpers.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
@@ -23,10 +24,6 @@ namespace {
 
 namespace dist = tt::tt_metal::distributed;
 
-ttsl::Span<const std::byte> byte_span(const void* p, std::size_t n) {
-    return ttsl::Span<const std::byte>(static_cast<const std::byte*>(p), n);
-}
-
 }  // namespace
 
 // Single-threaded by design: the caller drives poll(). No atomics, no locks.
@@ -35,6 +32,9 @@ struct D2HLeg::Impl {
     uint32_t page_size = 0;
     uint32_t fifo_bytes = 0;
     uint32_t device_id = 0;
+    // The mesh's own cluster, not MetalContext::instance(): a leg built from a
+    // non-default context must not write control words through the default one.
+    const Cluster* cluster = nullptr;
 
     // Everything one core owns, in one place. `fifo`/`bytes_sent`/`connector` point into
     // the alias; the counters are bytes, the watermarks are frames.
@@ -116,6 +116,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
         return nullptr;
     }
     im.device_id = static_cast<uint32_t>(devices.front()->id());
+    im.cluster = &mesh->impl().metal_context().get_cluster();
 
     const uint32_t n = cfg.cores;
     im.core.resize(n);
@@ -287,12 +288,11 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
         im.core[core].connector->read_ptr = im.core[core].read_ptr;
     }
     const auto& v = im.core[core].virt;
-    tt::tt_metal::internal::noc_write_immediate(
-        im.device_id,
-        static_cast<uint32_t>(v.x),
-        static_cast<uint32_t>(v.y),
-        im.core[core].cfg_addr + im.core[core].acked_dev_off,
-        byte_span(&im.core[core].acked, sizeof(uint32_t)));
+    im.cluster->write_core_immediate(
+        &im.core[core].acked,
+        sizeof(uint32_t),
+        tt_cxy_pair(im.device_id, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)),
+        im.core[core].cfg_addr + im.core[core].acked_dev_off);
 }
 
 // Only on change: an unchanged counter is a PCIe write the kernel would not notice.
@@ -304,12 +304,11 @@ void D2HLeg::credit(uint32_t core, uint64_t pages) {
     }
     im.core[core].credited = v;
     const auto& c = im.core[core].virt;
-    tt::tt_metal::internal::noc_write_immediate(
-        im.device_id,
-        static_cast<uint32_t>(c.x),
-        static_cast<uint32_t>(c.y),
-        im.cfg.consumed_addr,
-        byte_span(&im.core[core].credited, sizeof(uint32_t)));
+    im.cluster->write_core_immediate(
+        &im.core[core].credited,
+        sizeof(uint32_t),
+        tt_cxy_pair(im.device_id, static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y)),
+        im.cfg.consumed_addr);
 }
 
 uint32_t D2HLeg::page_size() const { return impl_->page_size; }
