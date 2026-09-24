@@ -165,6 +165,9 @@ struct H2HSocket::Impl {
                 const uint64_t seen = credit_seen(c, h);
                 uint64_t& closed = credit_closed_at(c, h);
                 for (; closed < seen; ++closed) {
+                    if (put_to_credit_ns.size() >= kMaxTimingSamples) {
+                        continue;
+                    }
                     const auto d = now - put_at_of(c, h, closed);
                     put_to_credit_ns.push_back(
                         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
