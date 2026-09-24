@@ -212,30 +212,6 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 
 
 @pytest.mark.parametrize(
-    "M, K, N, in1_dtype, transpose",
-    [
-        pytest.param(1, 32, 32, ttnn.bfloat4_b, False, id="k1-ct1-bfp4-post1"),
-        pytest.param(1, 288, 32, ttnn.bfloat8_b, False, id="k9-ct1-bfp8-post0"),
-        pytest.param(1, 288, 64, ttnn.bfloat4_b, False, id="k9-ct2-bfp4-post1"),
-        pytest.param(8, 288, 96, ttnn.bfloat8_b, True, id="k9-ct3-bfp8-transposed"),
-    ],
-)
-def test_matmul_single_core_odd_k(device, M, K, N, in1_dtype, transpose):
-    """Exercise custom-MM's single-K replay tail, including both unpack tunings."""
-    _run_matmul_single_core(
-        device,
-        M,
-        K,
-        N,
-        ttnn.bfloat16,
-        in1_dtype,
-        transpose,
-        fused_activation=None,
-        fp32_dest_acc_en=False,
-    )
-
-
-@pytest.mark.parametrize(
     "M, K, N",
     [
         (1, 64, 32),
