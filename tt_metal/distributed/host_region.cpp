@@ -49,7 +49,7 @@ uint8_t* map_region(uint64_t bytes) {
     return reinterpret_cast<uint8_t*>(aligned);
 }
 
-void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Grid grid) {
+void validate_shape(uint32_t chip, uint32_t cores_in_use, HostTopology topology, HostRegion::Grid grid) {
     std::string m;
     // The only bound the arenas need: both legs assign core i to logical{i%w, i/w}, so
     // tt_uva_core_index() of a used core IS i. The full grid's extent is irrelevant -- do not re-add it.
@@ -57,10 +57,16 @@ void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Gr
         m = fmt::format("cores_in_use {} is outside 1..{}", cores_in_use, kProvisionedCores);
     } else if (!host_topology_ok(topology)) {
         m = fmt::format(
-            "topology ident={} num={} chips_per_host={} does not fit the 12-bit UVA selector",
+            "topology ident={} num={} chips_per_host={} exceeds the {}-host credit table or the "
+            "12-bit UVA selector",
             topology.ident,
             topology.num,
-            topology.chips_per_host);
+            topology.chips_per_host,
+            kMaxHosts);
+    } else if (chip >= topology.chips_per_host) {
+        // tt_uva_t6_slot() is host * chips_per_host + chip, so an out-of-range chip lands on
+        // the next host's slot and every frame it sends names someone else's core.
+        m = fmt::format("chip {} is outside 0..{} for chips_per_host", chip, topology.chips_per_host - 1);
     } else if (grid.width == 0 || grid.height == 0) {
         m = "grid width/height must be non-zero; they are part of the wire contract";
     } else if (cores_in_use > grid.width * grid.height) {
@@ -275,7 +281,7 @@ void HostRegion::provision(
         throw std::runtime_error(fmt::format(
             "provision asks for {} cores but the region was sized for {}", cores_in_use, reserved_cores_));
     }
-    validate_shape(cores_in_use, topology, grid);
+    validate_shape(chip, cores_in_use, topology, grid);
 
     const uint64_t want = pinned_bytes_for(cores_in_use);
 
