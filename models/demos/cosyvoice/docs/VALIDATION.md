@@ -167,14 +167,18 @@ where the core-grid win that is large at `K = 4096` nearly vanishes. `PERF.md`
 
 ## Open defects
 
-### `test_streaming_perf` hangs on Wormhole
+### `test_streaming_perf` hangs on Wormhole and can take a Blackhole CI host down
 
 `tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedges
-n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackhole
-boards run it. It skips on Wormhole, because a wedged board costs every later test in
-the run. `synthesize_streaming` itself runs on n300, where
-`test_device_streaming_generates_the_same_tokens_as_batch` passes; what has no Wormhole
-figure is this test's head-to-head timing.
+n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. On Blackhole it
+completes on a p150a and a p150b, but in the upstream CI on `bh_p150` two consecutive
+runs of the perf suite lost the runner about 12 minutes in, and a run without this file
+completed. So it is off by default on both architectures: `COSYVOICE_STREAMING_PERF=1`
+runs it on Blackhole, and Wormhole skips it either way, because a lost or wedged machine
+costs every later test in the run. `synthesize_streaming` itself runs on n300; its
+`peak < 1.5` check in `test_device_streaming_generates_the_same_tokens_as_batch` is not
+yet measured there with the persistent carry buffers, and this test's head-to-head
+timing has no Wormhole figure.
 
 The cause is not established. Ruled out:
 
@@ -206,8 +210,8 @@ The reverse warm order — capture the decode trace first, then run the flow dec
 the vocoder through it — completes on Blackhole:
 `scripts/probe_warm_order.py --order reversed` finishes on `p150a` in 6.2 s with a warm
 JIT cache and 273.8 s with a cleared one, 248 s of that compiling kernels under the live
-trace. It is untested on n300, where the next step is to run `test_streaming_perf`
-unskipped.
+trace. It is untested on n300, where the next step is to run `test_streaming_perf` with
+its Wormhole skip removed.
 
 ### A longer streamed utterance wedges the board
 

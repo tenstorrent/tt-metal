@@ -58,6 +58,15 @@ needs_weights = pytest.mark.skipif(
 needs_golden = pytest.mark.skipif(
     not os.path.exists(os.path.join(GOLDEN_DIR, "llm.ar_forward_chunk.npz")), reason="generate goldens first"
 )
+# Off unless asked for, on both architectures: the test wedges n300, and on Blackhole CI it
+# can take the runner host down partway through the perf suite. Neither cause is established
+# (`docs/VALIDATION.md`), and a lost machine costs every later test in the run.
+# `COSYVOICE_STREAMING_PERF=1` runs it on Blackhole; Wormhole stays skipped either way.
+opt_in = pytest.mark.skipif(
+    os.environ.get("COSYVOICE_STREAMING_PERF") != "1",
+    reason="opt-in (COSYVOICE_STREAMING_PERF=1): it has taken CI hosts down on Blackhole and wedges n300; "
+    "see docs/VALIDATION.md",
+)
 
 
 # The utterance is vocoded twice on each schedule -- once to warm, once to measure --
@@ -70,6 +79,7 @@ needs_golden = pytest.mark.skipif(
 # Without it, every configuration of the perf suite recompiles everything, and this
 # test is where that shows up first.
 @pytest.mark.timeout(3600)
+@opt_in
 @needs_weights
 @needs_golden
 @needs_l1_small
@@ -77,7 +87,7 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # Skipped on Wormhole: this test wedges n300, cause not established.
+    # Wormhole stays skipped even when opted in: this test wedges n300, cause not established.
     # `docs/VALIDATION.md` has what is ruled out and what to try next.
     if "WORMHOLE" in str(device.arch()).upper():
         pytest.skip("hangs Wormhole n300, cause not established; see docs/VALIDATION.md and PERF.md, Known limitations")
