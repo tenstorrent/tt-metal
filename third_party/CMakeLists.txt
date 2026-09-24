@@ -189,7 +189,8 @@ endif()
 # Backs ttsl::move_only_function (GitHub #57444). Header only, and its headers are installed
 # because tt_stl/move_only_function.hpp is public API and includes them.
 #
-# Pinned by commit rather than tag: zoo publishes no tags, only branches.
+# Pinned by commit rather than tag: zoo publishes no tags, only branches. Use the source archive
+# to exclude test-only submodules; CPM 0.40.2 does not preserve an empty GIT_SUBMODULES argument.
 #
 # tests/tt_stl/move_only_function_bench/CMakeLists.txt pins a commit too, but for a different
 # reason: it is the commit the published evaluation was measured against. The two are equal today
@@ -197,13 +198,15 @@ endif()
 # confirm the comparison still holds before moving its pin.
 #
 # Note zoo does not compile under -fno-rtti, with or without the RTTI affordance -- the typeid
-# tokens in VTablePolicy.h and FunctionPolicy.h are rejected at parse time. That is fine for the
+# tokens in VTablePolicy.h are rejected at parse time. That is fine for the
 # host build; device kernels are compiled -fno-rtti but do not include tt_stl.
 if(NOT DEFINED zoo_SOURCE_DIR)
     CPMAddPackage(
         NAME zoo
-        GITHUB_REPOSITORY thecppzoo/zoo
-        GIT_TAG 7fb5eed6331651e9d94c0f7e9017f2d56ba4b993
+        URL
+            https://github.com/thecppzoo/zoo/archive/7fb5eed6331651e9d94c0f7e9017f2d56ba4b993.tar.gz
+            URL_HASH
+            SHA256=298bc7f928044f6eed40c7135c62329dc1fb6234187b5dd191f94a400a6ab9a0
         DOWNLOAD_ONLY YES
     )
 endif()

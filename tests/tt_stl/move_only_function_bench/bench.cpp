@@ -4,11 +4,12 @@
 
 // Evaluation harness for GitHub issue #57444: pick the implementation to back
 // ttsl::move_only_function. Compares zoo and fu2 against std::function at a common inline
-// capacity. See README.md for how to run and how to read the numbers.
+// capacity, and the shipped wrapper at its fixed capacity. See README.md.
 
 #include "candidates.hpp"
 
 #include <benchmark/benchmark.h>
+#include <tt_stl/move_only_function.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -35,6 +36,7 @@ using bench::kInlinePointers;
 using StdFn = bench::StdFunction<void()>;
 using ZooFn = bench::ZooFunction<void()>;
 using Fu2Fn = bench::Fu2Function<void()>;
+using TtslFn = ttsl::move_only_function<void()>;
 
 // Captures sized to sit either side of kInlineBytes.
 struct SmallCapture {
@@ -178,7 +180,8 @@ struct SizeReport {
     SizeReport() {
         std::printf(
             "inline capacity in use: %zu B (%s)\n"
-            "sizes: std::function=%zu/%zu zoo=%zu/%zu fu2=%zu/%zu (bytes: sizeof/alignof)\n",
+            "sizes: std::function=%zu/%zu zoo=%zu/%zu fu2=%zu/%zu ttsl=%zu/%zu (bytes: sizeof/alignof)\n"
+            "ttsl inline capacity: %zu B\n",
             kInlineBytes,
             bench::kStdlibName,
             sizeof(StdFn),
@@ -186,7 +189,10 @@ struct SizeReport {
             sizeof(ZooFn),
             alignof(ZooFn),
             sizeof(Fu2Fn),
-            alignof(Fu2Fn));
+            alignof(Fu2Fn),
+            sizeof(TtslFn),
+            alignof(TtslFn),
+            ttsl::detail::kMoveOnlyFunctionInlinePointers * sizeof(void*));
     }
 };
 const SizeReport g_size_report{};
@@ -204,16 +210,19 @@ void* operator new(std::size_t size) {
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
-#define BENCH_ALL_CAPTURES(bm)                      \
-    BENCHMARK_TEMPLATE(bm, StdFn, SmallCapture);    \
-    BENCHMARK_TEMPLATE(bm, ZooFn, SmallCapture);    \
-    BENCHMARK_TEMPLATE(bm, Fu2Fn, SmallCapture);    \
-    BENCHMARK_TEMPLATE(bm, StdFn, BoundaryCapture); \
-    BENCHMARK_TEMPLATE(bm, ZooFn, BoundaryCapture); \
-    BENCHMARK_TEMPLATE(bm, Fu2Fn, BoundaryCapture); \
-    BENCHMARK_TEMPLATE(bm, StdFn, LargeCapture);    \
-    BENCHMARK_TEMPLATE(bm, ZooFn, LargeCapture);    \
-    BENCHMARK_TEMPLATE(bm, Fu2Fn, LargeCapture)
+#define BENCH_ALL_CAPTURES(bm)                       \
+    BENCHMARK_TEMPLATE(bm, StdFn, SmallCapture);     \
+    BENCHMARK_TEMPLATE(bm, ZooFn, SmallCapture);     \
+    BENCHMARK_TEMPLATE(bm, Fu2Fn, SmallCapture);     \
+    BENCHMARK_TEMPLATE(bm, TtslFn, SmallCapture);    \
+    BENCHMARK_TEMPLATE(bm, StdFn, BoundaryCapture);  \
+    BENCHMARK_TEMPLATE(bm, ZooFn, BoundaryCapture);  \
+    BENCHMARK_TEMPLATE(bm, Fu2Fn, BoundaryCapture);  \
+    BENCHMARK_TEMPLATE(bm, TtslFn, BoundaryCapture); \
+    BENCHMARK_TEMPLATE(bm, StdFn, LargeCapture);     \
+    BENCHMARK_TEMPLATE(bm, ZooFn, LargeCapture);     \
+    BENCHMARK_TEMPLATE(bm, Fu2Fn, LargeCapture);     \
+    BENCHMARK_TEMPLATE(bm, TtslFn, LargeCapture)
 
 BENCH_ALL_CAPTURES(BM_ConstructInvokeDestroy);
 BENCH_ALL_CAPTURES(BM_MoveConstruct);
@@ -222,9 +231,11 @@ BENCH_ALL_CAPTURES(BM_MoveAssign);
 BENCHMARK(BM_MoveOnlyCapture_Std);
 BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, ZooFn);
 BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, Fu2Fn);
+BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, TtslFn);
 
 BENCHMARK_TEMPLATE(BM_QueueThroughput, StdFn, SmallCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_QueueThroughput, ZooFn, SmallCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_QueueThroughput, Fu2Fn, SmallCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_QueueThroughput, TtslFn, SmallCapture)->Arg(1024);
 
 BENCHMARK_MAIN();
