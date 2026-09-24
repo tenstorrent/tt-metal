@@ -242,6 +242,30 @@ python models/demos/blackhole/pplx_embed_4b/demo/eval_accuracy_tt.py --pool mask
 
 ---
 
+#### Accuracy through the batched paths (bs8/16/32)
+
+`eval_accuracy_tt.py` encodes one text per forward, so it never runs the batched kernels and program
+configs. `demo/eval_accuracy_batched.py` runs STS-B through the perf demo's exact batch-B
+configuration (`apply_workload_env(B, 512)`, eager forward, final RMSNorm on host, masked mean over
+the real tokens; fixed ISL 512, no bucketing, no attention mask, so the numbers compare across batch
+sizes but sit below the bucketed bs1 script's 0.8161):
+
+```bash
+TT_VISIBLE_DEVICES=10 python models/demos/blackhole/pplx_embed_4b/demo/eval_accuracy_batched.py --batch 8 --save /tmp/embs_B8.pt
+```
+
+| path | STS-B Spearman (masked mean) | per-text cosine vs batch 1 (mean / p1) | 1379 pair-cosines vs batch 1 (Pearson) |
+|---|---|---|---|
+| batch 1 | 0.8121 | — | — |
+| batch 8 | 0.8123 | 0.983 / 0.917 | 0.9946 |
+| batch 16 | 0.8140 | 0.983 / 0.912 | 0.9943 |
+| batch 32 | 0.8159 | 0.982 / 0.908 | 0.9933 |
+
+Measured 2026-09-24 with the shipped defaults (row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved
+weights at bs32, bfp4 weights, bfp8 activations). The per-text spread is the bfp8 pipeline's normal
+sensitivity (a benign kernel change moves per-token cosines by a similar amount after 36 layers, see
+the negatives file §16/§33); the task metric is unchanged or better at every batch size.
+
 ## 4. Embedding API
 
 Build the model once with `build_single_device_model()` and wrap it in a
