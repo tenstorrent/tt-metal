@@ -6,10 +6,9 @@
 // counter, as instants the host places records by.
 //
 // Runs on one idle ethernet core per chip for the life of the profiling session, and does nothing but sample: the
-// bracket loop below and the local clock model. Its instants go to a ring in its L1 (kSyncRingAddr, tail in its
+// sampler below and the local clock model. Its instants go to a ring in its L1 (kSyncRingAddr, tail in its
 // control block) that the drainer on a second idle core (eth_clock_drainer.cpp) ships to the host over the NoC;
-// that core also ships this one's firmware markers and the active eth cores' rings. Anything this loop did besides
-// sampling was a hole in the samples that a frequency glide bent across.
+// that core also ships this one's firmware markers and the active eth cores' rings.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -35,19 +34,17 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 // the sample count behind it; a new k8, or a CLOSE point, starts the next segment, and two consecutive segments meet
 // where their lines cross.
 //
-// A sample brackets one wall-clock read between two refclk reads and counts only when the refclk changed inside
-// the bracket. The three loads pipeline, so the bracket is a couple of AICLK cycles wide (measured: the counter
-// changes inside it on 2 % of iterations), and the refclk the ERISC reads advances in steps of 4 ticks, 80 ns
-// apart: a counted sample is the wall time of one such update to within a cycle, with no quantisation noise, and
-// the update is uniform over the bracket, which is symmetric about the wall read, so there is no read-latency
-// term either. About one update in fifty is caught, one every ~5 us; a fresh segment's intercept is at a quarter
-// of a tick after 16 of them and keeps improving as 1/sqrt(n), and the host never places a record on a line drawn
-// through a handful of points.
+// A sample is one advance of the refclk the ERISC reads (it moves in steps of 4 ticks, 80 ns apart) caught between
+// two consecutive refclk reads of the sampler below, and placed at the centre of that pair: the wall time of one
+// update to within half the pair's width, with no quantisation noise, and unbiased, the update being uniform over
+// the pair. About one update in three or four is caught; a fresh segment's intercept is at a quarter of a tick after
+// 16 of them and keeps improving as 1/sqrt(n), and the host never places a record on a line drawn through a handful
+// of points.
 //
 // A step shows as kConfirm consecutive samples off the line by more than kOffTicks. The old segment's last on-line
 // sample closes it; the new slope is locked once the newest kWinTicks of samples lie on one line, which rejects the
-// PLL's glide. Nothing here is a typed-in correction: the bracket cancels the read latency by construction, k8 is
-// integer arithmetic, and the intercept is a mean.
+// PLL's glide. Nothing here is a typed-in correction: the pairs' widths are measured, k8 is integer arithmetic, and
+// the intercept is a mean.
 
 // This core's instants, in a ring of kSyncRingRecords the drainer reads over the NoC: the tail is published in the
 // control block, the drainer writes the count it consumed back beside it. An instant the ring has no room for is
@@ -96,12 +93,9 @@ constexpr uint32_t kWinSpreadTicks = 14;   // one line's samples spread less tha
 constexpr uint32_t kAcqTestEvery = 64;     // samples between lock tests: a scan of the window every ~30 us
 constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
 constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
-// While no line holds (a step's acquisition, which a PLL glide of tens of ms keeps failing), the bracketed samples
-// go out as points, k8 0, as few as keep the host's chord through them within kRawEpsTicks of every sample: the map
-// then bends through the glide instead of bridging it with one chord (whose error is the frequency change times the
-// seam length over eight -- hundreds of us for a 7% ramp over 30 ms). A slow ramp costs a point every ~80 us, a
-// fast one a point a sample while it lasts.
-constexpr int64_t kRawEpsTicks = 1;       // 0.7 ns: the means it applies to carry ~1 cycle of noise themselves
+// While no line holds (a step's acquisition, which a PLL glide keeps failing), every kRawMean samples go out as one
+// point, their mean, k8 0: the map then bends through the glide instead of bridging it with one chord (whose error is
+// the frequency change times the seam length over eight).
 constexpr uint32_t kCountMax = 1u << 22;  // the residue sum stops here, and it stays in 32 bits
 // A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
@@ -134,23 +128,17 @@ struct Model {
     uint32_t max_d8 = 0;  // the largest |residual| of an on-line sample since the last point, in eighths
     uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
     uint32_t win_i = 0;   // the oldest ring entry within kWinTicks of the newest sample (try_lock's window)
-    // Acquisition's raw points: the anchor (the last point sent), the previous sample, and the cone of chord slopes
-    // from the anchor that keep every sample since within kRawEpsTicks, as fractions n/d with d > 0.
-    uint64_t raw_r0 = 0, raw_w0 = 0, raw_rp = 0, raw_wp = 0;
-    int32_t lo_n = 0, lo_d = 1, hi_n = 0, hi_d = 1;  // 32-bit: a seam's spans stay under 2^31; the products are 64
-    bool cone = false;
     // The last kWin samples, in this RISC's local memory (the L1 ring above is for the lock test; reading it back
-    // costs an L1 miss per word). A raw instant is the mean of the last kRawMean of them, taken every kRawStride.
-    // The mean of samples spread over a bending stretch sits above the curve by the curvature times the spread's
-    // variance over two: four samples over ~1.8 us put every seam instant ~0.6 cycles off, two over ~0.5 us a tenth
-    // of that, and their noise (a sample is within half a cycle or a cycle and a half of the truth) is what the
-    // cone's eps is sized for. A mean must not span a hole in the samples (it would average across the glide's
-    // bend): win_from is the first sample after the last one.
+    // costs an L1 miss per word). A raw instant is the mean of kRawMean of them, each sample in one instant. The mean
+    // of samples spread over a bending stretch sits above the curve by the curvature times the spread's variance over
+    // two: four samples over ~0.75 us put an instant ~0.2 cycles off in the steepest glide at 0.8 GHz, while their
+    // mean halves a sample's noise (within half a cycle to a cycle and a half of the truth). A mean must not span a
+    // hole in the samples (it would average across the glide's bend): win_from is the first sample after the last one.
     static constexpr uint32_t kWin = 16;
     uint64_t win_r[kWin] = {}, win_w8[kWin] = {};
     uint32_t win_n = 0;     // samples pushed; the newest is win_r[(win_n - 1) & (kWin - 1)]
     uint32_t win_from = 0;  // the first sample a mean may include
-    uint32_t onset = 0;     // means still to send as they form: a seam's first, where the glide is steepest
+    uint32_t since = 0;     // samples since the last instant
 };
 
 inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w8) {
@@ -180,47 +168,7 @@ inline void write_point(Model& m, uint64_t r, uint32_t role) {
 // A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
 inline void write_raw_point(Model& m, uint64_t r, uint64_t w8) {
     m.r_last_point = r;
-    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w8, 8u * static_cast<uint32_t>(kRawEpsTicks));
-}
-// One acquisition sample: the seam's first becomes a point and the anchor; then the cone narrows with each sample,
-// and the sample that empties it makes the previous one the next point and anchor.
-constexpr int32_t kRawEps8 = 8 * static_cast<int32_t>(kRawEpsTicks);
-__attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w8) {
-    if (m.raw_r0 == 0) {
-        write_raw_point(m, r, w8);
-        m.raw_r0 = m.raw_rp = r;
-        m.raw_w0 = m.raw_wp = w8;
-        m.cone = false;
-        return;
-    }
-    const int32_t dr = static_cast<int32_t>(r - m.raw_r0), dw = static_cast<int32_t>(w8 - m.raw_w0);
-    const int32_t lo = dw - kRawEps8, hi = dw + kRawEps8;
-    if (!m.cone) {
-        m.lo_n = lo;
-        m.hi_n = hi;
-        m.lo_d = m.hi_d = dr;
-        m.cone = true;
-    } else {
-        if (static_cast<int64_t>(lo) * m.lo_d > static_cast<int64_t>(m.lo_n) * dr) {
-            m.lo_n = lo;
-            m.lo_d = dr;
-        }
-        if (static_cast<int64_t>(hi) * m.hi_d < static_cast<int64_t>(m.hi_n) * dr) {
-            m.hi_n = hi;
-            m.hi_d = dr;
-        }
-        if (static_cast<int64_t>(m.lo_n) * m.hi_d > static_cast<int64_t>(m.hi_n) * m.lo_d) {
-            write_raw_point(m, m.raw_rp, m.raw_wp);
-            m.raw_r0 = m.raw_rp;
-            m.raw_w0 = m.raw_wp;
-            const int32_t dr2 = static_cast<int32_t>(r - m.raw_r0), dw2 = static_cast<int32_t>(w8 - m.raw_w0);
-            m.lo_n = dw2 - kRawEps8;
-            m.hi_n = dw2 + kRawEps8;
-            m.lo_d = m.hi_d = dr2;
-        }
-    }
-    m.raw_rp = r;
-    m.raw_wp = w8;
+    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w8, 0u);
 }
 inline void begin_acquire(Model& m, uint64_t r_from) {
     m.k8 = 0;
@@ -228,17 +176,15 @@ inline void begin_acquire(Model& m, uint64_t r_from) {
     m.sum = 0;
     m.r_acq0 = r_from;
     m.acq_count = 0;
-    m.raw_r0 = 0;
-    m.cone = false;
+    m.since = 0;
     m.win_i = m.ring_n;
 }
-constexpr uint32_t kRawMean = 2;
-constexpr uint32_t kRawStride = 1;
+constexpr uint32_t kRawMean = 4;
 constexpr uint32_t kGroupGapTicks = 125;  // 2.5 us
-static_assert((kRawMean & (kRawMean - 1)) == 0 && (kRawMean % kRawStride) == 0);
+static_assert((kRawMean & (kRawMean - 1)) == 0);
 constexpr uint32_t kRawMeanShift = __builtin_ctz(kRawMean);
 inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w8) {
-    if (m.win_n != 0 && r - m.win_r[(m.win_n - 1) & (Model::kWin - 1)] > kGroupGapTicks) {
+    if (m.win_n != 0 && static_cast<uint32_t>(r - m.win_r[(m.win_n - 1) & (Model::kWin - 1)]) > kGroupGapTicks) {
         m.win_from = m.win_n;
     }
     m.win_r[m.win_n & (Model::kWin - 1)] = r;
@@ -256,26 +202,17 @@ inline void win_mean(const Model& m, uint32_t end, uint64_t& mr, uint64_t& mw8) 
     mr = sr >> kRawMeanShift;
     mw8 = (sw + (kRawMean / 2)) >> kRawMeanShift;
 }
-inline void send_onset_mean(Model& m, uint64_t mr, uint64_t mw8) {
-    write_raw_point(m, mr, mw8);
-    m.raw_r0 = m.raw_rp = mr;
-    m.raw_w0 = m.raw_wp = mw8;
-    m.cone = false;
-}
 __attribute__((noinline)) void raw_sample(Model& m) {
-    if (m.win_n - m.win_from < kRawMean || (m.onset == 0 && (m.win_n % kRawStride) != 0)) {
+    if (++m.since < kRawMean) {
+        return;
+    }
+    m.since = 0;
+    if (m.win_n - m.win_from < kRawMean) {
         return;
     }
     uint64_t mr, mw;
     win_mean(m, m.win_n, mr, mw);
-    if (m.onset == 0) {
-        raw_feed(m, mr, mw);
-        return;
-    }
-    // The cone would hold each of these back until the next one arrived, and the stride would halve them; here
-    // every 0.3 us matters.
-    m.onset--;
-    send_onset_mean(m, mr, mw);
+    write_raw_point(m, mr, mw);
 }
 
 // Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
@@ -334,7 +271,6 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
 // off sample, where the samples still sat on it, the slope acquisition restarts from the departure, and those
 // samples and the confirming ones open the seam, so the onset is placed from measurements, not from the line.
 constexpr uint32_t kPreSamples = 8;
-constexpr uint32_t kOnsetMeans = 14;  // live means sent as they form after the replay's, one a sample, ~4 us
 __attribute__((noinline, cold)) void step(Model& m) {
     constexpr uint32_t back = kConfirm + kPreSamples;
     static_assert(back % kRawMean == 0);
@@ -343,63 +279,46 @@ __attribute__((noinline, cold)) void step(Model& m) {
     begin_acquire(m, m.r_dep);
     // The seam's first instants, the means over those samples, from local memory: every cycle here is a sample
     // not taken at the onset, the glide's steepest microseconds.
-    for (uint32_t end = m.win_n - back + kRawMean; end <= m.win_n; end += kRawStride) {
+    for (uint32_t end = m.win_n - back + kRawMean; end <= m.win_n; end += kRawMean) {
         if (end - kRawMean < m.win_from) {
             continue;
         }
         uint64_t mr, mw;
         win_mean(m, end, mr, mw);
-        send_onset_mean(m, mr, mw);
+        write_raw_point(m, mr, mw);
     }
-    m.onset = kOnsetMeans;
 }
 
-inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w8) {
+// A sample while no line holds: the ring (the lock test's window) gets it, and the seam its instants.
+__attribute__((noinline)) void acquire(Model& m, uint64_t r, uint64_t w8) {
     ring_push(m, r, w8);
-    win_push(m, r, w8);
-    if (m.k8 == 0) {
-        advance_window(m, r);
-        if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
-            m.acq_count = 0;
-            if (try_lock(m, r)) {
-                return;
-            }
-        }
-        raw_sample(m);
-        return;
-    }
-    const int64_t e = static_cast<int64_t>(w8 - m.wa8) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
-    const int64_t d = e - m.c8;
-    if (d > 8 * kOffTicks || d < -8 * kOffTicks) {
-        if (m.off++ == 0) {
-            m.r_dep = r;
-        }
-        if (m.off >= kConfirm) {
-            step(m);
-        }
-        return;
-    }
-    m.off = 0;
-    m.r_last_on = r;
-    const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
-    m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
-    if (m.n >= (1u << kEmaShift)) {
-        m.ema += static_cast<int32_t>(e) - (m.ema >> kEmaShift);
-        m.c8 = (m.ema + (1 << (kEmaShift - 1))) >> kEmaShift;
-    }
-    if (m.n < kCountMax) {
-        m.sum += static_cast<int32_t>(e);
-        m.n++;
-        if ((m.n & (m.n - 1)) == 0) {
-            if (m.n <= (1u << kEmaShift)) {
-                m.c8 = m.sum / static_cast<int32_t>(m.n);
-                m.ema = m.c8 << kEmaShift;
-            }
-            if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
-                write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
-            }
+    advance_window(m, r);
+    if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
+        m.acq_count = 0;
+        if (try_lock(m, r)) {
+            return;
         }
     }
+    raw_sample(m);
+}
+__attribute__((noinline)) void off_line(Model& m, uint64_t r) {
+    if (m.off++ == 0) {
+        m.r_dep = r;
+    }
+    if (m.off >= kConfirm) {
+        step(m);
+    }
+}
+__attribute__((noinline)) void count_point(Model& m, uint64_t r) {
+    if (m.n <= (1u << kEmaShift)) {
+        m.c8 = m.sum / static_cast<int32_t>(m.n);
+        m.ema = m.c8 << kEmaShift;
+    }
+    if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
+        write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
+    }
+}
+__attribute__((noinline)) void line_housekeeping(Model& m, uint64_t r) {
     if (r - m.r_last_point >= kPointTicks) {
         write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
     }
@@ -408,86 +327,430 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
         m.wa8 += static_cast<uint64_t>(m.k8) * kReanchorTicks;
     }
 }
+// On a line the residue is computed in 32 bits: it is small, and the line's terms wrap alike. The ring is left alone
+// (only a lock test reads it, and a step restarts it).
+inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w8) {
+    win_push(m, r, w8);
+    if (m.k8 == 0) {
+        acquire(m, r, w8);
+        return;
+    }
+    const int32_t e = static_cast<int32_t>(
+        static_cast<uint32_t>(w8 - m.wa8) -
+        m.k8 * static_cast<uint32_t>(static_cast<uint32_t>(r) - static_cast<uint32_t>(m.ra)));
+    const int32_t d = e - m.c8;
+    if (d > 8 * kOffTicks || d < -8 * kOffTicks) {
+        off_line(m, r);
+        return;
+    }
+    m.off = 0;
+    m.r_last_on = r;
+    const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
+    m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
+    if (m.n >= (1u << kEmaShift)) {
+        m.ema += e - (m.ema >> kEmaShift);
+        m.c8 = (m.ema + (1 << (kEmaShift - 1))) >> kEmaShift;
+    }
+    if (m.n < kCountMax) {
+        m.sum += e;
+        m.n++;
+        if ((m.n & (m.n - 1)) == 0) {
+            count_point(m, r);
+        }
+    }
+    if (static_cast<uint32_t>(r) - static_cast<uint32_t>(m.r_last_point) >= kPointTicks ||
+        static_cast<uint32_t>(r) - static_cast<uint32_t>(m.ra) >= kReanchorTicks) {
+        line_housekeeping(m, r);
+    }
+}
 }  // namespace model
-
-#endif
-
-// The cycle at which load p of a back-to-back group issues: the load unit takes four in consecutive cycles, then
-// idles two (kernel_main). centre8(i) is the centre of the issue cycles of loads i and i+1, in eighths.
-constexpr uint32_t issue_cycle(uint32_t p) { return 6u * (p / 4u) + (p % 4u); }
-constexpr uint32_t centre8(uint32_t i) { return 4u * (issue_cycle(i) + issue_cycle(i + 1)); }
-constexpr uint32_t kGroupCycles = issue_cycle(17);
 
 // Both clocks' high words and the low words they were last seen at.
 struct Carry {
     uint32_t r_hi, w_hi, prev_r_lo, prev_w_lo;
 };
-// A caught advance: the new count and the wall at the catching pair's centre, in eighths, go to the model.
-__attribute__((noinline)) void sample(model::Model& m, Carry& c, uint32_t rb_lo, uint32_t w0, uint32_t c8) {
-    c.r_hi += rb_lo < c.prev_r_lo;
-    c.w_hi += w0 < c.prev_w_lo;
-    c.prev_r_lo = rb_lo;
-    c.prev_w_lo = w0;
+// A caught advance: the new count and the wall of its place, in eighths, go to the model.
+inline __attribute__((always_inline)) void sample(model::Model& m, Carry& c, uint32_t r_lo, uint32_t w, uint32_t pos8) {
+    c.r_hi += r_lo < c.prev_r_lo;
+    c.w_hi += w < c.prev_w_lo;
+    c.prev_r_lo = r_lo;
+    c.prev_w_lo = w;
     model::feed(
-        m, (static_cast<uint64_t>(c.r_hi) << 32) | rb_lo, (((static_cast<uint64_t>(c.w_hi) << 32) | w0) << 3) + c8);
+        m, (static_cast<uint64_t>(c.r_hi) << 32) | r_lo, (((static_cast<uint64_t>(c.w_hi) << 32) | w) << 3) + pos8);
 }
-// A landed group: when its rhythm held and an advance fell between two of its refclk reads, that is a sample.
-inline __attribute__((always_inline)) void take(
-    model::Model& m,
-    Carry& c,
-    uint32_t w0,
-    uint32_t r0,
-    uint32_t r1,
-    uint32_t r2,
-    uint32_t r3,
-    uint32_t r4,
-    uint32_t r5,
-    uint32_t r6,
-    uint32_t r7,
-    uint32_t r8,
-    uint32_t r9,
-    uint32_t r10,
-    uint32_t r11,
-    uint32_t r12,
-    uint32_t r13,
-    uint32_t r14,
-    uint32_t r15,
-    uint32_t w1) {
-    if (r15 == r0 || w1 - w0 != kGroupCycles) {
-        return;
-    }
-    uint32_t rb_lo = r15, c8 = centre8(15);
-    if (r1 != r0) {
-        rb_lo = r1, c8 = centre8(1);
-    } else if (r2 != r1) {
-        rb_lo = r2, c8 = centre8(2);
-    } else if (r3 != r2) {
-        rb_lo = r3, c8 = centre8(3);
-    } else if (r4 != r3) {
-        rb_lo = r4, c8 = centre8(4);
-    } else if (r5 != r4) {
-        rb_lo = r5, c8 = centre8(5);
-    } else if (r6 != r5) {
-        rb_lo = r6, c8 = centre8(6);
-    } else if (r7 != r6) {
-        rb_lo = r7, c8 = centre8(7);
-    } else if (r8 != r7) {
-        rb_lo = r8, c8 = centre8(8);
-    } else if (r9 != r8) {
-        rb_lo = r9, c8 = centre8(9);
-    } else if (r10 != r9) {
-        rb_lo = r10, c8 = centre8(10);
-    } else if (r11 != r10) {
-        rb_lo = r11, c8 = centre8(11);
-    } else if (r12 != r11) {
-        rb_lo = r12, c8 = centre8(12);
-    } else if (r13 != r12) {
-        rb_lo = r13, c8 = centre8(13);
-    } else if (r14 != r13) {
-        rb_lo = r14, c8 = centre8(14);
-    }
-    sample(m, c, rb_lo, w0, c8);
+
+// The sampler. A pass is kBlocks + 2 blocks of [refclk, refclk, wall, refclk] in one asm block: the load unit takes
+// four loads in four consecutive cycles and idles two, and each block's check of the block before it sits in those two
+// (measured: sixteen such blocks take 96 cycles, as sixteen without the checks do, and a check one block behind its
+// value never waits for it). The refclk reads run unbroken for longer than an advance period at any AICLK, so a pass
+// catches the first advance after it starts whatever its phase, and no phase of the loop against the advances can
+// starve the sampler. A block's pairs are the one from the block before across its idle slots, the one between its
+// first two reads and the one across its wall read; the catch counts only if the wall reads of its block and of the
+// blocks either side are exactly one block period apart, so every read of its pair issued in its place, and a stall
+// anywhere else in the pass (a fetch after the model's code evicted it) cannot move it. The branch predictor is off for
+// the pass: a check taken on the last pass is otherwise mispredicted on this one. A 0-5 cycle pad before each pass puts
+// the advance at a uniform phase against the blocks, so a catch is uniform within its pair and the pair's centre places
+// it without bias; the pairs' widths are measured before the go word from the catches' share of each, the reads placed
+// from the one a cycle before the wall read.
+namespace sampler {
+constexpr uint32_t kBlocks = 20;
+inline __attribute__((always_inline)) uint32_t pass(uint32_t (&w)[3], uint32_t (&o)[4]) {
+    uint32_t st, w0, w1, w2, o0, o1, o2, o3, x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11;
+    asm volatile(
+        ".option push\n\t"
+        ".option norvc\n\t"
+        "csrrsi zero, 0x7c0, 2\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_0\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_1\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_2\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_3\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_4\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_5\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_6\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_7\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_8\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_9\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_10\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_11\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_12\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_13\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_14\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_15\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_16\n\t"
+        "nop\n\t"
+        "lw %[s0_1], 0(%[cfr])\n\t"
+        "lw %[s0_2], 0(%[cfr])\n\t"
+        "lw %[s0_0], 0(%[wall])\n\t"
+        "lw %[s0_3], 0(%[cfr])\n\t"
+        "bne %[s2_3], %[s1_3], .Lh%=_17\n\t"
+        "nop\n\t"
+        "lw %[s1_1], 0(%[cfr])\n\t"
+        "lw %[s1_2], 0(%[cfr])\n\t"
+        "lw %[s1_0], 0(%[wall])\n\t"
+        "lw %[s1_3], 0(%[cfr])\n\t"
+        "bne %[s0_3], %[s2_3], .Lh%=_18\n\t"
+        "nop\n\t"
+        "lw %[s2_1], 0(%[cfr])\n\t"
+        "lw %[s2_2], 0(%[cfr])\n\t"
+        "lw %[s2_0], 0(%[wall])\n\t"
+        "lw %[s2_3], 0(%[cfr])\n\t"
+        "bne %[s1_3], %[s0_3], .Lh%=_19\n\t"
+        "nop\n\t"
+        "li %[st], 0\n\t"
+        "j .Le%=\n\t"
+        ".Lh%=_0:\n\t"
+        "li %[st], 1\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_1:\n\t"
+        "li %[st], 2\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_2:\n\t"
+        "li %[st], 3\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_3:\n\t"
+        "li %[st], 4\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_4:\n\t"
+        "li %[st], 5\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_5:\n\t"
+        "li %[st], 6\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_6:\n\t"
+        "li %[st], 7\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_7:\n\t"
+        "li %[st], 8\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_8:\n\t"
+        "li %[st], 9\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_9:\n\t"
+        "li %[st], 10\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_10:\n\t"
+        "li %[st], 11\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_11:\n\t"
+        "li %[st], 12\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_12:\n\t"
+        "li %[st], 13\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_13:\n\t"
+        "li %[st], 14\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_14:\n\t"
+        "li %[st], 15\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_15:\n\t"
+        "li %[st], 16\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_16:\n\t"
+        "li %[st], 17\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lh%=_17:\n\t"
+        "li %[st], 18\n\t"
+        "j .Lt%=_2\n\t"
+        ".Lh%=_18:\n\t"
+        "li %[st], 19\n\t"
+        "j .Lt%=_0\n\t"
+        ".Lh%=_19:\n\t"
+        "li %[st], 20\n\t"
+        "j .Lt%=_1\n\t"
+        ".Lt%=_0:\n\t"
+        "mv %[a], %[s2_0]\n\t"
+        "mv %[b], %[s0_0]\n\t"
+        "mv %[c], %[s1_0]\n\t"
+        "mv %[o0], %[s2_3]\n\t"
+        "mv %[o1], %[s0_1]\n\t"
+        "mv %[o2], %[s0_2]\n\t"
+        "mv %[o3], %[s0_3]\n\t"
+        "j .Le%=\n\t"
+        ".Lt%=_1:\n\t"
+        "mv %[a], %[s0_0]\n\t"
+        "mv %[b], %[s1_0]\n\t"
+        "mv %[c], %[s2_0]\n\t"
+        "mv %[o0], %[s0_3]\n\t"
+        "mv %[o1], %[s1_1]\n\t"
+        "mv %[o2], %[s1_2]\n\t"
+        "mv %[o3], %[s1_3]\n\t"
+        "j .Le%=\n\t"
+        ".Lt%=_2:\n\t"
+        "mv %[a], %[s1_0]\n\t"
+        "mv %[b], %[s2_0]\n\t"
+        "mv %[c], %[s0_0]\n\t"
+        "mv %[o0], %[s1_3]\n\t"
+        "mv %[o1], %[s2_1]\n\t"
+        "mv %[o2], %[s2_2]\n\t"
+        "mv %[o3], %[s2_3]\n\t"
+        ".Le%=:\n\t"
+        "csrrci zero, 0x7c0, 2\n\t"
+        ".option pop\n\t"
+        : [st] "=&r"(st),
+          [a] "=&r"(w0),
+          [b] "=&r"(w1),
+          [c] "=&r"(w2),
+          [o0] "=&r"(o0),
+          [o1] "=&r"(o1),
+          [o2] "=&r"(o2),
+          [o3] "=&r"(o3),
+          [s0_0] "=&r"(x0),
+          [s0_1] "=&r"(x1),
+          [s0_2] "=&r"(x2),
+          [s0_3] "=&r"(x3),
+          [s1_0] "=&r"(x4),
+          [s1_1] "=&r"(x5),
+          [s1_2] "=&r"(x6),
+          [s1_3] "=&r"(x7),
+          [s2_0] "=&r"(x8),
+          [s2_1] "=&r"(x9),
+          [s2_2] "=&r"(x10),
+          [s2_3] "=&r"(x11)
+        : [wall] "r"(eth_ptp::kWallClockLo), [cfr] "r"(eth_ptp::kPtpCfrLo)
+        : "memory");
+    w[0] = w0;
+    w[1] = w1;
+    w[2] = w2;
+    o[0] = o0;
+    o[1] = o1;
+    o[2] = o2;
+    o[3] = o3;
+    return st;
 }
+__attribute__((noinline)) uint32_t pass_out_of_line(uint32_t (&w)[3], uint32_t (&o)[4]) { return pass(w, o); }
+inline __attribute__((always_inline)) void pad(uint32_t& walk) {
+    walk = walk * 1103515245u + 12345u;
+    const uint32_t n = ((walk >> 16) * 6u) >> 16;
+    asm volatile(
+        ".option push\n\t"
+        ".option norvc\n\t"
+        "la t0, 1f\n\t"
+        "slli t1, %0, 2\n\t"
+        "sub t0, t0, t1\n\t"
+        "jr t0\n\t"
+        ".rept 5\n\t"
+        "nop\n\t"
+        ".endr\n"
+        "1:\n\t"
+        ".option pop"
+        :
+        : "r"(n)
+        : "t0", "t1", "memory");
+}
+// The block period, and pair p's place past the catch's reference wall read in eighths of a cycle (four cycles
+// before its block's wall read, so every place is positive): 0 the pair from the block before, 1 the pair between
+// the block's first two reads, 2 the pair across its wall read. Typed until measured.
+struct Table {
+    uint32_t period = 6;
+    uint32_t pos8[3] = {32 - 28, 32 - 12, 32};
+};
+struct Catch {
+    uint32_t r, w, pos8, pair;
+};
+template <uint32_t (*Pass)(uint32_t (&)[3], uint32_t (&)[4])>
+inline __attribute__((always_inline)) bool take(uint32_t& walk, Catch& c, const Table& t) {
+    uint32_t w[3], o[4];
+    pad(walk);
+    if (Pass(w, o) == 0 || w[1] - w[0] != t.period || w[2] - w[1] != t.period) {
+        return false;
+    }
+    const uint32_t p = o[1] != o[0] ? 0u : o[2] != o[1] ? 1u : 2u;
+    c.r = o[p + 1];
+    c.w = w[1] - 4u;
+    c.pos8 = t.pos8[p];
+    c.pair = p;
+    return true;
+}
+// Before the go word: the block period, the mode of the catching block's wall step over the first 1024 catches, then
+// the catches counted by pair until the go word, and at least 2^16 of them.
+Table calibrate(volatile tt_l1_ptr uint32_t* go, volatile tt_l1_ptr uint32_t* stop, volatile tt_l1_ptr uint32_t* hb) {
+    Table t;
+    static uint32_t hist[64];
+    uint32_t walk = eth_ptp::rd(eth_ptp::kWallClockLo) | 1u;
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t w[3], o[4];
+        pad(walk);
+        if (pass_out_of_line(w, o) != 0) {
+            hist[(w[1] - w[0]) & 63u]++;
+        }
+    }
+    for (uint32_t i = 1; i < 64; i++) {
+        t.period = hist[i] > hist[t.period] ? i : t.period;
+    }
+    uint32_t pairs[3] = {}, total = 0;
+    for (uint32_t i = 1; *stop == 0u; i++) {
+        Catch c;
+        if (take<pass_out_of_line>(walk, c, t)) {
+            pairs[c.pair]++;
+            total++;
+        }
+        if ((i & 1023u) == 0u) {
+            (*hb)++;
+            invalidate_l1_cache();
+            if ((total >= (1u << 16) && *go != 0u) || total >= (1u << 26)) {
+                break;
+            }
+        }
+    }
+    uint32_t k = 0;
+    while ((total >> k) >= (1u << 20)) {
+        k++;
+    }
+    const uint32_t n = total >> k;
+    if (n == 0) {
+        return t;
+    }
+    int32_t g64[3];
+    for (uint32_t p = 0; p < 3; p++) {
+        g64[p] = static_cast<int32_t>((64u * t.period * (pairs[p] >> k)) / n);
+    }
+    const int32_t r1 = 4 * 64 - 64;  // the read before the wall read, in 64ths past the reference
+    const int32_t c64[3] = {r1 - g64[1] - g64[0] / 2, r1 - g64[1] / 2, r1 + g64[2] / 2};
+    for (uint32_t p = 0; p < 3; p++) {
+        t.pos8[p] = static_cast<uint32_t>((c64[p] + 4) >> 3);
+    }
+    return t;
+}
+}  // namespace sampler
+
+#endif
 
 void kernel_main() {
 #if defined(PROFILE_KERNEL)
@@ -500,26 +763,15 @@ void kernel_main() {
     *go = 0;
     *stop = 0;
 
+    const sampler::Table table = sampler::calibrate(go, stop, hb);
     // Sampling waits for the host's go word, written once the receiver's ingest threads are up.
     while (*go == 0u && *stop == 0u) {
         (*hb)++;
         invalidate_l1_cache();
     }
 
-    // Each iteration is a group of eighteen loads issued back to back with nothing between them, one asm block: the
-    // wall clock, sixteen refclk reads, the wall clock. The load unit takes four loads in four consecutive cycles and
-    // then idles two, so load p issues at issue_cycle(p) from the first and the last wall read lands kGroupCycles
-    // after it unless something stalled the group, which drops it. A refclk advance that fell between two of the
-    // refclk reads -- at most one fits, advances being 64-108 cycles apart -- is placed at the centre of that pair's
-    // issue cycles: within half a cycle inside a run of four, a cycle and a half across the idle pair. (The rhythm
-    // from tagging 18 million brackets of a wall/refclk alternation: the wall reads either side of every bracket six
-    // cycles apart, the even brackets catching twice as often as the odd, and the last pair eight apart; it also put
-    // that alternation's even wall reads a cycle past their bracket's centre.) The group's values are first read
-    // after all its loads issued: a register move the compiler slipped between two loads copied the register before
-    // its load had returned, and issuing the next group while this one's loads were still queued (to hide their
-    // latency) broke the rhythm of most groups and caught fewer advances, not more. Each iteration is padded by 0-3
-    // pseudo-random cycles so the advance's phase against the loop walks instead of locking. Both clocks' high words
-    // are carried from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
+    // Both clocks' high words are carried from the low words' wraps, which at this rate no sweep can hide (86 s and
+    // 3.2 s periods).
     const eth_ptp::Instant start = eth_ptp::read_instant();
     Carry carry{
         static_cast<uint32_t>(start.refclk >> 32), start.wall_hi, static_cast<uint32_t>(start.refclk), start.wall_lo};
@@ -527,36 +779,10 @@ void kernel_main() {
     model::begin_acquire(m, start.refclk);
     uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
-        walk = walk * 1103515245u + 12345u;
-        for (uint32_t d = walk >> 30; d != 0; d--) {
-            asm volatile("nop");
+        sampler::Catch c;
+        if (sampler::take<sampler::pass>(walk, c, table)) {
+            sample(m, carry, c.r, c.w, c.pos8);
         }
-        uint32_t w0, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, w1;
-        asm volatile(
-            "lw %0, 0(%18)\n\tlw %1, 0(%19)\n\tlw %2, 0(%19)\n\tlw %3, 0(%19)\n\tlw %4, 0(%19)\n\tlw %5, 0(%19)\n\t"
-            "lw %6, 0(%19)\n\tlw %7, 0(%19)\n\tlw %8, 0(%19)\n\tlw %9, 0(%19)\n\tlw %10, 0(%19)\n\tlw %11, 0(%19)\n\t"
-            "lw %12, 0(%19)\n\tlw %13, 0(%19)\n\tlw %14, 0(%19)\n\tlw %15, 0(%19)\n\tlw %16, 0(%19)\n\tlw %17, 0(%18)"
-            : "=&r"(w0),
-              "=&r"(r0),
-              "=&r"(r1),
-              "=&r"(r2),
-              "=&r"(r3),
-              "=&r"(r4),
-              "=&r"(r5),
-              "=&r"(r6),
-              "=&r"(r7),
-              "=&r"(r8),
-              "=&r"(r9),
-              "=&r"(r10),
-              "=&r"(r11),
-              "=&r"(r12),
-              "=&r"(r13),
-              "=&r"(r14),
-              "=&r"(r15),
-              "=&r"(w1)
-            : "r"(eth_ptp::kWallClockLo), "r"(eth_ptp::kPtpCfrLo)
-            : "memory");
-        take(m, carry, w0, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, w1);
         if ((++iter & 255u) != 0u) {
             continue;
         }
