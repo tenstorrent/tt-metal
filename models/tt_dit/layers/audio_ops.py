@@ -18,6 +18,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.matmul import log_warning
 from ..utils.tap_filter_configs import (
     applicable_formulations,
     format_formulation_row,
@@ -30,6 +31,22 @@ from ..utils.tensor import local_device_to_torch
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
+
+# Dedup noisy construction / fallback warnings across every call in this process.
+_ONCE_WARNINGS: set = set()
+_TAP_WARNED = _ONCE_WARNINGS  # name used by tests/unit/test_audio_tap_path.py
+
+
+def _warn_once(key, message: str) -> None:
+    if key not in _ONCE_WARNINGS:
+        log_warning(message)
+        _ONCE_WARNINGS.add(key)
+
+
+def _warn_padded_out_channels(unpadded: int, padded: int) -> None:
+    if unpadded != padded:
+        _warn_once(("padded_out", unpadded, padded), f"Padding out_channels from {unpadded} to {padded}")
+
 
 CONV_SPLIT_MODES = ("off", "weight", "full")
 
@@ -147,7 +164,7 @@ def all_gather_channel(ccl_manager, x: ttnn.Tensor, parallel_config, *, dim: int
     axis = channel_axis(parallel_config)
     if axis is None:
         return x
-    return ccl_manager.all_gather_persistent_buffer(x, dim=dim, mesh_axis=axis)
+    return ccl_manager.all_gather(x, dim=dim, mesh_axis=axis, use_hyperparams=False)
 
 
 def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> ttnn.Tensor:
@@ -248,7 +265,7 @@ def _t_neighbor_pad(
     if isinstance(parallel_config, AudioTParallelConfig):
         # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
-        x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTC = ccl_manager.neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -259,7 +276,7 @@ def _t_neighbor_pad(
             num_links=[num_links],
         )
         sem1 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis1.mesh_axis)
-        return ccl_manager.neighbor_pad_persistent_buffer(
+        return ccl_manager.neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -271,7 +288,7 @@ def _t_neighbor_pad(
         )
 
     sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
-    return ccl_manager.neighbor_pad_persistent_buffer(
+    return ccl_manager.neighbor_pad(
         x_BTC,
         dims=[1],
         pad_left=[pad_left],
@@ -393,18 +410,17 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         try:
             out = run(formulation, slice_config)
         except RuntimeError as exc:
-            last_exc = exc
+            reason = str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
+            last_exc = RuntimeError(f"tap filter: {formulation!r} failed at {shape}: {reason}")
+            del exc
             if source in ("table", "cached"):
                 _warn_once(
                     ("tap_stale", device_key, C, K, stride, formulation, slice_signature(slice_config)),
                     f"tap filter: {source} plan {formulation!r} / {slice_signature(slice_config) or 'auto slicing'} "
-                    f"failed at {shape}: {str(exc).splitlines()[0][:160]}; falling back",
+                    f"failed at {shape}: {reason}; falling back",
                 )
             continue
         cache[shape_key] = (formulation, slice_config)
-        logger.debug(
-            f"tap filter plan: {shape} -> {formulation!r} / {slice_signature(slice_config) or 'auto'} ({source})"
-        )
         if source == "trial":
             if formulation == "mac":
                 _warn_once(
@@ -553,10 +569,10 @@ def _depthwise_tap_conv1d(
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """All-gather the T-sharded tensor to full T on every chip."""
     if isinstance(parallel_config, AudioTParallelConfig):
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis)
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis, use_hyperparams=False)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis, use_hyperparams=False)
     else:
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.mesh_axis)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.mesh_axis, use_hyperparams=False)
     return x
 
 
@@ -845,8 +861,7 @@ class Conv2dViaConv3d(Module):
         self.unpadded_out_channels = out_channels
         self.in_channels = aligned_channels(in_channels)
         self.out_channels = max(32, out_channels)
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        _warn_padded_out_channels(self.unpadded_out_channels, self.out_channels)
 
         kh, kw = _ntuple(kernel_size, 2)
         sh, sw = _ntuple(stride, 2)
@@ -1008,8 +1023,7 @@ class Conv1dViaConv3d(Module):
         self.unpadded_out_channels = out_channels
         self.in_channels = aligned_channels(in_channels, self.channel_align)
         self.out_channels = aligned_channels(max(32, out_channels), self.channel_align)
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        _warn_padded_out_channels(self.unpadded_out_channels, self.out_channels)
 
         self.kernel_size = (kernel_size, 1, 1)
         self.stride = (stride, 1, 1)
