@@ -183,6 +183,42 @@ if(reflect_ADDED OR DEFINED reflect_SOURCE_DIR)
 endif()
 
 ############################################################################################################################
+# zoo : https://github.com/thecppzoo/zoo
+############################################################################################################################
+
+# Backs ttsl::move_only_function (GitHub #57444). Header only, and its headers are installed
+# because tt_stl/move_only_function.hpp is public API and includes them.
+#
+# Pinned by commit rather than tag: zoo publishes no tags, only branches.
+#
+# Note zoo does not compile under -fno-rtti, with or without the RTTI affordance -- the typeid
+# tokens in VTablePolicy.h and FunctionPolicy.h are rejected at parse time. That is fine for the
+# host build; device kernels are compiled -fno-rtti but do not include tt_stl.
+if(NOT DEFINED zoo_SOURCE_DIR)
+    CPMAddPackage(
+        NAME zoo
+        GITHUB_REPOSITORY thecppzoo/zoo
+        GIT_TAG 7fb5eed6331651e9d94c0f7e9017f2d56ba4b993
+        DOWNLOAD_ONLY YES
+    )
+endif()
+if(zoo_ADDED OR DEFINED zoo_SOURCE_DIR)
+    add_library(zoo INTERFACE)
+    add_library(Zoo::Zoo ALIAS zoo)
+    target_include_directories(zoo SYSTEM INTERFACE "$<BUILD_INTERFACE:${zoo_SOURCE_DIR}/inc>")
+
+    file(GLOB_RECURSE ZOO_HEADERS "${zoo_SOURCE_DIR}/inc/*.h")
+    target_sources(
+        zoo
+        INTERFACE
+            FILE_SET api
+            TYPE HEADERS
+            BASE_DIRS ${zoo_SOURCE_DIR}/inc
+            FILES ${ZOO_HEADERS}
+    )
+endif()
+
+############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
