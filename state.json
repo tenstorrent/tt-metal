@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "36000165336",
-  "timestamp": "2026-09-24T12:42:00Z"
+  "run_id": "36041714939",
+  "timestamp": "2026-09-24T18:36:00Z"
  },
- "run_id": "36000165336",
+ "run_id": "36041714939",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -329,6 +329,12 @@
   "57535": {
    "issue": 57475,
    "status": "CI green, tracked (items 2+4 of #57475)"
+  },
+  "57715_transpose_bfp8_identity": {
+   "issue": 57715,
+   "branch": "repo-assist/fix-issue-57715-transpose-bfp8-identity-typecast",
+   "title": "fix(ttnn): resolve identity transpose before bfloat8_b typecast",
+   "status": "opened this run; moves identity-transpose check above bfloat8_b typecast in transpose_impl (transpose.cpp), matches issue's own suggested fix; added test_transpose_identity_bfloat8_b regression test mirroring test_transpose_wh_bfp4; clang-format clean, py_compile clean; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; Docker unavailable in sandbox so unverified by build/execution"
   }
  },
  "issues_labeled": [
@@ -543,7 +549,9 @@
   "57512": {
    "date": "2026-09-24",
    "note": "no existing open PR referenced #57512 (search_pull_requests 0 hits before fix)"
-  }
+  },
+  "57715": "verified 0 open PRs reference #57715 before opening fix this run",
+  "57724": "has open fix PR #57726 (reporter mtairum's own), no duplicate needed"
  },
  "dropped_fix_targets": {
   "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -1148,7 +1156,7 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-24 (2nd run today): continued below #57413 cursor down through #57335; most issues in this range are shield_prefill/models internal tracking or already-covered defect catalogs (no action). Investigated and confirmed root cause for #57410 (BFP4/BFP2 packer rounding gap) via full clone+grep verification; fixed its flagged dead-test build gap via a separate PR. Continue below #57335 next run.",
+  "task1_task2_latest": "2026-09-24 (3rd run today): reviewed newest ~100 open issues page 1 (down to #57468), labeled 7 fresh unlabeled issues from 2026-09-24, fixed #57715 (transpose bfloat8_b identity typecast) with PR. Most of page 1 below #57501 is AI-static-analysis defect-catalog issues (57356-57367, 57474-57509 range) already extensively triaged/covered in prior runs (see covered_no_duplicate). Continue from #57310 range next run (last touched page-2 items #57310-57340 not yet reviewed this cycle).",
   "task6_latest": "2026-09-24: nudged 3 never-previously-touched author-blocked stale PRs (dirty mergeable_state): #40858, #45435, #47426 (3-action cap reached). Prior batch (#40858, #51119, #51120 from 2026-09-23) -- #51119/#51120 not re-nudged this run (checked 2026-09-23, still within 3-day cadence). Next candidates for future run: #51129, #51155 (both DPS0340, mergeable_state behind/blocked, last touched 2026-09-02)."
  },
  "labeled_issues": {
@@ -1398,6 +1406,38 @@
     "bug"
    ],
    "note": "MemoryConfig spec re-validation gap, root cause confirmed against tensor_spec.cpp"
+  },
+  "57731": {
+   "date": "2026-09-24",
+   "label": "feature"
+  },
+  "57709": {
+   "date": "2026-09-24",
+   "label": "bug"
+  },
+  "57708": {
+   "date": "2026-09-24",
+   "label": "bug"
+  },
+  "57707": {
+   "date": "2026-09-24",
+   "label": "bug"
+  },
+  "57695": {
+   "date": "2026-09-24",
+   "label": "bug"
+  },
+  "57716": {
+   "date": "2026-09-24",
+   "label": "bug"
+  },
+  "57715": {
+   "date": "2026-09-24",
+   "label": "performance monitoring"
+  },
+  "57722": {
+   "date": "2026-09-24",
+   "label": "performance monitoring"
   }
  },
  "issues_commented": {
@@ -1515,6 +1555,11 @@
    "run_id": "36000165336",
    "date": "2026-09-24T12:42:00Z",
    "summary": "Task5: found PR #57130's CHANGES_REQUESTED review was already addressed by a prior commit (via blozano-tt/Claude Opus); posted a comment confirming this and diagnosing its 4 failing checks as a pre-existing unrelated squared_difference_ ULP flake (this PR only touches ttnn.selu golden). Task2: investigated fresh issue #57410 (host BFP4/BFP2 packer rounds directly to destination width instead of via an intermediate BFP8 stage) -- cloned main and verified the root-cause claim line-by-line against current blockfloat_common.cpp::convert_u32_to_bfp; posted a confirming comment; judged a direct fix too high-risk without device access, deferred to maintainer. Task3/4: fixed the smaller, independent build-wiring gap #57410 itself flagged -- test_bfp4_conversion.cpp was never added to sources.cmake's UNIT_TESTS_LEGACY_SRC despite its bfp8 sibling being present, so the only Bfp4 host conversion test in the tree has never compiled; opened a one-line ready-for-review PR. Task6: nudged 3 non-repo-assist author-blocked stale PRs past the 3-day cadence: #45949, #49787, #50519 (3-action cap reached). Task8: refreshed monthly summary Suggested Actions (added #57645/#57624/#57581/#57535/#57410-build-PR, removed merged #57421, added #57130/#57410 coordination items) and prepended this run-history entry."
+  },
+  {
+   "run_id": "36041714939",
+   "date": "2026-09-24T18:36:00Z",
+   "summary": "Task5: checked CI via get_check_runs on ~32 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green; CHANGES_REQUESTED already addressed per prior-run comment). Task1: labeled 7 fresh 2026-09-24 issues: #57731 feature, #57709/#57708/#57707/#57695/#57716 bug, #57715/#57722 performance monitoring. Task2/3: investigated #57715 (ttnn.transpose bfloat8_b identity typecast waste, iklemenskiTT) -- cloned+verified root cause line-by-line against current transpose.cpp::transpose_impl (matches reporter's exact code citation); confirmed no existing open PR; opened ready-for-review fix PR moving the identity check above the bfloat8_b typecast (mirrors reporter's own suggested fix) plus a regression test (test_transpose_identity_bfloat8_b) mirroring the existing test_transpose_wh_bfp4 pattern; posted confirming comment on the issue. Checked #57724 (nlp_concat_heads_decode vararg OOB) -- already has an open fix PR #57726 from the reporter, no duplicate opened. Task8: rewrote monthly summary #55015 (body had regrown to ~93KB via repeated duplicated Activity/Run-History blocks across at least 5 copies, a recurring failure mode) -- trimmed to a single canonical copy, refreshed Suggested Actions (added new PR, removed stale resolved items like the merged #57421 and the already-resolved #57474/#57518 coverage note and #57324/#57396 duplicate-merge note), kept a trimmed Run History."
   }
  ],
  "no_action_reviewed": [
@@ -1573,7 +1618,7 @@
    "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
   }
  },
- "task8_last_update": "2026-09-24T12:42:00Z",
+ "task8_last_update": "2026-09-24T18:36:00Z",
  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
  "lessons_learned": [
   "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
