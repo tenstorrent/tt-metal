@@ -29,8 +29,9 @@ FORCE_INLINE void isin_subchunks(
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(test_elements_l1_read_addr);
-    volatile tt_l1_ptr elements_number_type* output_subchunk_ptr =
-        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
+    // Output mask is always uint32; elements_number_type is only for the compared values.
+    volatile tt_l1_ptr uint32_t* output_subchunk_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_l1_write_addr);
     for (uint32_t elements_index = 0; elements_index < elements_subchunk_size; ++elements_index) {
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
@@ -126,7 +127,8 @@ void kernel_main() {
         output_cb.reserve_back(ONE_PAGE);
         const uint32_t elements_l1_read_addr = elements_cb.get_read_ptr();
         const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
-        prefill_output<elements_number_type>(noc, output_cb, elements_subchunk_size, ctas.invert);
+        // Mask words are uint32, including the invert fill.
+        prefill_output<uint32_t>(noc, output_cb, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;

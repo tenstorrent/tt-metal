@@ -42,7 +42,8 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
     // Calculate size of individual elements in bytes
     const auto elements_datum_size = elements.element_size();
     const auto test_elements_datum_size = test_elements.element_size();
-    const auto output_datum_size = elements_datum_size;
+    // L1 budget counts the uint32 mask, not the input width.
+    const auto output_datum_size = sizeof(uint32_t);
 
     // Calculate max elements that fit in L1 considering all three buffers (elements, test_elements, output)
     // Round down to nearest multiple of 64 for alignment
