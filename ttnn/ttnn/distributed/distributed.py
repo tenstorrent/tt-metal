@@ -657,6 +657,8 @@ def open_mesh_device(
     Args:
         mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
         l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            The default is 0: ops that allocate from the L1_SMALL region (conv2d and pooling with kernel > 1, CCL semaphores)
+            fail with an ``L1_SMALL`` out-of-memory error, or fall back to L1, until a non-zero size such as 32768 or 65536 is set here.
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
