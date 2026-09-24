@@ -159,6 +159,20 @@ static ResolvedGeom to_resolved_geom(const tt::tt_metal::emule::ResolvedTileGeom
         g.narrow_tile};
 }
 
+// One JitBuildOptions::set_cb_data_fmt_tile_and_face_geometry call: format and tile size always land,
+// the tile/face dims only when a Tile or FaceGeometry was given.
+static CbGeomWrite to_geom_write(
+    uint32_t slot,
+    tt::DataFormat fmt,
+    const std::optional<Tile>& tile,
+    const std::optional<FaceGeometry>& unpack_face_geometry) {
+    return CbGeomWrite{
+        slot,
+        static_cast<uint32_t>(fmt),
+        tile.has_value() || unpack_face_geometry.has_value(),
+        to_resolved_geom(tt::tt_metal::emule::resolve_tile_geometry(tile, unpack_face_geometry), fmt)};
+}
+
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
@@ -288,6 +302,27 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                      static_cast<uint32_t>(r.end_coord.x),
                      static_cast<uint32_t>(r.end_coord.y)});
             }
+            // The kernel's JIT CB/DFB descriptor, walked as ProgramImpl::compile's prep_kernel does:
+            // set_cb_data_fmt_and_tile, then set_dfb_data_fmt_and_tile, over all its core ranges.
+            const auto kernel_crs = k.logical_coreranges();
+            for (const auto& cr : kernel_crs) {
+                for (const auto& cb : impl.circular_buffers_on_corerange(cr)) {
+                    for (uint8_t idx : cb->buffer_indices()) {
+                        kd.cb_geom_writes.push_back(
+                            to_geom_write(idx, cb->data_format(idx), cb->tile(idx), cb->unpack_face_geometry(idx)));
+                    }
+                }
+            }
+            for (const auto& cr : kernel_crs) {
+                for (const auto& dfb : impl.dataflow_buffers_on_corerange(cr)) {
+                    const auto& c = dfb->config;
+                    if (c.data_format == tt::DataFormat::Invalid) {
+                        continue;
+                    }
+                    kd.cb_geom_writes.push_back(
+                        to_geom_write(dfb->device_slot, c.data_format, c.tile, c.unpack_face_geometry));
+                }
+            }
             pd.kernel_order.push_back(kd.id);
             pd.kernels.emplace(kd.id, std::move(kd));
         }
@@ -372,13 +407,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     b.index = idx;
                     b.page_size = cb->page_size(idx);
                     b.num_pages = cb->num_pages(idx);
-                    const auto fmt = cb->data_format(idx);
-                    b.data_format = static_cast<uint32_t>(fmt);
-                    // Apply silicon's tile/face precedence here (marshaller has the live Tile);
-                    // the POD carries only the resolved primitives. Mirrors build_kernel_defines.
-                    const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(cb->tile(idx), cb->unpack_face_geometry(idx));
-                    b.geom = to_resolved_geom(g, fmt);
                     cd.buffers.push_back(std::move(b));
                 }
                 cs.cbs.push_back(std::move(cd));
@@ -398,13 +426,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 dd.producer_risc_mask = c.producer_risc_mask;
                 dd.consumer_risc_mask = c.consumer_risc_mask;
                 dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
-                dd.data_format = static_cast<uint32_t>(c.data_format);
-                // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
-                if (c.data_format != tt::DataFormat::Invalid) {
-                    const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, c.unpack_face_geometry);
-                    dd.geom = to_resolved_geom(g, c.data_format);
-                }
                 auto cl = dfb->core_lookup_.find(core);
                 dd.has_finalize = (cl != dfb->core_lookup_.end());
                 dd.finalize_l1_offset = dd.has_finalize ? cl->second.second : 0;  // 0-based L1 offset

@@ -29,6 +29,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/test_noc_without_barrier.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_padded_write.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_semaphore_write.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_shared_kernel_cb_descriptor.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_tensor_bad_access.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_valid_mem_wrong_alloc.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_write_beyond_res_pages.cpp
