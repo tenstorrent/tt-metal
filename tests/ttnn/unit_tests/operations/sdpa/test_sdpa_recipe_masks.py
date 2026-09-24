@@ -234,6 +234,10 @@ def test_fully_masked_rows(device, variant, record_property):
     record_property("recipe_masked_rows_finite", bool(torch.isfinite(actual[:, :, rows]).all()))
     record_property("legacy_masked_rows_nan", bool(torch.isnan(legacy[:, :, rows]).all()))
     record_property("legacy_masked_rows_finite", bool(torch.isfinite(legacy[:, :, rows]).all()))
+    record_property("recipe_masked_rows_absmax", actual[:, :, rows].abs().max().item())
+    record_property("legacy_masked_rows_absmax", legacy[:, :, rows].abs().max().item())
+    mean_v = v.double().mean(dim=2, keepdim=True)  # uniform weights over all keys
+    record_property("recipe_masked_rows_l2_vs_mean_v", metrics(actual[:, :, rows], mean_v.expand(-1, -1, 32, -1))["l2_pct"])
     # Other rows are unaffected by the fully masked ones.
     observed = metrics(actual[:, :, ~rows], masked_reference(q, k, v, mask)[:, :, ~rows])
     assert observed["l2_pct"] < LIMITS[variant]
