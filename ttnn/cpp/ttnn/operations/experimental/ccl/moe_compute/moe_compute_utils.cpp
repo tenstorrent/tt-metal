@@ -472,7 +472,7 @@ WeightMemoryConfigs get_weight_mem_configs(
     const uint32_t num_banks = shard_maps.dram_core_range_set.num_cores();
 
     // Per-shape DRAM transaction size (both streams) and the stored rows of one block.
-    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Ht, Nt_w0_w1, has_bias);
+    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Ht, Nt_w0_w1, has_bias, num_cores);
     const uint32_t block_rows = ::moe_ring::block_tiles_h(tiles_per_txn) * TILE_SIZE;
 
     // Compact W0/W1 layout (prepare_w0_w1_tensor_for_moe_compute): every bank holds the same whole blocks
@@ -794,6 +794,8 @@ ttnn::Tensor prepare_w0_w1_compact(
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
     const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N) {
+    const uint32_t num_cores = static_cast<uint32_t>(
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map.size());
     return prepare_w0_w1_compact(
         tt_w0,
         tt_w1,
@@ -801,7 +803,7 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
         E,
         K,
         N,
-        ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/false));
+        ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/false, num_cores));
 }
 
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
@@ -820,7 +822,8 @@ ttnn::Tensor prepare_w2_tensor_for_moe_compute(
 
     // Pad N to whole DRAM blocks for the per-shape transaction size (and lay a half-width last a2a iteration out
     // 2 wide).
-    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/false);
+    const uint32_t tiles_per_txn =
+        ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/false, static_cast<uint32_t>(w0_w1_shard_map.size()));
     auto blocks = w2_blocks_from_groups(n_reordered_no_pad, Nt, Kt, tiles_per_txn);
     n_reordered_no_pad.deallocate(/*force=*/false);
     auto result = ttnn::to_layout(blocks, ttnn::Layout::TILE);
@@ -857,7 +860,10 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     b0_tiled.deallocate(/*force=*/true);
     b1_tiled.deallocate(/*force=*/true);
 
-    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/true);
+    const uint32_t num_cores = static_cast<uint32_t>(
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map.size());
+    const uint32_t tiles_per_txn =
+        ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/true, num_cores);
     auto result = prepare_w0_w1_compact(w0_b0, w1_b1, L, E, K_with_bias, N, tiles_per_txn);
     w0_b0.deallocate(/*force=*/true);
     w1_b1.deallocate(/*force=*/true);
@@ -942,7 +948,7 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
 
     // 4) Pad to whole DRAM blocks for the per-shape transaction size (and lay a half-width last a2a iteration out
     //    2 wide).
-    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/true);
+    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/true, num_cores);
     auto blocks = w2_blocks_from_groups(n_with_bias, Nt + 1, Kt, tiles_per_txn);
     n_with_bias.deallocate(/*force=*/false);
     auto result = ttnn::to_layout(blocks, ttnn::Layout::TILE);

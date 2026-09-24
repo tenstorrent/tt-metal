@@ -364,10 +364,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_num_cores);
     const uint32_t a2a_cb_pages = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
 
-    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 10
-    // for the 2560/640 expert), passed to the kernels as the "tiles_per_txn" compile arg.
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 20
+    // for the 2560/640 expert on the 8-bank ring), passed to the kernels as the "tiles_per_txn" compile arg.
     const uint32_t weight_tiles_per_txn =
-        moe_ring::tiles_per_txn_for_shape(hidden_tiles, intermediate_tiles, args.has_bias);
+        moe_ring::tiles_per_txn_for_shape(hidden_tiles, intermediate_tiles, args.has_bias, matmul_num_cores);
     const uint32_t weight_tiles_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK * weight_tiles_per_txn;
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
