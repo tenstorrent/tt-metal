@@ -488,6 +488,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+        ttnn::operations::compute_throttle_utils::add_swiglu_lut_silu_define_if_needed(device->arch(), defines);
     }
 
     if (use_fused_ternary) {

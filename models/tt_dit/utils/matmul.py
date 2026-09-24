@@ -625,6 +625,20 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     config_tuple = None
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
+    # A 4-tuple default_block_size (M_block, K_block, N_block, (subblock_h, subblock_w)) is an explicit, complete
+    # blocking from the caller and is used as given, ahead of the swept (M, K, N) tables: the tables were swept at one
+    # compute config (fp32 dest on, 4 DST tiles, 2x2 subblocks) and a caller that changes the compute config is the only
+    # one that passes a subblock. A 3-tuple keeps its legacy meaning: a fallback for when the tables miss, at 2x2.
+    if default_block_size is not None and len(default_block_size) == 4:
+        M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) = default_block_size
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))

@@ -366,6 +366,16 @@ Reproduce: the `run_safe_pytest.sh --profile` command above, once per setting an
 `python models/tt_dit/tests/models/minimax_h3/tools/block_profile_stats.py runs r0=<csv> r1=<csv> ...`,
 `... compare baseline=<09-17 csv> today=<csv>`, `... devices <csv>`.
 
+### Per-op durations are not additive under FSDP (2026-09-24)
+
+With `dit_fsdp` the weight all-gathers (`AllGatherAsync`) run on the CCL sub-device concurrently with the matmul that
+consumes them: on every device to_out's gather launches 0.12 ms before to_out and finishes inside its window, and to_out's
+kernel duration is compute plus whatever part of the gather it waits for. That makes to_out 5.15 ms on mesh rows 3 and 5 and
+7.2 ms on rows 0 and 6 with identical work, and it lets a timing shift upstream move time between the two rows of the table
+without changing the layer's wall time. For any comparison that shifts timing, use the **device-busy union per layer**
+(`tools/block_device_busy.py`: the union of every op's device interval, repeatable to 0.1 ms; 238.1 ms today) rather than the
+"device only" sum, which counted 240.8 for the same profile and read a real -1.2 ms as zero (ff1.md §3.4).
+
 ### Per-op: baseline vs current
 
 The 09-17 baseline column is the `c825d089e31` breakdown at `fsdp1`; the current column is the mean of the six 2026-09-21
@@ -380,6 +390,102 @@ end-to-end in Part 4.
 | MinimalMatmulDeviceOperation (2) | 8.54 | 8.56 | +0.02 | — |
 | *(all others)* | 31.57 | 31.78 | +0.21 | FSDP collectives, within their run-to-run noise |
 | **device only** | **246.92** | **244.35** | **-2.57 (-1.0%)** | |
+
+Same-session single-run A/B of the 2026-09-23 K-loop MVMUL reorder ([kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md)), device ms per block:
+fsdp1 three AGMMs 31.53 -> **31.02**, fused MM/RS 8.62 -> **8.21**, device only 242.77 -> 241.85 (-0.92); fsdp0 31.28 -> 30.48, 8.69 -> 8.37,
+229.11 -> 227.87 (-1.24). Numerics bit-identical.
+
+### Roofline with every optimization on — one block, 15 s / 16:9 (2026-09-24)
+
+Experiment 5 (the re-profile with the landed configurations) with the two measured-but-not-landed precision levers also
+switched on, as one Tracy profile: same host (`UF-EV-B12-GWH02`), `f1575653d72` + the working tree (the K-loop MVMUL reorder
+in `matmul_block_kloop`), `fsdp1`, report `2026_09_24_02_51_06`. Same profiling command as Part 2; the roofline is
+
+```bash
+python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dump --figs block_stacked,block_ops,block_other \
+  --profile-csv generated/profiler/reports/2026_09_24_02_51_06/ops_perf_results_2026_09_24_02_51_06.csv --out-dir transformer_roofline_out/all_on
+python models/tt_dit/tests/models/minimax_h3/tools/block_profile_stats.py compare baseline=<09-17 csv> all_on=<csv>
+python models/tt_dit/tests/models/minimax_h3/tools/block_device_busy.py baseline=<09-17 csv> all_on=<csv>
+```
+
+#### How to run with every optimization on (handoff)
+
+Everything that is landed is on by default: check out the branch, build (`build_metal.sh` recreates `python_env`; reinstall the
+pinned MiniMax-H3 `diffusers` fork with `uv` afterwards, or the perf test and the pipeline fail at import), and set the two
+exploration switches. The LUT switch is host code, so an incremental rebuild needs the install step as well
+(`ninja -C build install`, or `cmake --install build_Release` after `ninja -C build`): Python loads `build/lib/_ttnncpp.so`,
+the *installed* copy, and a bare `ninja -C build` leaves it stale. Both switches are read once at model construction, so
+they must be in the environment of the process that builds the model:
+
+```bash
+# the two switches; leave either unset to run the production numerics for that op
+export MINIMAX_H3_MM_FP32_DEST=0      # ff1 (8,7,16) 2x4 and to_qkv (12,7,8) 4x2 with fp32 dest accumulation off
+                                      # ("ff1" or "qkv" selects one of them; unset or "1" = production, fp32 dest on)
+export TT_MM_SWIGLU_LUT_SILU=1        # LUT-sigmoid SwiGLU epilogue in every fused-SwiGLU matmul kernel (Wormhole only)
+
+# one block, per-op device profile (2-3 min; prints "SAFE_PYTEST: PROFILER CSV: <csv>")
+scripts/run_safe_pytest.sh --profile \
+  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
+  -s --timeout 3600
+python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dump --figs block_stacked,block_ops,block_other \
+  --profile-csv <csv> --out-dir transformer_roofline_out/all_on
+
+# the 15 s / 16:9 video, 50 steps, with the CLIP gate (~25 min with the weight cache; artifacts in ~/h3_t2va_artifacts/)
+TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
+  python -m pytest "models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py::test_t2va_end_to_end[wormhole_b0-4x8nl4-16x9_15s]" \
+  -q -s --timeout 7200
+```
+
+Two checks that the switches took: the profile's `AGMM ff1` row reads ~12.1 ms (15.7 baseline, 14.5 with both switches off), and
+the freshly built SwiGLU kernel's `defines_generated.h` under `~/.cache/tt-metal-cache/<key>/kernels/compute/<hash>/` contains
+`SWIGLU_LUT_SILU` (`grep -l SWIGLU_LUT_SILU ~/.cache/tt-metal-cache/*/kernels/compute/*/defines_generated.h`). Neither switch
+changes the roofline; both are precision decisions (item 5 below), which is why they are switches and not defaults. Drop
+`--profile` and `-s` for a plain run; `pytest.ini`'s 300 s timeout is too short for either command.
+
+What is on, and how:
+
+| optimization | how it was switched on |
+|---|---|
+| SDPA inner-loop pack-4, bf16-grade silu, swept ff1/ff2 blockings, fused ff2 MM+RS+addcmul (8x7 grid, (6,7,8) 2x2), K-loop MVMUL reorder | default in the tree, nothing to set |
+| fp32 dest off for ff1 ((8,7,16) 2x4) and to_qkv ((12,7,8) 4x2) | `MINIMAX_H3_MM_FP32_DEST=0` (`transformer_block_minimax_h3.py:162`, `attention_minimax_h3.py:236`) |
+| LUT-sigmoid SwiGLU epilogue in ff1 | `TT_MM_SWIGLU_LUT_SILU=1`: the fused-SwiGLU program factories add the `SWIGLU_LUT_SILU` define (`compute_throttle_utils.cpp`, `add_swiglu_lut_silu_define_if_needed`), which is part of the kernel hash, so LUT and exact builds coexist in the kernel cache. The profile itself predates the switch by two hours: it forced the guard in `swiglu_lut.hpp:39` and parked the compute-kernel JIT cache, since `Kernel::compute_hash` (`tt_metal/impl/kernels/kernel.cpp:556`) hashes defines and compile-time args, not header text. Verified on the binaries: only the `FUSE_SWIGLU` kernel's math TRISC changed (text 6092 -> 4004 B). Reproduced through the env var once the switch existed (report `2026_09_24_04_34_24`): ff1 12.13 ms, union 235.47 ms, `SWIGLU_LUT_SILU` in the kernel's `defines_generated.h` |
+
+Per op, merged as the roofline merges (mean over devices for collectives, max otherwise). Ideal = HiFi2 speed of light on
+the op's own grid. Baseline is the 09-17 `fsdp1` profile of Part 2.
+
+| op | ideal ms | baseline ms | **all on ms** | delta | FPU util baseline -> all on | headroom baseline -> all on |
+|---|---|---|---|---|---|---|
+| RingJointSDPA | 82.98 | 174.56 | **172.14** | -2.42 | 48% -> 48% | 2.10x -> 2.07x |
+| AGMM ff1 | 8.03 | 15.70 | **12.11** | **-3.59** | 51% -> **66%** | 1.95x -> **1.51x** |
+| AGMM to_qkv | 6.03 | 10.26 | **9.68** | -0.58 | 59% -> 62% | 1.70x -> 1.61x |
+| ff2: plain matmul + RS + gated residual -> fused MM+RS | 3.57 (72 cores) / 4.59 (56-core fused) | 6.86 + 2.78 + 0.63 = 10.27 | **8.24** | **-2.03** | 52% -> 56% (of the smaller grid) | 1.92x -> 1.79x |
+| AGMM to_out | 2.01 | 6.29 | **6.11** | -0.18 | 32% -> 33% | 3.13x -> 3.04x |
+| everything else (embeddings, FSDP collectives, norms, layout, small ops) | | 29.84 | **29.99** | +0.15 | | |
+| **device only** (sum) | 109.1 (sum of ideals) | **246.92** | **238.27** | **-8.65 (-3.5%)** | 36% -> 37% | **2.26x -> 2.18x** |
+| **device-busy union** (`block_device_busy.py`) | | **244.05** | **235.34** | **-8.71 (-3.6%)** | | |
+| device + op gap | | 250.80 | 240.37 | -10.43 | | |
+| per forward, 50 layers, device only | 5.45 s | 12.35 s | **11.91 s** | -0.44 s | | |
+
+Reading it:
+
+1. **All on is -8.71 ms per layer of device-busy wall time (-3.6%)**, -8.65 ms of `device only`; over 50 layers that is
+   -0.44 s per denoise step, 12.35 -> 11.91 s projected device-only (the baseline row of the 15 s table above is 12435 ms/fwd).
+   The block's roofline headroom moves from 2.26x to 2.18x: the whole gain is on the matmul class, and the ideal is unchanged.
+2. **ff1 becomes the best-utilised matmul in the block**: 15.70 -> 12.11 ms, 51% -> 66% of HiFi2 peak, 1.51x from its
+   roofline; to_qkv sits at 62%, the fused ff2 at 56% of its 56-core grid, to_out stays at 33% (delivery co-limited,
+   [to_out.md](to_out.md)). ff2's reduce-scatter and gated-residual Ternary disappear as separate ops into the fused row.
+3. **SDPA does not move beyond pack-4 and is now 72% of the block** (172.14 of 238.27); at 48% of peak it holds 89 of the
+   129 ms of headroom that remain. Every further percent of the forward is in `compute_streaming.hpp` ([sdpa.md](sdpa.md)).
+4. **Nothing else moved**: embeddings, norms, layout conversions and the small ops are within 0.1 ms of the baseline; the
+   FSDP `AllGatherAsync` is +0.2 ms, inside its own run-to-run band (0.3 ms, 3 std).
+5. **The two precision levers are measured here, not landed.** The fp32-off switch defaults to on (ff1.md §3.4: -0.84 ms/layer
+   at production-level CLIP, 50-step A/B) and the LUT is opt-in through `TT_MM_SWIGLU_LUT_SILU=1`
+   ([ff1_swiglu_lut_handoff.md](ff1_swiglu_lut_handoff.md) §4). The end-to-end video below (Part 4, *Optimization target*)
+   carries both: **CLIP 35.90** (min 34.70) against 35.75 production on this host, 12015.6 ms/fwd. VBench with the LUT enabled has
+   not been run. Adopting either is the owner's call.
+
+Figures: `transformer_roofline_out/all_on/block_{stacked,ops,other}_wh_M13664.png`; the baseline figures stay in
+`transformer_roofline_out/`.
 
 ### From the breakdown to the per-op work
 
@@ -406,10 +512,10 @@ the tooling. Numbers are per call, per device, at 15 s / 768P / 16:9.
 | op | share of block | baseline (09-17 block) | roofline | current | status | doc |
 |---|---|---|---|---|---|---|
 | ring joint SDPA | 70.7% | 174.56 ms | 83.0 ms | 172.16 ms | pack-4 landed; exp ring op brought up (193.7 vs normal 191.6 ms on the padded shard, not adopted); softmax half of the inner loop is the lever | [sdpa.md](sdpa.md) |
-| ff1 AGMM (fused SwiGLU) | 6.4% | 15.7 ms | 8.03 ms | 15.29 ms | bf16 silu landed (-3.6%); fp32 dest off + 2x4 (-8%) and a 6-segment LUT silu (-9.2%) measured, both precision decisions, not landed | [ff1.md](ff1.md) |
-| to_qkv AGMM (chunks=3) | 4.2% | 10.4 ms | 6.03 ms | 10.30 ms | behaves like ff1; fp32 dest off + 4x2 -8.7% measured, not landed | [to_qkv.md](to_qkv.md) |
+| ff1 AGMM (fused SwiGLU) | 6.4% | 15.7 ms | 8.03 ms | 15.29 ms | bf16 silu landed (-3.6%); K-loop MVMUL reorder landed 2026-09-23 (-0.35 ms per call on the mesh bench, [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md)); fp32 dest off + 2x4 (-8%) and a 6-segment LUT silu (-9.2%) measured, both precision decisions, not landed | [ff1.md](ff1.md) |
+| to_qkv AGMM (chunks=3) | 4.2% | 10.4 ms | 6.03 ms | 10.30 ms | behaves like ff1; K-loop reorder landed 2026-09-23 (11.25 -> 11.03 ms per call, fp32 dest on); fp32 dest off + 4x2 -8.7% measured, not landed | [to_qkv.md](to_qkv.md) |
 | to_out AGMM (fused addcmul) | 2.1% | 5.3 ms (4.33 in the plain sweep) | 2.01 ms | 5.29 ms | delivery co-limited (relay waits 1.1 ms) + two-pass epilogue 0.7 ms; compute-side levers do not transfer | [to_out.md](to_out.md) |
-| ff2 matmul + reduce-scatter + addcmul | 2.7% + 1.1% + ~0.3% | 10.70 ms host-timed (7.45 + 2.54 + 0.71) | 4.59 ms (56-core matmul) | **8.94 ms fused** | fused MM/RS re-evaluated like-for-like at M=13664 and landed 2026-09-23 (8x7 matmul, (6,7,8) 2x2, L1 window): -1.76 ms/layer, -1.88 ms/block in the Tracy profile, **-166 ms/fwd (-1.35%) in a 10-step same-host A/B**, CLIP 35.58 vs 35.71; unfused RS hyperparameters measured (-5%), not landed | [ff2.md](ff2.md) |
+| ff2 matmul + reduce-scatter + addcmul | 2.7% + 1.1% + ~0.3% | 10.70 ms host-timed (7.45 + 2.54 + 0.71) | 4.59 ms (56-core matmul) | **8.94 ms fused** (8.68 after the K-loop reorder, 2026-09-23) | fused MM/RS re-evaluated like-for-like at M=13664 and landed 2026-09-23 (8x7 matmul, (6,7,8) 2x2, L1 window): -1.76 ms/layer, -1.88 ms/block in the Tracy profile, **-166 ms/fwd (-1.35%) in a 10-step same-host A/B**, CLIP 35.58 vs 35.71; unfused RS hyperparameters measured (-5%), not landed | [ff2.md](ff2.md) |
 
 ## Part 4 — Other findings
 
@@ -424,6 +530,7 @@ in Part 2), measured at `fsdp1`.
 | baseline, **this host**, tuned entries disabled | 612.9 s | 590.9 s | 12058.3 | 40.6x | — | **TODO** |
 | **best found**, this host, `a07012d7d8a` | **612.2 s** | **587.4 s** | **11988.4** | 40.6x | — | **TODO** |
 | best found, this host, later run (rebuilt weight cache) | 621.0 s | 599.2 s | 12230 | 41.2x | **35.88** (min 34.69, bar 33.0) | **TODO** |
+| **every optimization on**, this host, `f1575653d72` + tree, 2026-09-24 (tree default + `MINIMAX_H3_MM_FP32_DEST=0` + LUT SwiGLU; Part 2 *Roofline with every optimization on*) | 611.9 s | **588.8 s** | **12015.6** | 40.6x | **35.90** (min 34.70, max 37.01) | **238.27 ms** (union 235.34) |
 
 Same host, same weights, same everything, one run each, 2026-09-17: the landed ff1 + ff2 blockings
 are worth **-69.9 ms/fwd, -0.58%** (steady 12057 -> 11990 ms/step; denoise 590.9 -> 587.4 s). The
@@ -525,7 +632,7 @@ One row per experiment, in the order they were numbered (12 was never allocated)
 | 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible. [sdpa.md](sdpa.md) |
 | 3b | `q_chunk=128` | **done** | Not a perf path: slower than q=192 at every feasible k. Hang history in [sdpa.md](sdpa.md), chunk-shape zone. |
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product. [sdpa.md](sdpa.md) |
-| 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
+| 5 | Re-profile the block with landed configs | **done** | 2026-09-24, this host, every optimization on (tree default + fp32 dest off + LUT SwiGLU): **246.92 -> 238.27 ms** device-only (-3.5%), 244.05 -> 235.34 device-busy union (-3.6%), ff1 at 66% of HiFi2 peak, block headroom 2.26x -> 2.18x. Table and per-op roofline in Part 2, *Roofline with every optimization on* |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
 | 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links, sequential passes for shards that do not fit L1); PCC 0.99975. 15 s shard (padded to 14336 rows): exp 206.7 ms on 56 cores -> 196.2 on 64 cores (bottom-row MUX) -> **193.7 ms** with the shared pack-4 inner loop, against the normal op's 192.9 -> **191.6 ms**: 1.1% behind, not adopted. [sdpa.md](sdpa.md) |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
@@ -537,6 +644,8 @@ One row per experiment, in the order they were numbered (12 was never allocated)
 | 15 | ff1 AGMM SwiGLU epilogue: bf16-grade `silu_tile<false>` (2026-09-19) | **landed** | Device kernel 15,852 → **15,289 us (-3.6%)** on the mesh, PCC 0.99998 unchanged to the 4th decimal; the mesh "hang" it was first blamed for was a semaphore-reuse race in `sweep_mm_block_sizes.py` (one semaphore pair for back-to-back calls; the model ping-pongs two), fixed. [ff1.md](ff1.md) |
 | 16 | ff1 AGMM K-loop attribution with per-thread device zones (2026-09-19) | **measured** | The 5 ms above the FPU time is **pipeline issue efficiency**, not delivery: on a 2x2 fp32 subblock the MATH thread issues at 47 cycles per tile-MAC (nominal 32), UNPACK is busy 42 per tile and PACK 309 per fp32 L1-acc tile, with 21-26 cycles of DST waits — all three ~95% busy. A relay-protocol prefetch changed nothing (16.08 → 16.06 ms); 4x1 subblocks cost +2.2 ms; doubling K_block -1.3%. Remaining levers are precision decisions (fp32 dest off + 2x4: -8% measured; LUT sigmoid) or tt-llk work on `matmul_block`. [ff1.md](ff1.md) |
 | 17 | to_qkv AGMM attribution (2026-09-21) | **measured** | Behaves like ff1: K loop 10,053 of 10,228 us per core (98%), operand waits 0.9 us of a 30 us iteration, sampled pipeline at the same 47 cycles per tile-MAC; the `chunks=3` writer split costs 0.08 ms and the copy epilogue 0.17. fp32 dest off with a 4x2 subblock: **11.30 → 10.32 ms on the mesh (-8.7%)**, rel-RMSE 0.0044 → 0.0107 (bar 0.02). LoFi saves only 1.0 of 3.0 ms of math (unpacker-paced). [to_qkv.md](to_qkv.md) |
+| 20 | fp32 dest off for ff1 / to_qkv, end to end (2026-09-24) | **measured** | Two SwiGLU epilogue fixes first (live-pairs-only, truncating multiply): ff1 fp32 off (8,7,16) 2x4 on the mesh bench 15.63 -> **14.30 ms** (-8.5%). Exploration switch `MINIMAX_H3_MM_FP32_DEST` in the model. Block, as device-busy wall time per layer (`tools/block_device_busy.py`, the union of op intervals; per-op sums double count the FSDP gathers that overlap to_out): **ff1 alone -0.91 ms**, to_qkv alone -0.35, both -1.22, additive. to_out's longer *kernel duration* with to_qkv off is the concurrent weight gather being re-apportioned, not a cost. Pipeline 10-step: time unresolvable (0.35% of a forward), output a different sample of the same prompt (mean abs diff 33 of 255 with both ops off vs 1.2 run-to-run). **50-step, same session, back to back: ff1-only CLIP 35.91 (min 34.96) vs production 35.75 (min 34.83); per forward 12087 vs 12143 ms (-56 ms, -0.46%)**; output shift 16 of 255 (the TP8 range). Verdict in [ff1.md](ff1.md) §3.4: -0.84 ms per layer at production-level CLIP, adoption is the user's call; switch defaults to fp32 on |
+| 19 | AGMM K loop: what paces the 2x2 fp32 subblock (2026-09-23) | **answered** | Source accounting of the 47 cycles per tile-MAC (per-tile `SETC16` + MOP + bank switch on MATH; 4 unpacks per 4 tile-MACs with a context round-trip on UNPACK) and a three-signature decision table in [ff1.md](ff1.md) §3.1; the K1-K5 ladder in ff1.md §5. Capture attempt on the mesh bench found two traps: the tracy parent deadlocks on the chip lock without `TT_METAL_DEVICE_ARCH=wormhole_b0`, and the ring op hangs in its first call with `-DPROFILE_PERF_COUNTERS` (board reset needed). Answered the same day by an engine-isolation study on GWH01 (ff1.md §3.1, exp 16): the bare unpack stream is 185 of the 208 cycles per K-tile step and HiFi4 lands at 256 + 24, so the loop is **unpacker-paced** (4 x 2 KB per 4 tile-MACs at ~44 B/cycle); math-thread issue work (K2-K4) is closed, the levers are bytes per tile-MAC: fp32 dest off with 2x4 (measured) and bfp8 in1 / in0 (projected -25% / -35%, precision decisions). **Verified on this galaxy the same evening** (ff1.md exp 17): all eleven variants within 1-2%, and the hardware counters show FPU 60%, math thread never stalled, unpacker requests half-blocked by overwrite protection and never by the L1 port: the floor is the src-register handshake (4 per step) plus the exposed srcB refill of the 2x2 scheme, so one tt-llk lever remained before the precision levers: hide the refill by alternating the MVMUL order between K tiles. **Built and landed the same evening** as `matmul_block_kloop` (ff1.md exp 18): -3.5% of the K loop at HiFi2 (209.7 -> 202.3 cycles per step), bit-exact; mesh ff1 16.04 -> 15.69 ms, to_qkv 11.25 -> 11.03, ff2 fused 8.98 -> 8.68. Half the projection: the isolation ladder re-run before/after puts the exposed refill at 5 cycles (nopack 197.9 -> 192.8, i.e. on the 193 mock floor; both mock rows unchanged) and the remaining 202 vs 193 at the packer's interaction with the loop (the per-subblock DST handoff; L1-port refusals stay 0%), which no MVMUL order touches; the lever is exhausted at 2x2, to be carried into 2x4 / 4x2 with fp32 dest off. Plan, trace and result in [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md) |
 | 18 | to_out AGMM attribution (2026-09-21) | **measured** | The op the model runs (fused addcmul, approx on) is **5.29-5.31 ms** on the device, not the 4.33 ms the blocking sweep recorded with the `plain` use case: the addcmul epilogue is 0.7 ms (two passes over the fp32 intermediate) and the K loop **waits on the in0/in1 relay 5.7 us of every 23 us iteration (~1.1 ms)** -- to_out needs ~12.8 GB/s per core of operands at its MAC pace and the store-and-forward relay delivers ~10. Relay prefetch: no gain (5.52 vs 5.43); fp32 dest off: -3.5% only, larger subblocks / M_block 16 / K_block 14 nothing on the mesh (they help single-device, where the loop does not wait). Levers left: a one-pass epilogue (~-0.35 ms) and a higher-bandwidth in0 path (multicast); [to_out.md](to_out.md) |
 
 ### TP/SP parallel-configuration sweep — 15 s / 16:9

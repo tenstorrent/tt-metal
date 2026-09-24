@@ -120,17 +120,20 @@ class ParallelFeedForward(Module):
         default_block_size=None,
         force_transpose: bool = True,
         use_persistent_buffer: bool = True,
+        ff1_compute_kernel_config=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
 
         `default_block_size` and `force_transpose` are forwarded to ff1 only, for callers that have
-        measured block sizes for their ff1 shape; ff2 keeps the generic path.
+        measured block sizes for their ff1 shape; ff2 keeps the generic path. `ff1_compute_kernel_config`,
+        when given, replaces `compute_kernel_config` for ff1 only (e.g. fp32 dest off with an 8-tile
+        subblock while ff2 keeps fp32 dest).
         """
         ff1_out = self.ff1(
             x,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=ff1_compute_kernel_config or compute_kernel_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
             force_transpose=force_transpose,
@@ -150,6 +153,7 @@ class ParallelFeedForward(Module):
         default_block_size=None,
         core_grid=None,
         force_transpose: bool = True,
+        ff1_compute_kernel_config=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -157,11 +161,11 @@ class ParallelFeedForward(Module):
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
 
-        `default_block_size` and `force_transpose` are forwarded to ff1 only, as in `forward`.
+        `default_block_size`, `force_transpose` and `ff1_compute_kernel_config` are forwarded to ff1 only, as in `forward`.
         """
         ff1_out = self.ff1(
             x,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=ff1_compute_kernel_config or compute_kernel_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
             core_grid=core_grid,

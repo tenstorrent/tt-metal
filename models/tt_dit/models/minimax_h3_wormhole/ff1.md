@@ -135,7 +135,10 @@ the pipeline's issue pace. The table below is the corrected decomposition.)
 | 6 | per-block zones | K loop 12.9 ms, SwiGLU 2.8 ms, waits 0 |
 | 7 | SwiGLU attribution and variants, single device | table in §2: silu 2.16 ms; batching 0.1 ms; `silu_tile<false>` -0.93 ms with PCC intact |
 | 8 | `silu_tile<false>` in the AGMM kernel on the mesh, through the sweep harness | hung 3 of 3 times. **Root-caused 2026-09-19: not the kernel.** The harness reused one semaphore pair and one gathered-in0 buffer for every call, and its warm-up enqueues calls back to back (`sync=False`): a device that finishes call i early starts call i+1 and signals ring semaphores a neighbour is still consuming in call i. Reproduced with the **unmodified** kernel: 5 back-to-back calls with one shared set hang after the first completes. The model never sees this: `CCLManager.get_ag_ping_pong_semaphore/buffer` alternates two sets. Harness fixed to ping-pong (§6) |
-| 14 | 2026-09-21: silu variants A/B on the single device and the mesh (§3.2) | fitted 6-segment fp16 LUT silu fused with the up multiply: single device 15.68 -> **14.42 ms**, PCC 0.999922, rel-RMSE 0.00914; mesh **16.04 -> 14.57 ms (-9.2%)**, PCC 0.9999858. Measured, not landed |
+| 14 | 2026-09-21: silu variants A/B on the single device and the mesh (§3.2) | fitted 6-segment fp16 LUT silu fused with the up multiply: single device 15.68 -> **14.42 ms**, PCC 0.999922, rel-RMSE 0.00914; mesh **16.04 -> 14.57 ms (-9.2%)**, PCC 0.9999858. Measured, not adopted; opt-in through `TT_MM_SWIGLU_LUT_SILU=1` since 2026-09-24, block and video numbers in the README (*Roofline with every optimization on*) |
+| 16 | 2026-09-23 (galaxy GWH01): engine isolation of the K loop, 11 variants of `matmul_blocks` with one engine mocked out (§3.1) | bare unpack stream 185 of 208 cycles per step, HiFi4 256 + 24, rawunpack / fixedaddr / packmulti no change: **unpacker-paced at 46 cycles per 2 KB tile**; K2-K4 closed, only bytes per tile-MAC move it |
+| 17 | 2026-09-23 (this galaxy): the eleven exp-16 variants re-run with a KLOOP zone, plus Tensix hardware perf counters on the production loop (§3.1) | every row within 1-2% of GWH01 (full 209, LoFi 200, HiFi4 281, nopack 196-200, unpackmock 193, mathmock 193, bare unpack 186-188); counters: FPU 60%, math thread 0.5% stalled with instructions always pending, src data ready exactly 60%, unpacker write requests 52-58% blocked by overwrite protection and 0% by the L1 port. **Confirmed unpacker-side; mechanism is the src-register handshake (4 per step) plus the exposed srcB refill of the 2x2 reuse scheme, not raw L1 bandwidth.** 17b: the two mocks under counters confirm the prediction (unpack mocked: refusals 0%, FPU 66% = 128/193, unpack thread waiting on srcB clear 70%; math mocked: unpacker writes 32 cycles per tile with no refusals) |
+| 18 | 2026-09-23 (this galaxy, same evening): the K-loop MVMUL reorder of [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md) built and measured (§3.1) | `matmul_block_kloop` alternates the 2x2 reuse-A order with its A/B mirror between K tiles: HiFi2 **209.7 -> 202.3** cycles per step (LoFi 200.3 -> 193.8, HiFi4 281.5 -> 279.6), bit-exact (128 LLK harness cases, 0 mismatches); mesh ff1 16.04 -> **15.69 ms**, to_qkv 11.25 -> 11.03, ff2 fused 8.98 -> 8.68, PCC identical. The plan's -15..20 did not survive the hand trace: the exposed refill was 5 of the 17 cycles above the 193 mock floor (nopack 197.9 -> **192.8**, i.e. the alternating loop without the packer sits on the floor; both mock rows unchanged at 193), the other ~9-12 are the packer's interaction with the loop (L1-port refusals stay 0%; likely the per-subblock DST handoff, exp 12). Unpack issue order: no effect; no MVMUL order can go below the four-handshake floor |
 | 15 | 2026-09-21: block zones under fp32 dest off, (8,7,16) 2x4 (§3.2) | KLOOP 12,930 -> 11,692 us but SWIGLU 2,191 -> 2,744: the bf16-dest `mul_binary_tile` does a software round-to-nearest-even per vector, and `swiglu_block` processes the padded N. Net 15,169 -> 14,506 us (-4.4%); the -8% of exp 2 included the silu gain now banked separately |
 | 10 | relay prefetch: in0/in1 receivers request block k+1 right after pushing block k to compute, before waiting for the downstream hop's request (60-line reorder of `dm_in0_sender.cpp` / `dm_in1_sender_out.cpp`, `tools/agmm_relay_prefetch.patch`) | correct (PCC identical, no hang) and **no gain**: HiFi2 16.08 → 16.06 ms, LoFi 14.52 → 14.68. Delivery does not pace the loop. Not landed |
 | 11 | blocking sweep with the bench, HiFi2 host ms: (8,7,10) 2x2 **16.06**; (8,7,10) **4x1 18.28** (same 4 DST tiles, 5 unpacks per K step instead of 4); (4,7,10) 23.68; (4,14,10) 23.37 (doubling K_block = halving fp32 L1-acc pack passes: -1.3%); plain (8,7,10) 14.30; plain LoFi 12.65 | non-math time scales with tile-MACs and with the unpack count, not with iterations or pack passes → issue-bound pipeline, see §2 |
@@ -170,6 +173,242 @@ rel-RMSE < 0.02. Single-device SwiGLU vs fp32 torch: fp32 dest 0.99993 / 0.0087,
   only as an index stride), or MOP/REPLAY programming across the K loop. This is tt-llk work on
   `llk_math_matmul` / `llk_unpack_AB_matmul` for Wormhole, not a kernel edit; the sampled zones above are the
   measurement to hold it against.
+
+**What the 47 cycles are made of (source read, 2026-09-23).** Per `matmul_block` call on a 2x2 subblock the math
+thread runs `_llk_math_matmul_` (`tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h:852-1002`): for each of
+the 4 output tiles a `set_dst_write_addr` (`common/inc/cmath_common.h:257-277`, a `TT_SETC16` config write), one
+`ckernel_template::run()` (`common/inc/ckernel_template.h:320-323`, a `TTI_MOP` replaying the 16-MVMUL image twice at
+HiFi2, programmed by `matmul_configure_mop`, `llk_math_matmul.h:~330-496`), then a `SETRWC` / `CLEARDVALID` bank switch. The
+unpack thread runs `_llk_unpack_AB_matmul_` (`llk_unpack_AB_matmul.h:287-447`): per K tile one context acquire,
+`_llk_unpack_configure_addresses_`, a semaphore post, a `STALLWAIT`, two srcB `UNPACR`s with a `SETDMAREG`/`REG2FLOP` address
+rewrite between them, a `TT_MOP` for the two srcA tiles, a semaphore get and a context switch -- four tile unpacks per four
+tile-MACs. The kernel passes the subblock dims at run time (`current_subblock_h/w`, `compute.cpp:475-486`, needed for the
+ragged edge), so none of those LLK loops unroll; the `state_configure` call inside `matmul_block`
+(`tt_metal/hw/inc/api/compute/matmul.h:259`) compiles to nothing without `TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED`. The
+Blackhole LLK has the same per-tile loop (`tt_llk_blackhole/llk_lib/llk_math_matmul.h:742-780`), so there is no ready
+variant to port.
+
+**Why the per-thread zones cannot say which thread paces (and what would).** The MATH zone of exp 12 is RISC-V issue
+time, back-pressured by the Tensix instruction FIFO: an MVMUL stalled on srcA/srcB dvalid looks identical to a slowly
+issued one. The fidelity scaling of exp 4 (plain, single device: LoFi 13.17 / HiFi2 14.48 / HiFi4 20.72 ms against
+4.0 / 8.0 / 16.1 ms of nominal MAC time) fits `pace = max(~43, FPU + ~16..19)` cycles per tile-MAC: a ~16-cycle term
+serialized with every tile-MAC (the size of a per-tile config write plus bank switch that cannot overlap the MOP), and a
+~43-cycle floor (four 2 KB unpacks per four tile-MACs at 2x2). Both would have to fall for the loop to reach 32. The
+disambiguator is the Tensix hardware counters, which the profiler exposes (`tech_reports/PerfCounters/perf-counters.md`):
+`FPU Util` (FPU active cycles / elapsed), `SrcA/SrcB Valid Wait` (math waiting for the unpacker), `Thread 1 Stall Rate`
+and the `INSTRN` availability rates, `Unpacker0/1 Write Efficiency`. Three signatures:
+
+| counters read | pacer | lever |
+|---|---|---|
+| FPU Util ~68%, SrcA/B Valid Wait ~0, T1 stall low, THCON/CFG avail high | math-side issue: cfg write + bank switch per tile serialize with the MOP | LLK: dest increment through the addr_mod inside the replay so one MOP covers the 2x2 (no `SETC16` per tile), or a MOP outer loop over the K tiles; kernel-only prelude: compile-time subblock dims (exp K2 below) |
+| SrcA/SrcB Valid Wait >= 25%, unpacker busy ~100% | unpacker: 4 unpacks per 4 tile-MACs at ~43 cycles each | only fewer unpacks per MAC: 2x4 / 4x2 subblocks (fp32 dest off, exp 2 / 15) or a narrower in1 format (bfp8, a precision decision); no code lever at 2x2 bf16 |
+| both ~50% | the two limits coincide (the exp 4 fit) | both changes are needed for any gain; take the subblock change first, it lifts the floor to ~32 |
+
+The capture itself is `TT_METAL_DEVICE_ARCH=wormhole_b0 python -m tracy -r -p --profiler-capture-perf-counters=fpu,pack,unpack,instrn --perf-counter-multipass <bench> ...`
+(two passes of the workload, merged into the ops CSV as per-op `FPU Util`, `SrcA Valid Wait`, ... columns). Two things
+found 2026-09-23 on the way: without `TT_METAL_DEVICE_ARCH`, `tools/tracy/perf_counter_multipass.py:76-88` opens device 0
+in the *parent* tracy process to learn the architecture, which on this Galaxy leaves the `CHIP_IN_USE_16_PCIe` mutex held
+and the child workload waits on it forever; and with it set, the mesh bench (`--op ff1 --no-fusion`) compiled with
+`-DPROFILE_PERF_COUNTERS=3` and hung in its first AGMM call (25 min after `tensors on device`), wedging the ETH heartbeat.
+The readout runs on BRISC after the TRISCs finish (`tt_metal/hw/firmware/src/tt-1xx/brisc.cc:542-545`,
+`tt_metal/tools/profiler/perf_counters.hpp:471`) and pushes each group to DRAM; the interaction with the ring op's BRISC
+dataflow kernels and the mux row is not root-caused. **Run the capture on the single-device bench** (`minimal_matmul`,
+`transformer_op_single_device_bench.py --op ff1 --no-plain` for the SwiGLU op or `--no-fusion` for the plain K loop; the
+`matmul_blocks` it runs is the AGMM's, `minimal_matmul/device/kernels/compute.cpp:356-410`), which has no ring, no fabric mux
+and one BRISC dataflow kernel per core. Not run here: the board needed `tt-smi -r all` after the mesh hang, and the question
+was answered the same day by the engine-isolation study below.
+
+**Engine isolation (exp 16, 2026-09-23, galaxy GWH01, plain unfused ff1, shipped blocking).** Instead of counters, each
+variant edits `matmul_blocks` so one engine does nothing (or only its handshake) and the step time is read from device
+zones: 63,504 K-tile steps per core, one step = one `matmul_block` call = 4 unpacks + 4 tile-MACs of a 2x2 subblock.
+Output is garbage in the mock variants; only the time counts.
+
+| variant | what is removed | cycles per step | per tile-MAC |
+|---|---|---|---|
+| full loop, HiFi2 | nothing | **208** | 52 |
+| rawunpack | the unpack thread's per-call handshake (semaphore, address config, STALLWAIT, context switch) for 6 of 7 steps | 209 | |
+| fixedaddr | the L1 address pattern (same tiles every step) | 209 | |
+| LoFi | half the MVMUL cycles | 198 | |
+| nopack | every PACR | 197 | |
+| unpackmock | every UNPACR (math + pack left) | 192 | |
+| mathmock | every MVMUL (unpack + pack left) | 191 | |
+| rawstream_a | 4 tiles through one unpacker, nothing else running | 193 | 48 |
+| **rawstream_nopack** | **the bare UNPACR stream, nothing else running** | **185** | **46 per tile** |
+| packmulti | half the pack instructions | 209 | |
+| HiFi4 | (double the MVMUL cycles) | 280 = 256 + 24 | 70 |
+
+Reading: the bare unpack stream is 185 of the 208 cycles, so the 2x2 step is paced by moving 4 x 2 KB of operands through the
+unpacker at ~44 bytes per cycle, and the remaining 23 cycles are handshake bubbles between unpacker and FPU. The HiFi4 row
+settles the math-side story: 4 x 64 = 256 cycles of MVMUL plus only 24, so the per-tile config write and bank switch on the
+math thread cost ~6 cycles per tile-MAC, not the ~16 the fidelity fit above allowed; at HiFi2 the math side would run at
+~4 x 38 = 152 if fed, under the 185 unpack floor. `rawunpack` and `fixedaddr` at 209 say the unpack thread's RISC-V
+bookkeeping is already hidden under its data movement; `packmulti` says the pack instruction count is not on the path and
+`nopack`'s 11 cycles are the packer's read-modify-write L1 traffic contending with the unpacker's reads. One unpacker moving
+all four tiles (193) costs the same as the two sharing them (185-192): the limit is one shared port, not two engines.
+
+This is the second row of the three-signature table: **unpacker-paced**. Consequences for the ladder in §5: K2 (compile-time
+subblock dims), K3 (no-MOP replay) and K4 (one MOP per subblock) all attack math-thread issue cost that is not on the critical
+path and are closed without being run. The only quantity that moves the step is bytes of operand per tile-MAC:
+
+| lever | mechanism | projected | cost |
+|---|---|---|---|
+| fp32 dest off, 2x4 subblock | 6 unpacks per 8 tile-MACs: 35 unpack cycles per tile-MAC against 32 of math | KLOOP 12,930 -> 11,692 us measured (exp 15), ~42 per tile-MAC | bf16 partial sums; rel-RMSE 0.0083 -> 0.0166, under the 0.02 bar; model-level check |
+| bfp8 in1 (weights) | the two srcA unpacks per step move ~1 KB tiles instead of 2 KB: ~140 unpack cycles against 128 of math | ~150-160 per step, about -25% | weight precision; not measured |
+| bfp8 in0 as well | all four unpacks halve: ~93 unpack cycles, math-bound at 128 + bubbles | ~-35% | activation precision; not measured |
+| `dst_full_sync_en` with fp32, 2x4 | 8 fp32 tiles to math at identical numerics, but pack no longer overlaps: ~2,400 pack cycles per subblock on the path | ~79 per tile-MAC at K_block 7, break-even ~50 at K_block 21 | no gain |
+
+**Verified on this galaxy (GWH02, 2026-09-23 evening, exp 17).** The same eleven variants re-run on one device of `UF-EV-B12-GWH02`
+through the single-device bench with a per-output-block `KLOOP` zone (`tools/mm_kloop_variants.py apply <v>` / `parse`;
+the mocks follow the tt-llk perf harness's dvalid scheme, `tt_metal/tt-llk/tests/helpers/include/perf.h:51-120`), 3 calls per
+variant, mean over the 64 cores:
+
+| variant | GWH01 (artifact) | GWH02 (this run) | cycles per step |
+|---|---|---|---|
+| full, HiFi2 | 208 | **209** (208.8-210.4 over 4 calls) | |
+| full, LoFi | 198 | 200 | |
+| full, HiFi4 | 280 | 281 | = 256 + 25 |
+| nopack | 197 | 196-200 | |
+| unpackmock (no UNPACR; math + pack, mock unpacker sets dvalid) | 192 | 193 | = 128 + 65 |
+| mathmock (no MVMUL; unpack + pack, mock math clears dvalid) | 191 | 193 | |
+| mathmock + nopack (bare unpack stream) | 185 | 186-188 | |
+
+Every row agrees to 1-2%. Two of them sharpen the reading. `unpackmock` at 193 = 128 + 65 says the math side with instantly
+valid sources still pays ~16 cycles per tile-MAC of dvalid round trip (STALLWAIT on clear, SETDVALID, MVMUL, CLEARDVALID),
+and `mathmock` at 193 says the unpack side with instant consumption pays the same: **the ~185-193 floor is the source-register
+handshake protocol at four handshakes per step, on whichever engine is real**, and the full loop's 208 adds ~15-20 cycles for
+the refill of the srcB banks that the 2x2 reuse scheme holds through the whole step (`_llk_math_matmul_init_` disables the
+srcB valid clear for `t_dim > 1`, `llk_math_matmul.h:789-799`, so B0 and B1 are released only by the final `CLEARDVALID` and
+the next step's B0 write is exposed). HiFi4 hides all of it under the longer MVMULs (256 + 25).
+
+The hardware counters (`tools/tensix_perf_counters.py`, from a `--profiler-capture-perf-counters=fpu,pack,unpack,instrn`
+run of the same bench; tracy's own merge of the two passes asserts on run-host-ids, so the parser reads the raw marker rows)
+say the same thing from the inside, production 2x2 fp32 case, per core over the whole kernel (13.52 M cycles, K loop + copy
+epilogue), 4x2 fp32-off case alongside:
+
+| counter | 2x2 fp32 | 4x2 fp32-off |
+|---|---|---|
+| FPU active cycles | 8,141,936 = 63,504 steps x 128.2 | 8,444,912 |
+| FPU util (active / elapsed) | 60.2% (61.6% of the K loop = 128/208) | 71.6% |
+| math instructions started / available | 99.9% | 99.9% |
+| math src data ready / elapsed | 60.2% (= FPU active: the FPU idles exactly when operands are not ready) | 71.4% |
+| MATH instruction pending on T1 | 97% | 97% |
+| T1 (math thread) stall | 0.5% | 0.9% |
+| wait srcA / srcB valid (T1) | 0 / 0 | 0 / 0 |
+| unpacker 0 / 1 busy | 93% / 93% | 94% / 94% |
+| srcA / srcB write requests (cycles / elapsed) | 73% / 63% | 77% / 70% |
+| srcA / srcB write requests blocked by **overwrite protection** | 58% / 52% of requests | 76% / 49% |
+| srcA / srcB write requests blocked by the **L1 port** | 0% / 0% | 0% / 0% |
+| packer busy | 32% | 20% |
+| T2 (pack thread) stall | 13% | 5% |
+
+The math thread never stalls and always has work queued; the FPU is idle 40% of cycles and those are exactly the cycles with
+no source data ready. The unpackers are "busy" 93% but never port-blocked: half of their write requests are refused by
+overwrite protection, i.e. they hold a tile and wait for the FPU to release the bank. The unblocked write cycles come to
+~32 per 2 KB tile (73% x 42% x 208 / 2 = 64 cycles for two srcA tiles), so the engine moves ~64 B/cycle when it can write;
+the artifact's 46 cycles per tile is 32 of data plus ~14 of handshake round trip, not a 44 B/cycle port. The consequence
+for the levers is the same as the artifact's, with one refinement: hiding the exposed srcB refill (a MOP order or bank
+schedule in which the next step's first operands land during the current step's last two MVMULs) is worth at most
+208 -> ~185, ~11% of the K loop (~1.4 ms on ff1, ~0.6 ms on to_qkv per call), and is tt-llk work on `_llk_math_matmul_` /
+`_llk_unpack_AB_matmul_`; past that floor only fewer handshakes and bytes per tile-MAC move it, which is the subblock shape
+(fp32 dest off) and the operand format (bfp8).
+
+**The two mocks under counters (exp 17b, same evening), which test that reading directly.** Prediction: with the unpacker
+mocked, overwrite refusals should vanish and FPU util should be 128/193; with math mocked, the real unpacker should write with
+no refusals and its write cycles should show the per-tile data time.
+
+| counter | unpack mocked (real math) | math mocked (real unpack) |
+|---|---|---|
+| K-loop pace | 12.36 M cycles per core, ~193 per step | 12.43 M, ~193 per step |
+| FPU util | **65.9%** (= 128 / 193 over the K loop) | 0.1% |
+| src data ready / elapsed | 65.9% (= FPU active) | 0.1% |
+| unpacker 0 / 1 busy | 1.2% / 1.2% (mock) | 85% / 85% |
+| srcA / srcB write requests, cycles / elapsed | 0.9% / 0% | **33.6% / 33.0%** = 65 + 64 cycles per step for 2 + 2 tiles: **~32 cycles per 2 KB tile** |
+| requests refused by overwrite protection | **0% / 0%** | 0.1% / 0.9% |
+| requests refused by the L1 port | 0 / 0 | 0 / 0 |
+| unpack thread waiting for **srcB clear** / srcA clear | **70.5%** / 1.0% (the mock's STALLWAIT before each SETDVALID) | 0 / 0 |
+| math thread stalled | 0.5% | 94% (the mock's STALLWAIT: 74% on srcA valid, 20% on srcB valid) |
+
+Read together: with no bytes moved at all the loop still runs at 193 and the FPU still idles 34% for "source not ready"; the
+mock unpacker spends 70% of its time waiting for a **srcB** bank to clear and 1% for srcA, which is the reuse scheme holding
+both B banks until MVMUL ④. With no math at all the unpacker writes 32 cycles per tile, is never refused, and is busy but not
+writing for another ~16 cycles per tile (address config, context switch, dvalid); 4 x (32 + 16) = 193. So the artifact's 46
+cycles per tile is 32 of data plus ~14-16 of per-tile unpack-side overhead and handshake, the 208 of the real loop is that
+floor plus the exposed srcB refill, and the L1 port is idle in every configuration. `tools/tensix_perf_counters.py` on the
+device CSVs of `mm_kloop_variants.py apply 2` and `apply 1` runs.
+
+**The reorder, built and measured (exp 18, same evening).** `matmul_block_kloop` (`tt_metal/hw/inc/api/compute/matmul.h:335-368`)
+runs a subblock's whole K loop in one call and, for 2x2 on Wormhole, `_llk_math_matmul_kloop_`
+(`tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h:1060-1115`) alternates the reuse-A order (A0B0, A0B1, A1B0,
+A1B1) with its mirror (A0B0, A1B0, A0B1, A1B1) between K tiles, with both DVALID auto-clears off and explicit `CLEARDVALID`s.
+Same-session A/B on the plain single-device loop: **209.7 -> 202.3 cycles per step at HiFi2** (LoFi 200.3 -> 193.8, HiFi4
+281.5 -> 279.6); counters, same session before -> after: FPU util 60.2% -> 62.9% on identical FPU active cycles (8.14 M), unpacker write requests refused by overwrite protection srcA 57.6% -> 49.8% and srcB 52.0% -> 45.5% of requests (absolute refused cycles down ~25% on both), L1-port refusals 0% both.
+Mesh (`transformer_op_mesh_bench.py`): ff1 fused 16.04 -> 15.69 ms, to_qkv 11.25 -> 11.03, ff2 fused 8.98 -> 8.68, numerics
+identical. The engine-isolation ladder of exp 16/17, re-run before and after in one session (`mm_kloop_variants.py apply <v>
+[legacy]`, HiFi2): full 210.2 -> 202.2; **nopack 197.9 -> 192.8**; unpack mocked 192.6 -> 192.9; math mocked 193.3 -> 193.2;
+bare unpack stream 188.2 -> 187.7. The two mock rows do not move (the reorder does not change the four valid/clear round
+trips per step) and the loop without the packer now sits exactly on their floor, so the exposed refill was worth 5 cycles,
+not the 15-20 projected above: the rest of the 208 -> 193 gap is the packer's interaction with the loop (the `nopack`
+gain exp 16 already measured on the old loop; the counters keep L1-port refusals at 0%, so the likely account is the
+per-subblock DST handoff of exp 12, `ACQ` 21 + `PWAIT` 26 cycles per 7 steps), and that is what the remaining 202 vs 193 is. The hand trace before coding also showed the plan's mechanism was not the point: in any 4-MVMUL order over a 2x2 the
+two tiles of MVMUL ④ are released at 128 and the other two at 64 and 96, and the next step's first MVMUL always needs one
+of the 64/96 pair, so the production order already released first what was needed first; what the alternation removes is
+the second late refill queueing behind the first on the same (srcB) unpacker. The unpacker's issue order (srcA MOP before
+or after the srcB pair) makes no difference. No MVMUL order can go below the four-handshake floor, so this lever is
+exhausted at 2x2; it should be carried into the 2x4 / 4x2 orders if fp32 dest off lands.
+**Before / after, all three configurations under hardware counters (exp 18b, 2026-09-23 23:31-23:33, one session).** The
+production loop and the two mocks of exp 17b, each built on the per-tile `matmul_block` loop (`mm_kloop_variants.py apply <v>
+legacy`, standard reuse-A order every K tile) and on `matmul_block_kloop` (alternating orders), HiFi2, `--iters 2`, two
+counter passes each; per-core means over 64 cores, K-loop pace from the `KLOOP` zone of the same run, "per step" = per core /
+63,504. `tools/tensix_perf_counter_matrix.py name=csv ...` prints this table from the six device CSVs.
+
+| metric | full, old order | full, alternating | unpack mocked, old | unpack mocked, alt | math mocked, old | math mocked, alt |
+|---|---|---|---|---|---|---|
+| K-loop pace, cycles per step (KLOOP zone) | 210.2 | 202.9 | 192.2 | 193.4 | 192.7 | 193.2 |
+| elapsed cycles per core (kernel, M) | 13.5 | 13.0 | 12.4 | 12.4 | 12.4 | 12.4 |
+| FPU util % of kernel | 60.3 | 62.4 | 65.8 | 65.4 | 0.1 | 0.1 |
+| FPU util % of K loop (FPU active / KLOOP) | 61.0 | 63.2 | 66.7 | 66.3 | 0.1 | 0.1 |
+| src data ready % of kernel | 60.3 | 62.4 | 65.8 | 65.4 | 0.1 | 0.1 |
+| math thread stalled % | 0.5 | 0.5 | 0.5 | 0.5 | 94.7 | 94.5 |
+| T1 wait srcA valid / srcB valid % | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 76.2 / 17.9 | 72.3 / 21.5 |
+| unpacker0 / unpacker1 busy % | 93.4 / 93.4 | 90.0 / 90.0 | 1.2 / 1.2 | 1.2 / 1.2 | 85.6 / 85.8 | 84.7 / 84.9 |
+| srcA / srcB write-request cycles per step | 155.0 / 133.3 | 130.9 / 117.6 | 1.7 / 0.0 | 1.7 / 0.0 | 65.7 / 64.6 | 65.8 / 64.6 |
+| srcA / srcB unblocked write cycles per step | 65.7 / 64.0 | 65.7 / 64.0 | 1.7 / 0.0 | 1.7 / 0.0 | 65.7 / 64.0 | 65.7 / 64.0 |
+| srcA / srcB refused by overwrite, % of requests | 57.6 / 52.0 | 49.8 / 45.6 | 0.0 / n/a | 0.0 / n/a | 0.0 / 1.0 | 0.1 / 0.9 |
+| srcA / srcB refused by overwrite, cycles per step | 89.3 / 69.3 | 65.2 / 53.6 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.6 | 0.1 / 0.6 |
+| srcA / srcB refused by L1 port, % of requests | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / n/a | 0.0 / n/a | 0.0 / 0.0 | 0.0 / 0.0 |
+| T0 wait srcA clear / srcB clear % | 0.0 / 0.0 | 0.0 / 0.0 | 1.0 / 70.4 | 1.0 / 70.5 | 0.0 / 0.0 | 0.0 / 0.0 |
+| unpack thread stalled % | 1.9 | 2.1 | 0.0 | 0.0 | 1.8 | 1.8 |
+| packer busy % | 31.8 | 33.3 | 30.7 | 30.5 | 36.8 | 36.7 |
+| pack thread stalled % | 13.1 | 13.8 | 12.3 | 12.2 | 16.2 | 16.2 |
+
+Reading it column pair by column pair:
+
+- **Full loop, old -> alternating.** 210.2 -> 202.9 cycles per step; FPU util of the K loop 61.0 -> 63.2%. The unpackers'
+  *unblocked* write cycles are identical (65.7 + 64.0 per step, i.e. ~32 cycles per 2 KB tile, the port width) and the L1 port
+  refuses nothing in either order. What changes is the waiting: write-request cycles per step drop from 155 + 133 to 131 + 118,
+  the cycles refused by overwrite protection from 89 + 69 to 65 + 54 (the srcA side loses 24, the srcB side 16), and the
+  unpackers' busy fraction from 93% to 90%. Every recovered cycle is one in which a bank was released earlier.
+- **Unpack mocked, old -> alternating.** 192.2 -> 193.4, within noise; FPU util of the K loop 66.7 vs 66.3%. With no bytes
+  moved the order does not matter, which is the expected result: the reorder buys nothing on the handshake floor. The 70%
+  "waiting for srcB clear" is the same in both because the mock's own STALLWAIT order (B first, then A) is fixed; it measures
+  where the mock waits, not how long the real loop loses.
+- **Math mocked, old -> alternating.** 192.7 -> 193.2, unchanged; the real unpacker writes 65.7 + 64.0 unblocked cycles per
+  step with ~1% refusals in both, and the mock math thread waits for srcA valid 72-76% / srcB valid 18-22% of the time in both.
+  The unpack side is order-independent, which is why the change lives entirely on the math side.
+
+So the eight cycles the reorder recovers appear only where real data meets real MVMULs (the first column pair), and the two
+mock pairs put the floor at ~193 regardless of order. The remaining ~10 cycles between 193 and 203 do not move with the MVMUL
+order and are not L1 refusals; the handoff's §0.1 attributes them to the packer's DST-half handoff between subblocks.
+
+**The rest of the order space (exp 19, 2026-09-24).** A compile-time schedule interpreter (`kloop_sched`, `MM_KLOOP_SCHED`,
+`llk_math_matmul.h`) replaced the two hand-written orders and was swept over nine 2x2 schedules: both period-1 orders 210 / 198
+(full / no packer), both period-2 mirrors 201-202 / 193, PCC 1.000000 throughout; any schedule that starts a step on tile 1 or
+flips a source an odd number of times deadlocks against the unpacker's write order (one hung the device) and is now rejected at
+compile time. tt-llk golden on the interpreter: 112 passed. fp32 dest off at 2x2 runs 196-198 (the pack residual halves with
+the pack bytes); 4x2 fp32 off runs at 45.8 cycles per tile-MAC with ~14 cycles per step of boundary exposure that only an
+unpacker-side change could hide. The 2x2 order question is closed. Tables and reasoning: [kloop_order_space_plan.md](kloop_order_space_plan.md) §2.5, §3.1, §4.
+
+Details, code map and validation: [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md).
 
 ### 3.2 The SwiGLU epilogue (2.8 ms at baseline, 2.2 ms after change A)
 
@@ -244,6 +483,108 @@ fix as change A); and `swiglu_block` is called with the full `N_block_tiles` whi
 width, so at N_block 16 it processes 896 pairs per core instead of 840 (fix: pass the clipped width). The fused
 LUT pass of change B removes the separate multiply and with it the first cause.
 
+### 3.4 fp32 dest off, explored end to end (exp 20, 2026-09-24 00:20-01:35, this galaxy)
+
+The precision decision of §3.2 / §5, taken through the op, the block and the pipeline in one session, with the two epilogue fixes
+of §3.2 applied first and the alternating K loop (exp 18) as the baseline.
+
+**The two epilogue fixes** (`all_gather_minimal_matmul_async/device/kernels/compute.cpp` and `minimal_matmul/device/kernels/compute.cpp`,
+`swiglu_block`): the epilogue now takes the block's live row and column counts and computes only the gate/up pairs that hold
+real output (the writer already skips the padded tiles, `matmul_dataflow_common.hpp:559-590`, so the out CB keeps the full
+block layout and padded rows are pushed uncomputed), and the multiply is `mul_binary_tile<true>`, the fp32-DST code path,
+which under a bf16 DST truncates on the store instead of running the software round-to-nearest-even per vector
+(`ckernel_sfpu_binary.h:147-170`). Under fp32 dest both are no-ops in effect. `test_linear_swiglu` 4/4.
+
+| ff1 on the mesh bench (`transformer_op_mesh_bench.py --op ff1`, host ms per call) | before the fixes | after |
+|---|---|---|
+| fp32 on, (8,7,10) 2x2 (production) | 15.62 | 15.63 |
+| fp32 off, (8,7,10) 2x2 | 15.55 | — |
+| fp32 off, (8,7,16) 2x4 | 15.38 | **14.30 (-8.5%)**, rel-RMSE 0.0157 (was 0.0166) |
+| fp32 off, (12,7,8) 4x2 | 15.34 | 14.54 |
+
+**Model plumbing, behind an exploration switch.** `MINIMAX_H3_MM_FP32_DEST` (`transformer_block_minimax_h3.py`,
+`attention_minimax_h3.py`; default `1`): `0` gives ff1 and to_qkv fp32 dest off with 8-tile subblocks, `ff1` or `qkv` one of
+them; `MINIMAX_H3_QKV_BLOCKS` overrides to_qkv's blocking. ff1 takes its own compute config through a new
+`ff1_compute_kernel_config` argument of `ParallelFeedForward.forward` / `forward_fused_addcmul` (`layers/feedforward.py`), so
+ff2 keeps fp32 dest; and `get_matmul_config` (`utils/matmul.py`) now accepts a 4-tuple `default_block_size` carrying the
+subblock, used as given ahead of the M-keyed tables (the 3-tuple keeps its fallback meaning). Verified in the profiles below
+that the switched ops ran the intended blockings.
+
+**Block (`test_minimax_h3_transformer_block_perf`, 15 s / 768P, fsdp1, device ms per call, mean over 32 devices; the three
+AGMMs in call order):**
+
+| config | to_qkv | to_out | ff1 | net |
+|---|---|---|---|---|
+| production (fp32 on) | 9.96 | 6.10 | 14.46 | |
+| **ff1 only off, (8,7,16) 2x4** | 9.97 | 6.06 | **13.62** | **-0.84 ms per layer** |
+| to_qkv only off, (12,7,8) 4x2 | 9.74 | 6.35 | 14.49 | ~0 |
+| to_qkv only off, (8,7,12) 2x2 | 9.57 | 6.28 | 14.54 | -0.2 |
+| both off | 9.77 | 6.63 | 13.66 | -0.3 |
+| both off, two earlier pairs | 9.81 / 9.72 | 6.41 / 6.50 | 13.62 / 13.63 | (-0.06 device-only vs 240.79) |
+
+ff1 alone is a clean -0.84 ms (-5.8% of the op) with nothing else moving. Switching to_qkv makes to_out's *kernel duration*
+longer by 0.2-0.5 ms in every run (five of five), which at first read cancelled to_qkv's gain. It does not: **the per-op
+durations are not additive under FSDP.** On every device an FSDP `AllGatherAsync` (to_out's own weight gather, on the CCL
+sub-device) launches 0.12 ms before to_out and runs inside its window; to_out's kernel waits for those weights, so its
+duration is compute plus however much of the gather lands inside it. In production that already makes to_out ring-uniform
+but row-dependent, 5.15 ms on rows 3 and 5 of the mesh and 7.2 on rows 0 and 6, anticorrelated with the gather's own recorded
+duration (2.0 vs 0.5-0.7 ms); the fsdp0 profile in Part 2 of the README has to_out at 5.3 with no gather. A faster to_qkv shifts
+the phase of that overlap and moves time from the gather's row into to_out's. The metric that cannot double count is the
+**device-busy wall time per layer, the union of every op's device interval** (`tools/block_device_busy.py`), repeatable to
+0.1 ms across the night's repeats:
+
+| config | device-busy per layer | vs production |
+|---|---|---|
+| production (fp32 on), two runs | 238.12 / 238.13 ms | |
+| **ff1 only off** | 237.22 | **-0.91** |
+| to_qkv only off, 4x2 | 237.80 | -0.33 |
+| to_qkv only off, 2x2 | 237.74 | -0.39 |
+| both off, three runs | 236.80 / 236.96 / 236.91 | **-1.22**, additive |
+
+So to_qkv off is worth ~-0.35 ms per layer of wall time (its op-level -8.7% shrinks because the alternating K loop already
+took part of it), not zero; it stays a secondary candidate because it doubles the output shift (below) for a third of ff1's
+gain. `block_profile_stats.py compare`'s "device only" row (240.79 -> 240.73 for both off) is a per-op sum and hides this;
+use the union for any change that shifts timing under FSDP. The fsdp0 profile, which has no gathers, aborts inside Tracy on a
+mismatched zone pair from `dit_fused_norm_forwarder.cpp:159` and could not be used.
+
+**Pipeline, 10 steps (`test_parallel_sweep_minimax_h3.py`, 4x8 TP4/SP8, 16:9 15 s, FSDP on), per forward and output:**
+
+| config | ms per forward | frames vs production | audio |
+|---|---|---|---|
+| production, run 1 / run 2 | 12117 / 12147 | run 1 vs run 2: PCC 0.99925, mean abs diff 1.2 of 255 | |
+| ff1 and to_qkv off | 12132 | PCC 0.629, mean abs diff 33.5, per-frame PCC 0.47-0.78 | PCC 0.962 |
+| ff1 only off | 12062 | PCC 0.891, mean abs diff 16.4 (the TP8 experiment's range, 12-19) | PCC 0.969 |
+
+The end-to-end time cannot resolve the change (-0.84 ms of a 241 ms layer is 0.35% of a forward, inside the 10-step
+run-to-run spread). The output does: two production runs agree to 1.2 of 255, and the fp32-off output differs by 33.5, so the
+difference is the precision change, not run-to-run variation. Rendered frames (first, middle, last) show the same fox, snow
+field and lighting with a different pose and gait in every frame: a different sample of the same prompt, not a degraded one.
+The TP8 experiment in the README, which also changed only bf16 reduction order, moved frames by 12-19; ff1 alone sits in
+that range, both ops together are twice it.
+
+**Pipeline, 50 steps with the CLIP gate (`test_t2va_end_to_end[wormhole_b0-4x8nl4-16x9_15s]`, FSDP on, `RUN_VBENCH=0`), ff1 only off:**
+
+| | ff1 only off (02:00) | production, same session (02:22) | production, this host, 2026-09-17 (README Part 4) |
+|---|---|---|---|
+| CLIP prompt alignment, mean / min / max | **35.91 / 34.96 / 36.88** (bar 33.0) | 35.75 / 34.83 / 36.88 | 35.88 / 34.69 / — |
+| per forward | **12086.9 ms** | 12143.1 ms | 12058-12230 across runs (best 11988) |
+| denoise / realtime | 592.3 s / 40.8x | 595.0 s / 41.0x | 590.9-599.2 s / 40.6-41.2x |
+| audio / A-V sync | 2 ch 15.075 s at 32 kHz, sync delta -0.008 s, sanity OK | same, sanity OK | |
+
+Same host, same weights, same seed, back to back: **-56 ms per forward (-0.46%)**, against the -45 ms the block profile
+predicts (0.91 ms x 50 layers) and inside the 0.5% the 10-step pairs could not resolve; CLIP 35.91 vs 35.75, the two runs'
+spread (production alone has ranged 35.75-35.88 on this host). Videos: `~/h3_fp32_videos/` on this host: the two 50-step
+generations with audio (`50step_ff1_only_fp32off/`, `50step_production_fp32on/`), 10-step clips of every configuration, and a
+side-by-side.
+
+**Verdict.** ff1 with fp32 dest off and the (8,7,16) 2x4 blocking is a **-0.9 ms per layer of device wall time (-5.8% of
+the op, ~-45 ms per forward)** change with production-level CLIP and an output that differs from production by the amount a
+reduction-order change does. to_qkv off adds another -0.35 ms per layer but doubles the output shift (33 vs 16 of 255 at 10
+steps) and has no CLIP run of its own; it is the secondary candidate, not a rejected one. Adopting it means turning the switch's
+ff1 branch into the default (`transformer_block_minimax_h3.py`, `ff1_compute_kernel_config` / `ff1_block_size`), keeping
+`MINIMAX_H3_MM_FP32_DEST=1` as the way back, and re-baselining the numerics rows in this file (op rel-RMSE 0.0157 against the
+0.02 bar). Not landed by default in this session; the user decides.
+
 ### 3.3 Not levers (measured or bounded)
 
 K_block (exp 1, 11); operand delivery and the relay protocol (exp 5, 10, 12); out-CB depth (exp 6); the ring
@@ -259,7 +600,8 @@ the bar); `dst_full_sync_en` (serializes math and pack); the grid (mux row fixed
 | + fp32 dest off, (8,7,16) 2x4 (exp 2, 15) | 11.7 | 2.7 (regression, fixable to ~2.0) | 14.5 (device 14,506 us) | 55% | measured; precision decision (rel-RMSE 0.0083 -> 0.0166), model-level check needed |
 | + fitted 6-segment LUT silu, fused (change B, exp 14) | 13.0 | ~1.0 | **~13.8** (mesh host 14.57 vs 16.04) | ~58% | measured; precision decision (error bounded at 0.018 on the sigmoid), model-level check needed |
 | both precision decisions | ~11.7 | ~0.8 | ~12.5 | ~64% | projected |
-| + LLK `matmul_block` issue efficiency to ~35 cyc/tile-MAC | ~9.5 | | ~10-11 | 75% | tt-llk work |
+| + bfp8 in1 (unpack floor ~140 of 128 math cycles per step) | ~9.5 | | ~10-11 | 75% | projected from exp 16; weight-precision decision, not measured |
+| ~~LLK `matmul_block` issue efficiency~~ | | | | | closed by exp 16: the loop is unpacker-paced, math-thread issue is not on the path |
 | roofline | 8.0 | 0 | 8.0 | 100% | |
 
 Numerics: the real ring op at M=13664 reads pcc 0.9999843, rel-RMSE 0.00837 at baseline (bar pcc > 0.9995,
@@ -272,13 +614,41 @@ the 12.4 s forward, 2.3%.
 
 ## 5. What is left
 
-1. **The two precision decisions**, best taken together and for ff1 and to_qkv at once (they share the compute
-   config through `ParallelFeedForward` / `Attention`): fp32 dest off with an 8-tile subblock (-8% here, -8.7% on
-   to_qkv, [to_qkv.md](to_qkv.md)) with the two epilogue fixes of §3.2, and the fitted 6-segment LUT silu (-9%).
-   Validate at the model level (CLIP / VBench), not only op PCC.
+1. **The two precision decisions.** fp32 dest off was taken through the block and the pipeline on 2026-09-24 (§3.4): the
+   two epilogue fixes are in, the switch is in the tree (`MINIMAX_H3_MM_FP32_DEST`, default on), **ff1 alone is worth -0.84 ms
+   per layer** and to_qkv is not (it slows to_out by as much as it gains). The 50-step CLIP run of the ff1-only configuration
+   decides adoption (§3.4). The fitted 6-segment LUT silu (-9%) is still pending its own model-level check.
 2. **Change C** (pack-thread epilogue overlap) once fp32 dest is off.
 3. **tt-llk `matmul_block` issue efficiency** (§3.1): the only lever left on the K loop after that, and it moves
-   all three AGMMs.
+   all three AGMMs. Order of work as planned on 2026-09-23, and how it resolved the same day (§3.1, exp 16: the loop is
+   unpacker-paced, so K2-K4 are closed and K5 is the path):
+   - **K1 — which engine paces.** Answered by the engine-isolation study (§3.1, exp 16): the bare unpack stream is 185 of
+     the 208 cycles per step; HiFi4 puts the math-side per-tile overhead at ~6 cycles. Unpacker-paced. The counter capture
+     stays only as a check on whether 46 cycles per tile is the unpacker's intrinsic rate or L1 port contention.
+   - **K2 — compile-time subblock dims in the kernel** (`matmul_blocks<sb_h, sb_w>` with a run-time dispatch for the
+     ragged last subblock, `compute.cpp:352-402` / `:475-486`), so `_llk_math_matmul_` and `_llk_unpack_AB_matmul_`
+     unroll and constant-fold. **Closed without running:** `rawunpack` / `fixedaddr` (209 vs 208) show the thread
+     bookkeeping is hidden under the data movement.
+   - **K3 — `matmul_block_no_mop` A/B** (the SDPA's replay path,
+     `tt_metal/hw/inc/api/compute/experimental/matmul_custom.h:57-93`, `llk_math_matmul_custom_no_mop.h`): same per-tile
+     structure with `lltt::replay` in place of the MOP. **Closed:** math-side issue is not on the critical path.
+   - **K4 — LLK: one MOP per 2x2 subblock.** Program the dest increment into the replay image's addr_mods (the
+     `.dest = {.incr}` fields `matmul_configure_addrmod` already sets, `llk_math_matmul.h:~40-320`) and the srcA/srcB
+     bank switches into the MOP end-ops, so the four `SETC16` + `SETRWC` pairs per K tile disappear. Only if K1 reads
+     the math-side signature. **Closed:** the HiFi4 row (256 + 24) leaves at most ~6 cycles per tile-MAC to win here, and
+     the loop would still sit on the 185-cycle unpack floor.
+   - **K4b — hide the srcB refill. Landed 2026-09-23 (exp 18), smaller than projected.** `matmul_block_kloop` alternates the
+     2x2 MVMUL order between K tiles: -7 cycles per step at HiFi2 (209.7 -> 202.3), -0.35 ms on ff1, -0.22 on to_qkv, -0.30 on
+     ff2 fused per call, bit-exact. The -15..20 projection assumed both first operands of a step could be released early; one
+     of them is always the tile released third, so the gain is only the split of the two late refills over both unpackers;
+     the isolation ladder puts the exposed refill at 5 cycles (nopack 198 -> 193, on the mock floor) and the rest of the
+     production gap at the packer's interaction with the loop (DST handoff, not L1 bandwidth). Closed at 2x2; carry the alternation into 2x4 / 4x2 with fp32 dest off.
+     [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md).
+     The rest of the order space (2x2 confirmation sweep, the packer-interaction cycles, the 2x4 / 4x2 orders that open with fp32
+     dest off) is enumerated in [kloop_order_space_plan.md](kloop_order_space_plan.md).
+   - **K5 — the path.** Below the ~185 handshake floor there is no code lever at 2x2 bf16; the levers are bytes of operand per tile-MAC: the 8-tile
+     subblock (fp32 dest off, item 1, measured) and bfp8 in1 / in0 (not measured; a weight- and activation-precision
+     decision). Both are precision decisions for the model owner, to be validated at the model level (CLIP / VBench).
 4. Housekeeping: `sweep_mm_block_sizes.py`'s L1 pre-filter over-estimates the AGMM footprint (it filters K_block >= 14
    combos that build; they measured slower anyway).
 
@@ -313,6 +683,13 @@ not mean a combo completed — a hang shows up as the run never finishing (with 
 happens for the AGMM; the non-AGMM branches were already safe, they have no ring semaphores). Wrap in `timeout 400` when testing
 kernel changes. Note the harness passes a **bias** for `ff1_swiglu` (the model does not) and runs
 `math_approx_mode=False` (the model runs True; silu ignores it).
+
+**K-loop engine isolation and hardware counters (single device).** `tools/mm_kloop_variants.py apply 0..4` edits
+`minimal_matmul/device/kernels/compute.cpp` in place (KLOOP zone + one engine mocked), `parse <profile_log_device.csv>` prints
+cycles per K-tile step per call, `revert` restores the kernel; run the bench between them under `python -m tracy -r -p`. About
+90 s per variant. `tools/tensix_perf_counters.py <device csv> ['{"name": ["run ids"]}']` prints the derived counter metrics per
+group of run host IDs from a `--profiler-capture-perf-counters=fpu,pack,unpack,instrn --perf-counter-multipass` run
+(`TT_METAL_DEVICE_ARCH=wormhole_b0` is mandatory on the Galaxy, see §3.1; do not run the counter capture on the ring op).
 
 **Device zones.** `models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply block|opwait|sampled` edits the
 AGMM `compute.cpp` in place (exact-match, asserts if the kernel moved on), `revert` restores it, `parse <csv>` prints
