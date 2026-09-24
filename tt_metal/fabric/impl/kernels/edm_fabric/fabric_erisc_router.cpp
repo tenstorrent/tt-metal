@@ -1502,14 +1502,12 @@ void run_routing_without_noc_sync_coordinated_as_master(
         // <= 0 => the backlog fully drained out; residual > 0 => that many packets stayed stuck (register hid them).
         static bool dbell_was_down = false;
         static bool stop_init = false;
+        uint32_t exact_free_q_saved = 32u;  // exact_free captured at quiesce, used to restore stream-22 after retrain
         if (!stop_init) {
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 0u;  // word[10] STOP_FLAG = 0
             stop_init = true;
         }
         const bool link_up_now = fabric_dbg_link_is_up();
-        const uint32_t exact_free_now =
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);                    // word[8]
-        const uint32_t tx_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);  // word[1]
         const uint32_t fs22_now =
             static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
         if (!dbell_was_down && !link_up_now) {
@@ -1517,10 +1515,6 @@ void run_routing_without_noc_sync_coordinated_as_master(
             // [#45872 R0] Raw register at the instant of down, BEFORE the handshake -- may include in-flight
             // decrements (compare against R1 = w11, the settled post-handshake value). Also (re)seed the climb-max.
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_DOWN_RAW_ADDR) = fs22_now;  // word[4]  R0
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) =
-                0xFFFFu;  // word[5] R2 sentinel
-                          // (0xFFFF => up-edge
-                          // never fired = frozen)
             // [#45872 QUIESCE HANDSHAKE] Before ANY measurement or the retrain, stop the connected payload sender and
             // wait for its ACK so no packets are in flight. STOP (word[10]) + ACK (word[3]) are on-chip NoC / local
             // L1, unaffected by the down eth link. Bounded spin: if no sender is connected (ACK never comes) or one
@@ -1541,36 +1535,11 @@ void run_routing_without_noc_sync_coordinated_as_master(
             const uint32_t exact_free_q = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // w8
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) =
                 exact_free_q;  // w9 EXACT_FREE_MIN seed
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_q;  // w11 FS22_AT_DOWN
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) =
+                fs22_q;  // w11 R1: stream reg before retrain
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_q;      // w12 FS22_MIN seed
-        } else if (dbell_was_down) {
-            auto* ef_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR);  // w9
-            if (exact_free_now < *ef_min) {
-                *ef_min = exact_free_now;
-            }
-            auto* fs_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR);  // w12
-            if (fs22_now < *fs_min) {
-                *fs_min = fs22_now;
-            }
-            if (link_up_now) {
-                dbell_was_down = false;
-                // [#45872 R2] Register at retrain-finish (up-edge). Captured in-line by the router, so no observer lag
-                // -- this is the precise value at the moment the link came back, before the speedy loop resumes and
-                // the register starts climbing (that climb is tracked separately as R3 = w6).
-                *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = fs22_now;  // word[5]  R2
-                // [#45872 STREAM-22 RESTORE] Hardware resets STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE to SIZE (=32)
-                // at retrain-finish (same mechanism as ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD). Restore to exact_free_now
-                // (w8 = sender's CPU-side free-slot count, frozen at ACK time since the sender is quiesced).
-                // Using w8 instead of the stream register snapshot (w11) avoids the NoC credit write race:
-                // at ACK time some credit writes may still be in-flight to the stream register, causing w11
-                // to under-count occupied slots. The sender's CPU counter (w8) is updated before each NOC
-                // write, so it accurately reflects all outstanding sends.
-                init_ptr_val(
-                    static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]),
-                    static_cast<int32_t>(exact_free_now));
-                // NOTE: w13/w14 are now the read-pointer @ begin/finish (written from the speedy step). The former
-                // EXACT_FREE_AT_UP / TX_AT_UP writes here are removed to avoid clobbering them.
-            }
+            exact_free_q_saved =
+                exact_free_q;  // persist for delta block: correct restore value for stream-22 after retrain
         }
 
         // [POST-RETRAIN HANDSHAKE] Bracket the recovery pass with a before/after read of the L1 retrain
@@ -1592,12 +1561,18 @@ void run_routing_without_noc_sync_coordinated_as_master(
             // retrain-count delta as the gate -- more reliable than re-reading fabric_dbg_link_is_up() here,
             // which can see a momentary PCS glitch in the post-[#2] window and miss the restore.
             dbell_was_down = false;
-            const uint32_t exact_free_settled = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = static_cast<uint32_t>(
-                get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // R2
+            // [#45872 DBG] R0 (w4): stream reg right after retrain — hardware resets to 32.
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_DOWN_RAW_ADDR) = static_cast<uint32_t>(get_ptr_val(
+                static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // w4: stream reg after retrain
+            // Restore stream-22 to the quiesce-time free-slot count. Hardware reset it to 32 at retrain-finish,
+            // making the ERISC think the sender buffer is empty even though packets arrived in L1 before retrain.
+            // exact_free_q_saved was frozen at STOP/ACK time (sender quiesced, no in-flight decrements).
             init_ptr_val(
                 static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]),
-                static_cast<int32_t>(exact_free_settled));
+                static_cast<int32_t>(exact_free_q_saved));
+            // [#45872 DBG] R2 (w5): stream-22 after init_ptr_val — should equal exact_free_q_saved
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = static_cast<uint32_t>(
+                get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // w5: after restore
             // [CREDIT RESYNC] A retrain drops the receiver->sender credit block that was in flight, and
             // nothing re-issues it: the push only fires when a new completion occurs, and at the tail there
             // are none left. The sender is then permanently short of the credits it needs to retire its
