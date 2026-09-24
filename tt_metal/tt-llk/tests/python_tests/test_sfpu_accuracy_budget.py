@@ -478,10 +478,8 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
     assert broad.atol == 0.13
 
 
-#: The ops enrolled from the accuracy sweep: 19 transcendentals in P3, and the exact and
-#: predicate ops here, plus ReluMax, SqrtCustom and ReciprocalCompat re-measured in
-#: review, take it to 48. Their keys all pin ``input_format``, which is what makes them
-#: the witnesses for the resolution regression below.
+#: The ops enrolled from the accuracy sweep. Their keys all pin ``input_format``, which
+#: is what makes them the witnesses for the resolution regression below.
 _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
     op
     for op, table in _SFPU_ACCURACY_BUDGET.items()
