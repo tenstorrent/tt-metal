@@ -125,7 +125,9 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # The rotary forward reads only x's dtype/device, never its values or shape
+    # (the table length comes from pos_ids), so one element carries enough.
+    x_dummy = torch.zeros(1, 1, 1, dtype=torch.float32)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
@@ -1865,7 +1867,10 @@ class Gemma4Model:
         self._prefill_input_ids_torch = tokens_torch
         self._prefill_batch_size = batch_size
         self._prefill_seq_len_per_user = per_user_seq_len
-        if self._embed_weight_cpu is not None:
+        # Host embeds feed per-layer inputs only (E2B/E4B), so skip the vocab
+        # table F.embedding when PLI is off -- same gate as
+        # _compute_per_layer_inputs.
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
             self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
         else:
             self._prefill_embeds_torch = None
