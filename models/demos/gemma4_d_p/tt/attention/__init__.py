@@ -186,7 +186,7 @@ class Gemma4Attention:
             q_rotated = ttnn.experimental.rotary_embedding_llama(
                 q_rotary, q_cos, q_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
             )
-            tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=act_mc)
+            tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
                 tensor.deallocate(True)
         elif is_sliding:
@@ -195,7 +195,12 @@ class Gemma4Attention:
             sliding_cos, sliding_sin, trans_mat = packed_sliding_rope
             q_unrotated = tt_q
             tt_q = ttnn.experimental.rotary_embedding_llama(
-                q_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+                q_unrotated,
+                sliding_cos,
+                sliding_sin,
+                trans_mat,
+                is_decode_mode=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             q_unrotated.deallocate(True)
             k_unrotated = tt_k
