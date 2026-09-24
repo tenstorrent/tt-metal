@@ -30,7 +30,7 @@ kernels.
 | 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | done (`cglagovich/sdpa-recipe-ring-factories` @ 4b65adf7, merged); legacy kernels byte-identical in 204/206 configs, ring/exp/continuation/mesh green, perf unchanged |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
 | 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done (`cglagovich/sdpa-recipe-masks` @ f365ffc8, merged; 131 mask tests, unmasked digests unchanged); lengths/exp geometry after task 4 |
-| 7 | Parity gates, then default flip for the four ops; drop model compute configs and tuning tables | planned |
+| 7 | No global default flip (user, 2026-09-24): every SDPA-variant call in `models/tt_dit` passes an explicit recipe; drop its compute configs and chunk tuning tables; per-model accuracy/speed parity gates vs its legacy setup | in progress |
 | 8 | Restack into reviewable PRs | planned |
 
 Parity gates (task 7), per op: legacy test suites pass with the recipe default;
@@ -107,6 +107,8 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 - 2026-09-24: contract is the A-E numerical implementation (user).
 - 2026-09-24: SDPA documents recommended dtypes/rounding and never prepares
   inputs; E callers own preparation (user).
+- 2026-09-24: no implicit default flip for SDPA callers in general (too many callers); instead
+  every SDPA-variant invocation under `models/tt_dit` selects a recipe explicitly (user).
 
 ## Open questions
 
