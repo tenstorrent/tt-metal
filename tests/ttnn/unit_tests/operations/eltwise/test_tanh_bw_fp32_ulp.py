@@ -34,7 +34,10 @@ FP32_MIN_NORMAL = float(np.finfo(np.float32).tiny)  # 1.1754944e-38
 # its fp32-dest instantiation (see tenstorrent/tt-metal#57509, defect 3).
 pytestmark = pytest.mark.skipif(
     ttnn.get_arch_name() != "blackhole",
-    reason="fp32-dest tanh derivative is only fixed on Blackhole; Wormhole tracked by #57509",
+    reason=(
+        "fp32-dest tanh derivative is only fixed on Blackhole; Wormhole tracked by "
+        "https://github.com/tenstorrent/tt-metal/issues/57509"
+    ),
 )
 
 

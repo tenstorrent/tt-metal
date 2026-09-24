@@ -209,7 +209,9 @@ sfpi_inline sfpi::vFloat inline_exp4_neg2x_fp32(sfpi::vFloat a) {
 
 // Newton reciprocal for a strictly positive, well-scaled argument. The only caller
 // passes (1 + exp(-2|x|))^2, which lives in [1, 4], so none of the zero / infinity /
-// NaN guards in sfpu_reciprocal_iter are reachable. Two iterations from the SFPARECIP
+// NaN guards in sfpu_reciprocal_iter are reachable. Both bounds are attained and the
+// interval is closed, not half-open: x = 0 gives exactly 4, and the exp flushes to
+// zero for |x| past ~44.4, which gives exactly 1. Two iterations from the SFPARECIP
 // seed, matching the fp32 arm of _sfpu_reciprocal_gt0_ in ckernel_sfpu_trigonometry.h.
 sfpi_inline sfpi::vFloat inline_reciprocal_1_to_4(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
