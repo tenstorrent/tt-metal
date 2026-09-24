@@ -131,6 +131,44 @@ struct SfpuBinaryOp : SfpuOpBase<Op>
             _llk_math_eltwise_binary_sfpu_run_once_(calculate, dst_index_in0, dst_index_in1, dst_index_out, args...);
         }
     }
+
+    /**
+     * @brief Bridge for compute APIs that still take a VectorMode; new code uses run<TENSOR_SHAPE>().
+     *
+     * RC, R and C run a 32x32, 16x32 and 32x16 tile; None and RC_custom run a single 16x16 face.
+     * An op whose calculate() walks Dest itself ignores vector_mode.
+     *
+     * @param vector_mode: Legacy face selection, values = <RC/R/C/None/RC_custom>
+     * @param dst_index_in0: Dest tile index of the first input
+     * @param dst_index_in1: Dest tile index of the second input
+     * @param dst_index_out: Dest tile index that receives the result
+     * @param args: Extra arguments passed to Op::calculate
+     */
+    template <typename... Args>
+    static inline __attribute__((always_inline)) void run_vector_mode(
+        const VectorMode vector_mode, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, Args&&... args)
+    {
+        if constexpr (!Op::walks_faces)
+        {
+            run(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::RC)
+        {
+            run<DEFAULT_TENSOR_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::R)
+        {
+            run<tensor_shape_from_tile_dims(MAX_FACE_R_DIM, MAX_TILE_C_DIM)>(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::C)
+        {
+            run<tensor_shape_from_tile_dims(MAX_TILE_R_DIM, MAX_FACE_C_DIM)>(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+        }
+        else
+        {
+            run<tensor_shape_from_tile_dims(MAX_FACE_R_DIM, MAX_FACE_C_DIM)>(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+        }
+    }
 };
 
 /**

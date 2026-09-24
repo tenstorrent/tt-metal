@@ -8,6 +8,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -113,6 +114,34 @@ inline void calculate_binary_max_min(
         lltt::replay(0, BINARY_MAX_MIN_REPLAY_LEN);
     }
 }
+
+// Op class for elementwise max/min of two float tiles in Dest. Same name and leading template
+// parameters as on Wormhole/Blackhole; the float and MX formats share one kernel here.
+template <bool IS_MAX_OP, int ITERATIONS = SFPU_ITERATIONS, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryMaxMin : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, ITERATIONS, SLOT>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { _init_binary_max_min_(); }
+};
+
+// Op class for elementwise max/min of two int32 tiles in Dest. Quasar has no uint32 variant.
+template <
+    bool IS_MAX_OP,
+    bool IS_UNSIGNED,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryMaxMinInt32 : SfpuBinaryOp<BinaryMaxMinInt32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS, SLOT>, SLOT> {
+    static_assert(!IS_UNSIGNED, "Quasar has no uint32 binary max/min");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, ITERATIONS, SLOT>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { _init_binary_max_min_(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -183,6 +183,54 @@ struct SfpuTernaryOp : SfpuOpBase<Op>
             _llk_math_eltwise_ternary_sfpu_run_once_<SLOT>(calculate, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, args...);
         }
     }
+
+    /**
+     * @brief Bridge for compute APIs that still take a VectorMode; new code uses run<TENSOR_SHAPE>().
+     *
+     * RC runs the whole Dest slot, R its top row of faces, C its left column of faces, and None or
+     * RC_custom a single face; in a 32x32 slot that is a 32x32, 16x32, 32x16 and 16x16 tile.
+     * An op whose calculate() walks Dest itself ignores vector_mode.
+     *
+     * @param vector_mode: Legacy face selection, values = <RC/R/C/None/RC_custom>
+     * @param dst_index_in0: Dest tile index of the first input
+     * @param dst_index_in1: Dest tile index of the second input
+     * @param dst_index_in2: Dest tile index of the third input
+     * @param dst_index_out: Dest tile index that receives the result
+     * @param args: Extra arguments passed to Op::calculate
+     */
+    template <typename... Args>
+    static inline __attribute__((always_inline)) void run_vector_mode(
+        const VectorMode vector_mode,
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out,
+        Args&&... args)
+    {
+        if constexpr (!Op::walks_faces)
+        {
+            run(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::RC)
+        {
+            run<_llk_math_eltwise_sfpu_slot_tensor_shape_<SLOT>()>(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::R)
+        {
+            run<make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, 1, _llk_math_eltwise_sfpu_slot_faces_c_<SLOT>())>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        }
+        else if (vector_mode == VectorMode::C)
+        {
+            run<make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, 1)>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        }
+        else
+        {
+            run<tensor_shape_from_tile_dims(MAX_FACE_R_DIM, MAX_FACE_C_DIM)>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        }
+    }
 };
 
 /**

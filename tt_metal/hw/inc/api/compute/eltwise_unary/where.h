@@ -7,11 +7,11 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+// The where kernel and its op class live in tt-llk on Wormhole/Blackhole and in the metal ckernels on Quasar.
 #ifdef ARCH_QUASAR
-#include "llk_math_eltwise_ternary_sfpu_where.h"
+#include "ckernel_sfpu_where.h"
 #else
 #include "sfpu/ckernel_sfpu_where.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 #endif
 
@@ -38,22 +38,12 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void where_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
-#else
     MATH((sfpu::Where<APPROX, data_format>::run(idst0, idst1, idst2, odst)));
-#endif
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void where_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_ternary_sfpu_where_init<APPROX>()));
-#else
-    MATH((sfpu::Where<APPROX>::init()));
-#endif
-}
+ALWI void where_tile_init() { MATH((sfpu::Where<APPROX>::init())); }
 
 }  // namespace ckernel
