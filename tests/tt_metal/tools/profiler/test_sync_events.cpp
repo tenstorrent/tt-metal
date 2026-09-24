@@ -151,9 +151,9 @@ int main(int argc, char* argv[]) {
     bool pass = true;
 
     try {
-        const char* sync_events_env = std::getenv("TT_METAL_DEVICE_PROFILER_SYNC_EVENTS");
+        const char* sync_events_env = std::getenv("TT_METAL_STREAMING_PROFILER_SYNC_EVENTS");
         if (!sync_events_env || std::string(sync_events_env) != "1") {
-            fmt::print(stderr, "WARNING: Run with TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1\n");
+            fmt::print(stderr, "WARNING: Run with TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1\n");
         }
 
         int device_id = 0;

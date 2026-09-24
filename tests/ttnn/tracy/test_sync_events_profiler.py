@@ -452,7 +452,7 @@ def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "1",
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
@@ -665,7 +665,7 @@ def test_no_events_when_disabled():
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "0",  # Disabled
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "0",  # Disabled
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
@@ -704,7 +704,7 @@ def test_full_coverage_summary():
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "1",
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )

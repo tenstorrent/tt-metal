@@ -131,6 +131,8 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
+    TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
@@ -138,8 +140,6 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
-    TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable sync events profiling
-    TT_METAL_DEVICE_PROFILER_INLINE_ENABLED,       // Enable zone markers inlining
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
@@ -998,24 +998,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #endif
             break;
 
-        // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
+        // TT_METAL_STREAMING_PROFILER_SYNC_EVENTS
         // Enables profiling for synchronization events (cb reserve/wait/push/pop, semaphore set/wait).
         // Requires TT_METAL_STREAMING_PROFILER to be enabled as well.
         // Default: false
-        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
-        case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
-            this->profiler_sync_events_enabled = is_env_enabled(value);
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
+            this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
             break;
 
-        // TT_METAL_DEVICE_PROFILER_INLINE_ENABLED
+        // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
         // This is enabled by default. Disabling inlining of kernel zone-marker emit path to
         // reduce kernel size overhead from profiler instrumentation. This is useful for
         // kernels with many zones that would otherwise exceed the kernel-config ring and fail to launch at all.
         // Only works on the streaming profiler.
         // Default: true
-        // Usage: export TT_METAL_DEVICE_PROFILER_INLINE_ENABLED=1
-        case EnvVarID::TT_METAL_DEVICE_PROFILER_INLINE_ENABLED:
-            this->profiler_inline_enabled = is_env_enabled(value);
+        // Usage: export TT_METAL_STREAMING_PROFILER_INLINE_ENABLED=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_INLINE_ENABLED:
+            this->streaming_profiler_inline_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY
