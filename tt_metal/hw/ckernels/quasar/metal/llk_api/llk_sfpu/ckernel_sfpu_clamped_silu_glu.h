@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 
 // Clamped SwiGLU (DeepSeek-V4), a fused binary SFPU op:
 //
@@ -68,5 +69,22 @@ inline void clamped_silu_glu_init() {
     // _sfpu_sigmoid_'s own init: it owns the Prgm0 requirement noted above.
     sigmoid_init</*APPROXIMATION_MODE=*/false>();
 }
+
+// Op class for clamped_silu_glu of a gate tile (in0) and an up tile (in1).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    class Config = ClampedSiluGluConfigDsV4,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct ClampedSiluGlu : SfpuBinaryOp<ClampedSiluGlu<is_fp32_dest_acc_en, ITERATIONS, Config, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_clamped_silu_glu<is_fp32_dest_acc_en, ITERATIONS, Config>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { clamped_silu_glu_init(); }
+};
 
 }  // namespace ckernel::sfpu

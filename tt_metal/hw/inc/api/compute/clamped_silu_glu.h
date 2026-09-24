@@ -14,7 +14,6 @@
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_clamped_silu_glu.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -46,32 +45,26 @@ namespace ckernel {
  * | idst0          | The index of the tile in DST register buffer holding the gate operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer holding the up operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output          | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode    | The vector mode of the operation                                       | int      | Must be one of the VectorMode values                  | False    |
  */
 // clang-format on
-ALWI void clamped_silu_glu_tile(
-    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_clamped_silu_glu,
-        (DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::ClampedSiluGluConfigDsV4),
-        idst0,
-        idst1,
-        odst,
-        vector_mode)));
+ALWI void clamped_silu_glu_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::ClampedSiluGlu<DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::ClampedSiluGluConfigDsV4>::run(
+        idst0, idst1, odst)));
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the overload above, which
+ * processes the full tile.
+ */
+ALWI void clamped_silu_glu_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode) {
+    MATH((sfpu::ClampedSiluGlu<DST_ACCUM_MODE, 8 /* ITERATIONS */, sfpu::ClampedSiluGluConfigDsV4>::run_vector_mode(
+        vector_mode, idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamped_silu_glu_tile_init() {
-    // The SfpuType tag only selects whether _llk_math_eltwise_binary_sfpu_legacy_addrmod_ programs
-    // ADDR_MOD_6, which it does for the integer-multiply, min/max and compare ops; a pure-sfpi
-    // binary op needs none of that, so `unused` is accurate rather than a placeholder. Matches
-    // llk_math_eltwise_binary_sfpu_swiglu_init, which passes `unused` for the same reason.
-    MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
-}
+ALWI void clamped_silu_glu_tile_init() { MATH((sfpu::ClampedSiluGlu<DST_ACCUM_MODE>::init())); }
 
 }  // namespace ckernel
 

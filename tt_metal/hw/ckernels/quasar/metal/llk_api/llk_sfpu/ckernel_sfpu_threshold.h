@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_converter.h"
 
@@ -48,5 +49,18 @@ inline void _calculate_threshold_(T threshold, T value)
         sfpi::dst_reg++;
     }
 }
+
+// Op class for threshold: value where x <= threshold, x otherwise.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    typename T = std::uint32_t,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Threshold : SfpuUnaryOp<Threshold<APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const T threshold, const T value) {
+        _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>(threshold, value);
+    }
+};
 
 } // namespace ckernel::sfpu

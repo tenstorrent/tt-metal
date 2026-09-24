@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_polyval.h"
@@ -88,5 +89,27 @@ inline void snake_beta_init() {
     // needed in every mode, not just the non-approximate one.
     _init_reciprocal_</*APPROXIMATION_MODE=*/false>();
 }
+
+// Op class for snake_beta of x (in0), alpha (in1) and beta (in2). data_format is only needed by run().
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct SnakeBeta
+    : SfpuTernaryOp<SnakeBeta<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out) {
+        calculate_snake_beta<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { snake_beta_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

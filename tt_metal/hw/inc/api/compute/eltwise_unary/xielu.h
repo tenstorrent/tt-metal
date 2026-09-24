@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_xielu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -29,18 +29,10 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_xielu,
-        (APPROX, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC,
-        alpha_p,
-        alpha_n));
+ALWI void xielu_tile(std::uint32_t idst, std::uint32_t alpha_p, std::uint32_t alpha_n) {
+    MATH((sfpu::Xielu<APPROX, is_fp32_dest_acc_en>::run(idst, alpha_p, alpha_n)));
 }
 
-ALWI void xielu_tile_init() { MATH(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }
+ALWI void xielu_tile_init() { MATH((sfpu::Xielu<APPROX, DST_ACCUM_MODE>::init())); }
 
 }  // namespace ckernel

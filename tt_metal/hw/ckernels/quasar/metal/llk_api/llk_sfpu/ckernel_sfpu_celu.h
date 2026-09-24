@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_expm1_cw.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -37,5 +38,20 @@ inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for celu with alpha and 1 / alpha (fp32 bits).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Celu : SfpuUnaryOp<Celu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t alpha, const std::uint32_t alpha_recip) {
+        calculate_celu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(alpha, alpha_recip);
+    }
+    static inline __attribute__((always_inline)) void init_op() { celu_init(); }
+};
 
 }  // namespace ckernel::sfpu

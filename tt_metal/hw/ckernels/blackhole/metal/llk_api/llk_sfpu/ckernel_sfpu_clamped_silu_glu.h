@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 // Clamped SwiGLU (DeepSeek-V4), a fused binary SFPU op:
 //
@@ -39,9 +40,10 @@ struct ClampedSiluGluConfigDsV4 {
 };
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = ClampedSiluGluConfigDsV4>
-inline void calculate_clamped_silu_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+inline void calculate_clamped_silu_glu(
+    const std::uint32_t gate_tile_idx, const std::uint32_t up_tile_idx, const std::uint32_t out_tile_idx) {
     constexpr float limit = Config::limit;
-    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+    constexpr std::uint32_t dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
@@ -68,5 +70,16 @@ inline void clamped_silu_glu_init() {
     // _sfpu_sigmoid_'s own init: it owns the Prgm0 requirement noted above.
     sigmoid_init</*APPROXIMATION_MODE=*/false>();
 }
+
+// Op class for clamped_silu_glu of a gate tile (in0) and an up tile (in1).
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = ClampedSiluGluConfigDsV4>
+struct ClampedSiluGlu : SfpuBinaryOp<ClampedSiluGlu<is_fp32_dest_acc_en, ITERATIONS, Config>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_clamped_silu_glu<is_fp32_dest_acc_en, ITERATIONS, Config>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { clamped_silu_glu_init(); }
+};
 
 }  // namespace ckernel::sfpu

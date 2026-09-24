@@ -2,4 +2,4 @@ prelu_tile
 ==========
 
 .. doxygenfunction:: prelu_tile_init
-.. doxygenfunction:: prelu_tile(uint32_t idst, uint32_t param0)
+.. doxygenfunction:: prelu_tile(std::uint32_t idst, std::uint32_t param0)

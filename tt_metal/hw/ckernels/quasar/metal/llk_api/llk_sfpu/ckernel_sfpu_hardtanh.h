@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_converter.h"
 
@@ -28,5 +29,16 @@ inline void calculate_hardtanh(uint param0, uint param1) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for hardtanh: clamp(x, param0, param1) (fp32 bits).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Hardtanh : SfpuUnaryOp<Hardtanh<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t param0, const std::uint32_t param1) {
+        calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
+    }
+    static inline __attribute__((always_inline)) void init_op() { hardtanh_init(); }
+};
 
 }  // namespace ckernel::sfpu

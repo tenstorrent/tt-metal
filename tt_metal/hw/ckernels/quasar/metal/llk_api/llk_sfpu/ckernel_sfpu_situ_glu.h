@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_softcap.h"
 #include "ckernel_sfpu_tanh.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 
 // SiTU-GLU activation, a fused binary SFPU op:
 //
@@ -98,5 +99,21 @@ inline void situ_glu_init() {
     // One tanh init serves the whole op; the sigmoid half claims no vConstFloatPrgm.
     tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
 }
+
+// Op class for situ_glu of a gate tile (in0) and an up tile (in1).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    class Config = SituGluConfigKimi,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct SituGlu : SfpuBinaryOp<SituGlu<is_fp32_dest_acc_en, ITERATIONS, Config, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_situ_glu<is_fp32_dest_acc_en, ITERATIONS, Config>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { situ_glu_init(); }
+};
 
 }  // namespace ckernel::sfpu

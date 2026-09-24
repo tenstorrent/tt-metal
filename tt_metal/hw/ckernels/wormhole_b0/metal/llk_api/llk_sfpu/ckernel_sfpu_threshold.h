@@ -4,6 +4,23 @@
 
 #pragma once
 
-// The threshold kernel lives in tt-llk on this arch. This forwarding header gives the Compute API one
-// include name for it on every arch (Quasar's kernel lives in this directory).
+#include <cstdint>
+
+// The threshold kernel lives in tt-llk on this arch. This header gives the Compute API one include name
+// for it on every arch (Quasar's kernel lives in this directory) and declares its op class.
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Op class for threshold: value where x <= threshold, x otherwise. The kernel lives in tt-llk.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, typename T = std::uint32_t>
+struct Threshold : SfpuUnaryOp<Threshold<APPROXIMATION_MODE, ITERATIONS, T>> {
+    static inline __attribute__((always_inline)) void calculate(const T threshold, const T value) {
+        _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>(threshold, value);
+    }
+};
+
+}  // namespace sfpu
+}  // namespace ckernel

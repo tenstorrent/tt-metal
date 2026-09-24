@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -40,6 +41,13 @@ inline void hardmish() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for hardmish: x * clamp(0.5 * x + 1, 0, 1).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Hardmish : SfpuUnaryOp<Hardmish<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { hardmish<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { hardmish_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
