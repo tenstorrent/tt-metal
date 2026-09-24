@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import math
 import os
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pytest
@@ -73,62 +73,13 @@ TEMPERATURE = 1.0
 _DEFAULT_MESH = "1,2"
 
 
-# --- MGD selection (mirrors test_fsdp.py): only fill in a bundled descriptor
-#     when TT_MESH_GRAPH_DESC_PATH is UNSET, so a user-provided value always
-#     wins (e.g. the galaxy descriptor set in the launch script). ---
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_DIR = os.path.join(_REPO_ROOT, "configs", "mgd")
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", (1, 2)): os.path.join(_MGD_DIR, "bh_galaxy_1_2_line_line.textproto"),
-    ("blackhole", (2, 2)): os.path.join(_MGD_DIR, "bh_galaxy_2_2_line_line.textproto"),
-    ("wormhole_b0", (1, 2)): os.path.join(_MGD_DIR, "n300_1_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    """Return "blackhole"/"wormhole_b0" for the host (no device open needed), else None."""
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _ensure_mgd_path(shape: Tuple[int, ...]) -> Optional[str]:
-    """Point TT_MESH_GRAPH_DESC_PATH at a bundled descriptor IFF it is unset.
-
-    Returns the previous env value so the caller can restore it. Respects any
-    user-provided value (never overrides it) and leaves the env alone when no
-    bundled descriptor matches the host arch + shape.
-    """
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, tuple(shape))) if arch else None
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
 def _mesh_shape_from_env() -> Tuple[int, ...]:
     raw = os.environ.get("SAMPLE_SEEDING_MESH", _DEFAULT_MESH)
     return tuple(int(x) for x in raw.replace(" ", "").split(","))
 
 
 @pytest.fixture(scope="module")
-def seeding_mesh(skip_if_host_too_small, reset_metal_env_quietly):
+def seeding_mesh(fresh_device_mesh):
     """Open ONE mesh (shape from ``SAMPLE_SEEDING_MESH``) for all seeding scenarios.
 
     Skips the whole module if the host has too few devices for the shape. A host
@@ -136,26 +87,9 @@ def seeding_mesh(skip_if_host_too_small, reset_metal_env_quietly):
     and restores the MGD env var on teardown.
     """
     shape = _mesh_shape_from_env()
-    skip_if_host_too_small(shape, "sample-seeding tests")
-
-    previous_mgd = _ensure_mgd_path(shape)
-    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
-    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
-    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
-    # otherwise the fabric control plane is built from the wrong descriptor.
-    ttml.reset_metal_env()
-    try:
-        ttml.open_device_mesh(shape)
-    except BaseException:  # noqa: BLE001
-        reset_metal_env_quietly()
-        _restore_mgd_path(previous_mgd)
-        raise
-
-    ttml.autograd.AutoContext.get_instance().set_seed(SEED)
-    yield shape
-
-    reset_metal_env_quietly()
-    _restore_mgd_path(previous_mgd)
+    with fresh_device_mesh(shape, what="sample-seeding tests"):
+        ttml.autograd.AutoContext.get_instance().set_seed(SEED)
+        yield shape
 
 
 # --- Seeding scenarios. `seed_axes` is evaluated against the opened shape; a
