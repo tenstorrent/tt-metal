@@ -92,7 +92,18 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
 
     // Fully re-establish the packer HW config + dest layout for out_cb_id.
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>()));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
+}
+
+// Reconfigure an already initialized kernel without resetting the math/pack
+// synchronization or pack destination state. Used between fused micro-ops.
+template <bool normalize = true, bool fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void hadamard_h128_init_short(const uint32_t in_cb_id, const uint32_t h16_cb_id, const uint32_t out_cb_id) {
+    static_assert(!(normalize && fp32_dest_acc_en), "hadamard_h128 normalize=true is not supported with fp32 dest");
+    reconfig_full_operand<SrcOrder::Regular>(h16_cb_id, h16_cb_id);
+    UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, 0)));
+    MATH((llk_math_hadamard_h128_init<MATH_FIDELITY, normalize>()));
+    pack_reconfig_data_format<true>(out_cb_id);
 }
 
 // clang-format off

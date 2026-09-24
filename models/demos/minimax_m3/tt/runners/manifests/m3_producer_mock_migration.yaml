@@ -34,7 +34,6 @@ migration:
 env:
   PREFILL_MIGRATION_TABLE_PATH: /tmp/m3_kv_chunk_table.pb        # [MATCH RUNNER]
   PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/m3_kv_device_map.json  # [MATCH RUNNER]
-  # index_k is PCC'd automatically for any layer whose golden carries index_k_cache_layer_<L>.
-  # M3_INDEX_CACHE_BF16 must match the runner's (the model manifest sets 1) — it decides the
-  # index_k chunk size, hence which decoder the read-back picks.
+  # Must match the runner — decides the index_k chunk size, hence the read-back decoder.
   M3_INDEX_CACHE_BF16: "1"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

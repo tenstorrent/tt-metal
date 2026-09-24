@@ -337,6 +337,16 @@ ttnn::Tensor concat(
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
+    // tile-layout width concat with tile padding on the concat dim is handled natively by
+    // ConcatTiledUnalignedProgramFactory, which streams one 32-row band per core
+    // through untilize -> row assembly -> retilize. Route it straight to the device op: no
+    // full-size row-major or transposed intermediates, no DRAM staging, peak memory is just
+    // inputs + output + per-core CBs.
+    if (ttnn::prim::can_use_tiled_unaligned_concat(
+            input_tensors, static_cast<uint32_t>(dim), groups, mem_config, /*output_already_allocated=*/false)) {
+        return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+    }
+
     // Issue #43371: When concat is on the last dim and the last dim is not buffer-aligned,
     // the fallback path transposes dims -2/-1 so that the (small) last dim moves to dim[-2]
     // and concat proceeds along the new last dim.  If dim[-2] is very large the transposed

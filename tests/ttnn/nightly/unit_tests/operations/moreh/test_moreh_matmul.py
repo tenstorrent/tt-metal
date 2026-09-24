@@ -15,6 +15,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def create_tt_tensor(tensor: torch.Tensor, dtype, layout, device):
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
@@ -307,6 +310,9 @@ def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_optio
 )
 def test_moreh_matmul_enable_cache(params, device):
     torch.manual_seed(3072)
+    # Asserts an absolute cache-entry count, so start from an empty cache: the
+    # module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(4):
         # change input's transpose option
         if i % 2 == 1:

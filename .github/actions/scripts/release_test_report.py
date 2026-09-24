@@ -20,8 +20,12 @@ Environment:
   SIM_CI_CONFIG       config the gating job selects              (default: 1x3)
   TEST_REPORTS_DIR    JUnit XML from release-demo-tests                (optional)
   REPORT_MD_OUT       write the markdown report here                   (optional)
-  JIRA_*              as create_jira_issue.py; JIRA_ISSUE_TYPE default Task
+  JIRA_*              as jira_client.py; JIRA_ISSUE_TYPE default Task
   JIRA_SKIP           build the report but do not file it
+
+A Jira issue is filed only when something needs attention: sim failures, an
+inconclusive sim check, or e2e suite failures. A fully green run is recorded in
+the markdown artifact and step summary only.
 
 Exits 0 whether or not tests failed -- this reports, it does not gate.
 """
@@ -34,8 +38,8 @@ from pathlib import Path
 
 import yaml
 
-from create_jira_issue import _env, _truthy, file_issue
-from file_rtl_sim_jira import format_test, match_entry, parse_failed
+from jira_client import _commit_link, _env, _truthy, file_issue
+from create_jira import format_test, match_entry, parse_failed
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -216,6 +220,15 @@ def build(mapping, expected, passed, failed, verdict, suites=None):
     }
 
 
+def _in_scope(requirements):
+    """Requirements the Quasar gate could in principle evidence."""
+    return [r for r in requirements if r.get("in_scope", True)]
+
+
+def _out_of_scope(requirements):
+    return [r for r in requirements if not r.get("in_scope", True)]
+
+
 def _lines(rows):
     return [f"  - {format_test(r['config'], r['group'], r['filter'], r['runner'])}" for r in rows]
 
@@ -223,8 +236,9 @@ def _lines(rows):
 def render_plain(report, meta):
     """Plain text for the Jira description (ADF renders one paragraph per line)."""
     verdict = report["verdict"]
-    with_evidence = [r for r in report["requirements"] if r["passed"]]
-    without = [r for r in report["requirements"] if not r["passed"]]
+    scoped = _in_scope(report["requirements"])
+    with_evidence = [r for r in scoped if r["passed"]]
+    without = [r for r in scoped if not r["passed"]]
 
     out = [f"Release test evidence for {meta['version']}", ""]
     if verdict == PASSED:
@@ -237,9 +251,9 @@ def render_plain(report, meta):
             "per-test detail, so no test can be recorded as having passed."
         )
     out += [
-        f"Requirements with passing evidence: {len(with_evidence)} of {len(report['requirements'])}.",
+        f"Requirements with passing evidence: {len(with_evidence)} of {len(scoped)}.",
         "",
-        f"Commit:      {meta['sha']}",
+        f"Commit:      {_commit_link(meta['sha'])}",
         f"Sim results: {meta['url']}",
         f"Release run: {meta['run_url']}",
         "",
@@ -262,7 +276,7 @@ def render_plain(report, meta):
         "only compiles, is not evidence.",
     ]
     for req in without:
-        why = req.get("_evidence") or "no test executed by the release gate"
+        why = req.get("evidence") or "no test executed by the release gate"
         note = " FAILED this run." if req["failed"] else ""
         out.append(f"{req['key']} ({req['milestone']}) -- {req['summary']}: {why}.{note}")
         out += _lines(req["failed"])
@@ -270,6 +284,14 @@ def render_plain(report, meta):
     if report["unattributed"][PASSED] or report["unattributed"][FAILED]:
         out += ["", "--- Tests executed that map to no requirement ---"]
         out += _lines(report["unattributed"][PASSED] + report["unattributed"][FAILED])
+
+    oos = _out_of_scope(report["requirements"])
+    if oos:
+        out += [
+            "",
+            "Out of scope for this gate -- a different platform, so neither covered nor missing: "
+            + ", ".join(f"{r['key']} ({r.get('team', '?')})" for r in oos),
+        ]
 
     suites = report.get("suites") or []
     if suites:
@@ -303,13 +325,14 @@ def render_markdown(report, meta):
     badge = {PASSED: "✅ all gating tests passed", FAILED: "❌ failures present", INCONCLUSIVE: "⚠️ inconclusive"}[
         verdict
     ]
-    with_evidence = [r for r in report["requirements"] if r["passed"]]
+    scoped = _in_scope(report["requirements"])
+    with_evidence = [r for r in scoped if r["passed"]]
 
     out = [
         f"# Release test evidence — {meta['version']}",
         "",
         f"**{badge}** — {len(report['passed'])} passed, {len(report['failed'])} failed, "
-        f"{len(with_evidence)} of {len(report['requirements'])} requirements with passing evidence.",
+        f"{len(with_evidence)} of {len(scoped)} requirements with passing evidence.",
         "",
         f"| | |",
         f"|---|---|",
@@ -356,8 +379,8 @@ def render_markdown(report, meta):
         "",
     ]
     out += ["| Requirement | Milestone | Owner | Why |", "|---|---|---|---|"]
-    for req in [r for r in report["requirements"] if not r["passed"]]:
-        why = req.get("_evidence") or "no test executed by the release gate"
+    for req in [r for r in scoped if not r["passed"]]:
+        why = req.get("evidence") or "no test executed by the release gate"
         if req["failed"]:
             why = "**failed this run**: " + ", ".join(
                 f"`{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in req["failed"]
@@ -370,6 +393,15 @@ def render_markdown(report, meta):
         out += ["## Tests executed that map to no requirement", ""]
         out += [f"- `{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in extras]
         out.append("")
+
+    oos = _out_of_scope(report["requirements"])
+    if oos:
+        out += [
+            "_Out of scope for this gate — a different platform, so neither covered nor missing: "
+            + ", ".join(f"**{r['key']}** ({r.get('team', '?')})" for r in oos)
+            + "._",
+            "",
+        ]
 
     suites = report.get("suites") or []
     if suites:
@@ -453,8 +485,23 @@ def main():
         print("JIRA_SKIP set; report not filed")
         return
 
-    with_evidence = sum(1 for r in report["requirements"] if r["passed"])
-    status = {PASSED: "all gating tests passed", FAILED: "failures present", INCONCLUSIVE: "inconclusive"}[verdict]
+    # A fully green run needs no ticket: the report is already in the step
+    # summary and the release artifact. File only when there is something to
+    # act on -- sim failures, an inconclusive check, or e2e suite failures.
+    suite_failures = suite_totals(suites)["failed"] if suites else 0
+    if verdict == PASSED and not suite_failures:
+        print("all green; report kept in the artifact and step summary, no Jira issue filed")
+        return
+
+    scoped = _in_scope(report["requirements"])
+    with_evidence = sum(1 for r in scoped if r["passed"])
+    status = {
+        PASSED: "all gating tests passed",
+        FAILED: "sim failures present",
+        INCONCLUSIVE: "sim check inconclusive",
+    }[verdict]
+    if suite_failures:
+        status += f", {suite_failures} e2e suite test(s) failed"
     print(
         file_issue(
             base=_env("JIRA_BASE_URL", required=True),
@@ -462,10 +509,10 @@ def main():
             token=_env("JIRA_API_TOKEN", required=True),
             project=_env("JIRA_PROJECT_KEY", required=True),
             summary=(
-                f"Release test evidence {version}: {status} "
-                f"({with_evidence}/{len(report['requirements'])} requirements covered)"
+                f"Release test evidence {version}: {status} " f"({with_evidence}/{len(scoped)} requirements covered)"
             ),
             issue_type=_env("JIRA_ISSUE_TYPE", "Task"),
+            assignee=_env("JIRA_ASSIGNEE_ACCOUNT_ID", "") or None,
             description=render_plain(report, meta) + "\n",
             labels=["release", "test-evidence", f"release-{version}"]
             + sorted({r["key"] for r in report["requirements"] if r["passed"]}),

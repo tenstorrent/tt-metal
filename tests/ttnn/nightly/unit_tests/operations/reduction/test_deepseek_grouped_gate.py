@@ -12,6 +12,10 @@ from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_deepseek_grouped_gate
 
+# Module-scoped device: these tests all run with the default device config. The device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 TEST_PADDING_VALUE = -42
 
 

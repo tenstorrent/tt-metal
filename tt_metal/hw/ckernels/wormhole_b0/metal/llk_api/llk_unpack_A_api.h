@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+// llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
+// folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
+// required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
+#include "debug/llk_unpack_dummy.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -16,9 +22,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t operand = 0) {
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
@@ -32,6 +38,18 @@ inline void llk_unpack_A_init(
         operand_unpack_dst_format,
         tensor_shape.face_r_dim,
         tensor_shape.total_num_faces())));
+
+    SAN_HOOK(init<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(operand_unpack_src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(operand_unpack_dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(tensor_shape.face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces()),
+        StateDiscard<std::uint32_t>(transpose_of_faces),
+        StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
@@ -62,6 +80,17 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         get_operand_face_r_dim(operand_id),
         get_operand_num_faces(operand_id))));
 
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
@@ -82,7 +111,20 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    // One execute per tile; the state is identical for every iteration, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
@@ -93,5 +135,7 @@ inline void llk_unpack_A_block(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {
+    SAN_HOOK(uninit<OperationUnpackUnary>(StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType))));
+
     _llk_unpack_A_uninit_<BType>();
 }

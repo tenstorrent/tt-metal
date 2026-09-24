@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_moe_grouped_topk
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk)
 
 set_target_properties(
@@ -16,7 +16,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_moe_grouped_topk

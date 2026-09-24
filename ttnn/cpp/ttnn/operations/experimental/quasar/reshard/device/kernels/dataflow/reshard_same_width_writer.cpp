@@ -41,6 +41,22 @@ void kernel_main() {
     const uint32_t dst_addr = remote.get_bank_base_address();
     uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
     uint32_t vararg_idx = 0;
+#ifdef UNALIGNED
+    constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
+    constexpr uint32_t remote_unit_size_padded = get_arg(args::remote_unit_size_padded);
+    for (uint32_t i = 0; i < num_writes; ++i) {
+        uint32_t bank_id = get_vararg(vararg_idx++);
+        uint32_t addr = dst_addr + get_vararg(vararg_idx++);
+        uint32_t units_to_transfer = get_vararg(vararg_idx++);
+        for (uint32_t j = 0; j < units_to_transfer; ++j) {
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(src, bank, unit_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+            l1_read_addr += local_unit_size_padded;
+            addr += remote_unit_size_padded;
+        }
+    }
+    noc.async_write_barrier();
+#else
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = get_vararg(vararg_idx++);
         uint32_t addr = dst_addr + get_vararg(vararg_idx++);
@@ -51,4 +67,5 @@ void kernel_main() {
         l1_read_addr += write_size;
     }
     noc.async_write_barrier();
+#endif
 }

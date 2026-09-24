@@ -36,10 +36,10 @@ Usage examples:
     python scripts/compare_workflow_runs.py --category t3000
 
     # Compare specific workflows
-    python scripts/compare_workflow_runs.py --workflows t3000-unit-tests.yaml
+    python scripts/compare_workflow_runs.py --workflows t3000-tests.yaml
 
     # Compare a specific workflow run ID on your branch
-    python scripts/compare_workflow_runs.py --workflows pipeline-select.yaml --branch-run-id 1234567890
+    python scripts/compare_workflow_runs.py --workflows perf-device-models.yaml --branch-run-id 1234567890
 
     # Compare a specific branch
     python scripts/compare_workflow_runs.py --branch my-feature-branch
@@ -447,19 +447,14 @@ def main():
         # Single-card
         "perf-device-models.yaml",
         # T3000 (T3K)
-        "t3000-e2e-tests.yaml",
-        "t3000-fast-tests.yaml",
-        "t3000-integration-tests.yaml",
+        "t3000-tests.yaml",
+        "t3000-dispatch-tests.yaml",
         "t3000-profiler-tests.yaml",
-        "t3000-unit-tests.yaml",
         # Galaxy
-        "galaxy-deepseek-tests.yaml",
         "blaze-models-prefill-tests.yaml",
-        "galaxy-demo-tests.yaml",
         "galaxy-e2e-tests.yaml",
         "galaxy-health.yaml",
         "galaxy-integration-tests.yaml",
-        "galaxy-perf-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
         "galaxy-profiler-tests.yaml",
         "galaxy-sanity.yaml",

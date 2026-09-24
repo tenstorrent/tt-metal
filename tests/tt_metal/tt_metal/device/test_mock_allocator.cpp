@@ -47,7 +47,7 @@ protected:
     }
 };
 
-TEST_F(MockAllocatorTest, MockDeviceCreationAndQueries) {
+TEST_F(MockAllocatorTest, CPU_MockDeviceCreationAndQueries) {
     EXPECT_EQ(mock_env_->get_arch(), tt::ARCH::WORMHOLE_B0);
     EXPECT_GT(mock_env_->get_l1_size(), 0u);
     EXPECT_GT(mock_env_->get_dram_alignment(), 0u);
@@ -55,7 +55,7 @@ TEST_F(MockAllocatorTest, MockDeviceCreationAndQueries) {
     EXPECT_EQ(mock_device_->num_devices(), 1u);
 }
 
-TEST_F(MockAllocatorTest, BufferAllocationOnMockDevice) {
+TEST_F(MockAllocatorTest, CPU_BufferAllocationOnMockDevice) {
     constexpr size_t page_size = 4096;
     constexpr size_t buffer_size = page_size * 12;
     distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
@@ -67,12 +67,12 @@ TEST_F(MockAllocatorTest, BufferAllocationOnMockDevice) {
     EXPECT_FALSE(buffer->is_allocated());
 }
 
-TEST_F(MockAllocatorTest, GetMockAllocatorReturnsNonNull) {
+TEST_F(MockAllocatorTest, CPU_GetMockAllocatorReturnsNonNull) {
     auto* mock_alloc = experimental::get_mock_allocator(*mock_device_);
     ASSERT_NE(mock_alloc, nullptr);
 }
 
-TEST_F(MockAllocatorTest, ExtractAndOverrideRoundtrip) {
+TEST_F(MockAllocatorTest, CPU_ExtractAndOverrideRoundtrip) {
     // Fresh mock device — extracted state should be empty.
     auto empty_state = experimental::extract_mock_allocator_state(*mock_device_);
     EXPECT_TRUE(empty_state.is_empty(BufferType::L1));
@@ -106,7 +106,7 @@ TEST_F(MockAllocatorTest, ExtractAndOverrideRoundtrip) {
     EXPECT_EQ(stats_empty.total_allocated_bytes, 0u);
 }
 
-TEST_F(MockAllocatorTest, CheckpointRestoreViaMeshBuffer) {
+TEST_F(MockAllocatorTest, CPU_CheckpointRestoreViaMeshBuffer) {
     constexpr size_t small_size = 4096 * 4;
     constexpr size_t large_size = 4096 * 16;
 

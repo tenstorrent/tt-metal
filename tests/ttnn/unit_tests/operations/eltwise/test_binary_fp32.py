@@ -100,7 +100,7 @@ def test_div_fp32(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +148,7 @@ def test_div_bf16_nonzero(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -185,6 +185,38 @@ def test_squared_sum_fp32_activ(device):
 
 
 @pytest.mark.parametrize(
+    "activation, standalone, torch_fn",
+    [
+        (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0),
+            lambda t: ttnn.softplus(t, beta=1.0, threshold=20.0),
+            lambda x: torch.nn.functional.softplus(x, beta=1.0, threshold=20.0),
+        ),
+        (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.ERF, False),
+            lambda t: ttnn.erf(t, fast_and_approximate_mode=False),
+            torch.erf,
+        ),
+    ],
+    ids=["softplus", "erf"],
+)
+def test_add_fp32_activ_matches_standalone(device, activation, standalone, torch_fn):
+    # A fused activation on float32 must run the float32 SFPU variant, as the standalone op does: the bf16
+    # variant of softplus returns 0 below -5 and the bf16 variant of erf is about 1e4 times less accurate.
+    x_torch = torch.linspace(-16.0, 8.0, 1024, dtype=torch.float32).reshape(1, 1, 32, 32)
+    y_torch = torch.zeros_like(x_torch)
+    z_torch = torch_fn(x_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.add(x_tt, y_tt, activations=[activation]))
+    tt_alone = ttnn.to_torch(standalone(x_tt))
+
+    assert not (tt_out == 0).any()
+    assert torch.allclose(z_torch, tt_out, atol=1e-4, rtol=0)
+    assert torch.allclose(tt_alone, tt_out, atol=1e-5, rtol=0)
+
+
+@pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.add,
@@ -213,6 +245,34 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
     assert status
+
+
+@pytest.mark.parametrize("slot", ["a", "b", "result"])
+@pytest.mark.parametrize("activation", [ttnn.UnaryOpType.EXP, ttnn.UnaryOpType.RECIP])
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, ulp_threshold",
+    [(ttnn.float32, torch.float32, 2), (ttnn.bfloat16, torch.bfloat16, 2)],
+)
+def test_exp_recip_activation_golden_matches_device(device, activation, ttnn_dtype, torch_dtype, ulp_threshold, slot):
+    """Both activations reach the device but had no entry in the golden's activation map, so the
+    golden raised KeyError for every dtype. Comparison mode downgrades that to a warning, which
+    leaves the call reporting as validated with nothing compared.
+
+    All three slots go through the same map, so any one of them catches the missing entry. They
+    are parametrized to pin that the map stays shared, rather than to cover distinct logic."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {
+        "a": {"input_tensor_a_activations": [activation]},
+        "b": {"input_tensor_b_activations": [activation]},
+        "result": {"activations": [activation]},
+    }[slot]
+
+    expected = ttnn.get_golden_function(ttnn.add)(torch_input, torch_input, **kwargs)
+    output = ttnn.to_torch(ttnn.add(input_tensor, input_tensor, **kwargs))
+
+    assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(
@@ -432,4 +492,4 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
         golden_tensor = torch.where(
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
-    assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=0, allow_nonfinite=True)

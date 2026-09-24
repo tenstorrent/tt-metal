@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <set>
+#include <tuple>
 
 #include "ccl_host_datastructures.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
@@ -61,13 +64,21 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     const size_t ideal_packet_size = (pages_per_packet == 0) ? hw_max_packet_size : pages_per_packet * page_size;
 
     if (packet_size != ideal_packet_size) {
-        log_warning(
-            tt::LogOp,
-            "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to maximize "
-            "throughput.",
-            packet_size,
-            page_size,
-            ideal_packet_size);
+        // A given (packet_size, page_size, ideal_packet_size) combination is identical on every
+        // call for a fixed op/shape/topology, so this fires once per worker/iteration in a hot
+        // loop (up to hundreds of times per run for the same underlying condition). Warn only
+        // once per distinct combination per process to surface the actionable message without
+        // spamming identical repeats.
+        static std::set<std::tuple<size_t, uint32_t, size_t>> warned_packet_sizes;
+        if (warned_packet_sizes.insert({packet_size, page_size, ideal_packet_size}).second) {
+            log_warning(
+                tt::LogOp,
+                "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to "
+                "maximize throughput.",
+                packet_size,
+                page_size,
+                ideal_packet_size);
+        }
     }
 }
 
@@ -146,6 +157,16 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
     return true;
 }
 
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+}
+
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& allocator = mesh_device.allocator();
+    return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+}
+
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
     const auto& mesh_view = mesh_device.get_view();
     const auto& mesh_shape = mesh_view.shape();
@@ -194,8 +215,14 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        bool wraps;
+        if (cluster_axis.has_value()) {
+            wraps = is_axis_wrap_wired(*tensor.device(), *cluster_axis);
+        } else {
+            wraps = get_boundary_mode(tensor, topology_, cluster_axis) ==
+                    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        }
+        if (wraps) {
             return topology_;
         }
         if (topology_ == tt::tt_fabric::Topology::Torus) {

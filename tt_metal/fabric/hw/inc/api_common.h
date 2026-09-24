@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <type_traits>
+
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 namespace tt::tt_fabric {
@@ -432,37 +434,44 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
 /**
  * Opens fabric routing-plane connections for all headers associated with the given route.
  * Reads connection parameters from runtime arguments and initializes headers with routing metadata.
+ * Use the same WORKER_HANDSHAKE_NOC for the connection's packet traffic and close handshake.
  *
  * Return value: None
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC for open        | uint8_t                                        | False    |
  * | connection_manager                    | Connection manager to build and open    | RoutingPlaneConnectionManager&                 | True     |
  * | num_connections_to_build              | Number of connections to build/open     | uint32_t                                       | True     |
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
  */
 // clang-format on
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
     size_t& rt_arg_idx) {
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
-        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
+        WORKER_HANDSHAKE_NOC>(rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off
 /**
  * Closes all connections owned by the provided connection manager.
+ * WORKER_HANDSHAKE_NOC must match the NoC used to open the connections.
  *
  * Return value: None
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC used for open   | uint8_t                                        | False    |
  * | connection_manager                    | Connection manager to be closed         | RoutingPlaneConnectionManager&                 | True     |
  */
 // clang-format on
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
 FORCE_INLINE void close_connections(tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager) {
-    connection_manager.close();
+    connection_manager.close<WORKER_HANDSHAKE_NOC>();
 }
 
 }  // namespace tt::tt_fabric::common::experimental

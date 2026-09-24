@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
@@ -50,7 +51,11 @@ template <
     uint32_t output_chunk_size,
     uint32_t num_devices,
     uint32_t slice_step,
-    uint32_t static_output_chunks_per_stripe>
+    uint32_t static_output_chunks_per_stripe,
+    bool linearized_mesh_ring,
+    ttnn::ccl::snake_ring::Orientation snake_orientation,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols>
 class OutputStripeIterator {
     static constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     static_assert(slice_step == 1 || static_output_chunks_per_stripe != 0);
@@ -58,6 +63,12 @@ class OutputStripeIterator {
 public:
     // Point at `stripe` for the chunk range [start, start + count).
     FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count, uint32_t output_chunks_per_stripe) {
+        if constexpr (linearized_mesh_ring) {
+            // Fabric walks a snake Hamiltonian ring, while tensor shards retain
+            // normal row-major rank order. Translate the ring stripe here so
+            // local copies and relays address the canonical output position.
+            stripe = ttnn::ccl::snake_ring::row_major_index(stripe, mesh_rows, mesh_cols, snake_orientation);
+        }
         if constexpr (static_output_chunks_per_stripe != 0) {
             output_chunks_per_stripe_ = static_output_chunks_per_stripe;
         } else {
@@ -147,16 +158,16 @@ public:
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
-        // The scatter command has fixed-size address/chunk arrays even when the
-        // contiguous-page path below uses a larger terminal unicast payload.
-        // Only initialize the entries the scatter command can represent.
-        constexpr uint32_t scatter_header_pages_per_packet = std::min(pages_per_packet, max_pages_per_packet);
+        // Scatter-write requires at least two chunks. The single-page, split-page, and contiguous-page paths
+        // use the unicast header instead, so do not initialize an invalid or unused scatter header for them.
 #ifdef FABRIC_2D
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            scatter_packet_header,
-            dst_dev_id,
-            dst_mesh_id,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), scatter_header_pages_per_packet));
+        if constexpr (use_scatter_write && !coalesce_contiguous_pages) {
+            fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+                scatter_packet_header,
+                dst_dev_id,
+                dst_mesh_id,
+                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+        }
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, dst_dev_id, dst_mesh_id);
@@ -164,10 +175,12 @@ public:
             fused_unicast_packet_header, dst_dev_id, dst_mesh_id);
 #else
         constexpr uint8_t num_hops = 1;
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            scatter_packet_header,
-            num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), scatter_header_pages_per_packet));
+        if constexpr (use_scatter_write && !coalesce_contiguous_pages) {
+            fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+                scatter_packet_header,
+                num_hops,
+                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+        }
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);

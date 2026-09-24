@@ -30,7 +30,7 @@ from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 # M3 attention dims (text_config).
 HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
@@ -86,8 +86,8 @@ def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_see
     """Full M3 GQA attention block vs self-authored torch reference, random weights.
 
     (1,1) = TP=1. (8,4) = TP=4 (M3's KV-head-limited tensor-parallel), exercising the o_proj
-    reduce-scatter/all-gather CCL; attention output is full-hidden replicated post-allreduce, so
-    device[0] holds the full result. Needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy ([8,4])."""
+    closing CCL (reduce-scatter under a sharded residual, all-reduce under a replicated one).
+    Needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy ([8,4])."""
     torch.manual_seed(0)
     x = torch.randn(1, seq_len, HIDDEN) * 0.1
 
@@ -175,7 +175,9 @@ def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_see
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_out = attn(x_tt, rope_mats=rope_mats, position_idx=None, kv_cache=None)
-    out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(1, seq_len, HIDDEN)
+    # Seq is replicated; concat TP columns when the residual is emb/tp-sharded.
+    cols = mesh_device.shape[1]
+    out = compose_tp_hidden(ttnn.get_device_tensors(tt_out), 0, cols).reshape(1, seq_len, HIDDEN)
 
     passing, pcc = comp_pcc(ref_out, out, 0.97)
     logger.info(f"attention prefill vs ref: {pcc}")

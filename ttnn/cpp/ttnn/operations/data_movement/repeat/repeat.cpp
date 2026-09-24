@@ -25,6 +25,7 @@
 #include "codegen/repeat_codegen_device_operation.hpp"
 #include "codegen/repeat_codegen_supported.hpp"
 #include "repeat.hpp"
+#include "repeat_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -195,10 +196,10 @@ ttnn::Tensor repeat_dim_tile(
         std::move(optional_output_tensor));
 }
 
-// Single-dim codegen repeat step. repeat_codegen's kernels assume a 4D input
-// (ops/repeat/spec.py's _page_map / build_repeat_rm_factory), so `tensor` is
-// padded up to 4D here (prepending 1s) regardless of its original rank; the
-// output is viewed back down to the true logical shape before returning.
+// Single-dim codegen repeat step. prim::repeat_codegen's kernels index pages through a
+// fixed 4D page map, so `tensor` is padded up to 4D here (prepending 1s) regardless of
+// its original rank; the output is viewed back down to the true logical shape before
+// returning.
 ttnn::Tensor repeat_dim_codegen(
     const ttnn::Tensor& tensor,
     const uint32_t dim,
@@ -277,10 +278,9 @@ ttnn::Tensor repeat_dim_codegen(
 }
 
 // Decomposes a (possibly multi-dim) repeat into a sequence of single-dim
-// prim::repeat_codegen calls, mirroring the reverse-order per-dim loops
-// above (native TILE/RM) and ops/repeat/repeat.py's RepeatCodegen.repeat --
-// each single-dim step is independent (orthogonal axes), so iteration order
-// doesn't affect correctness.
+// prim::repeat_codegen calls, mirroring the reverse-order per-dim loops above
+// (native TILE/RM). Each single-dim step is independent (orthogonal axes), so
+// iteration order doesn't affect correctness.
 ttnn::Tensor repeat_via_codegen(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
@@ -300,69 +300,119 @@ ttnn::Tensor repeat_via_codegen(
     return working_tensor;
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+namespace {
 
-namespace ttnn {
-
-ttnn::Tensor repeat(
+// Strips shard_spec off a sharded input's memory config; the device op re-derives one for the
+// new output shape. A preallocated output is where the result has to land, so its own memory
+// config outranks both the requested one and the input's.
+MemoryConfig derive_output_mem_config(
     const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config,
-    const std::string& implementation,
-    const std::optional<Tensor>& optional_output_tensor) {
-    namespace repeat_codegen = operations::data_movement::repeat_codegen;
-    // Validate before any early return so invalid values fail consistently.
-    const auto sel = repeat_codegen::parse_implementation(implementation);
-
-    auto [working_tensor, working_repetition_vector] =
-        operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
-    // Prefer preallocated output's memory config when provided.
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    if (optional_output_tensor.has_value()) {
+        return optional_output_tensor->memory_config();
+    }
     const auto& input_mc = input_tensor.memory_config();
-    MemoryConfig output_mem_config =
-        optional_output_tensor.has_value()
-            ? optional_output_tensor->memory_config()
-            : memory_config.value_or(
-                  input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
-    if (optional_output_tensor.has_value() && memory_config.has_value()) {
+    return memory_config.value_or(
+        input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
+}
+
+// Whether the codegen path can serve this call, on the rank-matched tensor and repeat vector.
+// Correctness only -- perf demotion is a separate, routing-only question.
+bool codegen_can_serve(
+    const ttnn::Tensor& working_tensor,
+    const ttsl::SmallVector<uint32_t>& working_repetition_vector,
+    const MemoryConfig& output_mem_config) {
+    // A zero anywhere makes the output empty, which repeat_native answers up front without
+    // dispatching anything. supported_by_codegen() only asks whether *some* dim is repeated, so
+    // it accepts a vector like {0, 3, 1, 1}; those belong to native.
+    if (std::any_of(
+            working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](uint32_t r) { return r == 0; })) {
+        return false;
+    }
+    // Sharded *output* has no resharding path here (the codegen path only ever produces an
+    // interleaved output tensor); gated here rather than in supported_by_codegen(), which is
+    // about the input side.
+    if (output_mem_config.is_sharded()) {
+        return false;
+    }
+    // Placement must match too: the RM factories derive CB slot sizes and per-page transfer
+    // sizes from one side's aligned page size, and DRAM/L1 page alignments differ, so a
+    // cross-placement call can overrun destination pages or CB slots. Native derives both
+    // sides' pitches independently and handles the conversion.
+    if (output_mem_config.buffer_type() != working_tensor.memory_config().buffer_type()) {
+        return false;
+    }
+    return repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
+}
+
+// Everything a preallocated output has to satisfy. Both routes run this, so a case that lands on
+// codegen is held to the same standard as one that lands on native.
+void validate_optional_output(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& working_tensor,
+    const ttsl::SmallVector<uint32_t>& working_repetition_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    if (!optional_output_tensor.has_value()) {
+        return;
+    }
+    const auto& out = optional_output_tensor.value();
+
+    if (memory_config.has_value()) {
         TT_FATAL(
-            memory_config->buffer_type() == optional_output_tensor->memory_config().buffer_type() &&
-                memory_config->memory_layout() == optional_output_tensor->memory_config().memory_layout(),
+            memory_config->buffer_type() == out.memory_config().buffer_type() &&
+                memory_config->memory_layout() == out.memory_config().memory_layout(),
             "repeat: memory_config must match optional_output_tensor memory config");
-        // Explicit shard_spec must match prealloc; omit shard_spec to derive-from-prealloc.
+        // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
         if (memory_config->shard_spec().has_value()) {
             TT_FATAL(
-                memory_config->shard_spec() == optional_output_tensor->memory_config().shard_spec(),
+                memory_config->shard_spec() == out.memory_config().shard_spec(),
                 "repeat: memory_config shard_spec must match optional_output_tensor");
         }
     }
-    auto working_output_mem_config = output_mem_config;
 
     auto expected_logical_shape = working_tensor.logical_shape();
     for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
         expected_logical_shape[i] *= working_repetition_vector[i];
     }
-    if (optional_output_tensor.has_value()) {
-        const auto& out = optional_output_tensor.value();
-        TT_FATAL(out.device() == input_tensor.device(), "repeat optional output must be on the same device");
-        TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
-        TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
-        TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
-        // Direct-write kernels read input while writing output; shared storage corrupts (slice forbids this).
-        TT_FATAL(
-            out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
-    }
+    TT_FATAL(out.device() == input_tensor.device(), "repeat optional output must be on the same device");
+    TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
+    TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
+    TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
+    // Direct-write kernels read the input while writing the output, so a shared buffer corrupts both.
+    TT_FATAL(out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
+}
 
-    // Copy into preallocated when the composite path could not write it directly.
-    auto finalize_into_preallocated = [&](const ttnn::Tensor& result) -> ttnn::Tensor {
-        if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
-            return result;
-        }
-        const auto& dst = optional_output_tensor.value();
-        if (result.buffer() == dst.buffer()) {
-            return result;
-        }
-        return ttnn::copy(result, dst);
-    };
+// Copies into the preallocated output when the path that ran could not write it directly.
+ttnn::Tensor finalize_into_preallocated(
+    const ttnn::Tensor& result, const std::optional<Tensor>& optional_output_tensor) {
+    if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
+        return result;
+    }
+    const auto& dst = optional_output_tensor.value();
+    if (result.buffer() == dst.buffer()) {
+        return result;
+    }
+    return ttnn::copy(result, dst);
+}
+
+}  // namespace
+
+// The existing composite/native implementation, unconditionally. Callers that have already been
+// routed here enter this rather than re-entering ttnn::repeat, so a call routed to native cannot
+// be routed a second time and land on codegen partway through.
+ttnn::Tensor repeat_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
+    MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
+    auto working_output_mem_config = output_mem_config;
+
+    validate_optional_output(
+        input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
     if (std::any_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 0; })) {
@@ -385,7 +435,7 @@ ttnn::Tensor repeat(
             input_tensor.layout(),
             *input_tensor.device(),
             zero_mc);
-        return finalize_into_preallocated(zeros_out);
+        return finalize_into_preallocated(zeros_out, optional_output_tensor);
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
@@ -393,52 +443,13 @@ ttnn::Tensor repeat(
     // nothing to do!
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
-        return finalize_into_preallocated(input_tensor);
+        return finalize_into_preallocated(input_tensor, optional_output_tensor);
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
     const bool needs_rm_tilize_roundtrip = input_tensor.layout() == ttnn::TILE_LAYOUT &&
-                                           !operations::data_movement::detail::is_tile_repeat_eligible(working_tensor);
+                                           !is_tile_repeat_eligible(working_tensor);
     const bool needs_final_i2s = output_mem_config.is_sharded();  // refined after native_sharded below
-    // Tentative: codegen/tile paths can take optional; RM+TILE roundtrip cannot.
-    auto maybe_direct_out = [&](bool allow) -> std::optional<Tensor> {
-        if (!allow || !optional_output_tensor.has_value()) {
-            return std::nullopt;
-        }
-        if (working_tensor.buffer() == optional_output_tensor->buffer()) {
-            return std::nullopt;
-        }
-        return optional_output_tensor;
-    };
-
-    {
-        // Sharded *output* has no resharding path in this port (codegen only ever produces an
-        // interleaved output tensor); gate it here rather than in supported_by_codegen(), which
-        // is about the input side per the manifest's hand-authored sharded case.
-        // Placement must match too: the RM factories derive CB slot sizes and per-page
-        // transfer sizes from one side's aligned page size, and DRAM/L1 page alignments
-        // differ, so a cross-placement call can overrun destination pages or CB slots.
-        // Native derives both sides' pitches independently and handles the conversion.
-        const bool placement_matches = output_mem_config.buffer_type() == working_tensor.memory_config().buffer_type();
-        const bool codegen_output_ok = !output_mem_config.is_sharded() && placement_matches;
-        if (sel != repeat_codegen::ImplementationSelector::Native) {
-            const bool supported =
-                codegen_output_ok && repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
-            if (sel == repeat_codegen::ImplementationSelector::Codegen) {
-                TT_FATAL(
-                    supported,
-                    "repeat: implementation=\"codegen\" requires a supported input and an interleaved output "
-                    "memory configuration in the same buffer type as the input");
-                return finalize_into_preallocated(operations::data_movement::detail::repeat_via_codegen(
-                    working_tensor, working_repetition_vector, output_mem_config, maybe_direct_out(true)));
-            }
-            // Auto: codegen iff supported and not perf-demoted; else fall through to native below.
-            if (supported && !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
-                return finalize_into_preallocated(operations::data_movement::detail::repeat_via_codegen(
-                    working_tensor, working_repetition_vector, output_mem_config, maybe_direct_out(true)));
-            }
-        }
-    }
 
     // Native path: sharded input, single-axis repeat, predicate accepts. Else composite.
     bool native_sharded = false;
@@ -455,7 +466,7 @@ ttnn::Tensor repeat(
                     break;
                 }
             }
-            native_sharded = operations::data_movement::repeat::is_native_repeat_sharding(
+            native_sharded = repeat::is_native_repeat_sharding(
                 working_tensor.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, native_dim, native_reps);
         }
     }
@@ -483,7 +494,7 @@ ttnn::Tensor repeat(
         }
     }
 
-    if (operations::data_movement::detail::is_tile_repeat_eligible(working_tensor)) {
+    if (is_tile_repeat_eligible(working_tensor)) {
         // Tile-native path; skip TILE->RM->TILE.
         for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
             if (*it == 1) {
@@ -493,7 +504,7 @@ ttnn::Tensor repeat(
             const bool is_last =
                 std::none_of(std::next(it), working_repetition_vector.crend(), [](uint32_t r) { return r != 1; });
             auto step_out = (prim_can_land && is_last) ? optional_output_tensor : std::nullopt;
-            working_tensor = operations::data_movement::detail::repeat_dim_tile(
+            working_tensor = repeat_dim_tile(
                 working_tensor, dim, *it, working_output_mem_config, std::move(step_out));
         }
     } else {
@@ -511,11 +522,11 @@ ttnn::Tensor repeat(
             // RM prim lands only when final layout already matches (no later tilize).
             auto step_out = (prim_can_land && is_last) ? optional_output_tensor : std::nullopt;
             if (it == working_repetition_vector.crbegin()) {
-                working_tensor = operations::data_movement::detail::repeat_last_dim_rm(
+                working_tensor = repeat_last_dim_rm(
                     working_tensor, *it, working_output_mem_config, std::move(step_out));
             } else {
                 auto i = working_repetition_vector.crend() - it - 1;
-                working_tensor = operations::data_movement::detail::repeat_upper_dims_rm(
+                working_tensor = repeat_upper_dims_rm(
                     working_tensor, i, *it, working_output_mem_config, std::move(step_out));
             }
         }
@@ -529,12 +540,13 @@ ttnn::Tensor repeat(
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
         if (!final_mc.shard_spec().has_value()) {
-            auto synth = operations::data_movement::repeat::generate_repeat_shard_spec(
+            auto synth = repeat::generate_repeat_shard_spec(
                 working_tensor, working_tensor.padded_shape(), final_mc.memory_layout(), input_orientation_hint);
             if (synth.has_value()) {
                 final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
             } else {
-                return finalize_into_preallocated(working_tensor);  // No valid spec; keep interleaved.
+                // No valid spec; keep interleaved.
+                return finalize_into_preallocated(working_tensor, optional_output_tensor);
             }
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
@@ -542,19 +554,75 @@ ttnn::Tensor repeat(
             working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
     }
 
-    return finalize_into_preallocated(working_tensor);
+    return finalize_into_preallocated(working_tensor, optional_output_tensor);
+}
+
+ttnn::Tensor repeat_force_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config) {
+    return repeat_native(input_tensor, repetition_vector, memory_config, std::nullopt);
+}
+
+ttnn::Tensor repeat_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
+    const MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config);
+    TT_FATAL(
+        codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config),
+        "repeat_force_codegen invoked for a case the codegen path does not support (requires an "
+        "unsharded rank-2..4 input, at least one dim repeated more than once and none repeated zero "
+        "times, an interleaved output in the same buffer type as the input, and per-layout rules -- "
+        "ROW_MAJOR rejects bfloat8_b and needs a last dim of at least 2 elements, TILE needs the "
+        "repeated H/W axis tile-aligned). This entry never falls back to native, because a forced "
+        "leg that quietly served native would make any comparison against native vacuous. Use "
+        "ttnn::repeat if you want the case routed.");
+    return repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    namespace detail = operations::data_movement::detail;
+    namespace repeat_codegen = operations::data_movement::repeat_codegen;
+
+    auto [working_tensor, working_repetition_vector] = detail::match_input_rank(input_tensor, repetition_vector);
+    const MemoryConfig output_mem_config =
+        detail::derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
+    // Ahead of the routing decision, so a rejected preallocated output raises the same way whichever
+    // route the case would have taken.
+    detail::validate_optional_output(
+        input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
+
+    if (detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
+        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
+        // The codegen path writes an interleaved output in the input's buffer type and adds no layout
+        // or resharding hop after it, so its last per-dim step can land in the prealloc directly.
+        return detail::finalize_into_preallocated(
+            detail::repeat_via_codegen(
+                working_tensor, working_repetition_vector, output_mem_config, optional_output_tensor),
+            optional_output_tensor);
+    }
+
+    return detail::repeat_native(input_tensor, repetition_vector, memory_config, optional_output_tensor);
 }
 
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& repeat_dims,
-    const std::string& implementation,
     const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::repeat(
         input_tensor,
         ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()),
         std::nullopt,
-        implementation,
         optional_output_tensor);
 }
 

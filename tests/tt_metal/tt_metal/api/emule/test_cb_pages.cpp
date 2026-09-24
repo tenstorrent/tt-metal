@@ -11,9 +11,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -45,9 +45,7 @@ TEST_F(UnitMeshFixture, CB_Reservation_Overflow_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
-        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
+    EXPECT_DEATH(LaunchProgram(this->device(), std::move(program)), ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
 }
 
 // CB Reservation Overflow is the one check that is ALWAYS ON (not gated by
@@ -80,9 +78,7 @@ TEST_F(UnitMeshFixture, CB_Reservation_Overflow_AlwaysOn) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
-        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
+    EXPECT_DEATH(LaunchProgram(this->device(), std::move(program)), ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
 }
 
 // Boundary positive control: reserving EXACTLY the CB's capacity (n ==
@@ -127,7 +123,7 @@ TEST_F(UnitMeshFixture, CB_Reservation_ExactCapacity_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
