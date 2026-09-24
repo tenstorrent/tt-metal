@@ -745,13 +745,17 @@ def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_onl
 
 
 # Other public MoE expert shapes, one per W0/W1 layout case on an 8-bank ring: compact (the busiest core owns fewer
-# columns than the uniform even stride) and uniform stride (6/5 and 8/7 columns). name: (hidden, expert intermediate,
-# top-k, experts per device); 16-32 experts keep the BF4 weight preparation short.
+# columns than the uniform even stride) and uniform stride (6/5 and 8/7 columns), plus bias rows on the two shapes
+# whose cores own an odd column count (the half block-column path with the bias tile row; with bias every shape
+# stores 14-tile transactions, so the half-width W2 iteration is not reachable). name: (hidden, expert intermediate,
+# top-k, experts per device, activation, has_bias); 16-32 experts keep the BF4 weight preparation short.
 _MOE_OTHER_SHAPES = {
-    "qwen36_35b_a3b": (2048, 512, 8, 32),  # 2 columns per core: compact
-    "gemma4_26b_a4b": (2816, 704, 8, 32),  # 3/2 columns: compact
-    "glm45_air": (4096, 1408, 8, 32),  # 6/5 columns: uniform stride
-    "nemotron3_nano": (2688, 1856, 6, 16),  # 8/7 columns: uniform stride
+    "qwen36_35b_a3b": (2048, 512, 8, 32, MoEActivationFunction.SILU, False),  # 2 columns per core: compact
+    "gemma4_26b_a4b": (2816, 704, 8, 32, MoEActivationFunction.GELU, False),  # 3/2 columns: compact
+    "gemma4_26b_a4b_bias": (2816, 704, 8, 32, MoEActivationFunction.GELU, True),  # 3/2 columns + bias tile row
+    "flash_next_bias": (2560, 640, 10, 16, MoEActivationFunction.SILU, True),  # 3/2 columns + bias (14-tile)
+    "glm45_air": (4096, 1408, 8, 32, MoEActivationFunction.SILU, False),  # 6/5 columns: uniform stride
+    "nemotron3_nano": (2688, 1856, 6, 16, MoEActivationFunction.SILU, False),  # 8/7 columns: uniform stride
 }
 
 
@@ -763,8 +767,8 @@ _MOE_OTHER_SHAPES = {
 @pytest.mark.parametrize("shape", sorted(_MOE_OTHER_SHAPES))
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
-    """Single-card MoE compute on a 1x1 mesh for other public expert shapes (compute_only, SILU, no bias)."""
-    hidden_size, intermediate, k, experts = _MOE_OTHER_SHAPES[shape]
+    """Single-card MoE compute on a 1x1 mesh for other public expert shapes (compute_only)."""
+    hidden_size, intermediate, k, experts, activation, has_bias = _MOE_OTHER_SHAPES[shape]
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
@@ -777,8 +781,8 @@ def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
         output_height_shard_dim=4,
         output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
         dtype=ttnn.bfloat16,
-        activation_type=MoEActivationFunction.SILU,
-        has_bias=False,
+        activation_type=activation,
+        has_bias=has_bias,
         compute_only=True,
     )
 
