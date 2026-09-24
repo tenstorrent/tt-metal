@@ -9,7 +9,10 @@
 #define LLK_ZEROFLAG_OUTLINE 1
 
 #ifdef SDPA_RECIPE_RING
-#if defined(WATCHER_ENABLED) || !defined(SDPA_RECIPE_FP32)
+// BF16 ring recipes do not fit the kernel config buffer at O2 on all three TRISCs.
+// Size-optimize only the pack thread: unpack/math at O2 recover most of the O2 speed
+// (Q256/K512 on 1x2: E_bfp4 2.08 -> 1.52 ms, B 2.11 -> 1.87 ms, legacy 1.53 ms).
+#if defined(WATCHER_ENABLED) || (!defined(SDPA_RECIPE_FP32) && defined(TRISC_PACK))
 #pragma GCC optimize("Os")
 #else
 #pragma GCC optimize("O2")
