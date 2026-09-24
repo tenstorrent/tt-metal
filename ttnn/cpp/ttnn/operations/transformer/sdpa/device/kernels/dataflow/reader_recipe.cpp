@@ -33,8 +33,12 @@
 #include "sequence_accessor.hpp"
 #include "tile_padding.hpp"
 
+// DRAM read-barrier interval for the chain head's K/V fetch. Barriering every two
+// tiles serialized the fetch and left multi-core chains 12-30% behind legacy SDPA;
+// 16 tiles keeps enough reads in flight (measured 10x8192x8192 D128, full grid:
+// FAST Q256 2.16 -> 1.78 ms, Q128 4.12 -> 2.45 ms) and is neutral on 1-4 cores.
 #ifndef SDPA_READER_BARRIER_TILES
-#define SDPA_READER_BARRIER_TILES 2
+#define SDPA_READER_BARRIER_TILES 16
 #endif
 #ifndef SDPA_K_CHUNK_TILES
 #define SDPA_K_CHUNK_TILES 16
