@@ -127,10 +127,6 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
             break;
-        case BinaryOpType::LOGADDEXP:
-            // Composing this as log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the
-            // result is bounded by its inputs. It is served by the fused SFPU kernel in binary_ng.
-            TT_THROW("{} is implemented by the fused SFPU kernel in binary_ng", op_type);
         case BinaryOpType::RSUB:
             //  rsub(a,b) = b - a
             defines.merge(get_defines(UnaryOpType::NEG, std::nullopt, "PRE_IN0_0"));
@@ -162,10 +158,6 @@ std::map<std::string, std::string> get_defines(
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
-        case BinaryOpType::LOGADDEXP2:
-            // Composing this as log2(2**a + 2**b) overflows at |x| > 127 even though the result
-            // is bounded by its inputs. It is served by the fused SFPU kernel in binary_ng.
-            TT_THROW("{} is implemented by the fused SFPU kernel in binary_ng", op_type);
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
             defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", "0", input_dtype));
@@ -390,12 +382,6 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("lcm_tile_init();")});
             op_name = "lcm_tile";
             break;
-        case BinaryOpType::LOGADDEXP:
-        case BinaryOpType::LOGADDEXP2:
-            // The composed log(exp(a) + exp(b)) and log2(2**a + 2**b) forms overflow at |x| > 88.7
-            // and |x| > 127 even though the result is bounded by the inputs. Both ops are served
-            // by the fused SFPU kernels in binary_ng.
-            TT_THROW("{} is implemented by the fused SFPU kernel in binary_ng", op_type);
         case BinaryOpType::LDEXP:
             new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_binary_tile";

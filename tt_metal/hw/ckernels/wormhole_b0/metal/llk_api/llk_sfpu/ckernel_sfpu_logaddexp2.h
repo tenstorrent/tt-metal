@@ -52,7 +52,7 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
-        _sfpu_logaddexp_gap_(a, b);
+        a = _sfpu_logaddexp_gap_(a, b);
         // The exponential follows the destination precision, as in logaddexp. For bfloat16,
         // _sfpu_exp2_bf16_ is what exp2 uses for a bfloat16 result: logaddexp's exp_21f
         // taken in base 2, so the ln 2 multiply drops out. Neither the approximate body nor

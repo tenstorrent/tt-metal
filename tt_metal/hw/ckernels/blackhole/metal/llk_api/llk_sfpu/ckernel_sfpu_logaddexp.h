@@ -32,18 +32,19 @@ sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi:
     return result;
 }
 
-// Replaces a with |a - b|, or with zero when the operands are bit-identical. Equal
-// infinities are why the clause exists: inf - inf is NaN, and that NaN would swallow a
-// result the composed form gets right, while a zero gap keeps both signs correct because
-// max(+/-inf, +/-inf) plus a finite correction is +/-inf. The comparison goes through
-// as<vInt>, so the clause is bit identity by construction rather than depending on how
-// vFloat equality lowers. For any other bit-identical pair the substitution changes
-// nothing: a finite difference is already +0.0, and a NaN pair was already copied into
-// the result.
-sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
-    v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { a = 0.0f; }
-    v_else { a = sfpi::abs(a - b); }
+// Returns |a - b|, or zero when the operands are bit-identical. Equal infinities are why
+// the clause exists: inf - inf is NaN, and that NaN would swallow a result the composed
+// form gets right, while a zero gap keeps both signs correct because max(+/-inf, +/-inf)
+// plus a finite correction is +/-inf. The comparison goes through as<vInt>, so the clause
+// is bit identity by construction rather than depending on how vFloat equality lowers.
+// For any other bit-identical pair the substitution changes nothing: a finite difference
+// is already +0.0, and a NaN pair was already copied into the result. The difference is
+// taken for every lane and then overwritten, which needs no v_else.
+sfpi_inline sfpi::vFloat _sfpu_logaddexp_gap_(const sfpi::vFloat& a, const sfpi::vFloat& b) {
+    sfpi::vFloat gap = sfpi::abs(a - b);
+    v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { gap = 0.0f; }
     v_endif;
+    return gap;
 }
 
 // logaddexp(a, b) = max(a, b) + log1p(exp(-|a - b|))
@@ -72,7 +73,7 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
-        _sfpu_logaddexp_gap_(a, b);
+        a = _sfpu_logaddexp_gap_(a, b);
         // The exponential follows the destination precision, as calculate_log1p_fp32 does:
         // _sfpu_exp_accurate_ is _sfpu_exp_fp32_accurate_ for an fp32 destination and, for
         // bfloat16, exp_21f -- the exponential exp itself uses for a bfloat16 result, at a
