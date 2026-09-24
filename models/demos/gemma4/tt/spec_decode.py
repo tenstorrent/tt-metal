@@ -2235,18 +2235,25 @@ class SpeculativeDecoder:
         t0 = _time.time()
         tr = dict(self._srv_shared)
         tr.update(self._fused_width_inputs(at_pos, s_k))
-        vx, vidx, vh = self._fused_body(tr)
+        vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
         vx.deallocate(True)
         vidx.deallocate(True)
         vh.deallocate(True)
+        accept.deallocate(True)
+        for r in h_rows:
+            r.deallocate(True)
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        vx, vidx, vh = self._fused_body(tr)
+        vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         tr["id"] = tid
         tr["verify_x"] = vx
         tr["vidx"] = vidx
         tr["vhidden"] = vh
+        tr["h_rows"] = h_rows
+        tr["accept"] = accept
+        tr["accept_n_vx"] = int(vx.shape[-1])
+        tr["accept_host"] = ttnn.allocate_tensor_on_host(accept.spec, self.mesh_device)
         self._srv_widths[s_k] = tr
         _lg.info(f"[spec-trace] captured verify width S_k={s_k} in {_time.time()-t0:.2f}s (at position {at_pos})")
         return tr
