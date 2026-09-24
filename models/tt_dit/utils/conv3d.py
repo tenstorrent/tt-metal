@@ -617,7 +617,6 @@ def get_conv3d_config(
         fp32_blk = _FP32_BLOCKINGS.get((in_channels, out_channels, kernel_size))
         if fp32_blk is not None:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fp32_blk
-            logger.debug(f"conv3d fp32 blocking [exact] ({in_channels},{out_channels},{kernel_size}) -> {fp32_blk}")
         else:
             # Conservative default — unchanged from the prior hardcoded fp32 path.
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 32, 32, 1, 1, 1
@@ -638,10 +637,6 @@ def get_conv3d_config(
     exact = _BLOCKINGS.get(blocking_key)
     if exact is not None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = exact
-        logger.debug(
-            f"conv3d blocking [exact] {blocking_key} -> "
-            f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-        )
     else:
         fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:

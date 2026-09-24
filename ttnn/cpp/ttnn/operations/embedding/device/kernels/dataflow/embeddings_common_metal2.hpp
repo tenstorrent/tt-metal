@@ -15,6 +15,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -45,19 +46,28 @@ uint32_t one_local_addr;
 // `weight_col_offset_bytes` is the core's column slice of the weight row (non-zero only for
 // width-/block-sharded output); it is applied per read so that `weights` can be built on the clean
 // buffer base.
-template <typename T>
-FORCE_INLINE constexpr void prepare_local_cache(
+// `local_cache` is a DataflowBuffer binding token on WH/BH and a Scratchpad binding token on Quasar
+// (Gen2 forbids the self-loop DFB the cache would otherwise be). The cache is only ever NoC-accessed —
+// filled here and replayed via a NoC loopback read in read_token_async — so the scratchpad's plain
+// (cached) base address is correct; no uncached alias is needed (unlike the RISC-read index scratch).
+template <typename CacheToken, typename T>
+FORCE_INLINE void prepare_local_cache(
     const Noc& noc,
-    DFBBindingToken local_cache,
+    CacheToken local_cache,
     const T& weights,
     uint32_t weight_stick_size,
     uint32_t pad_token_value = 0,
     uint32_t weight_col_offset_bytes = 0) {
 #if defined PADDED
     pad_token = pad_token_value;
+#ifdef ARCH_QUASAR
+    Scratchpad<uint32_t> cache(local_cache);
+    pad_local_addr = cache.get_base_address();
+#else
     DataflowBuffer dfb(local_cache);
     dfb.reserve_back(1);
     pad_local_addr = dfb.get_write_ptr();
+#endif
     noc.async_read(
         weights,
         CoreLocalMem<uint32_t>(pad_local_addr),
@@ -66,9 +76,14 @@ FORCE_INLINE constexpr void prepare_local_cache(
         {});
     noc.async_read_barrier();
 #elif defined BINARY
+#ifdef ARCH_QUASAR
+    Scratchpad<uint32_t> cache(local_cache);
+    zero_local_addr = cache.get_base_address();
+#else
     DataflowBuffer dfb(local_cache);
     dfb.reserve_back(2);
     zero_local_addr = dfb.get_write_ptr();
+#endif
     noc.async_read(
         weights,
         CoreLocalMem<uint32_t>(zero_local_addr),

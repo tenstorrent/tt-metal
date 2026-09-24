@@ -16,7 +16,6 @@ Correctness is checked against torch SDPA with the equivalent block-diagonal
 window mask.
 """
 
-import os
 import torch
 import pytest
 from loguru import logger
