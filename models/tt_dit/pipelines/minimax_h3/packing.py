@@ -354,25 +354,62 @@ def build_rope_tables(
     return freqs.cos(), freqs.sin()
 
 
-def build_row_timesteps(
-    layout: MiniMaxH3PackedSequence,
+# Roles a row can take, in canonical slot order; slot count stays fixed (no dedup) so the traced shape is constant.
+MINIMAX_H3_ADALN_ROLES = ("video", "audio", "condition_video", "condition_audio")
+
+
+def build_slot_routing(
+    layout: MiniMaxH3PackedSequence, roles: tuple[str, ...] | None = None
+) -> tuple[torch.Tensor, tuple[str, ...]]:
+    """Fixed per-row AdaLN slot assignment, returned as ``(row_slot, roles)``.
+
+    ``roles=None`` keeps only roles with rows; a given ``roles`` pins the slot set so one trace serves every request.
+    """
+    num_cond_video = layout.num_condition_video_rows
+    num_cond_audio = layout.num_condition_audio_rows
+    present = {
+        "video": True,
+        "audio": True,
+        "condition_video": num_cond_video > 0,
+        "condition_audio": num_cond_audio > 0,
+    }
+    if roles is None:
+        roles = tuple(role for role in MINIMAX_H3_ADALN_ROLES if present[role])
+    else:
+        missing = tuple(role for role, has_rows in present.items() if has_rows and role not in roles)
+        if missing:
+            msg = f"the layout has rows for roles {missing} but the pinned slot roles are {roles}"
+            raise ValueError(msg)
+    slot = {role: index for index, role in enumerate(roles)}
+
+    row_slot = torch.full((layout.sequence_length,), slot["video"], dtype=torch.long)
+    if num_cond_video:
+        row_slot[layout.video_indices[:num_cond_video]] = slot["condition_video"]
+    row_slot[layout.audio_indices[num_cond_audio:]] = slot["audio"]
+    if num_cond_audio:
+        row_slot[layout.audio_indices[:num_cond_audio]] = slot["condition_audio"]
+    return row_slot, roles
+
+
+def slot_levels(
+    roles: tuple[str, ...],
+    *,
     video_timestep: float,
     audio_timestep: float,
-    condition_video_timestep: float,
-    condition_audio_timestep: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-row timesteps, reduced to the transformer's ``(timesteps, indices)`` pair.
-
-    One forward serves rows at different noise levels: generated video and audio
-    step their own schedules while conditioning rows stay pinned at their
-    noise-augmentation level. Text rows never reach an output head and inherit
-    the video timestep.
-    """
-    row_timesteps = torch.full((layout.sequence_length,), video_timestep, dtype=torch.float32)
-    row_timesteps[layout.video_indices[: layout.num_condition_video_rows]] = condition_video_timestep
-    row_timesteps[layout.audio_indices[layout.num_condition_audio_rows :]] = audio_timestep
-    row_timesteps[layout.audio_indices[: layout.num_condition_audio_rows]] = condition_audio_timestep
-    return torch.unique(row_timesteps, sorted=True, return_inverse=True)
+    condition_video_timestep: float | None = None,
+    condition_audio_timestep: float | None = None,
+) -> torch.Tensor:
+    """The per-step noise level of each slot, ordered to match :func:`build_slot_routing`'s roles (no dedup)."""
+    values = {
+        "video": video_timestep,
+        "audio": audio_timestep,
+        "condition_video": condition_video_timestep,
+        "condition_audio": condition_audio_timestep,
+    }
+    missing = [role for role in roles if values[role] is None]
+    if missing:
+        raise ValueError(f"slot_levels missing values for roles {missing}")
+    return torch.tensor([values[role] for role in roles], dtype=torch.float32)
 
 
 def adaln_indices(token_tags: torch.Tensor, timestep_indices: torch.Tensor) -> torch.Tensor:
@@ -382,24 +419,3 @@ def adaln_indices(token_tags: torch.Tensor, timestep_indices: torch.Tensor) -> t
     their modulation is irrelevant because their output is discarded.
     """
     return timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags.clamp(min=0)
-
-
-def adaln_index_ranges(indices: torch.Tensor) -> list[tuple[int, int, int]]:
-    """Compress a row-to-AdaLN-table map into ``(start, stop, table_row)`` runs.
-
-    The packed layout is contiguous by modality and the timestep map is
-    piecewise-constant over those same blocks, so this collapses to a handful of
-    runs -- which is what lets the device apply modulation as slice plus
-    broadcast instead of a gather. Returns runs over the rows given, so callers
-    pass their own sequence-parallel shard and get shard-local ranges.
-    """
-    if indices.ndim != 1:
-        raise ValueError(f"indices must be 1-D, got shape {tuple(indices.shape)}")
-    if indices.numel() == 0:
-        return []
-
-    values = indices.to(torch.long)
-    boundaries = torch.nonzero(values[1:] != values[:-1], as_tuple=False).reshape(-1) + 1
-    starts = torch.cat([torch.zeros(1, dtype=torch.long), boundaries])
-    stops = torch.cat([boundaries, torch.tensor([values.numel()], dtype=torch.long)])
-    return [(int(a), int(b), int(values[a])) for a, b in zip(starts, stops)]

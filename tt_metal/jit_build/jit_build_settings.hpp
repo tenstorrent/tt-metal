@@ -22,6 +22,12 @@ enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
     DM_LOCAL_CACHED = 1,
     EXTERNAL = 2,
+    // Blackhole compute scope: the Tensix hardware (Sync Unit) semaphore, so concurrent UNPACK
+    // and PACK writers cannot lose an update. Produced by ResolveSemaphoreScope() for a Blackhole
+    // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
+    // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
+    // unlinked mirrors.
+    COMPUTE_ATOMIC = 3,
 };
 
 namespace tt::tt_metal {
@@ -40,6 +46,7 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
         case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
         case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
         case SemScope::EXTERNAL: return "EXTERNAL";
+        case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
     }
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
@@ -191,6 +198,7 @@ public:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
     //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
     virtual void process_prefetcher_pipe_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.

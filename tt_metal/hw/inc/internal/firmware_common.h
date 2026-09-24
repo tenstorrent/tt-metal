@@ -11,7 +11,6 @@
 #endif
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
-#include "api/compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/rta_constants.h"
