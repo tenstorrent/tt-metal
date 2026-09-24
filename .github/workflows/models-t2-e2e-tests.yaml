@@ -81,7 +81,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Experimental Emax/Emax-1 search for cached BFP weights (requires writable weight cache)"
+        description: "Enable BFP exponent search during weight conversion. The cache directory must be writable."
       mlperf-read-only:
         required: false
         type: boolean

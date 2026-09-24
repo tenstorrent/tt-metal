@@ -418,7 +418,13 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value);
 
     auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
-    if (col_tilize || optimize_bfp) {
+    if (optimize_bfp) {
+        // Keep BF16 weights in BF16 when padding is zero. The packer accepts BF16 directly.
+        // Use FP32 for other inputs. This also preserves nonzero padding values.
+        const bool keep_bfloat16 = src_data_type == PyDType::BFLOAT16 && pad_value.value_or(0.0f) == 0.0f;
+        host_dtype = keep_bfloat16 ? DataType::BFLOAT16 : DataType::FLOAT32;
+    }
+    if (col_tilize) {
         host_dtype = DataType::FLOAT32;
     }
     auto host_buffer = get_host_tensor(host_dtype);
@@ -479,8 +485,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         enable_bfloat_opt);
 
     if (optimize_bfp) {
-        // Construct the real per-device layout/padding in FP32 first. Packing
-        // then searches physical face rows after sharding and col_tilize.
+        // Divide the weights between devices and apply padding before exponent search.
+        // The packer must use the same groups of 16 values that the device will read.
         output = Tensor(tt::tt_metal::to_dtype(output.host_tensor(), dst_dtype, true));
     }
 

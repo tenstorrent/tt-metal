@@ -1,43 +1,59 @@
-# Opt-in BFP weight exponent search (prototype)
+# BFP weight conversion: optional exponent search
 
-This branch adds `optimize_bfp=True` to host conversion to `ttnn.bfloat4_b` and
-`ttnn.bfloat8_b`. Existing calls default to ordinary packing. There is no
-calibration, inference pass, model rewrite, GPTQ, or change to device kernels.
-The dtype, packed size, tensor shape, and runtime arithmetic stay the same.
+This prototype can reduce weight conversion error for BFP4_B and BFP8_B.
+The option is off by default.
+It does not require calibration data or an inference pass.
+It does not change device kernels, tensor shapes, or the number of bytes in a packed tensor.
+Lower weight error does not guarantee better model accuracy.
 
-For every physical group of 16 values sharing an exponent, the packer:
+## How it works
 
-1. Finds the usual maximum exponent, Emax.
-2. Rounds with Emax and with Emax−1, using the existing round-to-nearest-even
-   mantissa conversion. The lower exponent has half the step size and saturates
-   outliers to its largest representable magnitude.
-3. Compares the two sums of squared weight errors in double precision. It uses
-   Emax−1 only when its error is strictly smaller; ties keep Emax.
+A BFP group contains 16 values that share one exponent.
+The usual conversion selects the largest input exponent, called Emax.
+The new option also tests Emax−1.
 
-Groups containing NaN/Inf, and groups close to exponent underflow, keep the
-ordinary encoding. Source weights are untouched. This is the two-exponent
-method from the experiments, **not** the three-exponent search or GPTQ+search.
-It guarantees no increase in the local weight error for eligible groups, not an
-increase in end-to-end model accuracy. Activation errors can add or cancel.
+For each group, the CPU does these steps:
 
-## Use from Python
+1. Convert the values with Emax.
+2. Convert the values with Emax−1.
+3. Calculate the sum of squared weight errors for each result.
+4. Select the result with the smaller error.
 
-Build/install this branch's TTNN and native library together using the normal
-[tt-metal build instructions](../../INSTALLING.md). A Python-only checkout
-change against an older wheel is insufficient.
+If the errors are equal, the CPU selects Emax.
+Emax−1 gives half the spacing between representable values.
+It also reduces the largest representable magnitude.
+The conversion limits larger magnitudes to this maximum.
+
+The code uses the existing rounding rule: round to nearest, with ties to even.
+It keeps the usual exponent for groups with infinity, NaN, or very small values.
+It does not change the source weights.
+
+The search occurs after the code divides the tensor between devices and adds padding.
+Thus, it uses the same groups of 16 values that the device will read.
+This method tests two exponents only.
+It does not use GPTQ or the previous three-exponent experiment.
+
+## Use the option with or without a cache
+
+Build the Python package and native library from this branch together.
+Follow the [build instructions](../../INSTALLING.md).
+An older installed wheel does not support the new argument.
 
 ```python
 import torch
 import ttnn
 
 weights = torch.randn(1024, 1024, dtype=torch.bfloat16)
+
+# Convert without a cache.
 optimized = ttnn.from_torch(
     weights,
-    dtype=ttnn.bfloat4_b,   # or ttnn.bfloat8_b
+    dtype=ttnn.bfloat4_b,  # bfloat8_b is also supported.
     layout=ttnn.TILE_LAYOUT,
     optimize_bfp=True,
 )
 
+# Convert and save the result for later loads.
 cached = ttnn.as_tensor(
     weights,
     dtype=ttnn.bfloat8_b,
@@ -47,177 +63,204 @@ cached = ttnn.as_tensor(
 )
 ```
 
-`from_torch` always requires explicit opt-in. `as_tensor` accepts True, False,
-or None (the default). None follows the configuration below **only for cached
-BFP tensors**. Explicit False overrides the configuration. The flag is
-incompatible with `enable_bfloat_opt=True`, which is a different, lossy device
-conversion path. Unsupported dtypes are rejected for explicit True.
+A cache is a file that stores the converted tensor for later use.
+The search does not require a cache.
+`ttnn.as_tensor(..., optimize_bfp=True)` also works without `cache_file_name`.
 
-Packing searches the groups after mesh partitioning, padding, tilization and
-optional `col_tilize`, including fused model weights in their final layout.
-The prototype constructs an FP32 host tensor before packing when enabled, so
-cold conversion uses additional temporary host memory. Warm cache loads avoid
-that work. It does not reduce inference memory or imply a throughput speedup.
-
-The C++ host packers `pack_as_bfp4_tiles` and `pack_as_bfp8_tiles` accept a final
-`bool optimize_bfp=false` argument after `tile`; `tt::tt_metal::to_dtype` accepts
-it after the target dtype. Only B-format is supported, not `is_exp_a=true`,
-BFP2, device `typecast`, or device tilization.
-
-## Existing model scripts
-
-Set this **before model construction and cache-completeness checks**:
+The global setting has a narrower scope:
 
 ```bash
 export TTNN_CONFIG_OVERRIDES='{"enable_bfp_weight_optimization":true}'
 ```
 
-Or set `ttnn.CONFIG.enable_bfp_weight_optimization = True` in the process.
-Merge this key into existing overrides if you already use that environment
-variable. Keep the setting fixed for the entire model load.
+Set this variable before model construction and cache checks.
+If the variable already contains other settings, add this key to the existing JSON object.
+You can also set `ttnn.CONFIG.enable_bfp_weight_optimization = True` in Python.
+Keep the setting constant until the model has loaded.
 
-This enables search for both BFP4 and BFP8 through cached `ttnn.as_tensor` calls,
-without changing the model's precision configuration. It also affects any
-other static BFP tensors cached through that API. It deliberately leaves
-ordinary activation `from_torch` calls unchanged.
+| Call | When the search runs |
+| --- | --- |
+| `from_torch(..., optimize_bfp=True)` | On each conversion, without a cache requirement. |
+| `as_tensor(..., optimize_bfp=True)` | On conversion. If the correct cache file exists, the call reads that file. |
+| `as_tensor(..., optimize_bfp=False)` | Never. This argument overrides the global setting. |
+| `as_tensor(...)` with no explicit argument | For BFP conversion when the global setting is true and a cache filename is set. |
+| `from_torch(...)` with no explicit argument | Never. The global setting does not apply. |
 
-Optimized tensor filenames end in `_bfp_emax_minus1_v1.tensorbin`. Disabled
-calls retain their original names. The shared model cache helper adds the same
-algorithm discriminator to its `.weights_complete` marker, so an ordinary
-warm-cache marker cannot authorize placeholder source weights for an optimized
-cache miss. Original checkpoint weights and writable cache storage must be
-available on the first enabled run. Do not rename existing tensorbins into the
-new namespace. Use separate cache roots for controlled comparisons.
+The global setting uses a cache filename as an indication that the tensor could contain weights.
+The API cannot identify weights from their values or shape.
+Applying the setting to every call could change activation conversion during inference.
+The cache condition is an initial integration choice, not a requirement of exponent search.
+Some cached tensors contain data other than weights.
+Some weight loaders do not use this cache API.
+Use the explicit argument when the caller knows that a tensor contains weights.
 
-Coverage is a property of the loader, not just the model name:
+The option requires BFP4_B or BFP8_B and tile layout.
+Do not combine it with `enable_bfloat_opt=True`.
+That option permits a separate device conversion with different rounding.
 
-- `models/tt_transformers` (TTTv1), including Llama-3.1-8B and the Blackhole
-  Qwen3-32B CI path, uses cached `as_tensor` and is the initial target.
-- `models/common/modules/lazy_weight.py` (TTTv2) uses its own cache and direct
-  `from_torch` calls. The config switch does **not** enable it. This includes the
-  current Wormhole Qwen3-32B E2E path. Its loader would need explicit opt-in and
-  its own cache discriminator before using this experiment there.
-- Other custom loaders, prepacked tensorbins, uncached `from_torch`, C++ model
-  loaders and device conversions are not automatically enabled. Audit their
-  call sites and cache identity first. A model-specific warm-cache shortcut
-  outside `models/common/weight_cache.py` must not supply placeholders for new
-  optimized files. Per-weight explicit overrides also belong in that loader's
-  build-variant identity.
+The C++ functions `pack_as_bfp4_tiles` and `pack_as_bfp8_tiles` accept a final `optimize_bfp` argument after `tile`.
+`tt::tt_metal::to_dtype` accepts the argument after the target dtype.
+The default is false.
+The search requires B-format (`is_exp_a=false`).
+It does not apply to BFP2 or device conversion operations.
 
-Check the effective config at startup and the new tensorbin filenames before
-attributing a model result to this feature. Absence of those files can mean a
-loader was never covered.
+## Conversion time and memory
 
-## Validation and review
+The normal weight conversion already runs on the CPU.
+It uses a C++ packer that can process tiles in parallel.
+The new search uses this same packer and parallel execution.
+The disabled option does not select a special TT hardware conversion for cached weights.
 
-Added tests:
+The first prototype expanded every optimized input to FP32 before it built the tiled host tensor.
+This was an implementation choice.
+The search itself does not require a complete FP32 copy.
+The revised code keeps BF16 inputs in BF16 when padding is zero and `col_tilize` is false.
+The packer converts individual values as it processes each group.
+This removes the full BF16-to-FP32 input conversion in that case.
+It also reduces the temporary tiled buffer from four bytes to two bytes per value, before alignment overhead.
+
+FP32 input, column tilization, and nonzero padding still use the FP32 path.
+This preserves the conversion results from the first prototype.
+The enabled path still builds a temporary tiled tensor before it packs the BFP data.
+It also calculates two errors per group.
+We have not measured the total time or peak memory on the target machine.
+We cannot yet say whether the first model load will be considerably slower.
+
+| Stage | Effect of the option |
+| --- | --- |
+| First conversion | Adds exponent search and temporary host storage. |
+| Load from an existing optimized cache | Reads the converted tensor. No exponent search. |
+| Model inference after loading | Uses the same dtype, packed size, and kernels. |
+
+Further improvements are possible.
+The packer could reuse the rounded values calculated during the search.
+It could also combine tensor layout conversion and BFP packing to remove the full temporary tiled tensor.
+These changes are not included yet.
+They need separate checks for padding, device partitioning, and identical output bytes.
+
+Measure first conversion, later cache loads, and inference separately.
+Use the same weights, machine, thread count, and precision settings for each comparison.
+
+## Cache files and model loaders
+
+Optimized tensor filenames end in `_bfp_emax_minus1_v1.tensorbin`.
+Ordinary conversion retains the existing filenames.
+The source checkpoint must be available when the optimized cache does not exist.
+The cache directory must be writable.
+Do not rename ordinary cache files to use the optimized suffix.
+
+Some model loaders use a completion marker to skip reading source weights.
+These loaders supply uninitialized tensors when they expect every converted weight to exist in the cache.
+The shared cache helper now uses a separate completion marker for optimized files.
+Thus, an ordinary cache cannot cause a loader to save uninitialized values as optimized weights.
+
+The automatic setting covers cached calls in `models/tt_transformers`, also called TTTv1.
+The initial targets are Llama-3.1-8B and the Blackhole Qwen3-32B implementation.
+
+`models/common/modules/lazy_weight.py`, used by TTTv2, has a different cache and conversion path.
+This includes the Wormhole Qwen3-32B implementation checked for this prototype.
+The global setting does not enable search there.
+That loader needs an explicit conversion argument and separate cache filenames.
+
+Other custom loaders need the same checks.
+If a loader can skip source weights, its cache checks must account for the conversion option.
+If a loader chooses the option separately for each weight, its cache checks must also record those choices.
+Before an accuracy test, verify the effective setting and the optimized cache filenames.
+
+## Tests
+
+Run these tests in a built tt-metal environment:
 
 ```bash
 build/test/tt_metal/unit_tests_legacy --gtest_filter='HostOnlyTest.Bfp*'
 pytest -q tests/ttnn/unit_tests/base_functionality/test_bfp_weight_optimization.py
 ```
 
-The C++ tests check real pack/unpack values, local error, signs, exponent bytes,
-layout order and special-value fallback. Python tests cover BF16/FP32 inputs,
-padding, small tiles, TensorSpec, cache separation/reuse, configuration scope,
-marker transitions, invalid combinations, column tilization, device copies
-and mesh sharding. Device/mesh tests require appropriate hardware fixtures.
+The C++ tests check packed bytes, decoded values, group errors, signs, layout, and special values.
+They also compare direct BF16 input with the same values expanded to FP32.
+The Python tests check padding, small tiles, cache selection, configuration, column tilization, and copies to devices.
+A BF16 comparison test also checks nonzero padding and column tilization.
+Device tests require TT hardware.
 
-Before review, the actual native packer body was compiled locally with platform
-services stubbed (HAL alignment, executor and logging). Twenty-four cases
-matched main's default packed bytes and the earlier NumPy exponent-search
-oracle; every checked physical group had non-increasing squared error. This
-is **not** a full TTNN integration build. The Python cache policy and marker
-transitions also passed local checks with native conversion/serialization mocked. Native-library linking, Python
-bindings and device tests still need the Linux/TT validation above. No model
-accuracy result is claimed for this branch yet.
+The initial version passed 24 local C++ cases and the repository checks.
+Those cases matched the ordinary bytes from main and the earlier NumPy search results.
+The local test program replaced hardware support functions with test substitutes.
+Python cache checks also used test substitutes for native conversion and file storage.
+These checks do not establish that the full TTNN library builds or runs correctly on a device.
+The BF16 revision passed 16 local comparisons of direct BF16 input and the same values expanded to FP32.
+The inputs included all 65,536 BF16 bit patterns and 1,048,576 random finite values.
+Both BFP dtypes, both input layouts, and both option settings produced identical bytes.
+The host dtype selection also passed 64 local checks.
+These checks used source code compiled with test substitutes for platform functions.
 
-## CI plan — launch after review
+A full Linux build, integration tests, and model measurements remain required.
 
-Run **both modes on this same commit**, same checkpoint revision, hardware,
-precision profile, prompts, task versions and sampling settings. Record exact
-sample counts and per-example results, not only a pass/fail threshold.
+## Accuracy tests after review
 
-### 1. tt-metal: conversion and model regression checks
+Compare the option enabled and disabled on the same commit.
+Keep the checkpoint, hardware, precision, prompts, task versions, and generation settings fixed.
+Save the sample counts and individual results.
+A passing CI threshold alone does not show an improvement.
 
-This branch adds a default-off `optimize-bfp-weights` input to
-[Models Tier 2 E2E](../../.github/workflows/models-t2-e2e-tests.yaml).
-It forwards the config to single-host model jobs. Scheduled jobs stay off.
-After review, dispatch baseline and optimized runs for:
+### First: tt-metal model tests
 
-- Model `llama3.1-8b`, SKU `bh_quietbox_2 (BH QB2)`.
-- Model `qwen3-32b`, same SKU.
+Use [Models Tier 2 E2E](../../.github/workflows/models-t2-e2e-tests.yaml).
+This branch adds the `optimize-bfp-weights` input, with false as its default.
+It applies to jobs that run on one host.
+Scheduled runs keep it disabled.
 
-Use `mlperf-read-only=false` where a new cache must be written; enabled runs
-must not attempt to populate a read-only shared cache. The optimized suffix
-preserves ordinary files, but this grants the job write access to the mounted
-cache. Prefer runner-local writable caches when available. Cold-build memory,
-cache population and timeout headroom should be checked before a broad sweep.
-Do not select all models/SKUs initially: coverage varies by loader, and the
-switch is wired only to single-host jobs in this prototype.
+Start with `llama3.1-8b` and `qwen3-32b` on `bh_quietbox_2 (BH QB2)`.
+Use a writable cache directory for the first enabled run.
+If necessary, set `mlperf-read-only=false` to permit writes to the mounted cache.
+Prefer a cache directory on the runner when available.
+Allow enough host memory and time for the first conversion.
 
-The matrix is in
-[models_e2e_tests.yaml](../../tests/pipeline_reorg/models_e2e_tests.yaml).
-`performance-ci-token-matching` measures teacher-forced agreement with stored
-reference predictions, over up to 500 steps of one continuation. Its `top1`
-is predicted-token agreement; its `top5` is **quantized top1 in reference top5**,
-not reference top1 in quantized top5 or top5-set overlap. Compare the numerical
-`top1_token_accuracy` and `top5_token_accuracy` artifacts. `ci-eval-32` also
-checks repeatability/performance; its name does not make it a broad task
-accuracy or perplexity benchmark. These checks are useful regression gates
-but too narrow to establish a small general accuracy gain.
+The test selection is in [models_e2e_tests.yaml](../../tests/pipeline_reorg/models_e2e_tests.yaml).
+`performance-ci-token-matching` checks up to 500 positions from one text continuation.
+It supplies the reference text tokens as input at successive positions.
 
-### 2. Shield + inference-server: full task evaluations
+- `top1_token_accuracy`: the model's highest-scoring token equals the reference model's highest-scoring token.
+- `top5_token_accuracy`: the model's highest-scoring token is among the reference model's five highest-scoring tokens.
 
-[tt-shield On dispatch](https://github.com/tenstorrent/tt-shield/blob/main/.github/workflows/on-dispatch.yml)
-orchestrates
-[tt-inference-server evals](https://github.com/tenstorrent/tt-inference-server/blob/main/docs/workflows_user_guide.md).
-Choose `workflow=evals`, `run-full-evals=true`, an exact `tt-metal-git-ref`, and
-pin the inference-server/vLLM refs as well. `benchmarks` measures random-prompt
-latency/throughput; it is not the task-accuracy suite. `release` includes both.
+The second metric does not check whether the reference top token appears in the quantized model's top five.
+`ci-eval-32` checks repeated outputs and performance.
+These tests can detect regressions, but they are too small to establish a general accuracy gain.
 
-Current
-[eval configuration](https://github.com/tenstorrent/tt-inference-server/blob/main/reference_config/evals/eval_config.py)
-includes Llama-3.1-8B-Instruct `meta_ifeval`, `meta_gpqa_cot` and LongBench tasks;
-Qwen3-32B uses `r1_aime24`, `r1_math500` and `r1_gpqa_diamond`.
-Full AIME is still only 30 questions: a one-question change is 3.33 percentage
-points. Include the larger tasks, keep generations paired/seeded, and report
-uncertainty. Some configured Qwen GPU reference scores are explicitly marked
-unvalidated estimates; compare our paired baseline/optimized outputs rather
-than treating those numbers as a controlled reference.
+### Next: full task evaluations through Shield
 
-**One additional Shield wiring change is needed before dispatching enabled
-runs.** Selecting this branch alone leaves the feature off. Its reusable
-inference-server workflow writes a Docker `.env` containing selected fields;
-it currently has no input for this new TTNN setting. Add a default-off input
-and write `TTNN_CONFIG_OVERRIDES={"enable_bfp_weight_optimization":true}` into
-that server `.env` when selected (merge any other TTNN keys). Validate the
-server's effective config and optimized cache files. Setting the variable only
-in the evaluation client is insufficient. Select the covered `tt-transformers`
-implementation and verify the resolved QB2 device/model configuration before
-launching. No Shield repository or workflow was changed by this prototype.
+Use [Shield On dispatch](https://github.com/tenstorrent/tt-shield/blob/main/.github/workflows/on-dispatch.yml)
+with the [inference-server evaluation workflow](https://github.com/tenstorrent/tt-inference-server/blob/main/docs/workflows_user_guide.md).
+Set `workflow=evals` and `run-full-evals=true`.
+Specify exact commits for tt-metal, inference-server, and vLLM.
+The `benchmarks` workflow measures speed with random prompts.
+It does not measure task accuracy.
 
-An alternative is to start a server built from this branch with the setting in
-its environment, then run the inference-server `evals` client against that
-server. This avoids needing a Shield change for an initial manual experiment.
+The inspected task configuration includes IFEval, GPQA, and LongBench for Llama-3.1-8B-Instruct.
+It includes AIME24, MATH500, and GPQA Diamond for Qwen3-32B.
+Full AIME24 has only 30 questions.
+Include larger tasks and report statistical uncertainty.
+Some configured Qwen GPU scores are unverified estimates.
+Use our measured baseline to assess the effect of this change.
 
-### 3. Sensitive paired metrics from the earlier experiment
+Shield needs one more change before it can enable this option.
+Its workflow must write the TTNN setting into the model server's Docker `.env` file.
+Setting it only in the evaluation client has no effect on the server.
+Selecting this branch alone also leaves the option off.
+Verify the selected model loader and the server setting before each run.
+This PR does not change Shield.
 
-Neither of these standard workflows supplies our held-out perplexity,
-full-distribution KL divergence, reference-top1-in-quantized-top5 recall, or
-reference/quantized top5 overlap. Retain the existing experiment evaluator for
-those measurements. Use identical held-out prefixes and at least the previous
-large evaluation sample, reused reference logits, and both flag settings at the
-same precision. Report token/document counts and paired document-bootstrap
-intervals. Exponent search has no calibration split to leak into evaluation,
-but a dataset used to choose methods should not serve as the final test set.
+Alternatively, start the model server yourself with the setting enabled.
+Then run the inference-server evaluation client against that server.
 
-Measure cold weight load/conversion separately from warm model startup and
-steady-state inference. A lower local weight error, a higher reference
-agreement, and lower perplexity need not move together.
+### Detailed comparison with the reference model
 
-CI inspection pins: tt-metal base `b99aa035f39`, inference-server
-`935360671a0a4a894a2c35ee483d665978f2d2c7`, Shield
-`8d3c3010aa9c66e004690c874634d0abba87a4cd`. Workflow definitions may change;
-recheck inputs and loader coverage at dispatch time. No CI was launched while
-preparing this prototype.
+Keep the existing experiment evaluator for perplexity, KL divergence, and the additional top-five agreement metrics.
+The standard workflows above do not supply all these metrics.
+Use identical test prefixes and reuse the reference logits.
+Use data that was not used to choose the method.
+Report the number of tokens and documents, with uncertainty estimates from paired document samples.
+
+Inspected commits: tt-metal `b99aa035f39`, inference-server `935360671a0a4a894a2c35ee483d665978f2d2c7`,
+and Shield `8d3c3010aa9c66e004690c874634d0abba87a4cd`.
+Check workflow inputs and model loaders again before you start CI.
+Model CI remains deferred until review is complete.

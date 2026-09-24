@@ -23,7 +23,8 @@ HostTensor to_row_major_layout(const HostTensor& tensor);
 //                                  .to_dtype()
 // ======================================================================================
 
-// Optional host BFP4_B/BFP8_B exponent search; the default preserves ordinary packing.
+// Set optimize_bfp=true to compare Emax and Emax-1 during host conversion to BFP4_B or BFP8_B.
+// The default, false, uses the usual maximum exponent.
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype, bool optimize_bfp = false);
 
 // ======================================================================================

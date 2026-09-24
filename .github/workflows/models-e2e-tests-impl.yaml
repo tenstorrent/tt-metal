@@ -23,7 +23,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Experimental cached BFP weight exponent search (single-host jobs)"
+        description: "Enable BFP exponent search for cached tensors. Applies to jobs on one host."
       mlperf-read-only:
         required: false
         type: boolean

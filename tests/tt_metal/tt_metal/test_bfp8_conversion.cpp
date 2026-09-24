@@ -86,8 +86,8 @@ TEST(HostOnlyTest, Bfp8Conversion) {
 
 namespace {
 
-template <bool Bfp4>
-auto pack_search(const std::vector<float>& values, bool optimize, bool row_major = false) {
+template <bool Bfp4, typename T>
+auto pack_search(const std::vector<T>& values, bool optimize, bool row_major = false) {
     if constexpr (Bfp4) {
         return pack_as_bfp4_tiles(ttsl::make_const_span(values), row_major, false, std::nullopt, optimize);
     } else {
@@ -106,7 +106,7 @@ auto unpack_search(const std::vector<uint32_t>& values) {
 
 template <bool Bfp4>
 void check_exponent_search() {
-    // Tile-face order: every 16 consecutive elements share an exponent.
+    // Each group of 16 consecutive values shares one exponent in this tile layout.
     std::vector<float> values(1024, Bfp4 ? 0.13f : 0.008f);
     for (size_t i = 0; i < values.size(); i += 16) {
         values[i] = 1.0f;
@@ -115,16 +115,16 @@ void check_exponent_search() {
     auto packed = pack_search<Bfp4>(values, true);
     auto optimized = unpack_search<Bfp4>(packed);
     EXPECT_EQ(values, original);
-    // The exponent section comes first: Emax=127, and every row should select 126.
+    // The first bytes contain the exponents. Each row must select 126 instead of 127.
     EXPECT_EQ(packed[0], 0x7e7e7e7eu);
     EXPECT_EQ(optimized[0], Bfp4 ? 0.875f : 0.9921875f);
     EXPECT_EQ(optimized[1], Bfp4 ? 0.125f : 0.0078125f);
     EXPECT_EQ(pack_search<Bfp4>(values, false)[0], 0x7f7f7f7fu);
-    // All identical groups make row-major and tile-face input equivalent.
+    // The groups are identical. Both input layouts must give the same packed bytes.
     EXPECT_EQ(packed, pack_search<Bfp4>(values, true, true));
 
-    // Signed random values over a wide dynamic range; compare actual unpacked
-    // values per physical group, not merely an aggregate tensor MSE.
+    // Test positive and negative values with different magnitudes.
+    // Compare the error for each group after packing and unpacking.
     std::mt19937 rng(42);
     std::normal_distribution<float> normal;
     for (size_t i = 0; i < values.size(); ++i) {
@@ -141,7 +141,18 @@ void check_exponent_search() {
         EXPECT_LE(new_error, old_error);
     }
 
-    // Exact Emax values, zero/denormal blocks and special values retain legacy bits.
+    // Direct BF16 input must give the same packed bytes as BF16 values expanded to FP32.
+    std::vector<bfloat16> bf16_values;
+    std::vector<float> expanded_values;
+    for (float value : values) {
+        bf16_values.emplace_back(value);
+        expanded_values.push_back(static_cast<float>(bf16_values.back()));
+    }
+    for (bool optimize : {false, true}) {
+        EXPECT_EQ(pack_search<Bfp4>(bf16_values, optimize), pack_search<Bfp4>(expanded_values, optimize));
+    }
+
+    // These inputs must give the same bytes with exponent search enabled or disabled.
     for (float value :
          {0.0f,
           -0.0f,

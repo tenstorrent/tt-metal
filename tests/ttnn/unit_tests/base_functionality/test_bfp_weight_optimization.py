@@ -49,10 +49,10 @@ def test_bfp_cache_and_config(dtype, small, rounded, clipped, tmp_path, monkeypa
     optimized = ttnn.to_torch(ttnn.as_tensor(weights, **kwargs))
     assert not torch.equal(ordinary, optimized)
     assert len(set(tmp_path.glob("*.tensorbin")) - baseline_files) == 1
-    # Cache hits must ignore new input independently for each mode.
+    # Each mode must read its own cache file and ignore the new input values.
     assert torch.equal(optimized, ttnn.to_torch(ttnn.as_tensor(torch.zeros_like(weights), **kwargs)))
     assert torch.equal(ordinary, ttnn.to_torch(ttnn.as_tensor(torch.zeros_like(weights), optimize_bfp=False, **kwargs)))
-    # Global weight-loading switch must not change activation conversion.
+    # The global setting must not change calls without a cache filename.
     assert torch.equal(ordinary, ttnn.to_torch(ttnn.from_torch(weights, dtype=dtype, layout=ttnn.TILE_LAYOUT)))
     assert torch.equal(ordinary, ttnn.to_torch(ttnn.as_tensor(weights, dtype=dtype, layout=ttnn.TILE_LAYOUT)))
     assert torch.equal(
@@ -129,8 +129,8 @@ def test_bfp_spec_and_small_tile(dtype, small, rounded, clipped):
 @pytest.mark.parametrize("dtype,small,rounded,clipped", DTYPES)
 def test_bfp_mesh_sharding(mesh_device, dtype, small, rounded, clipped):
     num_devices = mesh_device.get_num_devices()
-    # A shard boundary within an exponent group ensures we optimize after mesh
-    # partitioning, rather than first quantizing the unsharded source tensor.
+    # Divide the input inside a group of 16 values.
+    # Search must use the new groups formed after this division.
     weights = _weights(small, (32, 18 * num_devices))
     output = ttnn.from_torch(
         weights,
@@ -150,3 +150,15 @@ def test_bfp_mesh_sharding(mesh_device, dtype, small, rounded, clipped):
         dim=1,
     )
     assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
+@pytest.mark.parametrize("pad_value", [0.0, 0.1])
+@pytest.mark.parametrize("col_tilize", [False, True])
+def test_bfp_bfloat16_matches_expanded_input(dtype, pad_value, col_tilize):
+    generator = torch.Generator().manual_seed(42)
+    weights = torch.randn((35, 47), generator=generator).to(torch.bfloat16)
+    kwargs = dict(dtype=dtype, layout=ttnn.TILE_LAYOUT, optimize_bfp=True, pad_value=pad_value, col_tilize=col_tilize)
+    direct = ttnn.to_torch(ttnn.from_torch(weights, **kwargs))
+    expanded = ttnn.to_torch(ttnn.from_torch(weights.float(), **kwargs))
+    assert torch.equal(direct, expanded)

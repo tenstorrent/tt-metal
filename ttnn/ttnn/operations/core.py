@@ -285,10 +285,9 @@ def from_torch(
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
 
-    For bfloat8_b or bfloat4_b format, the function itself is called twice,
-    first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
-    is not tile padded). Second call runs in desired format and does not call to_layout for bfloat8_b or bfloat4_b as we now convert
-    to tile layout during tensor creation (ttnn.Tensor).
+    BFP4_B and BFP8_B require tile layout. By default, the CPU converts these tensors.
+    Set optimize_bfp=True to compare two exponents for each group of 16 values during this conversion.
+    The separate enable_bfloat_opt option permits device conversion, which uses different rounding.
 
     Args:
         tensor (torch.Tensor | None): the input tensor. If `tensor` is `None`, the function returns `None`.
@@ -313,9 +312,9 @@ def from_torch(
             Defaults to `False`.
         enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
 
-        optimize_bfp (bool, optional): Search Emax and Emax-1 per physical block during host
-            BFP4_B/BFP8_B packing, choosing the lower weight squared error. Requires a BFP dtype
-            and tile layout. Incompatible with enable_bfloat_opt. Defaults to False.
+        optimize_bfp (bool, optional): Compare Emax and Emax-1 for each group of 16 values on the CPU.
+            Use the exponent with the smaller squared weight error. Requires bfloat4_b or bfloat8_b and tile layout.
+            A cache is not required. Do not combine this option with enable_bfloat_opt. Defaults to False.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -773,10 +772,11 @@ def as_tensor(
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
 
-        optimize_bfp (bool, optional): Use Emax/Emax-1 host exponent search for BFP4_B/BFP8_B.
-            None follows CONFIG.enable_bfp_weight_optimization for cached BFP tensors only;
-            otherwise it is False. Explicit False overrides the config. Optimized tensors
-            use a separate cache filename. Set the config before model cache checks/loading.
+        optimize_bfp (bool, optional): Set True to compare Emax and Emax-1 during BFP4_B/BFP8_B conversion.
+            True works with or without a cache. False disables exponent search.
+            The default, None, uses CONFIG.enable_bfp_weight_optimization only when cache_file_name is set.
+            Without a cache filename, None disables exponent search. Other dtypes are unchanged when None is used.
+            Optimized tensors use separate cache filenames. Set the config before the model checks its cache.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.

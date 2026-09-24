@@ -442,8 +442,8 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                                 if (tt::tt_metal::detail::prefer_lower_bfp_exponent<magnitude_bits>(
                                         single_row, exp, round)) {
                                     --exp;
-                                    // Clamp outliers before using the unchanged packer. This
-                                    // row is a local copy; the source weights are untouched.
+                                    // Limit large values before rounding with the smaller exponent.
+                                    // Change this local copy only. Keep the source weights unchanged.
                                     for (auto& value : single_row) {
                                         if (((value >> 23) & 0xff) > exp) {
                                             value = (value & 0x80000000u) | (uint32_t(exp) << 23) | 0x007fffffu;

@@ -11,8 +11,9 @@
 #include <optional>
 #include <vector>
 
-// optimize_bfp searches Emax/Emax-1 per 16 values by squared weight error.
-// Supports only is_exp_a=false; false preserves the existing encoding.
+// Set optimize_bfp=true to compare Emax and Emax-1 for each group of 16 values.
+// Select the exponent with the smaller squared weight error. Requires is_exp_a=false.
+// The default, optimize_bfp=false, uses the usual maximum exponent.
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
     ttsl::Span<const T> data,

@@ -94,9 +94,9 @@ def marker_path(cache_path, build_variant=None):
     (#45400 review, finding B3)"""
     import ttnn
 
-    # as_tensor changes its BFP filenames in this mode. An ordinary marker must
-    # never authorize placeholders for those new files. Keep the legacy name
-    # when disabled, and share this discriminator across every marker caller.
+    # Some loaders skip the source weights when a complete cache exists.
+    # A separate marker makes them load the source weights for a new optimized cache.
+    # Otherwise, a loader could convert uninitialized tensors into weight files.
     suffix = ".bfp_emax_minus1_v1" if ttnn.CONFIG.enable_bfp_weight_optimization else ""
     return Path(cache_path) / f"{WEIGHT_CACHE_MARKER}.{_variant_digest(build_variant)}{suffix}"
 
