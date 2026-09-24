@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <tt-metalium/bfloat16.hpp>
@@ -9,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -466,7 +468,8 @@ static KernelHandle prepare_compute(distributed::MeshWorkload& workload, const D
                 static_cast<uint32_t>(config.swizzle)}});
 }
 
-// Generates input data based on the test configuration
+// Generates input data based on the test configuration. The architecture matters for Int32: Quasar gets a
+// stimulus that exercises every bit of the word (see below), other architectures keep the plain ramp.
 static std::vector<uint32_t> generate_inputs(const DevicePrintDestTestConfig& config, ARCH arch) {
     switch (config.data_format) {
         case tt::DataFormat::Float16_b:
@@ -480,17 +483,26 @@ static std::vector<uint32_t> generate_inputs(const DevicePrintDestTestConfig& co
                 0.0f, config.get_num_elements());
         case tt::DataFormat::Int32:
             if (arch == ARCH::QUASAR) {
-                // A plain 0..1023 ramp never sets the sign bit or bits 10 and up, so it cannot catch a
-                // scrambled upper half. This step (bits 16 and 21) starting 40 steps below zero spans both
-                // signs and bits 16-26, and every value is exact in the generator's float arithmetic.
-                constexpr float step = (1 << 21) + (1 << 16);
-                return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::dp_df::int32>(
-                    0.0f, config.get_num_elements(), step, -40 * step);
+                // The default ramp only holds small non-negative values, so it cannot catch a dropped or
+                // scrambled bit. This one, built in integer math, varies every bit position and spans both
+                // signs: a coarse step (bits 16 and 21) starting 40 steps below zero plus an odd fine step
+                // for the low half. The first four datums are replaced by probes at the edges.
+                constexpr int64_t coarse_step = (1 << 21) + (1 << 16);
+                constexpr int64_t fine_step = 0x1235;
+                std::vector<uint32_t> words(config.get_num_elements());
+                for (size_t i = 0; i < words.size(); ++i) {
+                    const int64_t index = static_cast<int64_t>(i);
+                    words[i] = static_cast<uint32_t>((index - 40) * coarse_step + index * fine_step);
+                }
+                const uint32_t probes[] = {0x0000FFFFu, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu};
+                std::copy(std::begin(probes), std::end(probes), words.begin());
+                return words;
             }
             return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::dp_df::int32>(
                 0.0f, config.get_num_elements());
         case tt::DataFormat::Int8: {
-            // Two's-complement bytes, four per word, ramping over -127..127.
+            // Two's-complement bytes, four per word, ramping over -127..127. It stops short of -128: that byte
+            // (0x80) is sign-magnitude -0 on Quasar and prints as 0 (see int8_tile_bits_from_dest_view).
             std::vector<uint32_t> words(config.get_num_elements() / 4, 0);
             for (size_t i = 0; i < config.get_num_elements(); ++i) {
                 const int value = static_cast<int>(i % 255) - 127;
