@@ -60,9 +60,13 @@ constexpr uint32_t tt_uva_t6_selector_host(uint32_t sel, uint32_t chips_per_host
     return sel / tt_uva_t6_host_stride(chips_per_host);
 }
 constexpr uint32_t tt_uva_t6_selector_core(uint32_t sel) { return sel % kT6CoresPerChip; }
+constexpr uint32_t tt_uva_t6_selector_chip(uint32_t sel, uint32_t chips_per_host) {
+    return chips_per_host == 0 ? 0 : (sel / kT6CoresPerChip) % chips_per_host;
+}
 
 static_assert(tt_uva_t6_selector_host(tt_uva_t6_global_selector(2, 3, 17, 4), 4) == 2, "host must round-trip");
 static_assert(tt_uva_t6_selector_core(tt_uva_t6_global_selector(2, 3, 17, 4)) == 17, "core must round-trip");
+static_assert(tt_uva_t6_selector_chip(tt_uva_t6_global_selector(2, 3, 17, 4), 4) == 3, "chip must round-trip");
 static_assert(tt_uva_t6_global_selector(0, 0, 42, 1) == 42, "host 0 chip 0: the selector is the core index");
 
 constexpr tt_uva_t tt_uva_encode(uint32_t region, uint32_t selector, uint32_t page, uint32_t offset) {
@@ -95,6 +99,9 @@ constexpr uint32_t tt_uva_t6_host(tt_uva_t u, uint32_t chips_per_host) {
     return tt_uva_t6_selector_host(tt_uva_selector(u), chips_per_host);
 }
 constexpr uint32_t tt_uva_t6_core(tt_uva_t u) { return tt_uva_t6_selector_core(tt_uva_selector(u)); }
+constexpr uint32_t tt_uva_t6_chip(tt_uva_t u, uint32_t chips_per_host) {
+    return tt_uva_t6_selector_chip(tt_uva_selector(u), chips_per_host);
+}
 
 struct HostTopology {
     uint32_t ident;
