@@ -35,6 +35,59 @@ REPEATS = 8  # extra multicast runs per shape, to give a non-deterministic race 
 PCC_O = 0.99999
 PCC_STATE = 0.99999
 
+# --------------------------------------------------------------------------------------------
+# Shapes under test.
+#
+# _REGIME_SHAPES exercise the op's internal branches (GQA group 1, batch > 1, V < K).
+#
+# _QWEN_FAMILY_SHAPES adds every per-chip head geometry at which this op can run for any Qwen model
+# and tensor parallelism (TP) setting.
+#
+# GDN head geometry of the family, from each model's HF config.json:
+# `linear_num_key_heads` = 16 and `linear_key_head_dim` = `linear_value_head_dim` = 128 are
+# invariant across every member; only `linear_num_value_heads` (HV), and with it the GQA group
+# HV/Hk, moves.
+#
+#   HV  group  models
+#   16    1    Qwen3.5-0.8B, Qwen3.5-2B
+#   32    2    Qwen3-Next-80B-A3B, Qwen3.5-4B, Qwen3.5-9B, Qwen3.5-35B-A3B, Qwen3.6-35B-A3B
+#   48    3    Qwen3.5-27B, Qwen3.6-27B, Qwen3.8-27B
+#   64    4    Qwen3.5-122B-A10B, Qwen3.5-397B-A17B
+#  128    8    Qwen3.8-2.4T-A95B
+#
+# Tensor parallelism (TP) distributes both head sets, so (Hk/TP, HV/TP) and the GQA group
+# drive the shape of the kernel inputs.
+# Hk = 16 caps TP at 16 for every model in the family.
+# BH = batch * HV/TP determines the amount of work per core in the scan part. In consequence,
+# the test skips a shape whose BH exceeds the grid. On an 11x10 Blackhole chip that is for
+# the hv128_tp1 case only (128 heads > 110 cores).
+# Note that hv128_tp1 is a rather unrealistic deployment (2.4T model with TP1).
+# --------------------------------------------------------------------------------------------
+_QWEN_GDN_HK = 16  # linear_num_key_heads, invariant across the family
+_QWEN_GDN_DIM = 128  # linear_key_head_dim == linear_value_head_dim, likewise invariant
+_QWEN_GDN_HV = (16, 32, 48, 64, 128)  # linear_num_value_heads, per the table above
+_QWEN_GDN_TP = (1, 2, 4, 8, 16)  # divisors of Hk = 16
+
+_REGIME_SHAPES = [
+    pytest.param(1, 4, 12, 128, 128, id="tp4"),  # Qwen3.6-27B per-device shape at TP-4 (GQA group 3)
+    pytest.param(1, 16, 48, 128, 128, id="single_dev"),  # Qwen3.6-27B single-device shape (GQA group 3)
+    pytest.param(1, 12, 12, 128, 128, id="no_gqa"),  # no GQA: group 1, so the head-map is the identity
+    pytest.param(2, 4, 12, 128, 128, id="batch2"),  # batch > 1: BH = 24 independent scans
+    pytest.param(1, 4, 12, 128, 64, id="v64"),  # Small V: V=64
+    pytest.param(1, 4, 12, 128, 32, id="v32"),  # Small V: V=32
+]
+
+# (Hk, HV) pairs the regime list already runs at batch 1 with K = V = 128; the family sweep skips
+# them rather than run the same shape twice under a second id.
+_REGIME_HEAD_PAIRS = {(4, 12), (16, 48)}
+
+_QWEN_FAMILY_SHAPES = [
+    pytest.param(1, _QWEN_GDN_HK // tp, hv // tp, _QWEN_GDN_DIM, _QWEN_GDN_DIM, id=f"hv{hv}_tp{tp}")
+    for hv in _QWEN_GDN_HV
+    for tp in _QWEN_GDN_TP
+    if (_QWEN_GDN_HK // tp, hv // tp) not in _REGIME_HEAD_PAIRS
+]
+
 
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
@@ -60,18 +113,7 @@ def _const_tiles(device, chunk_size=CHUNK):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
-@pytest.mark.parametrize(
-    "batch, num_k_heads, num_v_heads, key_dim, val_dim",
-    [
-        (1, 4, 12, 128, 128),  # Qwen3.6-27B per-device shape at TP-4 (GQA group 3)
-        (1, 16, 48, 128, 128),  # Qwen3.6-27B single-device shape (GQA group 3)
-        (1, 12, 12, 128, 128),  # no GQA: group 1, so the head-map is the identity
-        (2, 4, 12, 128, 128),  # batch > 1: BH = 24 independent scans
-        (1, 4, 12, 128, 64),  # Small V: V=64
-        (1, 4, 12, 128, 32),  # Small V: V=32
-    ],
-    ids=["tp4", "single_dev", "no_gqa", "batch2", "v64", "v32"],
-)
+@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _REGIME_SHAPES + _QWEN_FAMILY_SHAPES)
 @pytest.mark.parametrize("seq_len", [CHUNK, 128, 256], ids=lambda v: f"T{v}")
 @pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
 def test_chunk_vs_recurrent_reference(
