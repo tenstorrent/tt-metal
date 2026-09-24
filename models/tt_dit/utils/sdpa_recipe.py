@@ -10,7 +10,8 @@ Recipe support (docs/sdpa_precision.md):
 - head dims 64, 128 and 256 for dense, joint and ring joint SDPA (default scale 1/sqrt(D)); exp ring
   joint SDPA is D128 only. D256 is L1-limited (e.g. Q128/K256).
 - dense and joint SDPA: Q chunk 128-320 rows in 32-row steps; K chunk 256, 384 or 512;
-- ring joint SDPA: the same, but the Q chunk must be an even number of tiles (state checkpoints);
+- ring joint SDPA: the same (odd Q tile counts are supported since the raw state checkpoint moves a
+  half-page BF16 maxima plane partially);
 - exp ring joint SDPA: Q chunk 128-320 in 32-row steps; K chunk 512 only.
 A tuned chunk the recipe supports is kept; otherwise Q falls back to 256 and K to 512.
 """
@@ -57,8 +58,11 @@ def exp_ring_supports(head_dim: int) -> bool:
 
 
 def recipe_q_chunk(q_chunk: int, *, ring: bool = False) -> int:
-    """Keep a tuned Q chunk when the recipe supports it, else Q256 (ring needs an even tile count)."""
-    supported = q_chunk % TILE == 0 and 128 <= q_chunk <= 320 and ((q_chunk // TILE) % 2 == 0 or not ring)
+    """Keep a tuned Q chunk when the recipe supports it, else Q256.
+
+    ``ring`` is kept for call-site clarity; ring joint recipes accept the same Q chunks as dense.
+    """
+    supported = q_chunk % TILE == 0 and 128 <= q_chunk <= 320
     return q_chunk if supported else 256
 
 

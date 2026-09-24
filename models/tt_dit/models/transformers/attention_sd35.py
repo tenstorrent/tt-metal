@@ -328,7 +328,7 @@ class SD35JointAttention(Module):
         return spatial_1BND, prompt_out
 
     def _sdpa_program_config(self, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """The legacy program config, or the recipe one (same grid, recipe chunks; ring needs even Q tiles)."""
+        """The legacy program config, or the recipe one (same grid, recipe chunks)."""
         if self.sdpa_precision is None:
             return self.sdpa_program_config
         return recipe_program_config(self.sdpa_program_config, ring=ring)

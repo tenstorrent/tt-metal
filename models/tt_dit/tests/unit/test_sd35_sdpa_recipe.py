@@ -69,10 +69,10 @@ def test_tuned_chunks_are_kept_by_the_recipe(q_chunk, k_chunk):
         assert _chunks(recipe) == (q_chunk, k_chunk)
 
 
-def test_recipe_falls_back_and_ring_needs_even_q_tiles():
+def test_recipe_falls_back_and_ring_keeps_odd_q_tiles():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=224, k_chunk=1024)
     assert _chunks(attention._sdpa_program_config(ring=False)) == (224, 512)
-    assert _chunks(attention._sdpa_program_config(ring=True)) == (256, 512)
+    assert _chunks(attention._sdpa_program_config(ring=True)) == (224, 512)
 
 
 @pytest.mark.parametrize(

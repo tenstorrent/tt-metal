@@ -73,10 +73,10 @@ def test_recipe_falls_back_for_unsupported_chunks():
     assert _chunks(attention._sdpa_program_config(ring=True)) == (256, 512)
 
 
-def test_ring_recipe_needs_even_q_tiles():
+def test_ring_recipe_keeps_odd_q_tiles():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=224, k_chunk=384)
     assert _chunks(attention._sdpa_program_config(ring=False)) == (224, 384)  # joint: odd tiles allowed
-    assert _chunks(attention._sdpa_program_config(ring=True)) == (256, 384)  # ring: 7 tiles -> Q256
+    assert _chunks(attention._sdpa_program_config(ring=True)) == (224, 384)  # ring: odd tiles allowed too
 
 
 @pytest.mark.parametrize("key", sorted(Flux1Transformer.sdpa_chunk_size_map))

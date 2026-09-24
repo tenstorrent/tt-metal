@@ -324,7 +324,7 @@ class MiniMaxH3Attention(Module):
         """The ring/dense program config: legacy as-is, or mapped to recipe-supported chunks.
 
         Under a recipe the measured / generic (q, k) is kept where the recipe supports it (ring needs
-        an even Q tile count), else Q256 / K512, on the same grid and with exp_approx_mode unset.
+        any 32-row step), else Q256 / K512, on the same grid and with exp_approx_mode unset.
         """
         legacy = self._sdpa_program_config(seq_local, ring=ring)
         if self.sdpa_precision is None:

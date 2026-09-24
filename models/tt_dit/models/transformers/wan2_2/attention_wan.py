@@ -346,10 +346,9 @@ class WanAttention(Module):
     def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool) -> int:
         """Reuse a tuned Q chunk when the recipe supports it, else Q256.
 
-        Ring checkpoints need an even Q tile count; dense and exp-ring recipes accept any 32-row step.
+        Dense, ring and exp-ring recipes all accept any 32-row step from 128 to 320 (odd tile counts included).
         """
-        tiles = q_chunk // 32
-        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not ring)
+        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320
         return q_chunk if supported else 256
 
     def _self_sdpa_kwargs(self) -> dict:

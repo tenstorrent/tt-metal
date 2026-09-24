@@ -36,7 +36,7 @@ def test_validate_rejects(precision, kv_dtype, head_dim, blackhole):
 
 def test_chunk_selection():
     assert recipe.recipe_q_chunk(224) == 224  # dense/joint accept odd tile counts
-    assert recipe.recipe_q_chunk(224, ring=True) == 256  # ring needs even tiles
+    assert recipe.recipe_q_chunk(224, ring=True) == 224  # ring accepts odd tiles too
     assert recipe.recipe_q_chunk(128, ring=True) == 128
     assert recipe.recipe_q_chunk(320, ring=True) == 320
     assert recipe.recipe_q_chunk(64) == 256 and recipe.recipe_q_chunk(352) == 256 and recipe.recipe_q_chunk(100) == 256
@@ -46,7 +46,7 @@ def test_chunk_selection():
 
 def test_program_config_keeps_grid():
     tuned = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 4), q_chunk_size=288, k_chunk_size=128, exp_approx_mode=False
+        compute_with_storage_grid_size=(8, 4), q_chunk_size=352, k_chunk_size=128, exp_approx_mode=False
     )
     config = recipe.recipe_program_config(tuned, ring=True)
     assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (8, 4)

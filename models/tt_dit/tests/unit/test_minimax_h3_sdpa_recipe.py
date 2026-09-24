@@ -53,10 +53,10 @@ def test_ring_recipe_keeps_supported_measured_chunks():
     assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
 
 
-def test_ring_recipe_even_tile_rule_and_fallback():
+def test_ring_recipe_odd_tiles_and_fallback():
     attn = _bare_attention(COMPENSATED)
     attn.measured_sdpa_chunk_sizes = {5000: (288, 384), 6000: (224, 1024), 7000: (96, 128)}
-    assert _chunks(attn._attn_program_config(5000, ring=True)) == (256, 384)  # 9 tiles: odd on ring
+    assert _chunks(attn._attn_program_config(5000, ring=True)) == (288, 384)  # 9 tiles: odd OK on ring
     assert _chunks(attn._attn_program_config(5000, ring=False)) == (288, 384)  # dense accepts odd tiles
     assert _chunks(attn._attn_program_config(6000, ring=False)) == (224, 512)
     assert _chunks(attn._attn_program_config(7000, ring=True)) == (256, 512)
