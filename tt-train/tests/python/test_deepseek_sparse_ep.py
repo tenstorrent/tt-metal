@@ -19,9 +19,11 @@ Blackhole, so the module skips on other archs rather than exercising an untuned
 path.
 
 Runs on a full 32-chip Blackhole galaxy as an ``8 x 4`` mesh (DP=8, EP=4). The
-module-scoped fixture skips if that mesh cannot be opened, so it is inert on
-smaller boards. The bundled ``bh_galaxy_8_4_torus_x`` descriptor is used unless
-``TT_MESH_GRAPH_DESC_PATH`` is already set.
+module-scoped fixture skips only on hosts with fewer than 32 devices, so it is
+inert on smaller boards. On a host large enough for the mesh, any failure to
+open it (topology, fabric init, ...) is a test failure. The bundled
+``bh_galaxy_8_4_torus_x`` descriptor is used unless ``TT_MESH_GRAPH_DESC_PATH``
+is already set.
 
 Multi-device only: this module opens a mesh, so it must not share a process with
 tests that open a default single-device context first — reopening the device as
