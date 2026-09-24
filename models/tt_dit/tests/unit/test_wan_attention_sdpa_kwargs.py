@@ -41,7 +41,5 @@ def test_recipe_q_chunk_keeps_supported_tuned_chunks():
     assert choose(288, accurate, ring=True) == 256  # ring checkpoints need an even tile count
     assert choose(224, accurate, ring=False) == 224  # dense FP32 recipes accept odd tiles
     assert choose(224, compensated, ring=False) == 224  # odd chunks end with a single-row group
-    assert choose(224, compensated, ring=False, exp_ring=True) == 256  # not yet on exp ring
-    assert choose(224, accurate, ring=False, exp_ring=True) == 224
     assert choose(64, accurate, ring=False) == 256
     assert choose(352, accurate, ring=False) == 256

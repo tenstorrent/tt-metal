@@ -702,6 +702,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
+    // Writer drain group height. The writer reads each group contiguously from cb_out's read pointer,
+    // so a group must never straddle the CB wrap. With an odd Q tile count a recipe pass leaves cb_out
+    // at a single-row offset, and the next pass's 2-row groups would run past the recipe cb_out (4 rows)
+    // end; drain one row at a time then (each row is DHt tiles, and cb_out is a whole number of rows).
+    const uint32_t writer_out_row_group_h =
+        (named_compute && Sq_chunk_t % out_out_subblock_h != 0) ? 1u : out_out_subblock_h;
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
@@ -725,7 +731,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         global_n_partial_col,
         joint_l_partial_col,
         static_cast<std::uint32_t>(use_streaming_compute),
-        static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<std::uint32_t>(has_logical_n_tensor),
     };
 

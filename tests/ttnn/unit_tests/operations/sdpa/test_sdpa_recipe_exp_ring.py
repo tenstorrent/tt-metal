@@ -160,7 +160,7 @@ CASES = {
 Q128_GRIDS = {"aligned": (5, 4), "joint": (4, 4), "padded-tails": (4, 4), "two-pass": (5, 4)}
 Q128_HEADS = {"aligned": 2, "joint": 1, "padded-tails": 1, "two-pass": 4}
 # Q224 (Wan's 4x32 exp-ring chunk): 1024-row shards give 5 Q chunks per head, filling 5 SDPA columns.
-Q224_GRIDS = {"aligned": (6, 4)}
+Q224_GRIDS = {"aligned": (6, 4), "two-pass": (6, 4)}  # two-pass: odd Q chunk with 2 passes per row
 
 
 @pytest.mark.parametrize("q_chunk", [256, 128, 224], ids=["q256", "q128", "q224"])
@@ -201,11 +201,6 @@ def test_recipe_exp_ring(exp_ring_mesh, case, variant, q_chunk, record_property)
             **kwargs,
         )
 
-    if q_chunk == 224 and variant in ("B", "E_bf16", "E_bfp8", "E_bfp4"):
-        # Odd chunks hang the paired recipes on exp ring; the host rejects them for now.
-        with pytest.raises(RuntimeError, match="multiple of 64 rows"):
-            invoke()
-        return
     if variant == "A" and heads * (-(-(local + joint) // q_chunk) // (grid[0] - 1)) > 2 * grid[1]:
         # FAST keeps the legacy exp compute and its multi-pass L1 layout (all passes' Q chunks and
         # accumulator states resident), which does not fit three passes at Q256/K512: the legacy call
