@@ -56,10 +56,8 @@ public:
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
 
-    template <
-        typename F,
-        typename = std::enable_if_t<
-            !std::is_same_v<std::decay_t<F>, move_only_function> && std::is_constructible_v<Base, F&&>>>
+    template <typename F>
+        requires(!std::is_same_v<std::decay_t<F>, move_only_function> && std::is_constructible_v<Base, F &&>)
     move_only_function(F&& f) : Base() {
         if (!detail::is_null_callable(f)) {
             Base::operator=(Base{std::forward<F>(f)});
