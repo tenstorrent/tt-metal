@@ -443,21 +443,9 @@ inline void _llk_math_matmul_emit_traversal_()
 
         if (pair + 1 < FACE_PAIRS)
         {
-            // The addrmod is an "n" immediate, so each arm carries a literal rather than the indexed value.
             const std::uint8_t transition =
                 IS_2X ? MATMUL_2X_FACE_TRANSITIONS[pair] : _llk_math_matmul_face_transition_(pair, MAX_NUM_FACES_C_DIM, MAX_NUM_FACES_R_DIM);
-            switch (transition)
-            {
-                case ADDR_MOD_1:
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                    break;
-                case ADDR_MOD_2:
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-                    break;
-                default:
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
-                    break;
-            }
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, transition, 0);
         }
     }
 }
