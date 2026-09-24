@@ -675,13 +675,7 @@ distributed::SystemMesh& MetalEnv::get_system_mesh() {
     return impl_->get_system_mesh();
 }
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
-    const distributed::MeshDeviceConfig& config,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
     // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
@@ -693,64 +687,52 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (!env_owns_context) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
     }
     return mesh_device;
 }
 
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
-    int device_id,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
+    ChipId device_id, const CreateMeshDeviceOptions& options) {
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (!env_owns_context) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
     }
     return mesh_device;
 }
 
-std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
-    const std::vector<int>& device_ids,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
+    ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
-        device_ids,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (!env_owns_context && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
         if (parent) {

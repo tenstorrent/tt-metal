@@ -449,7 +449,8 @@ TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
 
         auto mesh_shape = env.get_system_mesh().shape();
         auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
-        auto mesh_device = env.create_mesh_device(mesh_device_config, trace_region_size, l1_small_region_size);
+        auto mesh_device = env.create_mesh_device(
+            mesh_device_config, {.l1_small_size = l1_small_region_size, .trace_region_size = trace_region_size});
         context_id = mesh_device->impl().get_context_id();
     }
 
@@ -540,6 +541,29 @@ TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
     EXPECT_THROW(mesh_device->create_sub_device_manager({unsupported_sub_device}, 0), std::runtime_error);
 
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
+    MetalEnv mock_env({.target = MetalEnvTarget::mock(tt::ARCH::BLACKHOLE, 2)});
+
+    const std::array<ChipId, 2> device_ids{0, 1};
+    auto meshes = mock_env.create_unit_meshes(device_ids, {.l1_small_size = 1 << 15});
+    ASSERT_EQ(meshes.size(), device_ids.size());
+    for (ChipId device_id : device_ids) {
+        ASSERT_TRUE(meshes.contains(device_id));
+        EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
+    }
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
+TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen) {
+    MetalEnv mock_env({.target = MetalEnvTarget::mock(tt::ARCH::BLACKHOLE, 2)});
+    // Querying the system mesh first makes the env own one context shared by every create_* call.
+    mock_env.get_system_mesh();
+
+    auto mesh_0 = mock_env.create_unit_mesh(0);
+    EXPECT_THROW(mock_env.create_unit_mesh(1, {.num_command_queues = 2}), std::runtime_error);
 }
 
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.

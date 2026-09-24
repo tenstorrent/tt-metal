@@ -9,8 +9,9 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <vector>
+#include <tt_stl/span.hpp>
 #include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -64,6 +65,18 @@ private:
 struct MetalEnvDescriptor {
     MetalEnvTarget target = MetalEnvTarget::silicon();
     FabricConfigDescriptor fabric = {};
+};
+
+// Options for creating a MeshDevice from a MetalEnv.
+//
+// num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
+// from it is open, other create_* calls must pass the same values.
+struct CreateMeshDeviceOptions {
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    uint8_t num_command_queues = 1;
+    DispatchCoreConfig dispatch_core_config = {};
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
 };
 
 class MetalEnvImpl;
@@ -134,33 +147,15 @@ public:
 
     // Create a MeshDevice which will use this MetalEnv
     std::shared_ptr<distributed::MeshDevice> create_mesh_device(
-        const distributed::MeshDeviceConfig& config,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options = {});
 
     // Create a unit mesh for the physical device ID which will use this MetalEnv
-    std::shared_ptr<distributed::MeshDevice> create_unit_mesh_device(
-        int device_id,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    std::shared_ptr<distributed::MeshDevice> create_unit_mesh(
+        ChipId device_id, const CreateMeshDeviceOptions& options = {});
 
     // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
-    std::map<int, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
-        const std::vector<int>& device_ids,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
+        ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
 
 private:
     friend class MetalEnvAccessor;
