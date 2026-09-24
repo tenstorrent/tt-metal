@@ -476,6 +476,93 @@ inline void encode_2d_unicast(
     }
 }
 
+/**
+ * Canonical 2D sparse multicast routing pattern encoder
+ *
+ * Fills route_buffer[] for a sparse multicast along a single axis of a 2D mesh.
+ * Each bit in hop_mask selects a chip along the travel direction for a write.
+ * Chips without a set bit are pure-transit hops; the last set bit terminates the
+ * packet after writing (no further forwarding).
+ *
+ * Encoding per hop position i:
+ *   hop_mask bit i = 0                → fwd_cmd     (transit, no local write)
+ *   hop_mask bit i = 1, more set bits → waf_cmd     (write + continue)
+ *   hop_mask bit i = 1, last set bit  → terminal_cmd (write + stop)
+ *
+ * The commands are chosen by direction:
+ *   NORTH: fwd=FORWARD_NORTH, waf=WRITE_AND_FORWARD_NS, terminal=FORWARD_SOUTH
+ *   SOUTH: fwd=FORWARD_SOUTH, waf=WRITE_AND_FORWARD_NS, terminal=FORWARD_NORTH
+ *   EAST:  fwd=FORWARD_EAST,  waf=WRITE_AND_FORWARD_EW, terminal=FORWARD_WEST
+ *   WEST:  fwd=FORWARD_WEST,  waf=WRITE_AND_FORWARD_EW, terminal=FORWARD_EAST
+ *
+ * Example (direction=NORTH, hop_mask=0b1010 — writes at hops 1 and 3):
+ *   route_buffer[0] = FORWARD_NORTH       (transit)
+ *   route_buffer[1] = WRITE_AND_FORWARD_NS (write + continue north)
+ *   route_buffer[2] = FORWARD_NORTH       (transit)
+ *   route_buffer[3] = FORWARD_SOUTH       (terminal write)
+ *   route_buffer[4..] = NOOP
+ *
+ * @param direction    Axis and travel direction (NORTH/SOUTH/EAST/WEST)
+ * @param hop_mask     Bitmask of hops to write; bit N=1 means write at hop N
+ * @param route_buffer Output byte array (one byte per hop command)
+ * @param route_buffer_size Size of route_buffer in bytes
+ */
+inline void encode_2d_sparse_multicast(
+    eth_chan_directions direction, uint32_t hop_mask, uint8_t* route_buffer, uint32_t route_buffer_size) {
+    using MeshFields = RoutingFieldsConstants::Mesh;
+
+    // Derive the three command bytes from direction
+    uint8_t fwd_cmd, waf_cmd, terminal_cmd;
+    switch (direction) {
+        case eth_chan_directions::NORTH:
+            fwd_cmd = MeshFields::FORWARD_NORTH;
+            waf_cmd = MeshFields::WRITE_AND_FORWARD_NS;
+            terminal_cmd = MeshFields::FORWARD_SOUTH;
+            break;
+        case eth_chan_directions::SOUTH:
+            fwd_cmd = MeshFields::FORWARD_SOUTH;
+            waf_cmd = MeshFields::WRITE_AND_FORWARD_NS;
+            terminal_cmd = MeshFields::FORWARD_NORTH;
+            break;
+        case eth_chan_directions::EAST:
+            fwd_cmd = MeshFields::FORWARD_EAST;
+            waf_cmd = MeshFields::WRITE_AND_FORWARD_EW;
+            terminal_cmd = MeshFields::FORWARD_WEST;
+            break;
+        case eth_chan_directions::WEST:
+            fwd_cmd = MeshFields::FORWARD_WEST;
+            waf_cmd = MeshFields::WRITE_AND_FORWARD_EW;
+            terminal_cmd = MeshFields::FORWARD_EAST;
+            break;
+        default:
+            // Z-direction and others not supported for sparse multicast
+            fwd_cmd = MeshFields::NOOP;
+            waf_cmd = MeshFields::NOOP;
+            terminal_cmd = MeshFields::NOOP;
+            break;
+    }
+
+    uint32_t idx = 0;
+    // Iterate over set bits in hop_mask, filling route_buffer
+    while (hop_mask > 0 && idx < route_buffer_size) {
+        if (hop_mask == 1) {
+            // Last set bit: terminal write, stop forwarding
+            route_buffer[idx++] = terminal_cmd;
+        } else if (hop_mask & 1) {
+            // Set bit with more set bits remaining: write and continue
+            route_buffer[idx++] = waf_cmd;
+        } else {
+            // Clear bit: transit only
+            route_buffer[idx++] = fwd_cmd;
+        }
+        hop_mask >>= 1;
+    }
+    // Fill remainder with NOOP
+    while (idx < route_buffer_size) {
+        route_buffer[idx++] = MeshFields::NOOP;
+    }
+}
+
 }  // namespace routing_encoding
 
 // ============================================================================

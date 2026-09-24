@@ -3482,4 +3482,137 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
         init_payload_size);
 }
 
+// clang-format off
+/**
+ * Sparse multicast unicast write: issues a unicast write with 2D sparse multicast routing
+ * metadata along a single mesh axis.  Only the chips at set bit positions in hop_mask receive
+ * the write; all others are pure-transit hops.  The payload is identical on every writing chip
+ * but each chip uses the same NOC address (noc_unicast_command_header).  For per-chip distinct
+ * addresses use fabric_sparse_multicast_noc_scatter_write instead.  Intra-mesh only.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                         | Type                                       | Required |
+ * |----------------------------|-----------------------------------------------------|--------------------------------------------|----------|
+ * | client_interface           | Fabric sender interface                             | tt_l1_ptr FabricSenderType*                | True     |
+ * | packet_header              | Packet header to use                                | volatile PACKET_HEADER_TYPE*               | True     |
+ * | dst_dev_id                 | Destination start device id (for edge-router info)  | uint8_t                                    | True     |
+ * | dst_mesh_id                | Destination start mesh id (for edge-router info)    | uint16_t                                   | True     |
+ * | direction                  | Axis and direction of travel (NORTH/SOUTH/EAST/WEST)| eth_chan_directions                        | True     |
+ * | src_addr                   | Source L1 address                                   | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                               | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header                      | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ * | hop_mask                   | Bitmask of hops to write; bit N=1 → write at hop N | uint32_t                                   | True     |
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    eth_chan_directions direction,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint32_t hop_mask) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+    packet_header->to_chip_sparse_multicast_2d(direction, hop_mask);
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// clang-format off
+/**
+ * Sparse multicast unicast write (route variant): issues writes for all headers in the route
+ * using 2D sparse multicast routing metadata.  Direction is read from slot.tag for each
+ * connection; hop_masks[i] is the bitmask for connection i.  Intra-mesh only.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                          | Type                                       | Required |
+ * |----------------------------|------------------------------------------------------|--------------------------------------------|----------|
+ * | connection_manager         | Routing plane connection manager                     | RoutingPlaneConnectionManager&             | True     |
+ * | route_id                   | Route containing packet headers                      | uint8_t                                    | True     |
+ * | src_addr                   | Source L1 address                                    | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                                | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header                       | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ * | hop_masks                  | Per-header sparse multicast hop bitmasks             | uint32_t*                                  | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint32_t* hop_masks) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_sparse_multicast_noc_unicast_write(
+            &slot.sender,
+            packet_header,
+            slot.dst_dev_id,
+            slot.dst_mesh_id,
+            static_cast<eth_chan_directions>(slot.tag),
+            src_addr,
+            size,
+            noc_unicast_command_header,
+            hop_masks[i]);
+    });
+}
+
+// clang-format off
+/**
+ * Sparse multicast scatter write: delivers a single payload to a flat, hop-ordered list of
+ * destination NOC addresses grouped per writing chip by sparse_mcast_command_header.counts[].
+ * Chip c receives counts[c] pages.  Unlike the unicast-write variant (same address every chip),
+ * each writing chip gets its own distinct address(es).  Intra-mesh only.
+ *
+ * The caller must populate:
+ *   sparse_mcast_command_header.noc_address[0..num_dests)  — hop-ordered destination addresses
+ *   sparse_mcast_command_header.counts[0..num_chips)       — pages per writing chip
+ *   sparse_mcast_command_header.num_dests                  — total pages (= sum of counts)
+ *   sparse_mcast_command_header.num_chips                  — = popcount(hop_mask)
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                         | Type                                                | Required |
+ * |-----------------------------|-----------------------------------------------------|-----------------------------------------------------|----------|
+ * | client_interface            | Fabric sender interface                             | tt_l1_ptr FabricSenderType*                         | True     |
+ * | packet_header               | Packet header to use                                | volatile PACKET_HEADER_TYPE*                        | True     |
+ * | dst_dev_id                  | Destination start device id (for edge-router info)  | uint8_t                                             | True     |
+ * | dst_mesh_id                 | Destination start mesh id (for edge-router info)    | uint16_t                                            | True     |
+ * | direction                   | Axis and direction of travel (NORTH/SOUTH/EAST/WEST)| eth_chan_directions                                 | True     |
+ * | src_addr                    | Source L1 address                                   | uint32_t                                            | True     |
+ * | size                        | Payload size in bytes                               | uint32_t                                            | True     |
+ * | sparse_mcast_command_header | Hop-ordered addresses + per-chip counts             | tt::tt_fabric::NocSparseMulticastWriteCommandHeader | True     |
+ * | hop_mask                    | Bitmask of hops to write; bit N=1 → write at hop N | uint32_t                                            | True     |
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    eth_chan_directions direction,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocSparseMulticastWriteCommandHeader sparse_mcast_command_header,
+    uint32_t hop_mask) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+    packet_header->to_chip_sparse_multicast_2d(direction, hop_mask);
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->to_noc_sparse_mcast_write(sparse_mcast_command_header, size);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental

@@ -1266,11 +1266,35 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
     void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        // Sparse multicast is not supported via the 1D base-class path for 2D routing.
+        // Use to_chip_sparse_multicast_2d(direction, hop_mask) instead.
         ASSERT(false);
 #else
-        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported for 2D routing");
 #endif
+    }
+
+    /**
+     * Set up this packet header for a 2D sparse multicast along a single mesh axis.
+     *
+     * Encodes hop_mask into route_buffer[] such that only the chips at set bit positions
+     * receive a write; all others are pure-transit hops.  The last set bit terminates
+     * the packet after the write (no further forwarding).
+     *
+     * Supports intra-mesh routing only (mcast_params_64 is zeroed, suppressing
+     * edge-router recompute).  See encode_2d_sparse_multicast for per-direction
+     * command selection.
+     *
+     * @param direction  Axis and direction of travel (NORTH / SOUTH / EAST / WEST)
+     * @param hop_mask   Bitmask selecting destination chips; bit N=1 → write at hop N
+     */
+    void to_chip_sparse_multicast_2d(eth_chan_directions direction, uint32_t hop_mask) {
+        this->routing_fields.value = 0;   // hop_index = 0, branch offsets = 0
+        this->mcast_params_64 = 0;        // suppress edge-router recompute (intra-mesh only)
+        this->dst_start_node_id = 0;
+        this->is_mcast_active = 0;
+        routing_encoding::encode_2d_sparse_multicast(
+            direction, hop_mask, this->route_buffer, static_cast<uint32_t>(RouteBufferSize));
     }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
@@ -1278,11 +1302,21 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
     void to_chip_sparse_multicast_impl(
         const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        // Sparse multicast is not supported via the 1D base-class path for 2D routing.
+        // Use to_chip_sparse_multicast_2d(direction, hop_mask) instead.
         ASSERT(false);
 #else
-        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported for 2D routing");
 #endif
+    }
+
+    void to_chip_sparse_multicast_2d(eth_chan_directions direction, uint32_t hop_mask) volatile {
+        this->routing_fields.value = 0;
+        this->mcast_params_64 = 0;
+        this->dst_start_node_id = 0;
+        this->is_mcast_active = 0;
+        routing_encoding::encode_2d_sparse_multicast(
+            direction, hop_mask, const_cast<uint8_t*>(this->route_buffer), static_cast<uint32_t>(RouteBufferSize));
     }
 
 } __attribute__((packed, aligned(16)));
