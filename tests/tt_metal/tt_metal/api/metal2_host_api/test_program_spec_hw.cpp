@@ -1487,9 +1487,10 @@ DatacopyResult RunComputeSemaphoreDatacopy(
         return {};
     }
 
-    // Capacity = ring depth, so PACK's wait_not_full() holds the packer while all kDepth slots are full.
+    // Capacity = ring depth, so PACK's wait_not_full() holds the packer while all kDepth slots are full. The
+    // no-sync control never down()s, so it runs at the default capacity (15, > kMaxTiles).
     Program program = MakeComputeSemaphoreProgram(
-        mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
+        mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = nosync ? 0u : kSemDepth});
 
     // Input: tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F). Normal positive values (exact through a
     // bf16 datacopy) and distinct per tile, so a stale ring read (the previous tile) is detected.
@@ -1594,22 +1595,23 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreBoundedProducerBatched) {
     EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
 }
 
-// Negative control: same run without wait_not_full(). PACK races to the 15-credit hardware ceiling
-// (observed high-water mark above the capacity) and the posts beyond it are dropped, so UNPACK cannot
-// consume them all. If this passes the positive test above is not a detector.
+// Negative control: same run without wait_not_full(). PACK runs ahead of the slow consumer, so the observed
+// high-water mark exceeds kSemDepth. Runs at the default capacity (15) with fewer than 15 credits so no SEMPOST
+// lands at Max. If this passes the positive test above is not a
+// detector.
 TEST_F(ProgramSpecHWTest, ComputeSemaphoreBoundedProducerNoWaitControl) {
     auto mesh_device = devices_.at(0);
     if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Blackhole-only";
     }
-    constexpr std::uint32_t num_iters = 64;  // small: the consumer's timeout is the expected exit
-    const auto r = RunComputeSemaphore(
-        mesh_device, {.pattern = 4, .num_iters = num_iters, .nosync = 1, .max_value = kSemDepth}, 6);
+    constexpr std::uint32_t num_iters = 12;  // < 15: the ungated producer can never post at Max
+    const auto r = RunComputeSemaphore(mesh_device, {.pattern = 4, .num_iters = num_iters, .nosync = 1}, 6);
     GTEST_LOG_(INFO) << "bounded producer no-wait control: produced=" << r[0] << " consumed=" << r[1]
-                     << " high_water=" << r[2] << (r[4] ? " [UNPACK TIMEOUT, expected]" : "");
+                     << " high_water=" << r[2] << (r[4] ? " [UNPACK TIMEOUT]" : "");
     EXPECT_GT(r[2], kSemDepth) << "ungated producer never exceeded the capacity -- the positive test cannot "
                                   "tell wait_not_full() from nothing";
-    EXPECT_LT(r[1], num_iters) << "every post survived without back-pressure -- saturation was not reached";
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out -- a post was lost below the capacity";
+    EXPECT_EQ(r[1], num_iters);
 }
 
 }  // namespace
