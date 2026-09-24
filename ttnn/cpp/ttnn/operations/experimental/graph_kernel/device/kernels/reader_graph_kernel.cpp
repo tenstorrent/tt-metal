@@ -3,30 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <utility>
 
-#include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "api/tensor/noc_traits.h"
-#include "experimental/kernel_args.h"
+#include "input_bindings.hpp"
+#include "reader_helper.hpp"
 
-// graph_kernel basis reader: streams pages [start_id, start_id + num_pages) of input 0
-// into the `pages` dataflow buffer. Inputs 1..num_inputs-1 are bound as tensor::in1,
-// tensor::in2, ... and are available for the graph to consume later.
+// graph_kernel reader: input I (tensor in<I>) is streamed into dataflow buffer in<I> by chain_reads,
+// as a sliding window over all inputs. The node list is expanded from the num_inputs compile-time
+// arg, so there are no per-count cases.
+
+template <size_t I>
+struct read_node {
+    static constexpr auto tensor = graph_kernel::input_tensor<I>();
+    static constexpr Read_Node node{.DFB = graph_kernel::input_dfb<I>(), .page_size = get_arg(args::page_size)};
+};
+
+template <uint32_t pages_per_core, uint32_t dfb_length, bool is_fp_32, size_t... Is>
+FORCE_INLINE void read_all_inputs(uint32_t start_id, std::index_sequence<Is...>) {
+    chain_reads<pages_per_core, dfb_length, is_fp_32>(start_id, read_node<Is>{}...);
+}
+
 void kernel_main() {
-    constexpr uint32_t page_size = get_arg(args::page_size);
-    const uint32_t num_pages = get_arg(args::num_pages);
+    constexpr uint32_t num_inputs = get_arg(args::num_inputs);
+    constexpr uint32_t pages_per_core = get_arg(args::pages_per_core);
+    constexpr uint32_t dfb_length = get_arg(args::dfb_length);
+    constexpr bool is_fp_32 = get_arg(args::is_fp_32) != 0;
     const uint32_t start_id = get_arg(args::start_id);
 
-    DataflowBuffer pages(dfb::pages);
-    Noc noc;
-    const auto in0 = TensorAccessor(tensor::in0);
-
-    const uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-        pages.reserve_back(1);
-        noc.async_read(in0, pages, page_size, {.page_id = i}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        pages.push_back(1);
-    }
+    read_all_inputs<pages_per_core, dfb_length, is_fp_32>(start_id, std::make_index_sequence<num_inputs>{});
 }
