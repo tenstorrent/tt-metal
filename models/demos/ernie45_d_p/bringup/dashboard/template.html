@@ -1,0 +1,375 @@
+<title>ERNIE Prefill Bring-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#f4f4f1; --surface:#fcfcfb; --surface2:#efeee9; --ink:#0b0b0b; --ink2:#52514e; --muted:#7c7b75; --line:#dfded8;
+  --accent:#9a4f1c; --accent-soft:#f3e4d8;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --dev-fill:#e3f1e3; --dev-line:#0a8a0a;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121211; --surface:#1a1a19; --surface2:#232321; --ink:#ffffff; --ink2:#c3c2b7; --muted:#8f8e87; --line:#33332f;
+    --accent:#e0915a; --accent-soft:#3a2a1f;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+    --dev-fill:#15301a; --dev-line:#39c039;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121211; --surface:#1a1a19; --surface2:#232321; --ink:#ffffff; --ink2:#c3c2b7; --muted:#8f8e87; --line:#33332f;
+  --accent:#e0915a; --accent-soft:#3a2a1f;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+  --dev-fill:#15301a; --dev-line:#39c039;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-body);margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:20px;padding-block:28px 64px;display:grid;gap:28px}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:.005em}
+h1{font-size:30px;font-weight:700;line-height:1.1}
+h2{font-size:19px;font-weight:600}
+.eyebrow{font:500 11px/1 var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.sub{color:var(--ink2);max-width:72ch}
+.mono,.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+header{display:grid;gap:10px}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;color:var(--ink2);font-size:13px}
+.facts b{color:var(--ink);font-weight:600}
+section{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px;display:grid;gap:14px;min-width:0}
+.sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+.sec-head p{margin:0;color:var(--muted);font-size:13px}
+.summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:20px;align-items:center}
+@media (max-width:760px){.summary{grid-template-columns:1fr}}
+.meter{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--surface2);gap:2px}
+.meter span{display:block;height:100%}
+.meter-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink2);margin-top:8px}
+.big{font:600 40px/1 var(--f-display)}
+.next{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:500 12px/1 var(--f-mono);padding:6px 8px;border-radius:6px;background:var(--accent-soft);color:var(--ink);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 12px/1 var(--f-mono);padding:4px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font:500 11px/1.2 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.task{cursor:pointer}
+tr.task:hover td{background:var(--surface2)}
+tr.task:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+tr.phase td{font:600 13px/1 var(--f-display);color:var(--accent);background:transparent;padding-top:16px;letter-spacing:.04em}
+tr.detail td{background:var(--surface2);font-size:12.5px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px}
+.kv code,.detail code{font-family:var(--f-mono);font-size:12px;word-break:break-all}
+.metric-ok{color:var(--ink)} .metric-bad{color:var(--crit);font-weight:600}
+.two{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:20px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.svg-wrap{overflow-x:auto}
+svg text{font-family:var(--f-body)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink2)}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;vertical-align:-2px;margin-right:6px}
+.chips4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:820px){.chips4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:440px){.chips4{grid-template-columns:1fr}}
+.chipcard{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:8px;background:var(--bg)}
+.chipcard h3{font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+.chipcard dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 10px;margin:0;font-size:12.5px}
+.chipcard dt{color:var(--muted)} .chipcard dd{margin:0;font-family:var(--f-mono);font-size:12px}
+.membar{display:flex;height:12px;border-radius:4px;overflow:hidden;background:var(--surface2);gap:2px}
+.heads{display:flex;gap:3px;flex-wrap:wrap}
+.hd{width:18px;height:18px;border-radius:4px;font:500 10px/18px var(--f-mono);text-align:center;color:#fff}
+.tag{font:500 10.5px/1 var(--f-mono);letter-spacing:.05em;padding:3px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+.tag.COMPOSED{border-color:var(--s4);} .tag.CPU{border-color:var(--crit);color:var(--crit)}
+.strip{display:grid;grid-template-columns:repeat(28,minmax(0,1fr));gap:2px}
+.strip div{height:26px;border-radius:3px;font:500 9.5px/26px var(--f-mono);text-align:center;color:var(--ink2);background:var(--surface2);border:1px solid var(--line)}
+.strip div.moe{border-color:color-mix(in srgb,var(--s2) 55%,var(--line))}
+.strip div.dense{border-color:color-mix(in srgb,var(--s3) 70%,var(--line))}
+#tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:12px/1.4 var(--f-mono);box-shadow:0 4px 14px rgb(0 0 0/.12);z-index:10}
+.empty{color:var(--muted);font-size:13px;padding:24px 0;text-align:center;border:1px dashed var(--line);border-radius:8px}
+footer{color:var(--muted);font-size:12px}
+@media (prefers-reduced-motion:no-preference){tr.task td{transition:background .12s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Prefill bring-up · Tenstorrent</span>
+    <h1 id="h1">ERNIE-4.5-21B-A3B chunked prefill</h1>
+    <div class="facts" id="facts"></div>
+  </header>
+
+  <section aria-labelledby="s-sum">
+    <div class="sec-head"><h2 id="s-sum">Progress</h2><p id="gen"></p></div>
+    <div class="summary">
+      <div>
+        <div style="display:flex;align-items:baseline;gap:10px"><span class="big num" id="passn"></span><span class="sub" id="passof"></span></div>
+        <div class="meter" id="meter" style="margin-top:10px"></div>
+        <div class="meter-legend" id="meter-legend"></div>
+      </div>
+      <div style="display:grid;gap:8px">
+        <span class="eyebrow" style="color:var(--muted)">Ready to run (all deps PASS)</span>
+        <div class="next" id="next"></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-ladder">
+    <div class="sec-head"><h2 id="s-ladder">Gate ladder</h2><p>Each task has a gate command and metric thresholds. Click a row for details.</p></div>
+    <div class="tbl-wrap"><table id="ladder"><thead><tr><th>Task</th><th>Status</th><th>What</th><th>Gate metric (worst)</th><th>Commit</th><th>Run</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <div class="two">
+    <section aria-labelledby="s-dag">
+      <div class="sec-head"><h2 id="s-dag">Model graph</h2><p>One decoder layer, drawn once, runs 28 times</p></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--dev-fill);border:1.5px solid var(--dev-line)"></span>On device, gate passed</span>
+        <span><span class="sw" style="background:var(--surface);border:1.5px dashed var(--muted)"></span>CPU reference</span>
+      </div>
+      <div class="svg-wrap"><svg id="dag" viewBox="0 0 700 760" width="100%" role="img" aria-label="ERNIE decoder dataflow graph"></svg></div>
+      <div>
+        <span class="eyebrow" style="color:var(--muted)">Layer stack · per-layer PCC of the latest device run</span>
+        <div class="strip" id="strip" style="margin-top:8px"></div>
+        <div class="legend" style="margin-top:8px"><span><span class="sw" style="border:1.5px solid var(--s3);background:transparent"></span>dense MLP</span><span><span class="sw" style="border:1.5px solid var(--s2);background:transparent"></span>MoE (64 experts, top-6, 2 shared)</span></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="s-ops">
+      <div class="sec-head"><h2 id="s-ops">Op coverage</h2><p>Reference op to TTNN</p></div>
+      <div class="legend"><span><span class="tag">NATIVE</span> single TTNN op</span><span><span class="tag COMPOSED">COMPOSED</span> built from TTNN pieces</span><span><span class="tag CPU">CPU</span> stays on host</span></div>
+      <div class="tbl-wrap"><table id="ops"><thead><tr><th>Component</th><th>TTNN</th><th>Tag</th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
+
+  <section aria-labelledby="s-shard">
+    <div class="sec-head"><h2 id="s-shard">Sharding across chips</h2><p id="shard-sub"></p></div>
+    <div class="legend" id="mem-legend"></div>
+    <div class="chips4" id="chips"></div>
+    <div class="sub" style="font-size:13px" id="shard-notes"></div>
+  </section>
+
+  <section aria-labelledby="s-pcc">
+    <div class="sec-head"><h2 id="s-pcc">PCC trail by layer</h2><p>Plotted as 1 − PCC on a log scale; lower is better. Dashed lines mark the 0.99 layer and 0.97 end-to-end gates.</p></div>
+    <div class="legend" id="pcc-legend"></div>
+    <div class="svg-wrap" id="pcc-wrap"><svg id="pcc" viewBox="0 0 900 300" width="100%" role="img" aria-label="Per-layer PCC chart"></svg></div>
+    <details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Table view</summary><div class="tbl-wrap"><table id="pcc-table"></table></div></details>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+const D = /*__DATA__*/null;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const STATUS = {
+  PASS:{c:"--good", i:"✓", l:"PASS"}, FAIL:{c:"--crit", i:"✕", l:"FAIL"},
+  RUNNING:{c:"--warn", i:"◐", l:"RUNNING"}, TODO:{c:"--muted", i:"○", l:"TODO"}, BLOCKED:{c:"--serious", i:"!", l:"BLOCKED"}
+};
+const tip = $("#tip");
+function showTip(e, html){ tip.innerHTML = html; tip.hidden = false; moveTip(e); }
+function moveTip(e){ const r = tip.getBoundingClientRect(); let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14; if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip(){ tip.hidden = true; }
+function pill(st){ const s = STATUS[st] || STATUS.TODO; return `<span class="pill"><span class="dot" style="background:var(${s.c})"></span>${s.i} ${s.l}</span>`; }
+function fmt(v){ if (typeof v !== "number") return esc(v); if (Number.isInteger(v)) return String(v);
+  if (v > 0.9 && v <= 1) return v.toFixed(v > 0.99999 ? 7 : 5); return v.toPrecision(4); }
+
+function worstMetric(t){
+  const ops = {">=":(a,b)=>a>=b,"<=":(a,b)=>a<=b,">":(a,b)=>a>b,"<":(a,b)=>a<b,"==":(a,b)=>a==b};
+  const glob = g => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  let worst = null;
+  for (const [g, cond] of Object.entries(t.thresholds)){
+    const [op, vs] = cond.split(" "); const want = +vs; const re = glob(g);
+    const hits = Object.entries(t.metrics).filter(([k]) => re.test(k));
+    if (!hits.length){ if (t.status !== "TODO") worst = worst || {k:g, v:"missing", ok:false, cond}; continue; }
+    for (const [k, v] of hits){
+      const ok = ops[op](+v, want);
+      const margin = op.startsWith(">") ? +v - want : want - +v;
+      if (!worst || (!ok && worst.ok) || (ok === worst.ok && margin < worst.margin)) worst = {k, v, ok, cond, margin};
+    }
+  }
+  return worst;
+}
+
+function header(){
+  const c = D.config;
+  $("#facts").innerHTML = [
+    ["Model", D.model], ["Target", D.target], ["Box", `${D.box.name}, ${D.box.chips}, mesh ${D.box.mesh}`],
+    ["Arch", `${c.layers} layers · d=${c.hidden} · GQA ${c.q_heads}/${c.kv_heads}×${c.head_dim} · ${c.experts} experts top-${c.top_k} + ${c.shared} shared`],
+  ].map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
+  $("#gen").textContent = `Snapshot ${D.generated} · ${D.branch} @ ${D.head}`;
+  const n = D.tasks.length, counts = {};
+  D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
+  $("#passn").textContent = `${counts.PASS || 0}/${n}`;
+  $("#passof").textContent = "gates passed";
+  $("#meter").innerHTML = ["PASS","FAIL","RUNNING","TODO"].filter(k => counts[k]).map(k =>
+    `<span style="width:${100*counts[k]/n}%;background:var(${STATUS[k].c})" title="${k}: ${counts[k]}"></span>`).join("");
+  $("#meter-legend").innerHTML = ["PASS","FAIL","RUNNING","TODO"].filter(k => counts[k]).map(k =>
+    `<span><span class="dot" style="background:var(${STATUS[k].c})"></span> ${STATUS[k].i} ${k} <span class="num">${counts[k]}</span></span>`).join("");
+  const st = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
+  const ready = D.tasks.filter(t => t.status !== "PASS" && t.deps.every(d => st[d] === "PASS"));
+  $("#next").innerHTML = ready.map(t => `<span class="chip" title="${esc(t.title)}">${t.id} ${esc(t.title.split(" (")[0].slice(0, 46))}</span>`).join("") || `<span class="sub">none</span>`;
+}
+
+function ladder(){
+  const tb = $("#ladder tbody"); let html = "", phase = null;
+  const names = {P1:"Part 1 · CPU reference and goldens", P2:"Part 2 · Tenstorrent bring-up"};
+  D.tasks.forEach((t, i) => {
+    if (t.phase !== phase){ phase = t.phase; html += `<tr class="phase"><td colspan="6">${names[phase] || phase}</td></tr>`; }
+    const w = worstMetric(t);
+    const wm = w ? `<span class="mono ${w.ok ? "metric-ok" : "metric-bad"}">${esc(w.k)} = ${fmt(w.v)}</span> <span class="sub mono" style="font-size:11.5px">${esc(w.cond)}</span>` : `<span class="sub">—</span>`;
+    html += `<tr class="task" tabindex="0" data-i="${i}"><td class="mono">${t.id}</td><td>${pill(t.status)}</td><td>${esc(t.title)}</td><td>${wm}</td>
+      <td class="mono">${t.commit ? esc(t.commit) : "—"}</td><td class="mono" style="white-space:nowrap">${t.duration_s != null ? fmtDur(t.duration_s) : "—"}</td></tr>
+      <tr class="detail" data-d="${i}" hidden><td colspan="6"><div class="kv">
+        <span>Gate</span><code>${esc(t.cmd)}</code>
+        <span>Deps</span><span class="mono">${t.deps.join(", ") || "none"}</span>
+        <span>Thresholds</span><span class="mono">${Object.entries(t.thresholds).map(([k, v]) => esc(k + " " + v)).join(" · ")}</span>
+        ${t.notes ? `<span>Done means</span><span>${esc(t.notes)}</span>` : ""}
+        <span>Last run</span><span class="mono">${esc(t.last_run || "never")}</span>
+        <span>Metrics</span><span class="mono">${Object.entries(t.metrics).map(([k, v]) => esc(k) + "=" + fmt(v)).join(" · ") || "—"}</span>
+      </div></td></tr>`;
+  });
+  tb.innerHTML = html;
+  const toggle = row => { const d = tb.querySelector(`tr[data-d="${row.dataset.i}"]`); d.hidden = !d.hidden; };
+  tb.querySelectorAll("tr.task").forEach(r => { r.addEventListener("click", () => toggle(r));
+    r.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(r); } }); });
+}
+function fmtDur(s){ return s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s/60)}m` : `${(s/3600).toFixed(1)}h`; }
+
+function dag(){
+  const C = Object.fromEntries(D.components.map(c => [c.id, c]));
+  const W = 150, H = 40;
+  const N = {
+    embed:[350,30], attn_norm:[350,110], qkv:[350,170], rope:[350,230], kv_write:[200,295], sdpa:[500,295], o_proj:[350,360],
+    ffn_norm:[350,440], dense_mlp:[105,510], router:[350,510], shared:[595,510], experts:[350,575], moe_reduce:[350,640],
+    final_norm:[350,700], lm_head:[590,700]
+  };
+  const E = [["embed","attn_norm"],["attn_norm","qkv"],["qkv","rope"],["rope","kv_write"],["rope","sdpa"],["kv_write","sdpa"],["sdpa","o_proj"],
+    ["o_proj","ffn_norm"],["ffn_norm","dense_mlp"],["ffn_norm","router"],["ffn_norm","shared"],["router","experts"],["experts","moe_reduce"],["shared","moe_reduce"],
+    ["dense_mlp","moe_reduce"],["moe_reduce","final_norm"],["final_norm","lm_head"]];
+  const muted = css("--muted"), line = css("--line"), ink = css("--ink"), ink2 = css("--ink2");
+  let s = `<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0L10,5L0,10z" fill="${muted}"/></marker></defs>`;
+  s += `<rect x="18" y="80" width="664" height="592" rx="14" fill="none" stroke="${css("--accent")}" stroke-dasharray="5 5" stroke-width="1.2"/>`;
+  s += `<text x="34" y="100" font-size="12" fill="${css("--accent")}" font-family="IBM Plex Mono, monospace">× 28 decoder layers · layer 0 dense, 1–27 MoE</text>`;
+  s += `<text x="34" y="410" font-size="11" fill="${muted}" font-family="IBM Plex Mono, monospace">+ residual</text>`;
+  s += `<text x="34" y="668" font-size="11" fill="${muted}" font-family="IBM Plex Mono, monospace">+ residual</text>`;
+  s += `<text x="105" y="552" font-size="10.5" text-anchor="middle" fill="${muted}">layer 0 only</text>`;
+  s += `<text x="595" y="552" font-size="10.5" text-anchor="middle" fill="${muted}">layers 1–27</text>`;
+  for (const [a, b] of E){
+    const [x1, y1] = N[a], [x2, y2] = N[b];
+    let sx = x1, sy = y1 + H/2, ex = x2, ey = y2 - H/2;
+    if (Math.abs(y1 - y2) < 5){ sx = x1 + (x2 > x1 ? W/2 : -W/2); sy = y1; ex = x2 + (x2 > x1 ? -W/2 : W/2); ey = y2; }
+    const my = (sy + ey) / 2;
+    s += `<path d="M${sx},${sy} C${sx},${my} ${ex},${my} ${ex},${ey}" fill="none" stroke="${muted}" stroke-width="1.3" marker-end="url(#ar)" ${a==="kv_write"?'stroke-dasharray="3 3"':""}/>`;
+  }
+  for (const [id, [x, y]] of Object.entries(N)){
+    const c = C[id]; if (!c) continue;
+    const dev = c.state === "device";
+    const fill = dev ? css("--dev-fill") : css("--surface"), stroke = dev ? css("--dev-line") : muted;
+    const label = c.name.replace(/ \(.*\)/, "").replace(" + all_reduce", "").slice(0, 26);
+    s += `<g class="node" data-id="${id}" tabindex="0" style="cursor:default">
+      <rect x="${x - W/2}" y="${y - H/2}" width="${W}" height="${H}" rx="7" fill="${fill}" stroke="${stroke}" stroke-width="1.5" ${dev ? "" : 'stroke-dasharray="4 3"'}/>
+      <text x="${x}" y="${y - 3}" font-size="12" font-weight="600" text-anchor="middle" fill="${ink}">${dev ? "✓ " : ""}${esc(label)}</text>
+      <text x="${x}" y="${y + 12}" font-size="9.5" text-anchor="middle" fill="${ink2}" font-family="IBM Plex Mono, monospace">${esc(c.tag)} · ${c.task || "—"}</text></g>`;
+  }
+  const svg = $("#dag"); svg.innerHTML = s;
+  svg.querySelectorAll(".node").forEach(g => {
+    const c = C[g.dataset.id];
+    const h = `<b>${esc(c.name)}</b><br>ref: ${esc(c.ref)}<br>ttnn: ${esc(c.ttnn)}<br>${esc(c.tag)} · gate ${c.task || "—"} · ${c.state === "device" ? "on device" : "CPU reference"}`;
+    g.addEventListener("mouseenter", e => showTip(e, h)); g.addEventListener("mousemove", moveTip); g.addEventListener("mouseleave", hideTip);
+    g.addEventListener("focus", () => { const r = g.getBoundingClientRect(); showTip({clientX:r.right, clientY:r.top}, h); }); g.addEventListener("blur", hideTip);
+  });
+  // layer strip
+  const latest = [...D.trails].reverse().find(t => t.task.startsWith("P2"));
+  const pm = latest ? Object.fromEntries(latest.points) : {};
+  $("#strip").innerHTML = D.config.layer_types.map((ty, i) => {
+    const p = pm[i]; const bad = p != null && p < 0.99;
+    const st = p != null ? `background:${bad ? "color-mix(in srgb,var(--crit) 22%,var(--surface))" : "var(--dev-fill)"}` : "";
+    return `<div class="${ty}" style="${st}" title="L${i} · ${ty}${p != null ? " · PCC " + p.toFixed(5) : " · not yet on device"}">${i}</div>`;
+  }).join("");
+}
+
+function ops(){
+  $("#ops tbody").innerHTML = D.components.map(c => `<tr><td>${c.state === "device" ? "✓ " : ""}${esc(c.name)}</td><td class="mono" style="font-size:12px">${esc(c.ttnn)}</td><td><span class="tag ${c.tag}">${c.tag}</span></td></tr>`).join("");
+}
+
+function sharding(){
+  const P = D.plan, B = P.per_chip_bytes, GB = 2 ** 30;
+  const groups = [
+    ["Routed experts", ["routed experts"], "--s1"],
+    ["KV cache", ["KV cache"], "--s2"],
+    ["Embedding + LM head", ["embedding (replicated)", "LM head (vocab-sharded)"], "--s3"],
+    ["Attention", ["attention (Q,K,V,O)"], "--s4"],
+    ["Dense + shared MLP", ["dense MLP (layer 0)", "shared experts"], "--s5"],
+    ["Router, norms", ["router + bias", "norms"], "--s6"],
+  ].map(([n, ks, c]) => ({n, c, b: ks.reduce((a, k) => a + (B[k] || 0), 0)}));
+  $("#mem-legend").innerHTML = groups.map(g => `<span><span class="sw" style="background:var(${g.c})"></span>${g.n} <span class="num">${(g.b/GB).toFixed(2)} GB</span></span>`).join("");
+  $("#shard-sub").textContent = `mesh ${P.mesh.join("×")} · ${P.per_chip_total_gb.toFixed(1)} of ${P.chip_dram_gb} GB DRAM per chip at ${P.max_seq.toLocaleString()} tokens, ${P.num_users} user`;
+  const cap = P.chip_dram_gb * GB;
+  const qCol = css("--s4"), kvCol = css("--s2");
+  $("#chips").innerHTML = P.chips.map(ch => `<div class="chipcard">
+      <h3>Chip ${ch.chip} <span class="mono" style="font-size:11px;color:var(--muted)">p150b</span></h3>
+      <div class="membar" aria-label="DRAM use">${groups.map(g => `<span style="width:${100*g.b/cap}%;background:var(${g.c})" title="${g.n}: ${(g.b/GB).toFixed(2)} GB"></span>`).join("")}</div>
+      <div class="heads" aria-label="attention heads">${ch.q_heads.map(h => `<span class="hd" style="background:${qCol}" title="Q head ${h}">${h}</span>`).join("")}${ch.kv_heads.map(h => `<span class="hd" style="background:${kvCol}" title="KV head ${h}">K${h}</span>`).join("")}</div>
+      <dl>
+        <dt>Q / KV heads</dt><dd>${ch.q_heads[0]}–${ch.q_heads.at(-1)} / ${ch.kv_heads.join(",")}</dd>
+        <dt>Experts</dt><dd>${ch.experts[0]}–${ch.experts[1]} (16 of 64)</dd>
+        <dt>Dense MLP</dt><dd>cols ${ch.dense_mlp_cols[0]}–${ch.dense_mlp_cols[1]}</dd>
+        <dt>Shared MLP</dt><dd>cols ${ch.shared_mlp_cols[0]}–${ch.shared_mlp_cols[1]}</dd>
+        <dt>LM head</dt><dd>vocab ${ch.vocab[0]}–${ch.vocab[1]}</dd>
+        <dt>Residual</dt><dd>replicated [S, 2560]</dd>
+      </dl></div>`).join("");
+  $("#shard-notes").innerHTML = `Per layer: <b>${P.ccl_per_layer.join("</b>, <b>")}</b>. Every chip computes the same routing, runs its 16 local experts on the tokens routed to them, and sums them with its quarter of the shared expert before a single all_reduce. The KV cache holds one KV head per chip, which matches the prefill-server contract (one KV head per TP column).`;
+}
+
+function pccChart(){
+  const tr = D.trails, svg = $("#pcc");
+  if (!tr.length){ $("#pcc-wrap").innerHTML = `<div class="empty">No per-layer PCC recorded yet</div>`; return; }
+  const W = 900, H = 300, m = {l:64, r:20, t:14, b:40};
+  const lo = -13, hi = -0.5;  // log10(1-PCC)
+  const x = i => m.l + (W - m.l - m.r) * i / 27;
+  const y = v => { const e = Math.log10(Math.max(1 - v, 1e-13)); return m.t + (H - m.t - m.b) * (e - hi) / (lo - hi); };
+  const cols = ["--s1","--s2","--s3","--s4","--s5"].map(css);
+  const muted = css("--muted"), line = css("--line"), ink2 = css("--ink2");
+  let s = "";
+  for (let e = -12; e <= -1; e += 1){ const yy = m.t + (H - m.t - m.b) * (e - hi) / (lo - hi);
+    s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${line}" stroke-width="1"/>`;
+    if (e % 2 === 0 || e === -1) s += `<text x="${m.l - 8}" y="${yy + 4}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">1e${e}</text>`; }
+  for (const [p, lab] of [[0.99, "0.99"], [0.97, "0.97"]]){ const yy = y(p);
+    s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${css("--crit")}" stroke-dasharray="5 4" stroke-width="1.2"/>
+      <text x="${W - m.r}" y="${yy - 5}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">PCC ${lab}</text>`; }
+  for (let i = 0; i < 28; i += 3) s += `<text x="${x(i)}" y="${H - m.b + 18}" font-size="11" text-anchor="middle" fill="${ink2}" font-family="IBM Plex Mono, monospace">L${i}</text>`;
+  s += `<text x="${(W + m.l)/2}" y="${H - 6}" font-size="11.5" text-anchor="middle" fill="${muted}">decoder layer output</text>`;
+  s += `<text x="14" y="${(H - m.b + m.t)/2}" font-size="11.5" text-anchor="middle" fill="${muted}" transform="rotate(-90 14 ${(H - m.b + m.t)/2})">1 − PCC</text>`;
+  tr.forEach((t, k) => { const pts = t.points.map(([i, v]) => `${x(i)},${y(v)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="${cols[k % 5]}" stroke-width="2" stroke-linejoin="round"/>`;
+    const [li, lv] = t.points.at(-1);
+    s += `<circle cx="${x(li)}" cy="${y(lv)}" r="4" fill="${cols[k % 5]}" stroke="${css("--surface")}" stroke-width="2"/>`; });
+  s += `<line id="xh" y1="${m.t}" y2="${H - m.b}" stroke="${muted}" stroke-width="1" visibility="hidden"/>`;
+  s += `<rect id="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/>`;
+  svg.innerHTML = s;
+  $("#pcc-legend").innerHTML = tr.map((t, k) => `<span><span class="sw" style="background:${cols[k % 5]}"></span>${esc(t.label)} · min ${Math.min(...t.points.map(p => p[1])).toFixed(5)}</span>`).join("");
+  const hit = svg.querySelector("#hit"), xh = svg.querySelector("#xh");
+  hit.addEventListener("mousemove", e => { const r = svg.getBoundingClientRect(); const px = (e.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(27, Math.round((px - m.l) / (W - m.l - m.r) * 27)));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    const rows = tr.map((t, k) => { const p = t.points.find(q => q[0] === i); return p ? `<span style="color:${cols[k % 5]}">■</span> ${esc(t.label)}: ${p[1].toFixed(7)}` : null; }).filter(Boolean);
+    showTip(e, `<b>Layer ${i}</b> · ${D.config.layer_types[i]}<br>${rows.join("<br>")}`); });
+  hit.addEventListener("mouseleave", () => { hideTip(); xh.setAttribute("visibility", "hidden"); });
+  const tbl = $("#pcc-table");
+  tbl.innerHTML = `<thead><tr><th>Layer</th>${tr.map(t => `<th>${esc(t.label)}</th>`).join("")}</tr></thead><tbody>` +
+    D.config.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toFixed(7) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
+}
+
+function render(){ header(); ladder(); dag(); ops(); sharding(); pccChart();
+  $("#foot").textContent = `Generated from models/demos/ernie45_d_p/bringup (tasks.yaml, state.json, results/, components.yaml) by export_dashboard.py.`; }
+if (D) render();
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
+new MutationObserver(() => D && render()).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+</script>
