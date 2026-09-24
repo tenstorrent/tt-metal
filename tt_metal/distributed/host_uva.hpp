@@ -7,6 +7,9 @@
 
 #include <stdint.h>
 
+// For kMaxHosts: the credit array, not the selector, is the tighter bound on host count.
+#include "tt_metal/distributed/host_uva_layout.hpp"
+
 namespace tt::tt_metal::experimental {
 
 // [63:60] region | [59:48] selector | [47:32] page | [31:0] offset
@@ -100,7 +103,7 @@ struct HostTopology {
 };
 
 constexpr bool host_topology_ok(HostTopology t) {
-    return t.num >= 1 && t.ident < t.num && t.chips_per_host >= 1 &&
+    return t.num >= 1 && t.num <= kMaxHosts && t.ident < t.num && t.chips_per_host >= 1 &&
            (t.num - 1) <= static_cast<uint32_t>(kSelectorMask) &&
            static_cast<uint64_t>(t.num) * t.chips_per_host * kT6CoresPerChip <=
                static_cast<uint64_t>(kSelectorMask) + 1;
