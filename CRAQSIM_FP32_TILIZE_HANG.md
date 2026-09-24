@@ -1,12 +1,45 @@
-# craq-sim: fp32 tile production (tilize) hangs — root cause + reproducer
+# Quasar fp32 tilize: illegal format conversion (real bug) — craq-sim masks it as a hang
 
-**Verdict:** producing an **fp32 tile** on the Quasar functional simulator (`libttsim.so` / craq-sim) **hangs**;
-**bf16 works**. This is a **craq-sim modeling gap in the Quasar Tensix backend**, not a tt-metal bug — the
-tt-metal op/factory/LLK code is the standard lossless-fp32 tilize path, and both the mainline `ttnn.tilize`
-and the quasar-native `ttnn.experimental.quasar.tilize` hang identically because they share that LLK + the sim.
+> **UPDATED (emulator data): this is a REAL tt-metal/tt-llk bug on Quasar, not a sim-only gap.** My original
+> "craq-sim modeling gap, works on real HW" verdict below was **wrong** and is retracted. Keeping the filename
+> stable (craq-sim#401 links here).
 
-This branch exists only to hand craq-sim a self-contained reproducer + the localization already done. Nothing
-here is meant to merge.
+**Verdict:** producing an **fp32 tile** (and **uint8**) via tilize on Quasar hits a real hardware fault. On the
+ZEBU emulator (real RTL) the 32×32 repro fails fast:
+
+```
+Neo0TRISC0 hardware fault: UNPACKER_0 (ILLEGAL_FORMAT_CONVERSION)
+Current kernel: ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp
+```
+
+The **craq-sim functional simulator does not model that trap** — instead of faulting it stalls forever (reader
+NTW / compute WFW). So on craq-sim it looks like a hang; on RTL it's an illegal format conversion. `bf16` works
+(it takes the `fast_tilize` path); the fault is on the **generic/slow tilize path** that fp32-lossless and uint8
+fall through to (both fail `can_use_fast_tilize()`).
+
+Two things to fix, tracked separately:
+1. **The real bug (tt-metal / tt-llk):** the generic tilize path's Gen2 unpacker config for `enable_32_bit_dest`
+   is invalid for tilize's *unary* consumer (details below). Reproduced on the emulator via three paths — mainline
+   `ttnn.tilize` (uint8 and fp32→bf16) and the canonical `ttnn.experimental.quasar.tilize` (fp32, config built via
+   `to_compute_hardware_config`, byte-identical compute kernel) — so it is shared LLK/`compute_kernel_lib` code,
+   not a factory-specific config bug (rules out the mainline factory's `TODO(#52269)` manual Gen1→Gen2 copy).
+2. **craq-sim (issue #401):** ttsim should surface/trap the `ILLEGAL_FORMAT_CONVERSION` like RTL instead of
+   hanging; plus the separate `qsr_convert_pack_value` bf16→fp32 (`5→0`) gap.
+
+## Leading root-cause hypothesis (tt-llk boundary — UNDER VERIFICATION via the tt-llk `debug-kernel` skill)
+
+`_llk_unpack_tilize_mop_config_` in `tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_unpack_tilize.h` has an
+`EN_32BIT_DEST` branch commented *"exclusively for FP32 datacopy via math thread (ELWADD on SrcA+SrcB), not for
+UNP_DEST"* — it configures the MOP to also set dvalid on the **opposite** unpacker, i.e. for an ELWADD-style
+**binary** (SrcA+SrcB) consumer. But tilize's Quasar math is `llk_math_eltwise_unary_datacopy(0, icb)`
+(`api/compute/tilize.h`) — a genuinely **unary** datacopy that never touches SrcB. So enabling 32-bit-dest for
+tilize wires a binary-consumer MOP for a unary op → format-conversion mismatch the RTL rejects. The defect is
+introduced at the **compute-API boundary**: `tilize.h`'s Quasar branch forwards `is_fp32_dest_acc_en` into
+`llk_unpack_tilize_init` without accounting for tilize's unary consumer. (Hypothesis pending `debug-kernel`
+verification; not yet fixed.)
+
+This branch exists only to hand a self-contained reproducer + the localization done so far. Nothing here is meant
+to merge.
 
 ---
 
@@ -118,6 +151,7 @@ remain before the next run. There is one sim device — never run two sim pytest
 ## Impact
 
 The llama32_1b weight upload `from_torch(fp32, dtype=bfloat16, TILE)` (upload rowmajor fp32 → tilize fp32 →
-typecast bf16) deadlocks on craq-sim at the fp32 tilize. It should work on real Quasar HW/emulator (this is a
-sim-only limitation). On the sim, cast to bf16 on host first (`from_torch(bf16, …, TILE)`) to use the passing
-bf16 fast path.
+typecast bf16) is broken on Quasar: it **faults on real RTL/emulator** (`ILLEGAL_FORMAT_CONVERSION`) and **hangs
+on craq-sim**. This is a real Quasar bug in the generic tilize path, NOT sim-only. Workaround until the LLK fix
+lands: avoid the generic fp32/uint8 tilize path — cast to bf16 on host first (`from_torch(bf16, …, TILE)`), which
+takes the `fast_tilize` path that works on both RTL and the sim.
