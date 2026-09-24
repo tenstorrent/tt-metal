@@ -72,6 +72,9 @@ struct ChunkGdnFusedParams {
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
     uint32_t placement = 0;
+    // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_phased.hpp): the op's
+    // wy_inverse resolved by gdn_tinv_resolve at attrs construction (hashed), exactly as the phased prep prim.
+    uint32_t tinv = 0;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -167,6 +170,7 @@ std::vector<Tensor> chunk_gdn_fused(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
     bool v_flat = false,
     uint32_t HV = 0,
     bool qk_norm = false,

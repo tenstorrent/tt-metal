@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chunk_gdn_fused.hpp"
+#include "chunk_gdn_phased.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -66,6 +67,7 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     // (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) * grid.y.
     // Producers have no placement constraint. NP / NV come from ChunkGdnFusedProgramConfig::
     // num_producers / num_receivers, or from the cost model when unset (chunk_gdn_fused below).
+    validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
     TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
     TT_FATAL(attrs.nv >= 1, "chunk_gdn_fused: nv must be >= 1 (got {})", attrs.nv);
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
@@ -373,6 +375,7 @@ std::vector<Tensor> chunk_gdn_fused(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
     bool v_flat,
     uint32_t HV,
     bool qk_norm,
@@ -401,6 +404,10 @@ std::vector<Tensor> chunk_gdn_fused(
         "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
         nv_pin);
     // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
+    // The geometry is chosen with the Horner-calibrated model whatever the WY-inverse method: the SFPU
+    // solve removes producer compute but not the producer's DRAM/NoC time, so its gain shrinks as more
+    // producers load the NoC, and a single scale factor on w_p picked measurably slower geometries.
+    const uint32_t tinv = gdn_tinv_resolve(wy_inverse, chunk_size, q);
     const auto choice =
         choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / tt::constants::TILE_WIDTH, nv_pin, np_pin);
     TT_FATAL(
@@ -444,6 +451,7 @@ std::vector<Tensor> chunk_gdn_fused(
         .unicast = unicast,
         .posted = posted,
         .placement = placement,
+        .tinv = tinv,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,

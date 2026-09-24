@@ -42,6 +42,18 @@ inline constexpr bool kGdnHoistReconfig = false;
 #define GDN_ZONE(name)
 #endif
 
+// GDN_TINV_SFPU (a per-kernel define the prep factories set from the hashed `tinv` attr when it is
+// GdnTinv::SFPU_FP32): replace the Ct == 1 WY inverse (invert_block's Horner quadrants, ~60 LLK calls) with
+// ONE SFPU forward-substitution solve reading negN as fp32 (chunk_gdn_tinv_sfpu.hpp). It changes the
+// arithmetic, so T_inv is PCC-class against the Horner path — but both the phased prep and the fused
+// producer compile this same body for a given method, so fused == phased stays bit-exact per method.
+#if defined(GDN_TINV_SFPU)
+#if !defined(ARCH_BLACKHOLE)
+#error "GDN_TINV_SFPU: the SFPU triangle solve is Blackhole-only"
+#endif
+#include "chunk_gdn_tinv_sfpu.hpp"
+#endif
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
@@ -445,6 +457,33 @@ inline void invert_block(
     CircularBuffer(A).pop_front(1);  // + off -> out
 }
 
+#if defined(GDN_TINV_SFPU)
+// T_inv = (I - negN)^-1 for ONE 32x32 tile by the SFPU forward substitution (RHS = I, so X = T_inv).
+//   negN   : fp32 CB, tile 0 = -strictly_lower(N) (prep's cb.scr3), front-waited — exactly the
+//            pre-negated factor the solve consumes (unit diagonal implicit). Read in place, no staging copy.
+//   cb_eye : identity tile.
+//   out    : cb.Tinv (fp32).
+// Caller: WAIT(out, 1) before popping negN — L is read until T_inv is packed.
+inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
+    CircularBuffer l(negN);
+    cb_reserve_back(out, 1);
+    // The solve loads/stores DEST rows in the SrcB-implied format: keep both source formats on the fp32
+    // identity so DEST is read back as fp32.
+    reconfig_data_format(cb_eye, cb_eye);
+    pack_reconfig_data_format(out);
+    copy_init(cb_eye);
+    tile_regs_acquire();
+    copy_tile(cb_eye, 0, 0);  // RHS = I -> DST[0]
+    gdn_tinv_trisolve_tile_init();
+    gdn_tinv_trisolve_tile(l, 0, /*idst_in=*/0, /*idst_out=*/1);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(1, out, 0);
+    tile_regs_release();
+    cb_push_back(out, 1);
+}
+#endif
+
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
 inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_reserve_back(o, Ct);
@@ -655,10 +694,17 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
     // (cb.supd/cb.stmp).
     if constexpr (Ct == 1) {
+#if defined(GDN_TINV_SFPU)
+        // One SFPU forward-substitution solve on negN in place; the Horner quadrants below are the reference.
+        sfpu_tinv(cb.scr3, cb.eye, cb.Tinv);
+        WAIT(cb.Tinv, cc);
+        POP(cb.scr3, cc);
+#else
         // Single 32x32 block: T_inv is just its inverse.
         invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
         WAIT(cb.Tinv, cc);
         POP(cb.scr3, cc);
+#endif
     } else if constexpr (Ct == 2) {
         // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
         // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.
@@ -855,6 +901,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         POP(cb.dl, 1);
         POP(cur_S, kv);
     }
+    // ... + s_upd -> dst: the next chunk's cur_S, or the final state on the last chunk.
     {
         GDN_ZONE("st_snew");
         ew(cb.stmp, cb.supd, dst, kv, 0, H);

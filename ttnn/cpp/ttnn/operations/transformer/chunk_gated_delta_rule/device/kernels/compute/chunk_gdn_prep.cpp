@@ -9,7 +9,8 @@
 //   v_beta = v*beta ; k_beta = k*beta
 //   decay = cumsum(g) = tril @ g ; decay_exp = exp(decay)
 //   L_mask = tril( exp(decay_i - decay_j) )
-//   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1  (Horner)
+//   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1  (Horner quadrants, or the SFPU
+//                                             forward substitution under GDN_TINV_SFPU)
 //   u = T_inv @ v_beta ; w = T_inv @ (k_beta*decay_exp)
 //   intra = (q@k^T) * L_mask
 //   q_decay = q*decay_exp ; k_dec_t = transpose(k * exp(decay_last - decay))

@@ -131,6 +131,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_nv = self.linear_num_value_heads
         self.gdn_dv = self.linear_value_head_dim
         self.gdn_program_config = None
+        # WY-inverse arithmetic of that op (ttnn.ChunkGdnWyInverse.HORNER / SFPU). None: the op's AUTO — the
+        # SFPU solve on Blackhole at chunk 32, Horner elsewhere.
+        self.gdn_wy_inverse = None
         self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
         self.gdn_key_dim = self.linear_q_dim  # q and k equal
         self.gdn_value_dim = self.linear_v_dim

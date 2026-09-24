@@ -50,4 +50,23 @@ struct ChunkGdnFusedProgramConfig {
 using ChunkGdnProgramConfig =
     std::variant<ChunkGdnMonoProgramConfig, ChunkGdnPhasedProgramConfig, ChunkGdnFusedProgramConfig>;
 
+// WY-inverse method of the prep math: how T_inv = (I + N)^-1 of each chunk's 32x32 strictly-lower N is
+// computed. It changes the arithmetic (the two methods agree to ~1e-3, PCC-class), which is why it is a
+// kwarg of its own and not a program-config field: a program config never changes bits. It is orthogonal
+// to the path — the phased prep and the fused producer compile the same inverse for a given method, so
+// fused and phased stay bit-exact with each other whichever method is chosen.
+enum class ChunkGdnWyInverse : uint32_t {
+    // The SFPU solve wherever it is supported (Blackhole, chunk_size == 32), Horner everywhere else.
+    AUTO = 0,
+    // invert_block: quadrant split, two 15-term Horner inverses and an exact off-diagonal on the matrix
+    // engine (~60 LLK calls per chunk). Every architecture and chunk size; the reference the solve is
+    // validated against.
+    HORNER = 1,
+    // One SFPU forward-substitution solve reading the pre-negated factor as fp32 in place (about a quarter
+    // less producer time per chunk, T_inv error no larger than Horner's in any measured regime).
+    // Blackhole-only and chunk_size == 32: an explicit request the device or chunk size cannot honor
+    // FATALs rather than falling back.
+    SFPU = 2,
+};
+
 }  // namespace ttnn::transformer
