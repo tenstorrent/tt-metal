@@ -10,7 +10,7 @@
 // Blackhole-only: the SFPU rope LLK lives only in the Blackhole llk_lib.
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
 #include "sfpu/experimental/ckernel_sfpu_rope.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #endif
 
 namespace ckernel {
@@ -61,7 +61,7 @@ ALWI void rope_sfpu_inplace() {
 
 // Generic unary SFPU init (config reg + ADDR_MOD_7 + counters). Same entry
 // sinkhorn uses; RoPE has no extra LUT/constants.
-ALWI void rope_sfpu_fused_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>())); }
+ALWI void rope_sfpu_fused_init() { MATH((sfpu::UnaryFn::init())); }
 
 /**
  * Rotate in place, x tiles laid out at an arbitrary DEST stride.

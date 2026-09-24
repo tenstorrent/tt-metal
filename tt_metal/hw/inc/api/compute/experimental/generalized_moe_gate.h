@@ -4,12 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/transpose.h"
 #ifdef TRISC_MATH
-// SFPU topk: call ckernel::sfpu functors directly via SFPU_UNARY_CALL (no per-op llk_api wrapper layer).
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+// SFPU topk: op classes over the ckernel::sfpu functors (no per-op llk_api wrapper layer).
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
@@ -23,7 +23,7 @@ template <
     bool is_32bit = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool transpose_of_faces = true>
-ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
+ALWI void generalized_moe_gate_init(std::uint32_t icb0, std::uint32_t icb1) {
     if constexpr (enable_sigmoid) {
         // Init sigmoid (SFPU)
         sigmoid_tile_init<false>();
@@ -40,7 +40,7 @@ ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         // Init transpose dest addrmods (does not conflict with copy add)
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
-        MATH((SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX, is_fp32_dest_acc_en))));
+        MATH((sfpu::GeneralizedMoeGateSumTop2<APPROX, is_fp32_dest_acc_en>::init()));
     }
 }
 
@@ -49,30 +49,26 @@ ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 // (just unpacked from the L1 run stash via copy_tile) into its home region (bias/indices/scores)
 // at rows {dst_lo,dst_hi}. Row-selective, so it drops a block's run at the {4,6} merge slot without
 // disturbing the run already placed at {0,2}.
-template <uint32_t field, uint32_t dst_lo, uint32_t dst_hi, uint32_t src_lo = 0, uint32_t src_hi = 2>
+template <
+    std::uint32_t field,
+    std::uint32_t dst_lo,
+    std::uint32_t dst_hi,
+    std::uint32_t src_lo = 0,
+    std::uint32_t src_hi = 2>
 ALWI void generalized_moe_gate_place_field_from_interm() {
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_place_field_from_interm,
-        (APPROX, field, src_lo, src_hi, dst_lo, dst_hi),
-        0,
-        VectorMode::RC_custom)));
+    MATH((sfpu::GeneralizedMoeGatePlaceFieldFromInterm<APPROX, field, src_lo, src_hi, dst_lo, dst_hi>::run(0)));
 }
 
 // Finalize the combine: the two block runs sit at scores/idx/bias {0,2} and {4,6}; bitonically sort
 // the 16 candidates -> global top-8 + normalize, then transpose-dest step2 to the output layout.
-template <bool is_32bit = false, uint32_t topk = 8, bool output_softmax = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void generalized_moe_gate_combine_finalize(uint32_t eps, uint32_t scale) {
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        generalized_moe_gate_finalize_ungrouped,
-        (APPROX, is_fp32_dest_acc_en, topk, output_softmax),
-        0,
-        VectorMode::RC_custom,
-        eps,
-        scale)));
+template <
+    bool is_32bit = false,
+    std::uint32_t topk = 8,
+    bool output_softmax = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void generalized_moe_gate_combine_finalize(std::uint32_t eps, std::uint32_t scale) {
+    MATH((sfpu::GeneralizedMoeGateFinalizeUngrouped<APPROX, is_fp32_dest_acc_en, topk, output_softmax>::run(
+        0, eps, scale)));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<is_fp32_dest_acc_en, is_32bit>()));
 }
@@ -83,7 +79,7 @@ ALWI void generalized_moe_gate_combine_finalize(uint32_t eps, uint32_t scale) {
 template <bool is_32bit = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generalized_moe_gate_combine_init() {
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
-    MATH((SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX, is_fp32_dest_acc_en))));
+    MATH((sfpu::GeneralizedMoeGateFinalizeUngrouped<APPROX, is_fp32_dest_acc_en>::init()));
 }
 
 // Transpose-dest step2 ONLY (no finalize/normalize): transpose the run from the SFPU "math" layout to the
@@ -98,15 +94,9 @@ ALWI void generalized_moe_gate_step2_only() {
 }
 
 // Relocate a run between column-pairs within the scores/idx/bias regions (proven copy_topk_run).
-template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
+template <std::uint32_t from_lo, std::uint32_t from_hi, std::uint32_t to_lo, std::uint32_t to_hi>
 ALWI void generalized_moe_gate_relocate_run() {
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_copy_topk_run,
-        (APPROX, from_lo, from_hi, to_lo, to_hi),
-        0,
-        VectorMode::RC_custom)));
+    MATH((sfpu::GeneralizedMoeGateCopyTopkRun<APPROX, from_lo, from_hi, to_lo, to_hi>::run(0)));
 }
 
 // ungrouped_top8: REQUIRED path select, NO default on purpose. true = ungrouped global top-k (every
@@ -126,16 +116,20 @@ template <
     bool enable_sigmoid = false,
     bool is_32bit = false,
     bool produce_run = false,
-    uint32_t run_store_lo = 0,
-    uint32_t run_store_hi = 2,
-    uint32_t idx_offset = 0,
-    uint32_t topk = 8,
+    std::uint32_t run_store_lo = 0,
+    std::uint32_t run_store_hi = 2,
+    std::uint32_t idx_offset = 0,
+    std::uint32_t topk = 8,
     bool output_softmax = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool do_extra_scale = false,
-    uint32_t output_tiles = 3>
+    std::uint32_t output_tiles = 3>
 ALWI void generalized_moe_gate(
-    uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0x3f800000) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t eps,
+    std::uint32_t scale,
+    std::uint32_t extra_scale = 0x3f800000) {
     static_assert(!do_extra_scale || !ungrouped_top8, "extra scaling is supported by the grouped gate");
     static_assert(output_tiles == 3 || (!ungrouped_top8 && output_tiles == 2), "only grouped output may omit bias");
     if constexpr (enable_sigmoid) {
@@ -152,28 +146,24 @@ ALWI void generalized_moe_gate(
               MATH_FIDELITY>(icb1, icb1, false)));
         // Add binary reuse (FPU)
         UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
-            icb1, icb1, 0)));
+        MATH((
+            llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                icb1, icb1, 0)));
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
-        MATH((SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX, is_fp32_dest_acc_en))));
+        MATH((sfpu::GeneralizedMoeGateSumTop2<APPROX, is_fp32_dest_acc_en>::init()));
     } else {
         // Copy add (FPU)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
-            icb0, icb1, 0)));
+        MATH((
+            llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                icb0, icb1, 0)));
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
     // Sum top2 (SFPU)
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        generalized_moe_gate_sum_top2,
-        (APPROX, is_fp32_dest_acc_en),
-        0,
-        VectorMode::RC_custom)));
+    MATH((sfpu::GeneralizedMoeGateSumTop2<APPROX, is_fp32_dest_acc_en>::run(0)));
     // Transpose dest step 0 (FPU) — always runs; puts each group g at DEST row g.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<is_fp32_dest_acc_en, is_32bit>()));
@@ -191,13 +181,7 @@ ALWI void generalized_moe_gate(
         // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<is_fp32_dest_acc_en, is_32bit>()));
-        MATH((SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            generalized_moe_gate_merge4_top8,
-            (APPROX, is_fp32_dest_acc_en, 0, 0, 2),
-            0,
-            VectorMode::RC_custom)));
+        MATH((sfpu::GeneralizedMoeGateMerge4Top8<APPROX, is_fp32_dest_acc_en, 0, 0, 2>::run(0)));
         // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
         MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
         MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
@@ -206,71 +190,34 @@ ALWI void generalized_moe_gate(
         // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<is_fp32_dest_acc_en, is_32bit>()));
-        MATH((SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            generalized_moe_gate_merge4_top8,
-            (APPROX, is_fp32_dest_acc_en, 0, 4, 6),
-            0,
-            VectorMode::RC_custom)));
+        MATH((sfpu::GeneralizedMoeGateMerge4Top8<APPROX, is_fp32_dest_acc_en, 0, 4, 6>::run(0)));
         // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
         MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit, 28>()));
         MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
         if constexpr (produce_run) {
             // Multi-block: emit this block's top-8 as a re-mergeable RUN at {run_store_lo, run_store_hi}
             // (idx += idx_offset for global ids). No normalize/step2 here — the combine does that.
-            MATH((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                is_fp32_dest_acc_en,
-                generalized_moe_gate_merge16_to_run,
-                (APPROX, is_fp32_dest_acc_en, run_store_lo, run_store_hi, idx_offset),
-                0,
-                VectorMode::RC_custom)));
+            MATH((sfpu::GeneralizedMoeGateMerge16ToRun<
+                  APPROX,
+                  is_fp32_dest_acc_en,
+                  run_store_lo,
+                  run_store_hi,
+                  idx_offset>::run(0)));
         } else {
             // Single ≤256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, then keep top-`topk`
             // (zero ranks >= topk before normalize) + normalize over those (softmax over the kept if output_softmax).
-            MATH((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                is_fp32_dest_acc_en,
-                generalized_moe_gate_finalize_ungrouped,
-                (APPROX, is_fp32_dest_acc_en, topk, output_softmax),
-                0,
-                VectorMode::RC_custom,
-                eps,
-                scale)));
+            MATH((sfpu::GeneralizedMoeGateFinalizeUngrouped<APPROX, is_fp32_dest_acc_en, topk, output_softmax>::run(
+                0, eps, scale)));
         }
     } else {
         // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
-        MATH((SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            generalized_moe_gate_sort_top4_groups,
-            (APPROX, is_fp32_dest_acc_en),
-            0,
-            VectorMode::RC_custom)));
+        MATH((sfpu::GeneralizedMoeGateSortTop4Groups<APPROX, is_fp32_dest_acc_en>::run(0)));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<is_fp32_dest_acc_en, is_32bit>()));
         if constexpr (do_extra_scale) {
-            MATH((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                is_fp32_dest_acc_en,
-                generalized_moe_gate_top8_scaled,
-                (APPROX, is_fp32_dest_acc_en),
-                0,
-                VectorMode::RC_custom,
-                eps,
-                scale,
-                extra_scale)));
+            MATH((sfpu::GeneralizedMoeGateTop8Scaled<APPROX, is_fp32_dest_acc_en>::run(0, eps, scale, extra_scale)));
         } else {
-            MATH((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                is_fp32_dest_acc_en,
-                generalized_moe_gate_top8,
-                (APPROX, is_fp32_dest_acc_en),
-                0,
-                VectorMode::RC_custom,
-                eps,
-                scale)));
+            MATH((sfpu::GeneralizedMoeGateTop8<APPROX, is_fp32_dest_acc_en>::run(0, eps, scale)));
         }
     }
     // Transpose dest step 2 (FPU) — final output layout. Skipped in produce_run mode (the run stays
