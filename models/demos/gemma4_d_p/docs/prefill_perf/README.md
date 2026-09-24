@@ -5,6 +5,7 @@
 > |---|---|
 > | **[EXPERIMENTS.md](EXPERIMENTS.md)** | every experiment incl. negatives, keyed by env flag |
 > | **[REPRODUCE.md](REPRODUCE.md)** | re-measure after a rebase: 6 runs + one drift check |
+> | **[PCC/](PCC/README.md)** | KV-cache accuracy (256k PCC) for #57454: summary, runs, per-layer data |
 > | [scripts/](scripts/) | `run_e2e.sh`, `capture.sh`, `fit_chunks.py`, `diff_ops.py`, `check_baseline.py`, `BASELINE.json` |
 > | [L1Activations/](L1Activations/) | 23 per-op tables, unpatched and patched |
 > | [CHUNK_SIZE_ANATOMY.md](CHUNK_SIZE_ANATOMY.md) · [PER_OP_TABLES.md](PER_OP_TABLES.md) | earlier detail |
