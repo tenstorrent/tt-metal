@@ -2008,13 +2008,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                         .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = 4096}}}});
         }
         // Every recipe and ring CB spans the whole worker grid; reject before program creation.
-        uint64_t cb_bytes = 0;
-        for (const auto& cb : desc.cbs) {
-            cb_bytes += cb.total_size;
-        }
+        auto cb_total = [&] {
+            uint64_t bytes = 0;
+            for (const auto& cb : desc.cbs) {
+                bytes += cb.total_size;
+            }
+            return bytes;
+        };
+        uint64_t cb_bytes = cb_total();
         auto* device = input_tensor_q.device();
         const uint64_t available =
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        if (cb_bytes > available) {
+            // The recipe double-buffers Q. The ring reader reserves one Q chunk at a time and
+            // compute pops it when done, so a single slot is correct; it only gives up Q prefetch.
+            for (auto& cb : desc.cbs) {
+                if (!cb.format_descriptors.empty() && cb.format_descriptors.front().buffer_index == cb_q_in &&
+                    cb.total_size == 2 * Sq_chunk_t * DHt * q_tile_size) {
+                    cb.total_size /= 2;
+                    log_debug(tt::LogOp, "Named ring recipe: single-slot Q to fit L1");
+                }
+            }
+            cb_bytes = cb_total();
+        }
         TT_FATAL(
             cb_bytes <= available,
             "Named ring SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller "

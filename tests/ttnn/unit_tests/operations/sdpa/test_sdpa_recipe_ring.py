@@ -30,6 +30,9 @@ def recipe_ring_device():
         options = dict(mesh_shape=ttnn.MeshShape(1, 2), trace_region_size=16777216)
         if os.getenv("TT_METAL_LLK_ASSERTS"):
             options["worker_l1_size"] = 1444992
+        if os.getenv("SDPA_RECIPE_RING_WORKER_L1"):
+            # e.g. 1344544 (MiniMax H3's budget) forces the single-slot Q fallback for C/D.
+            options["worker_l1_size"] = int(os.environ["SDPA_RECIPE_RING_WORKER_L1"])
         mesh = ttnn.open_mesh_device(**options)
         mesh.enable_program_cache()
         hardware = mesh.compute_with_storage_grid_size()
