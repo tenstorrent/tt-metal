@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for indexer_score (DMA bottleneck). Walks this core's (group-phase x k-band) rectangle: per
-// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [diag, full]
-// -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
+// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [per-residue
+// causal, full] -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
 //
 // Banded-product multicast: a grid ROW shares q/w (q-mcast), a COLUMN shares the k-band (k-mcast). role
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
@@ -204,24 +204,45 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     cb.push_back(ntiles);
 }
 
+/** -inf over columns [first_masked, 16) of ONE face row, in 32-bit stores (low half = even column).
+ *  Word-granular on purpose: this fill sits at the head of run(), before any q/k read, so its cost is
+ *  serial startup on every core -- an element-at-a-time loop here cost ~4 us/dispatch, which the short
+ *  perf-band shapes (minimax_m3, glm5_tp1) cannot amortize. */
+inline void mask_face_row_suffix(
+    volatile tt_l1_ptr uint32_t* ptr, uint32_t face_base_words, uint32_t face_row, uint32_t first_masked) {
+    constexpr uint32_t words_per_face_row = tt::constants::FACE_WIDTH / 2;
+    if (first_masked >= tt::constants::FACE_WIDTH) {
+        return;
+    }
+    const uint32_t row_base = face_base_words + face_row * words_per_face_row;
+    uint32_t word = first_masked / 2;
+    if (first_masked % 2 != 0) {
+        ptr[row_base + word] = 0xFF800000u;  // low half = column first_masked-1, still valid (zero)
+        ++word;
+    }
+    for (; word < words_per_face_row; ++word) {
+        ptr[row_base + word] = 0xFF80FF80u;
+    }
+}
+
 /** Build one partial causal mask for each compressed-key residue represented by a query tile. */
 inline void fill_compressed_causal_mask_tile(Noc noc, uint32_t tile_id) {
     fill_tile_zeros<bf16_tile_bytes>(noc, cb_mask, tile_id);
     CircularBuffer cb(cb_mask);
-    volatile tt_l1_ptr uint16_t* ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * bf16_tile_bytes);
-    constexpr uint16_t neginf = 0xFF80;
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * bf16_tile_bytes);
     constexpr uint32_t face_h = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_w = tt::constants::FACE_WIDTH;
-    constexpr uint32_t face_hw = face_h * face_w;
+    constexpr uint32_t face_words = (face_h * face_w) / 2;
     const uint32_t residue = tile_id * (tt::constants::TILE_WIDTH / key_compression_ratio);
     for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
         const uint32_t first_masked = residue + (row + 1) / key_compression_ratio;
-        for (uint32_t col = first_masked; col < tt::constants::TILE_WIDTH; ++col) {
-            const uint32_t face = (row / face_h) * 2 + (col / face_w);
-            const uint32_t face_offset = (row % face_h) * face_w + (col % face_w);
-            ptr[face * face_hw + face_offset] = neginf;
-        }
+        // A tile row spans the left face (columns 0-15) and its right neighbour (columns 16-31).
+        const uint32_t left_face = (row / face_h) * 2;
+        const uint32_t face_row = row % face_h;
+        mask_face_row_suffix(ptr, left_face * face_words, face_row, first_masked);
+        mask_face_row_suffix(
+            ptr, (left_face + 1) * face_words, face_row, first_masked > face_w ? first_masked - face_w : 0);
     }
 }
 
