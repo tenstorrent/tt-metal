@@ -331,7 +331,9 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             const D2H2H2DSocket::Timing& t = sock_->timing();
             local.d2h_issue = summarize_latency_cycles(t.d2h_issue_cycles, cycles_per_us_);
             local.d2h_stall = summarize_latency_cycles(t.d2h_stall_cycles, cycles_per_us_);
-            local.h2h_put_credit = summarize_latency_ns(t.h2h_put_to_credit_ns, cycles_per_us_);
+            // 0.0: this leg is stamped on the host clock with no device in the path, so
+            // back-filling cycle columns from the Tensix rate would invent a quantity.
+            local.h2h_put_credit = summarize_latency_ns(t.h2h_put_to_credit_ns, 0.0);
             local.h2d_publish_drained = summarize_latency_ns(t.h2d_publish_to_drained_ns, cycles_per_us_);
             local.d2h_samples = t.d2h_issue_cycles.size();
             local.h2h_samples = t.h2h_put_to_credit_ns.size();

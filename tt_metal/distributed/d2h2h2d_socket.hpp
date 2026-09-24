@@ -74,7 +74,9 @@ public:
         // Sending chip's own cycles, carried in the frame trailer. As test_d2h_bw.cpp.
         std::vector<uint64_t> d2h_issue_cycles;
         std::vector<uint64_t> d2h_stall_cycles;
-        // This host's clock, submit -> RDMA complete. As test_h2h_bw.cpp's put->credit.
+        // This host's clock, put -> the peer's credit for that frame. Stamped inside
+        // H2HSocket, which is the only place that sees both ends. Comparable to the
+        // unprefixed latency columns of benchmark_h2h_leg.cpp.
         std::vector<uint64_t> h2h_put_to_credit_ns;
         // This host's clock, publish -> device drained. As test_h2d_bw.cpp.
         std::vector<uint64_t> h2d_publish_to_drained_ns;
