@@ -98,15 +98,32 @@ def test_transformer(
     )
 
     model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
-    torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(model_name, subfolder="transformer")
+    config = diffusers.Flux2Transformer2DModel.load_config(model_name, subfolder="transformer")
+
+    assert 0 <= skip_layers < config["num_layers"]
+    assert 0 <= skip_single_layers < config["num_single_layers"]
+
+    num_layers = config["num_layers"] - skip_layers
+    num_single_layers = config["num_single_layers"] - skip_single_layers
+
+    # Load the reference in the checkpoint's own dtype. Without torch_dtype, diffusers upcasts the
+    # 32B transformer to fp32, which is 120 GiB of host RAM and the largest allocation in this CI
+    # leg; on a QB2 host that load is what gets OOM-killed (#57727). Overriding the layer counts
+    # makes diffusers build only the blocks under test (the leading ones, as before), so the pruned
+    # variants materialize ~1 GB instead of the full model and the unused checkpoint keys are skipped.
+    torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
+        model_name,
+        subfolder="transformer",
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        num_layers=num_layers,
+        num_single_layers=num_single_layers,
+    )
     assert isinstance(torch_model, diffusers.Flux2Transformer2DModel)
     torch_model.eval()
 
-    assert 0 <= skip_layers < len(torch_model.transformer_blocks)
-    assert 0 <= skip_single_layers < len(torch_model.single_transformer_blocks)
-
-    del torch_model.transformer_blocks[len(torch_model.transformer_blocks) - skip_layers :]
-    del torch_model.single_transformer_blocks[len(torch_model.single_transformer_blocks) - skip_single_layers :]
+    assert len(torch_model.transformer_blocks) == num_layers
+    assert len(torch_model.single_transformer_blocks) == num_single_layers
 
     head_dim = torch_model.config.attention_head_dim
     num_heads = torch_model.config.num_attention_heads
@@ -128,9 +145,6 @@ def test_transformer(
         padding_config = PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
     else:
         padding_config = None
-
-    num_layers = torch_model.config.num_layers - skip_layers
-    num_single_layers = torch_model.config.num_single_layers - skip_single_layers
 
     # HACK: The cache subfolder name modification is to ensure the cache contains all tensors for both the
     # all_blocks and single_blocks test variants. Without this, we would get invalid caches for one or the other.
@@ -206,15 +220,17 @@ def test_transformer(
     )
 
     logger.info("running Torch model...")
+    # The reference runs in bf16 (see the load above); it casts timestep and guidance to the
+    # activation dtype itself, so only the two input streams need converting.
     with torch.no_grad():
         torch_output = torch_model.forward(
-            hidden_states=spatial,
-            encoder_hidden_states=prompt,
+            hidden_states=spatial.to(torch.bfloat16),
+            encoder_hidden_states=prompt.to(torch.bfloat16),
             timestep=timestep / 1000,
             guidance=guidance,
             img_ids=image_ids,
             txt_ids=text_ids,
-        ).sample
+        ).sample.float()
 
     logger.info("running TT model...")
 
