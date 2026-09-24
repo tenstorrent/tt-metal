@@ -101,15 +101,67 @@ python models/tt_dit/tests/models/sd35/run_sd35_submesh.py
 > Note `TT_DIT_CACHE_DIR` must be **unset** — unlike Wan 2.2, SD 3.5 uses its
 > own default cache location.
 
-### Reference numbers (1024x1024, 20 steps, one image on a 4-chip mesh)
+### Reference numbers (1024x1024, 20 steps)
 
-Measured 2026-09-24, layout `1x4tp`, ring, traced, CFG on. Iteration 1 is the
-steady-state figure; iteration 0 carries warm-up.
+Measured 2026-09-24 on a 32-chip BH Galaxy, firmware 19.11.0.0, traced, CFG on,
+warm caches. Iteration 1 is the steady-state figure; iteration 0 carries warm-up.
+
+**One process** — one image on a 4-chip submesh of the full mesh, layout `1x4tp`,
+ring. This is what the command above runs.
 
 | TDP   | encoder (s) | vae (s) | denoising (s) | step (s) | total (s) |
 |-------|-------------|---------|---------------|----------|-----------|
 | 190 W | 0.04        | 0.20    | 3.89          | 0.194    | **4.13**  |
 | 130 W | 0.04        | 0.18    | 4.09          | 0.204    | **4.32**  |
+
+**Eight processes in parallel** — one per 4-chip column, each pinned with
+`TT_VISIBLE_DEVICES`, layout `4x1tp`, ring. Mean over the 8 workers, all 32 chips
+busy. See "Eight parallel processes" below.
+
+| TDP   | denoising (s) | step (s)      | total, mean (s) | total, range (s) |
+|-------|---------------|---------------|-----------------|------------------|
+| 190 W | 3.84 - 3.90   | 0.192 - 0.195 | **4.116**       | 4.08 - 4.15      |
+| 130 W | 4.03 - 4.13   | 0.201 - 0.207 | **4.339**       | 4.31 - 4.37      |
+
+Running eight in parallel is effectively free: -0.014 s at 190 W and +0.019 s at
+130 W against a single process, both inside the 0.07 s spread between workers.
+Eight columns do not contend, so throughput is ~8x for the same per-image
+latency.
+
+For reference, the tt-inference-server container in its 8-column `DEVICE_IDS`
+mode measures 4.53 s (190 W) and 4.68 s (130 W) per image. The ~0.4 s gap over
+these numbers is request-path overhead -- queueing, scheduler dispatch, base64
+encoding, HTTP -- not device contention.
+
+### Eight parallel processes
+
+One process per 4-chip column, pinned with `TT_VISIBLE_DEVICES`. The columns are
+non-contiguous because a column is a slice of the (4, 8) mesh:
+
+```bash
+0,4,12,8      1,5,13,9      2,6,14,10     3,7,15,11
+27,31,23,19   26,30,22,18   25,29,21,17   24,28,20,16
+```
+
+Per process, on top of the single-process environment above:
+
+```bash
+export TT_VISIBLE_DEVICES="0,4,12,8"           # one column per process
+export TT_METAL_CACHE=/home/ttuser/ttm_cache_8proc/w0   # must be per-process
+export SD35_TAG=p0                             # else the PNGs collide
+export SD35_LAYOUT=4x1tp SD35_TOPOLOGY=ring
+```
+
+Two caveats:
+
+- `TT_METAL_CACHE` **must** differ per process. Eight processes JIT-compiling
+  into one cache directory race each other.
+- `run_sd35_submesh.py` asserts `full.shape == SystemMeshDescriptor().shape()`.
+  Under `TT_VISIBLE_DEVICES` the descriptor reports `(2, 2)` for four visible
+  chips while the device opens as `(4, 1)`, so that assert has to be relaxed to
+  a warning for this mode. The bare `(4, 1)` itself opens fine on ring fabric --
+  the "native 4x1 hangs on Galaxy" note above applies to slicing a column out of
+  the full 32-chip mesh, not to four chips opened alone.
 
 ### Prompt
 
