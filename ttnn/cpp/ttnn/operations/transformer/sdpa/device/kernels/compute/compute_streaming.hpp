@@ -1614,28 +1614,34 @@ static void sdpa_inner_loop_step(
             // didn't sync them).
 
             if constexpr (!kt_inplace_v) {
-                // Split-drain (common, materialized-V path): interleave each column-subblock's
-                // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                // Materialized V can drain packed scores in DST-sized column groups,
+                // independently of the QK matmul's divisor-based subblock width.
+                // A smaller final group keeps the physical K/V strides unchanged.
+                // This avoids repeating V-matmul setup and L1 accumulation once per
+                // tile when the configured K width has no larger fitting divisor.
+                const uint32_t drain_width = packed_runs ? dst_size / qkt_subblock_h : actual_sbw;
+                for (uint32_t col_start = 0; col_start < active_Sk; col_start += drain_width) {
+                    const uint32_t remaining = active_Sk - col_start;
+                    const uint32_t drain_inner = remaining < drain_width ? remaining : drain_width;
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
+                        col_start,
                         qkt_subblock_h,
-                        actual_sbw);
+                        drain_inner);
                     if constexpr (q_num_subblocks == 1) {
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     }
-                    if (kt_sub == 0) {
+                    if (col_start == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                     }
-                    if (kt_sub > 0) {
+                    if (col_start > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
 
@@ -1650,18 +1656,18 @@ static void sdpa_inner_loop_step(
                         mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
+                            const uint32_t qktv_in1_index = col_start * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
-                                qktv_in0_index_offset + kt_sub * matmul_inner,
+                                qktv_in0_index_offset + col_start,
                                 qktv_in1_index,
                                 0,
                                 v_subblock * qktv_subblock_w,
                                 qktv_subblock_w,
                                 qktv_h,
-                                matmul_inner,
+                                drain_inner,
                                 KT_stride,
                                 /*skip_pack_configure=*/true);
                             v_index_offset += qktv_subblock_w;
@@ -1669,7 +1675,7 @@ static void sdpa_inner_loop_step(
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
 
-                    if (kt_sub > 0) {
+                    if (col_start > 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
                 }
