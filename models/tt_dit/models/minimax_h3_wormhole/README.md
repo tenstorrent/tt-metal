@@ -622,6 +622,35 @@ The fused MM/RS study (the 2026-09-17 grid sweep was not like-for-like; re-done 
 [ff2.md](ff2.md); the SDPA chunk-size
 sweeps and the L1 envelope are in [sdpa.md](sdpa.md).
 
+### adaLN table gathers — a DRAM-bank hotspot, not bandwidth (2026-09-24)
+
+Every block gathers its six modulation tensors with `ttnn.embedding` (`transformer_block_minimax_h3.py:265`):
+13664 rows per device from a table of `num_timesteps x 3` rows, six times, 221 MB of output. The all-on profile
+(`2026_09_24_18_33_49`) put that at **10.45 ms per block, 7% of DRAM bandwidth**, while a plain read+write of the same
+bytes (`ttnn.add` on the output shape) takes 0.36 ms. The op is not slow in general: its tilized reader
+(`embeddings_tilize.cpp`) issues one row read per packed row, and an interleaved table keeps each 2.7 KB row in one
+bank, so with three distinct rows all 72 cores queue on the same bank. Single-chip microbenchmark of the shape, per
+gather: 1 copy 1.52 ms; 4 copies 0.56; 8 copies 0.41; **12+ copies 0.35 ms**, the plain read+write figure.
+
+Landed in `2b9b8f8dce9`: `_modulation_tables` interleaves `ADALN_TABLE_COPIES = 16` copies of every row once per block on the
+tiny joint table (`transformer_block_minimax_h3.py:37`, `:233`; 0.02 ms) and keeps the tables ROW_MAJOR; `forward`
+maps each index to `row * 16 + position % 16` (`spread_adaln_indices`, `:251`), with the `position % 16` vector built once
+per padded length outside the traced block loop (`transformer_minimax_h3.py:408`). The index contract at the block
+boundary (`t * MODALITY_NUM + modality`) is unchanged.
+
+Measured on this host, 15 s / 16:9, `fsdp1`, both switches on (report `2026_09_24_19_10_41`, figures in
+`transformer_roofline_out/all_on_adaln_spread/`):
+
+| | before | after |
+|---|---|---|
+| Embeddings (adaLN tables), 6 calls | 10.45 ms (7% DRAM) | **2.39 ms** (32% DRAM) |
+| block, device only | 238.5 ms | **230.8 ms** (-3.2%) |
+| denoise step, 49 steps | 12.26 s (10:23) | **11.93 s** (9:44) |
+| block PCC vs torch (`test_minimax_h3_transformer_block`) | 99.9995% | 99.9995% |
+
+The remaining 0.40 ms per gather is the reader's 32-row read + barrier structure, not the bank; the two final-norm
+gathers in `transformer_minimax_h3.py` run once per forward and were left alone.
+
 ### Perf experiments — index
 
 One row per experiment, in the order they were numbered (12 was never allocated); the detail lives in the per-op docs.
@@ -647,6 +676,7 @@ One row per experiment, in the order they were numbered (12 was never allocated)
 | 20 | fp32 dest off for ff1 / to_qkv, end to end (2026-09-24) | **measured** | Two SwiGLU epilogue fixes first (live-pairs-only, truncating multiply): ff1 fp32 off (8,7,16) 2x4 on the mesh bench 15.63 -> **14.30 ms** (-8.5%). Exploration switch `MINIMAX_H3_MM_FP32_DEST` in the model. Block, as device-busy wall time per layer (`tools/block_device_busy.py`, the union of op intervals; per-op sums double count the FSDP gathers that overlap to_out): **ff1 alone -0.91 ms**, to_qkv alone -0.35, both -1.22, additive. to_out's longer *kernel duration* with to_qkv off is the concurrent weight gather being re-apportioned, not a cost. Pipeline 10-step: time unresolvable (0.35% of a forward), output a different sample of the same prompt (mean abs diff 33 of 255 with both ops off vs 1.2 run-to-run). **50-step, same session, back to back: ff1-only CLIP 35.91 (min 34.96) vs production 35.75 (min 34.83); per forward 12087 vs 12143 ms (-56 ms, -0.46%)**; output shift 16 of 255 (the TP8 range). Verdict in [ff1.md](ff1.md) §3.4: -0.84 ms per layer at production-level CLIP, adoption is the user's call; switch defaults to fp32 on |
 | 19 | AGMM K loop: what paces the 2x2 fp32 subblock (2026-09-23) | **answered** | Source accounting of the 47 cycles per tile-MAC (per-tile `SETC16` + MOP + bank switch on MATH; 4 unpacks per 4 tile-MACs with a context round-trip on UNPACK) and a three-signature decision table in [ff1.md](ff1.md) §3.1; the K1-K5 ladder in ff1.md §5. Capture attempt on the mesh bench found two traps: the tracy parent deadlocks on the chip lock without `TT_METAL_DEVICE_ARCH=wormhole_b0`, and the ring op hangs in its first call with `-DPROFILE_PERF_COUNTERS` (board reset needed). Answered the same day by an engine-isolation study on GWH01 (ff1.md §3.1, exp 16): the bare unpack stream is 185 of the 208 cycles per K-tile step and HiFi4 lands at 256 + 24, so the loop is **unpacker-paced** (4 x 2 KB per 4 tile-MACs at ~44 B/cycle); math-thread issue work (K2-K4) is closed, the levers are bytes per tile-MAC: fp32 dest off with 2x4 (measured) and bfp8 in1 / in0 (projected -25% / -35%, precision decisions). **Verified on this galaxy the same evening** (ff1.md exp 17): all eleven variants within 1-2%, and the hardware counters show FPU 60%, math thread never stalled, unpacker requests half-blocked by overwrite protection and never by the L1 port: the floor is the src-register handshake (4 per step) plus the exposed srcB refill of the 2x2 scheme, so one tt-llk lever remained before the precision levers: hide the refill by alternating the MVMUL order between K tiles. **Built and landed the same evening** as `matmul_block_kloop` (ff1.md exp 18): -3.5% of the K loop at HiFi2 (209.7 -> 202.3 cycles per step), bit-exact; mesh ff1 16.04 -> 15.69 ms, to_qkv 11.25 -> 11.03, ff2 fused 8.98 -> 8.68. Half the projection: the isolation ladder re-run before/after puts the exposed refill at 5 cycles (nopack 197.9 -> 192.8, i.e. on the 193 mock floor; both mock rows unchanged) and the remaining 202 vs 193 at the packer's interaction with the loop (the per-subblock DST handoff; L1-port refusals stay 0%), which no MVMUL order touches; the lever is exhausted at 2x2, to be carried into 2x4 / 4x2 with fp32 dest off. Plan, trace and result in [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md) |
 | 18 | to_out AGMM attribution (2026-09-21) | **measured** | The op the model runs (fused addcmul, approx on) is **5.29-5.31 ms** on the device, not the 4.33 ms the blocking sweep recorded with the `plain` use case: the addcmul epilogue is 0.7 ms (two passes over the fp32 intermediate) and the K loop **waits on the in0/in1 relay 5.7 us of every 23 us iteration (~1.1 ms)** -- to_out needs ~12.8 GB/s per core of operands at its MAC pace and the store-and-forward relay delivers ~10. Relay prefetch: no gain (5.52 vs 5.43); fp32 dest off: -3.5% only, larger subblocks / M_block 16 / K_block 14 nothing on the mesh (they help single-device, where the loop does not wait). Levers left: a one-pass epilogue (~-0.35 ms) and a higher-bandwidth in0 path (multicast); [to_out.md](to_out.md) |
+| 21 | adaLN table gathers: interleave 16 row copies, spread indices by position (2026-09-24) | **landed** | `2b9b8f8dce9`. Embeddings 10.45 -> **2.39 ms** per block, block 238.5 -> **230.8 ms** (-3.2%), step 12.26 -> 11.93 s; PCC unchanged. Part 4 *adaLN table gathers*. |
 
 ### TP/SP parallel-configuration sweep — 15 s / 16:9
 
