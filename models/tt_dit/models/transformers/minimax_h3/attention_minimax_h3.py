@@ -103,8 +103,11 @@ class MiniMaxH3Attention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
+
+        self.kv_gather_capacity = kv_gather_capacity
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -545,10 +548,10 @@ class MiniMaxH3Attention(Module):
                 self.dummy_joint_input,
                 self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
+                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
+                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
@@ -573,10 +576,10 @@ class MiniMaxH3Attention(Module):
                 self.dummy_joint_input,
                 self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
+                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
+                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
