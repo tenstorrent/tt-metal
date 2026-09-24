@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "35902934854",
-  "timestamp": "2026-09-23T18:35:00Z"
+  "run_id": "35940788913",
+  "timestamp": "2026-09-24T01:05:00Z"
  },
- "run_id": "35902934854",
+ "run_id": "35940788913",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -35,12 +35,6 @@
    "issue": 54223,
    "status": "CI green (all check runs success incl PR Gate Status); awaiting maintainer review",
    "note": "DUPLICATE FIX ALERT: external PR #54375 (rafaio1) fixes same issue #54223 with same root cause/fix. Flagged in monthly summary for maintainer to pick one. Do not close either unilaterally."
-  },
-  "54666": {
-   "title": "fix(ttnn): guard matmul per_core_M/N against zero to avoid SIGFPE",
-   "closes": 54639,
-   "status": "CI green (PR-Gate success), unchanged",
-   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero-af452bb681e00eeb"
   },
   "54770": {
    "issue": 54770,
@@ -268,7 +262,7 @@
    "issue": 57408,
    "branch": "repo-assist/fix-issue-57408-square-bf16-rne-rounding",
    "title": "fix(sfpu): round ttnn.square to nearest-even instead of truncating to bf16",
-   "status": "opened this run; scoped to square only (WH+BH; Quasar addressing left untouched), adds is_fp32_dest_acc_en template param + float32_to_bf16_rne rounding matching calculate_sfpu_binary_mul; regression test asserts bit-exact match vs ttnn.mul(x,x); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+   "status": "MERGED as PR #57421 (confirmed 2026-09-24 run)"
   },
   "57446": {
    "issue": 57446,
@@ -284,13 +278,19 @@
    "date": "2026-09-23",
    "branch": "repo-assist/fix-issue-57475-moreh-dfb-oob",
    "fixes": "#57475 items 2 (moreh_fold writer over-long NoC write) and 4 (moreh_norm_backward rank-1 OOB read)",
-   "note": "item 1 deferred pending open PR #55968 rewrite; item 3 deferred per existing in-code comment leaving unpack-mode decision to op owner"
+   "note": "CONFIRMED tracked as PR #57535, CI green as of 2026-09-24 run"
   },
   "57477_prod_nc_dtype": {
    "issue": 57477,
    "branch": "repo-assist/fix-issue-57477-prod-nc-input-output-dtype-mismatch",
    "title": "fix(ttnn): derive prod_nc input dataflow buffer from input.dtype(), not output.dtype()",
-   "status": "opened this run (item 5 of #57477 defect catalog); splits in_/out_ cb_data_format+tile_size in prod_nc_program_factory.cpp, adds TT_FATAL(input.dtype()==output.dtype()) in validate_on_program_cache_miss; CI queued via pr-gate.yaml, no run ID captured yet, check on next run"
+   "status": "opened this run (item 5 of #57477 defect catalog); splits in_/out_ cb_data_format+tile_size in prod_nc_program_factory.cpp, adds TT_FATAL(input.dtype()==output.dtype()) in validate_on_program_cache_miss; CI queued via pr-gate.yaml, no run ID captured yet, check on next run -- CONFIRMED tracked as PR #57581, CI green as of 2026-09-24 run"
+  },
+  "57512_moe_token_remap": {
+   "issue": 57512,
+   "branch": "repo-assist/fix-issue-57512-moe-token-remap-reduction-size-validation",
+   "title": "fix(ttnn): validate moe_expert_token_remap reduction_size on host",
+   "status": "opened this run; adds TT_FATAL(reduction_size>0) and TT_FATAL((batch*seq)%reduction_size==0) in validate_on_program_cache_miss; added 2 regression tests; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
   }
  },
  "issues_labeled": [
@@ -501,6 +501,10 @@
   "57356": {
    "date": "2026-09-23",
    "note": "partially covered by 5 existing external PRs (#57482,#57483,#57484,#57485,#57486)"
+  },
+  "57512": {
+   "date": "2026-09-24",
+   "note": "no existing open PR referenced #57512 (search_pull_requests 0 hits before fix)"
   }
  },
  "dropped_fix_targets": {
@@ -689,6 +693,54 @@
   "57477": {
    "date": "2026-09-23",
    "note": "AI static-analysis defect-catalog meta-issue (5 items); item 5 (prod_nc dtype mismatch) fixed via repo-assist PR this run; items 1-4 (quasar tilize alignment guard, matmul out_block_num_tiles hang, reduce-H width-sharded cb deadlock, manual_seed OOB NoC read) left uninvestigated/unpicked, candidates for a future run"
+  },
+  "57478": {
+   "date": "2026-09-24",
+   "note": "already fixed via open external PR #57493 (ijankowskiTT), closes #57478"
+  },
+  "57455": {
+   "date": "2026-09-24",
+   "note": "already fixed via open external PR #57374 (VirdhatchaniKN), closes #57455"
+  },
+  "57500": {
+   "date": "2026-09-24",
+   "note": "sub-issue of #57356; fix already open at PR #57486"
+  },
+  "57499": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57485 references this issue"
+  },
+  "57498": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57484 references this issue"
+  },
+  "57476": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57488 references this issue"
+  },
+  "57461": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57463 references this issue"
+  },
+  "57458": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57440 references this issue"
+  },
+  "57519": {
+   "date": "2026-09-24",
+   "note": "existing open PRs #57529/#57440 reference this issue"
+  },
+  "57444": {
+   "date": "2026-09-24",
+   "note": "existing open PR #57569 references this issue (feature evaluation, not urgent)"
+  },
+  "57510": {
+   "date": "2026-09-24",
+   "note": "AI static-analysis defect-catalog meta-issue (11 items in tt_metal/impl), reviewed for existing coverage, not picked this run -- good Task3 candidate next round"
+  },
+  "57430": {
+   "date": "2026-09-24",
+   "note": "Quasar POP_TILES/PUSH_TILES STALLWAIT hazard, deep LLK/compile-time architectural change (COMPILE_TRISC-gated UNPACK_SEL), too risky for a quick surgical fix, already labeled bug and assigned to vkrsmanovicTT"
   }
  },
  "stale_pr_nudges": {
@@ -1038,11 +1090,14 @@
    "last_ping": "2026-09-20",
    "type": "author_checkin",
    "note": "dirty mergeable_state, no substantive human review since opened 2026-07-29"
-  }
+  },
+  "40858": "2026-09-24: nudged (dirty despite 2 approvals uaydonat/mtairum)",
+  "45435": "2026-09-24: nudged (dirty, stale since 2026-05-28)",
+  "47426": "2026-09-24: nudged (dirty despite 1 approval mbezuljTT)"
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-23: continued below prior cursor #57301, reviewed down through ~#57186 (fetched issues1/2/3 pages). Labeled #57394 (bug, ci-bug: fabric express-link routing hang) and #57385 (ci-bug: RealtimeProfilerSanity intermittent flake), both previously unlabeled. Engaged substantively on #57446 (fp32 pow underflow-to-NaN, opened fix PR, see open_prs). Most 573xx range issues below 57352 remain internal defect-catalog meta-issues or already-covered (57323/57326/57410 reviewed and passed in prior run). Continue below #57186 next run.",
-  "task6_latest": "2026-09-23: re-pinged 3 stale non-draft PRs whose bot-review-only state and dirty/behind/clean-but-stalled mergeable_state indicated author-blocked, all previously nudged ~Aug 25-26 (well past 3-day cadence): #38627, #38639, #39293 (3-action cap reached). Next candidates further down oldest-updated list not yet re-checked: #40858, #45435, #47426, #51119, #51120, #51129, #51155 (all previously nudged in Aug)."
+  "task1_task2_latest": "2026-09-24: reviewed newest ~50 open issues (#57623 down through #57413) via search_issues; most already labeled/covered by external PRs (see no_fix_needed_investigated additions this run: #57478,#57455,#57500,#57499,#57498,#57476,#57461,#57458,#57519,#57444 all have existing open non-repo-assist PRs). Found and fixed #57512 (moe_expert_token_remap missing reduction_size validation, no existing PR) via Task3. Reviewed #57510 (tt_metal/impl 11-defect catalog) and #57430 (Quasar POP_TILES/PUSH_TILES stalling) -- left uninvestigated/deferred, candidates for next run. Continue below #57413 next run.",
+  "task6_latest": "2026-09-24: nudged 3 never-previously-touched author-blocked stale PRs (dirty mergeable_state): #40858, #45435, #47426 (3-action cap reached). Prior batch (#40858, #51119, #51120 from 2026-09-23) -- #51119/#51120 not re-nudged this run (checked 2026-09-23, still within 3-day cadence). Next candidates for future run: #51129, #51155 (both DPS0340, mergeable_state behind/blocked, last touched 2026-09-02)."
  },
  "labeled_issues": {
   "54827": {
@@ -1377,6 +1432,11 @@
   }
  },
  "run_history": [
+  {
+   "run_id": "35940788913",
+   "date": "2026-09-24T01:05:00Z",
+   "summary": "Task5: checked CI via get_check_runs on all 28 open [repo-assist] PRs -- all green except the 2 known infra-noise cases (#55435/#56195 RTL Sim CI broken-placeholder details_url domain, unchanged). Confirmed #57477's PR is #57581 and #57475's PR is #57535, both green; confirmed #57413/#57408's PR #57421 (square bf16 RNE) MERGED since last run. Task3: fixed issue #57512 (ttnn.moe_expert_token_remap accepts reduction_size=0 with no host guard, reaching a divide-by-zero in split_work_to_cores_even_multiples/the program factory; also silently drops a ragged trailing group when batch*seq isn't evenly divisible by reduction_size, since the writer emits one reduced page per full group with no partial-tail flush) -- verified root cause against current moe_expert_token_remap_device_operation.cpp (validate_on_program_cache_miss left operation_attributes unused; compute_output_specs already computes ceil(batch_seq/reduction_size), confirming the ragged-tail claim); confirmed no existing open PR referenced #57512 (search_pull_requests 0 hits). Added 2 TT_FATAL checks plus 2 regression tests (test_moe_expert_token_remap_rejects_zero_reduction_size, test_moe_expert_token_remap_rejects_ragged_batch_seq) in tests/nightly/t3000/ccl/test_moe_expert_token_remap.py. Opened ready-for-review PR on branch repo-assist/fix-issue-57512-moe-token-remap-reduction-size-validation; unverified locally (no Docker in this sandbox), CI to be checked next run. Task1/2: reviewed newest ~50 open issues (#57623 down through #57413); found 10 fresh-looking issues (#57478,#57455,#57500,#57499,#57498,#57476,#57461,#57458,#57519,#57444) already covered by existing open non-repo-assist PRs -- recorded to avoid future duplicate-fix attempts; reviewed #57510 (11-item tt_metal/impl AI defect catalog) and #57430 (Quasar POP_TILES/PUSH_TILES STALLWAIT hazard, deep architectural change) without picking either this run. Task6: nudged 3 never-previously-touched author-blocked stale PRs, all mergeable_state=dirty: #40858 (2 approvals already in), #45435 (stale since May), #47426 (1 approval already in) -- 3-action cap reached. Task8: rewrote monthly summary #55015 with this run's entries, removed #54666 (merged), noted #56428's second approval (now fully approved, ready to merge)."
+  },
   {
    "run_id": "35902934854",
    "date": "2026-09-23T18:35:00Z",
