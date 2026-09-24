@@ -1,168 +1,82 @@
-name: (Galaxy) Multi-user Isolation Tests
+name: "[internal] Galaxy multi-user isolation tests impl"
+
+# Runs the Galaxy multi-user isolation matrix. Reads
+# tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml and budgets under gtm.e2e.
+# Each leg splits one Galaxy into docker-compose containers and runs the entry's cmd in
+# every container at once.
+
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      galaxy-multi-user-isolation-tests:
-        description: "Run Galaxy multi-host job (not actually used in logic yet)"
-        required: false
-        default: true
-        type: boolean
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+        description: "The manylinux wheel; every container pip-installs it."
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml); wh_galaxy and/or bh_galaxy."
       extra-tag:
         required: false
         type: string
         default: "in-service"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 0 * * *" # This cron schedule runs the workflow every day at 12am UTC
+        description: "Replaces the in-service runner label, to aim a run at another pool."
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-  build-artifact:
-    needs: check-harbor
-    if: ${{ !cancelled() }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-      build-wheel: true
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      # The matrix JSON carries single quotes (the -k expressions in test_args), so it
+      # goes through env, never through a quoted shell literal.
+      - name: Apply runner labels (extra-tag)
+        id: apply-runner-labels
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          EXTRA_TAG: ${{ inputs.extra-tag }}
+        run: |
+          UPDATED=$(jq -c --arg tag "$EXTRA_TAG" \
+            'map(.runs_on |= map(if . == "in-service" then $tag else . end))' <<<"$MATRIX")
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$UPDATED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   galaxy-multi-user-isolation-tests:
-    needs: build-artifact
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [wormhole_b0, blackhole]
-        scenario: [single, tp2, tray]
-        include:
-          # Wormhole B0 configuration
-          - arch: wormhole_b0
-            scenario: single
-            num_containers: 32
-            chips_per_container: 1
-            container_prefix: chip
-            mesh_descriptor: n150_mesh_graph_descriptor.textproto
-            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-            test_args: "-k test_fill"
-          - arch: wormhole_b0
-            scenario: tp2
-            num_containers: 16
-            chips_per_container: 2
-            container_prefix: tp2
-            mesh_descriptor: n300_mesh_graph_descriptor.textproto
-            test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
-            test_args: ""
-          - arch: wormhole_b0
-            scenario: tray
-            num_containers: 4
-            chips_per_container: 8
-            container_prefix: tray
-            mesh_descriptor: t3k_mesh_graph_descriptor.textproto
-            test_path: tests/nightly/t3000/ccl/test_all_gather.py
-            # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
-            test_args: "-k 'not fabric_ring'"
-          # Blackhole configuration
-          - arch: blackhole
-            scenario: single
-            num_containers: 32
-            chips_per_container: 1
-            container_prefix: bh_chip
-            mesh_descriptor: p150_mesh_graph_descriptor.textproto
-            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-            test_args: "-k test_fill"
-          - arch: blackhole
-            scenario: tp2
-            num_containers: 16
-            chips_per_container: 2
-            container_prefix: bh_tp2
-            mesh_descriptor: p150_x2_mesh_graph_descriptor.textproto
-            test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
-            test_args: ""
-          - arch: blackhole
-            scenario: tray
-            num_containers: 4
-            chips_per_container: 8
-            container_prefix: bh_tray
-            mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
-            test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
-            # The bh_1d_mesh_device fixture is function-scoped and opens/closes all 8 devices per test.
-            # Repeated open/close cycles can randomly cause firmware re-initialization failures
-            # ("Device N init: failed to initialize FW") due to a BH-specific firmware layer issue,
-            # not a tt-metal issue. Since this CI only needs one representative test to verify
-            # inter-container isolation, we narrow down to a single test combination to avoid the problem.
-            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
-          # ETH isolation reset tests. Implemented and working, but held until the
-          # hardware is stable: BH tray_reset reproducibly drops tray 2's eth link.
-          # - arch: wormhole_b0
-          #   scenario: tray_reset
-          #   repeat_count: 2
-          #   num_containers: 4
-          #   chips_per_container: 8
-          #   container_prefix: tray_reset
-          #   mesh_descriptor: t3k_mesh_graph_descriptor.textproto
-          #   test_path: tests/nightly/t3000/ccl/test_all_gather.py
-          #   test_args: "-k 'not fabric_ring'"
-          # - arch: blackhole
-          #   scenario: tray_reset
-          #   repeat_count: 400
-          #   num_containers: 4
-          #   chips_per_container: 8
-          #   container_prefix: bh_tray_reset
-          #   mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
-          #   test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
-          #   test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
-          # - arch: wormhole_b0
-          #   scenario: asic_reset
-          #   repeat_count: 1500
-          #   num_containers: 32
-          #   chips_per_container: 1
-          #   container_prefix: chip_reset
-          #   mesh_descriptor: n150_mesh_graph_descriptor.textproto
-          #   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-          #   test_args: "-k test_fill"
-          # - arch: blackhole
-          #   scenario: asic_reset
-          #   repeat_count: 1500
-          #   num_containers: 32
-          #   chips_per_container: 1
-          #   container_prefix: bh_chip_reset
-          #   mesh_descriptor: p150_mesh_graph_descriptor.textproto
-          #   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-          #   test_args: "-k test_fill"
-    runs-on:
-      - topology-6u
-      - arch-${{ matrix.arch }}
-      - ${{ inputs.extra-tag || 'in-service' }}
-    name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -173,14 +87,14 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -193,7 +107,7 @@ jobs:
         # serialize_cluster_descriptor() in the next step (SYS-1634 / BH-84).
         timeout-minutes: 25
         env:
-          DEV_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          DEV_IMAGE: ${{ inputs.docker-image }}
         run: |
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
           # Run the binary inside the dev image, which carries its runtime deps
@@ -241,7 +155,7 @@ jobs:
           # A missing/unenumerated device yields an incomplete mapping that would
           # only fail later in create-files with no recovery; treat it as a failed
           # attempt so the reset+retry below can bring the device back.
-          EXPECTED=$(( ${{ matrix.num_containers }} * ${{ matrix.chips_per_container }} ))
+          EXPECTED=$(( ${{ matrix.test-group.num_containers }} * ${{ matrix.test-group.chips_per_container }} ))
           generate_ok() {
             local count
             python3 .github/scripts/utils/generate_tray_mapping.py || return 1
@@ -272,16 +186,16 @@ jobs:
       - name: Create Docker Compose file
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ] || [ "${{ matrix.scenario }}" = "tray_reset" ]; then
+          if [ "${{ matrix.test-group.scenario }}" = "tray" ] || [ "${{ matrix.test-group.scenario }}" = "tp2" ] || [ "${{ matrix.test-group.scenario }}" = "tray_reset" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \
-            --image "${{ needs.build-artifact.outputs.dev-docker-image }}" \
-            --num-containers ${{ matrix.num_containers }} \
-            --chips-per-container ${{ matrix.chips_per_container }} \
+            --image "${{ inputs.docker-image }}" \
+            --num-containers ${{ matrix.test-group.num_containers }} \
+            --chips-per-container ${{ matrix.test-group.chips_per_container }} \
             $TRAY_MAPPING_ARG \
-            --mesh-descriptor ${{ matrix.mesh_descriptor }} \
-            --container-prefix ${{ matrix.container_prefix }}
+            --mesh-descriptor ${{ matrix.test-group.mesh_descriptor }} \
+            --container-prefix ${{ matrix.test-group.container_prefix }}
       - name: Pull container image
         # Pull the dev image up-front so its (multi-minute) download does not eat
         # into the container-readiness wait budget below. Previously the image
@@ -298,11 +212,11 @@ jobs:
         run: |
           shopt -s nullglob
           CONTAINERS_DIR=".multi-user-galaxy-docker-files"
-          REQUIRED_CONTAINERS=${{ matrix.num_containers }}
+          REQUIRED_CONTAINERS=${{ matrix.test-group.num_containers }}
           # Budget covers only in-container dependency install (uv pip install)
           # across all containers, not the image pull (done in the previous step).
           TIMEOUT=600
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
 
           rm -rf "$CONTAINERS_DIR"
           mkdir -p "$CONTAINERS_DIR"
@@ -331,13 +245,15 @@ jobs:
           echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
 
       - name: Run the tests
-        if: matrix.scenario != 'tray_reset' && matrix.scenario != 'asic_reset'
+        if: matrix.test-group.scenario != 'tray_reset' && matrix.test-group.scenario != 'asic_reset'
         timeout-minutes: 15
         run: |
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
-          TEST_PATH="${{ matrix.test_path }}"
-          TEST_ARGS="${{ matrix.test_args }}"
+          NUM_CONTAINERS=${{ matrix.test-group.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
+          TEST_CMD=$(cat <<'TEST_CMD_EOF'
+          ${{ matrix.test-group.cmd }}
+          TEST_CMD_EOF
+          )
           RESULTS_DIR=".multi-user-test-results"
 
           mkdir -p "$RESULTS_DIR"
@@ -375,16 +291,15 @@ jobs:
           export CONTAINER_PREFIX
           export RESULTS_DIR
 
-          TEST_NAME=$(basename "${TEST_PATH}" .py)
-          # Output: ">>> Running single/test_fill in chip-0" etc.
-          run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+          # Output: ">>> Running single in chip-0" etc.
+          run_test "${{ matrix.test-group.scenario }}" "$TEST_CMD" || true
 
       - name: Run reset isolation test
-        if: matrix.scenario == 'tray_reset' || matrix.scenario == 'asic_reset'
+        if: matrix.test-group.scenario == 'tray_reset' || matrix.test-group.scenario == 'asic_reset'
         # Survivors hold one long run each; ~20min at the repeat_counts above.
         timeout-minutes: 35
         run: |
-          if [ "${{ matrix.scenario }}" = "tray_reset" ]; then
+          if [ "${{ matrix.test-group.scenario }}" = "tray_reset" ]; then
             RESET_DEVICE_IDS=$(python3 -c "
           import yaml
           with open('tray_to_pcie_device_mapping.yaml') as f:
@@ -397,18 +312,18 @@ jobs:
             RESET_DEVICE_IDS="0"
           fi
           bash .github/scripts/utils/run-reset-isolation-test.sh \
-            ${{ matrix.num_containers }} \
-            "${{ matrix.container_prefix }}" \
-            "${{ matrix.test_path }}" \
-            "${{ matrix.test_args }}" \
+            ${{ matrix.test-group.num_containers }} \
+            "${{ matrix.test-group.container_prefix }}" \
+            "${{ matrix.test-group.test_path }}" \
+            "${{ matrix.test-group.test_args }}" \
             "$RESET_DEVICE_IDS" \
-            ${{ matrix.repeat_count }}
+            ${{ matrix.test-group.repeat_count }}
 
       - name: Check test results
         run: |
           RESULTS_DIR=".multi-user-test-results"
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+          NUM_CONTAINERS=${{ matrix.test-group.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
 
           failed=0
           for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
