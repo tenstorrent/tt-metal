@@ -852,22 +852,27 @@ def _check_hf_fallback(src: str) -> list:
     return hits
 
 
+# Layer cap for the G6 probe build. The SAME value sizes the build and the
+# stack-member floor (via stack_member_floor): a cap below the floor makes every
+# capped stack invisible, which reads as "structure is hidden" when it is not.
+_STACK_PROBE_LAYERS = 2
+
 _STACK_PROBE = """
 import json, sys
 import ttnn
-from models.experimental.perf_automation.cc_optimize._op_sig_probe import find_all_stacks
+from models.experimental.perf_automation.cc_optimize._op_sig_probe import find_all_stacks, stack_member_floor
 sys.path.insert(0, {demo!r})
 from tt.pipeline import build_pipeline
 dev = ttnn.open_device(device_id=0, l1_small_size=24576)
 try:
-    pipe = build_pipeline(dev, layers=2)
+    pipe = build_pipeline(dev, layers={cap})
     try:
         import torch as _t
         _m = _t.nn.Module
     except Exception:
         _m = ()
     n = 0
-    for st in find_all_stacks(pipe) or []:
+    for st in find_all_stacks(pipe, min_members=stack_member_floor({cap})) or []:
         blocks = getattr(st, "stack", None) or []
         if not blocks:
             continue
@@ -950,7 +955,7 @@ def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
         return None
     if len(sections) < 2:
         return None  # single-section model: one stack is the whole story
-    code = _STACK_PROBE.format(demo=str(demo_dir))
+    code = _STACK_PROBE.format(demo=str(demo_dir), cap=_STACK_PROBE_LAYERS)
     try:
         proc = subprocess.run(
             [sys.executable, "-c", code],

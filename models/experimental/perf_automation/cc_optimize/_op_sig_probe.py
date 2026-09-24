@@ -356,7 +356,36 @@ def _dominant_type(members):
     return max(kinds, key=lambda k: sum(1 for v in members if type(v) is k))
 
 
-def _walk_for_stacks(root):
+MIN_STACK_MEMBERS = 3
+"""Members a list needs before a FULL-DEPTH walk calls it a block stack.
+
+Three keeps an ordinary pair of unrelated submodules from being mistaken for a
+stack. It is a floor for the uncapped case only -- see `stack_member_floor`.
+"""
+
+
+def stack_member_floor(build_cap=None) -> int:
+    """Smallest member count that still counts as a block stack.
+
+    A probe may build the model with a LAYER CAP to keep the build cheap. Every
+    stack then has exactly `cap` members, so a floor above the cap makes those
+    stacks invisible and the caller concludes the structure is hidden -- the cap
+    and the floor were set in different files and neither knew about the other.
+
+    Never returns less than 2: `_is_block_stack` refuses a shorter list anyway,
+    and a single element is not a stack in any sense. With no cap (or a
+    meaningless one) this is the unchanged MIN_STACK_MEMBERS.
+    """
+    try:
+        cap = int(build_cap)
+    except (TypeError, ValueError):
+        return MIN_STACK_MEMBERS
+    if cap <= 0:
+        return MIN_STACK_MEMBERS
+    return max(2, min(MIN_STACK_MEMBERS, cap))
+
+
+def _walk_for_stacks(root, min_members: int = MIN_STACK_MEMBERS):
     """Depth-first walk that yields (path, members) for every candidate block stack.
 
     Visits nodes in DFS pre-order so the resulting list respects execution order.
@@ -386,7 +415,7 @@ def _walk_for_stacks(root):
                             seq = list(modules_dict.values())
                     if seq is not None:
                         members = _stack_members(seq)
-                        if _is_block_stack(members) and len(members) >= 3:
+                        if _is_block_stack(members) and len(members) >= min_members:
                             yield child_path, members
                     # Recurse into the child
                     yield from _visit(child, child_path)
@@ -405,7 +434,7 @@ def _walk_for_stacks(root):
             seq = _node_sequence(val)
             if seq is not None:
                 members = _stack_members(seq)
-                if _is_block_stack(members) and len(members) >= 3:
+                if _is_block_stack(members) and len(members) >= min_members:
                     yield attr_path, members
             # Recurse: unwrap single-element containers that might wrap a real stack
             if not _is_atomic(val) and id(val) not in seen_ids:
@@ -421,7 +450,7 @@ def _walk_for_stacks(root):
     yield from _visit(root, "")
 
 
-def find_all_stacks(root) -> list:
+def find_all_stacks(root, min_members: int = MIN_STACK_MEMBERS) -> list:
     """Discover ALL repeating block stacks in `root`, not just the largest one.
 
     Returns a list of :class:`StackInfo` sorted in depth-first (execution) order,
@@ -442,7 +471,7 @@ def find_all_stacks(root) -> list:
     is required.
     """
     # Step 1: collect all candidates in DFS order (path, members)
-    candidates = list(_walk_for_stacks(root))
+    candidates = list(_walk_for_stacks(root, min_members=min_members))
 
     if not candidates:
         return []
