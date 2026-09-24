@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 // Schedule derived by the reader from the trace-safe gathered-extent tensor and
@@ -17,16 +16,5 @@ struct HighBwAllGatherMetadataSchedule {
     uint32_t final_count;
     uint32_t data_valid_granularity;
 };
-
-inline constexpr uint32_t high_bw_all_gather_metadata_slice_start_word =
-    offsetof(HighBwAllGatherMetadataSchedule, slice_start) / sizeof(uint32_t);
-inline constexpr uint32_t high_bw_all_gather_metadata_slice_count_word =
-    offsetof(HighBwAllGatherMetadataSchedule, slice_count) / sizeof(uint32_t);
-inline constexpr uint32_t high_bw_all_gather_metadata_final_start_word =
-    offsetof(HighBwAllGatherMetadataSchedule, final_start) / sizeof(uint32_t);
-inline constexpr uint32_t high_bw_all_gather_metadata_final_count_word =
-    offsetof(HighBwAllGatherMetadataSchedule, final_count) / sizeof(uint32_t);
-inline constexpr uint32_t high_bw_all_gather_metadata_data_valid_granularity_word =
-    offsetof(HighBwAllGatherMetadataSchedule, data_valid_granularity) / sizeof(uint32_t);
 
 static_assert(sizeof(HighBwAllGatherMetadataSchedule) == 5 * sizeof(uint32_t));

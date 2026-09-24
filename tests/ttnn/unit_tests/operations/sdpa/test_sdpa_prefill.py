@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

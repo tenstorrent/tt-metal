@@ -10,32 +10,36 @@
 // The binding and argument names below are this fork's interface: every factory that later ports
 // onto it inherits them and cannot rename them.
 //
-// THREE REGIONS OF THE LEGACY KERNEL ARE NOT CARRIED HERE. Each is selected by a define that no
-// Metal 2.0 consumer can currently set, and each would need work that cannot be written or tested
-// from this port. A factory that needs one of them is not yet portable onto this fork.
+// Optional resource families are gated on preprocessor defines rather than on compile-time argument
+// values, because a Metal 2.0 binding token only exists when the host actually binds it:
+//   FUSE_BIAS / BIAS_SHARDED  -- dfb::bias, and tensor::bias on the non-sharded bias path
+//   IN1_SHARDED               -- in1 arrives in the resident dfb::in1 shard; no tensor binding
+//   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
+//   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
+//   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+//   OUT_SHARDED               -- output stays resident in dfb::out; the writer loop is compiled out
+//
+// The DRAM-width-sharded path takes its per-bank list as runtime varargs, walked two at a time:
+// entry 2*k is bank k's stride in bytes, entry 2*k+1 is its bank id.
+//
+// TWO REGIONS ARE PRESERVED VERBATIM FROM THE LEGACY KERNEL AND ARE NOT CONVERTED. Each is selected
+// by a define that no Metal 2.0 factory may set, and each would need work that cannot be written or
+// tested from a port:
 //
 //   * ENABLE_GLOBAL_CB - the legacy "remote CB" path. A GlobalCircularBuffer is a user-managed
 //     buffer whose Metal 2.0 analog, GlobalDataflowBuffer, is not implemented; it is NOT a
-//     DataflowBuffer. Carrying the region would mean carrying a raw CB index (c_31) into a kernel
-//     that has no CB indices. Only the legacy mcast-1d MeshWorkload paths and the llama all-gather
-//     matmul fusion set this define, and neither can bind a Metal 2.0 fork.
-//   * IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED - the DRAM-sharded weight readers, set only
-//     by the (still unported) mcast-2d factory. They use the in1 base address as a raw pointer with
-//     explicit bank arithmetic, which in Metal 2.0 must come from TensorAccessor's
-//     get_bank_base_address() bridge, and they walk per-bank stride/id lists that become runtime
-//     varargs. Converting them blind, with no consumer able to exercise them, would ship untested
-//     address arithmetic; the mcast-2d porter should add them here when that factory ports.
-//
-// Two further regions are gated behind defines rather than compile-time args, because each needs a
-// resource that only exists when the feature is on:
-//   * SPARSITY - the sparsity dataflow buffer and its tensor accessor. A binding the host does not
-//     declare produces no dfb::/tensor:: token at all, so the references must not reach C++ name
-//     lookup; the legacy kernel guarded them with `if constexpr (batchB > 0)`, which still looks
-//     names up in the discarded branch.
+//     DataflowBuffer, so the region keeps its raw CB index (c_31) in a kernel that otherwise has no
+//     CB indices. Only the legacy mcast-1d MeshWorkload paths and the llama all-gather matmul
+//     fusion set this define, and neither binds this fork.
 //   * FUSE_OP_ALL_GATHER / FUSE_OP_REDUCE_SCATTER - MatmulOpReceiver and OpSignaler consume
 //     *positional* runtime args through an index they advance by reference, and they live outside
 //     this op's directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so they cannot
 //     be fed from named arguments without changing a file this port may not touch.
+//
+// SPARSITY is likewise define-gated rather than arg-gated: the sparsity dataflow buffer and its
+// tensor accessor produce no dfb::/tensor:: token at all when the host does not declare them, so the
+// references must not reach C++ name lookup. The legacy kernel guarded them with
+// `if constexpr (batchB > 0)`, which still looks the names up in the discarded branch.
 
 #include <stdint.h>
 
@@ -48,6 +52,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#ifdef ENABLE_GLOBAL_CB
+#include "api/remote_circular_buffer.h"
+#endif
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -137,7 +144,7 @@ void kernel_main() {
     //
     // The id list rides in the sparsity operand's plumbing (tensor binding, sparsity DataflowBuffer):
     // the sparsity mask itself is never read in this mode, so reusing those slots keeps this shared
-    // kernel's argument surface unchanged.
+    // kernel's binding set unchanged.
     //
     // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
     // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
@@ -146,8 +153,6 @@ void kernel_main() {
     constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
 
     const Noc noc;
-    // in1 is filled here (from DRAM or the local shard) and drained by the compute kernel; out is
-    // filled by the compute kernel's packer and drained here.
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
     Semaphore sender_sem(sem::in1_mcast_sender);
@@ -159,10 +164,8 @@ void kernel_main() {
 
     constexpr auto in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
 
-    // bias is filled here from DRAM (or resident when sharded) and consumed by the compute kernel's
-    // bias add.
     DataflowBuffer dfb_in3(dfb::bias);
-    // Use the buffer's entry size (padded to the DRAM alignment by the factory) for DRAM reads
+    // Use the DFB entry size (padded to the DRAM alignment by the factory) for DRAM reads
     // and L1 write strides, NOT the raw tile size. On Blackhole, the DRAM read alignment
     // is 64B, so a sub-64B tile (e.g. 32B for a (1,16) bf16 bias tile) cannot be read
     // directly from DRAM, and 32B-strided L1 writes land at non-64B-aligned addresses
@@ -177,11 +180,15 @@ void kernel_main() {
     const auto s3 = TensorAccessor(tensor::bias);
 #endif  // BIAS_SHARDED
 #endif  // FUSE_BIAS
-
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
 #endif  // OUT_SHARDED
 
+// NOT CONVERTED TO METAL 2.0 -- both blocks are preserved verbatim from the legacy kernel and are
+// unreachable here: no Metal 2.0 factory may define either. MatmulOpReceiver and OpSignaler consume
+// runtime arguments positionally through the `uint32_t& rt_args_idx` cursor declared above, while
+// Metal 2.0 kernels address their arguments by name, so a factory that set one of these defines
+// would be feeding them a cursor into an argument block it does not populate. See the header note.
 #ifdef FUSE_OP_ALL_GATHER
     MatmulOpReceiver fused_op_receiver = MatmulOpReceiver(
         false, /* wait_for_op_signal */
@@ -193,15 +200,31 @@ void kernel_main() {
     OpSignaler op_signaler = OpSignaler(rt_args_idx);
 #endif
 
+// RT and COMPILE TIME ARGS for DRAM sharded weights
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    const uint32_t vc = get_arg(args::vc);
+    const uint32_t num_dram_shards_to_read = get_arg(args::num_dram_shards_to_read);
+    const uint32_t dram_tensor_start_offset = get_arg(args::dram_tensor_start_offset);
+
+    constexpr auto in1_dram_block_num_tiles = get_arg(args::in1_dram_block_num_tiles);
+    constexpr auto in1_block_w_dram_bytes = get_arg(args::in1_block_w_dram_bytes);
+#endif  // IN1_DRAM_WIDTH_SHARDED
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+    constexpr auto in1_KtNt_per_batch = get_arg(args::in1_KtNt_per_batch);      // K*N tiles per batch
+    constexpr auto in1_batches_per_bank = get_arg(args::in1_batches_per_bank);  // batches per DRAM bank
+#endif                                                                          // IN1_DRAM_HEIGHT_SHARDED
+
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb::in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 buffer entries are sized to match (see the program factory). On the plain
-    // interleaved path the NOC reads the unpadded tile of data into each padded slot and tiles are
-    // laid out / multicast at the padded stride. No-op when already aligned. The sharded path keeps
-    // its natural (unpadded) stride.
+    // interleaved in1 buffer entries are sized to match (see the program factory). On the plain interleaved
+    // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
+    // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
+    // keep their natural (unpadded) stride.
     constexpr uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
-#ifndef IN1_SHARDED
+#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
+    !defined(ENABLE_GLOBAL_CB)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -213,9 +236,22 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     dfb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
-#else
+#elif !defined(ENABLE_GLOBAL_CB)
     [[maybe_unused]] const auto s1 = TensorAccessor(tensor::in1);
-#endif  // IN1_SHARDED
+#if defined(IN1_DRAM_WIDTH_SHARDED) || defined(IN1_DRAM_HEIGHT_SHARDED)
+    // The DRAM-sharded paths below address banks directly rather than paging through the accessor,
+    // so they need in1's raw base address. It comes off the binding, never through a runtime arg.
+    const uint32_t in1_tensor_addr = s1.get_bank_base_address();
+#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED
+#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+
+#ifdef ENABLE_GLOBAL_CB
+    // NOT CONVERTED TO METAL 2.0 -- a GlobalCircularBuffer ("remote CB") is not a DataflowBuffer and
+    // has no Metal 2.0 analog yet (GlobalDataflowBuffer is unimplemented), so this tensor-prefetcher
+    // path is preserved verbatim and no Metal 2.0 factory may define ENABLE_GLOBAL_CB.
+    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    const uint32_t in1_fifo_tiles = dfb_in1.get_total_num_entries();
+#endif
 
     //  WRITER
     const auto s = TensorAccessor(tensor::out);
@@ -223,11 +259,11 @@ void kernel_main() {
     // sharded builds don't warn (-Wunused-but-set-variable).
     (void)s;
 
-    // sparsity accessor
 #ifdef SPARSITY
+    // sparsity accessor
     DataflowBuffer dfb_sparsity(dfb::sparsity);
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
-#endif
+#endif  // SPARSITY
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -256,15 +292,32 @@ void kernel_main() {
     }
 #endif  // SPARSITY
 
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
+    uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
+#endif  // IN1_DRAM_WIDTH_SHARDED
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+    constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
+#endif  // IN1_DRAM_HEIGHT_SHARDED
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+        // Compute DRAM bank and offset for this batch
+        uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
+        uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
+        AllocatorBank<AllocatorBankType::DRAM> dram_src;
+        uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
+#endif  // IN1_DRAM_HEIGHT_SHARDED
 
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
-#endif
+#endif  // SPARSITY
 
         // Indexed/gather mode writes to compact output slots, so capture this outer batch's output
         // base and index it by the compact slot (the loop counter) each iteration.
@@ -303,20 +356,118 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
+#ifdef IN1_DRAM_WIDTH_SHARDED
+                    // Reset DRAM read offset for each bh block — the inner dim loop
+                    // advances through K, and each output row block re-reads the same
+                    // in1 columns from K=0. (bw is always 1 for DRAM-sharded senders.)
+                    uint32_t l1_read_addr_in1_offset = 0;
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
-#endif
-#ifndef IN1_SHARDED
+#endif  // FUSE_OP_ALL_GATHER
+#if defined(ENABLE_GLOBAL_CB)
+                        // The tensor prefetcher pushes this receiver's K-blocks in natural order.
+                        // Keep one block of lookahead: publish the current block to compute, then
+                        // wait for the unpack engine to drain the previous block before returning
+                        // its remote-CB credit to the prefetcher.
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        experimental::remote_cb_wait_front(remote_cb_id, block == 0 ? 1u : 2u);
+#elif defined(IN1_DRAM_WIDTH_SHARDED)
+                        // Operand 1 - DRAM width sharded
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+
+                        uint64_t in1_start_address =
+                            dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
+
+                        uint32_t l1_write_addr_in1_offset = 0;
+                        uint32_t next_bank_id_and_dram_stride_index = 0;
+
+                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                            uint32_t shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
+                            uint32_t shard_base_addr = in1_tensor_addr;
+                            if (i == 0) {
+                                shard_base_addr += dram_tensor_start_offset;
+                            }
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                dram_bank,
+                                in1_single_tile_size_bytes,
+                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                NocOptVals{.vc = vc});
+
+                            uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
+                            uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
+                            uint32_t in1_block_w_dram =
+                                get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
+
+                            for (uint32_t m = 0; m < in1_block_h; ++m) {
+                                uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
+                                uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
+                                for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
+                                    noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                        dram_bank,
+                                        CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
+                                        in1_single_tile_size_bytes,
+                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {},
+                                        NocOptVals{.vc = vc});
+                                    l1_read_addr_in1_temp += in1_single_tile_size_bytes;
+                                    l1_write_addr_in1_temp += in1_single_tile_size_bytes;
+                                }
+                                l1_read_addr_in1 += in1_block_w_dram_bytes;
+                                l1_write_addr_in1 += in1_block_w_bytes;
+                            }
+                            l1_write_addr_in1_offset += get_vararg(next_bank_id_and_dram_stride_index);
+                            next_bank_id_and_dram_stride_index += 2;
+                        }
+                        l1_read_addr_in1_offset += in1_dram_block_size_bytes;
+                        noc.async_read_barrier();
+#elif defined(IN1_DRAM_HEIGHT_SHARDED)
+                        // Operand 1 - DRAM height sharded (batched)
+                        // Each DRAM bank holds batches_per_bank complete [K, N] matrices
+                        // Bank and offset computed at start of batch loop
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+
+                        uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr();
+                        uint64_t in1_start_address =
+                            l1_write_addr_in1;  // copy start address of block, to be used for mcasting
+
+                        // Read in1 block from the correct DRAM bank
+                        // Tile layout within a batch: row-major [K, N], same strides as interleaved
+                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
+                        for (uint32_t h = 0; h < in1_block_h; ++h) {
+                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                            for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                    uint32_t tile_byte_offset =
+                                        in1_dram_batch_offset + in1_tensor_tile_id * in1_single_tile_size_bytes;
+                                    noc.async_read(
+                                        dram_src,
+                                        CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                                        in1_single_tile_size_bytes,
+                                        {.bank_id = in1_dram_bank_id, .addr = in1_tensor_addr + tile_byte_offset},
+                                        {});
+                                }
+                                l1_write_addr_in1 += in1_single_tile_size_bytes;
+                                in1_tensor_tile_id += in1_tensor_stride_w;
+                            }
+                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                        }
+                        in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
+
+                        // Barrier! make sure the reads are done
+                        noc.async_read_barrier();
+#elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
                         const uint64_t in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
-                        // Copy in1 block into the in1 buffer, as the default kernel
+                        // Copy in1 block into the buffer, as the default kernel
                         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
                         for (uint32_t h = 0; h < in1_block_h; ++h) {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
@@ -338,7 +489,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
-#endif  // IN1_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
@@ -387,7 +538,23 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         dfb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
+#ifdef ENABLE_GLOBAL_CB
+                        if (block >= 1) {
+                            while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                                invalidate_l1_cache();
+                            }
+                            experimental::remote_cb_pop_front(remote_cb_id, 1);
+                        }
+#endif
                     }
+#ifdef ENABLE_GLOBAL_CB
+                    if (num_blocks_inner_dim > 0) {
+                        while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+                            invalidate_l1_cache();
+                        }
+                        experimental::remote_cb_pop_front(remote_cb_id, 1);
+                    }
+#endif
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
@@ -400,7 +567,56 @@ void kernel_main() {
                             dfb_in3.get_write_ptr();        // copy start address of block, to be used for mcasting
                         uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
-                        // Copy in1 block into the bias buffer, as the default kernel
+#ifdef IN1_DRAM_WIDTH_SHARDED
+                        uint32_t l1_write_addr_in3_offset = 0;
+                        uint32_t next_bank_id_and_dram_stride_index = 0;
+
+                        // Bank-direct reads need bias's raw base address; it comes off the binding.
+                        const uint32_t in3_tensor_addr = s3.get_bank_base_address();
+
+                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                        for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                            uint32_t bias_shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
+                            uint32_t bias_shard_base_addr = in3_tensor_addr;
+                            if (i == 0) {
+                                // dram_tensor_start_offset is in in1 tile bytes; convert to
+                                // bias tile bytes since bias_dtype may differ from in1_dtype.
+                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                        bias_single_tile_size_bytes;
+                            }
+
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                bias_dram_bank,
+                                bias_single_tile_size_bytes,
+                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                NocOptVals{.vc = vc});
+
+                            uint32_t l1_read_addr_in3 = 0;
+                            uint32_t l1_write_addr_in3 = dfb_in3.get_write_ptr() + l1_write_addr_in3_offset;
+                            // the stride vararg is in in1 tile bytes, so divide
+                            // by in1_single_tile_size_bytes (not bias) to get the tile count.
+                            uint32_t in3_block_w_dram =
+                                get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
+
+                            for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
+                                noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                    bias_dram_bank,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_in3),
+                                    bias_single_tile_size_bytes,
+                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {},
+                                    NocOptVals{.vc = vc});
+                                l1_read_addr_in3 += bias_single_tile_size_bytes;
+                                l1_write_addr_in3 += bias_single_tile_size_bytes;
+                                in3_block_size_bytes += bias_single_tile_size_bytes;
+                            }
+                            // Advance L1 offset in bias tile bytes, not in1 stride bytes.
+                            l1_write_addr_in3_offset += in3_block_w_dram * bias_single_tile_size_bytes;
+                            next_bank_id_and_dram_stride_index += 2;
+                        }
+                        noc.async_read_barrier();
+#else
+                        // Copy in1 block into the buffer, as the default kernel
                         uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
                         for (uint32_t w = 0; w < in1_block_w; ++w) {
                             if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
@@ -417,6 +633,7 @@ void kernel_main() {
                         }
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifndef SKIP_MCAST
 
@@ -549,18 +766,25 @@ void kernel_main() {
             in1_batch_tile_id += KtNt;
         }
         if constexpr (bcast_B == 0) {
+#ifndef IN1_DRAM_HEIGHT_SHARDED
+            // For height-sharded DRAM, tile IDs are relative within a batch;
+            // batch offset is handled by switching DRAM banks
             in1_tensor_start_tile_id += KtNt;
+#endif
         }
 
 #ifdef FUSE_OP_REDUCE_SCATTER
         // Signal reduce_scatter to go
         op_signaler.synchronize_workers_and_signal_op(0);
-#endif
+#endif  // FUSE_OP_REDUCE_SCATTER
     }
 
 #ifdef OUT_SHARDED
     dfb_out.wait_front(static_cast<uint16_t>(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+#endif
+#ifdef ENABLE_GLOBAL_CB
+    experimental::update_remote_cb_config_in_l1(remote_cb_id);
 #endif
     // #53329: this kernel issues non-posted NOC atomics (multicast semaphore increments, and
     // OpSignaler in the fused reduce-scatter path). Flushing only writes lets the kernel retire
