@@ -84,7 +84,8 @@
     "35919091501",
     "20839307530",
     "35970162562",
-    "35962547130"
+    "35962547130",
+    "35969197075"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -826,7 +827,28 @@
       "note": "PR #57606 fully resolved: validation run 35919091501 (runtime-perf-tests) completed/success (all 39 checks passed). Re-grepped runtime_perf_pgm_dispatch test-execution job logs (wh_n300_civ2 job 107381022785, bh_p150_perf job 107381022647): 0 occurrences of demoted templates (UniqueRTArgs/Test Passed/Subdevice core ranges/Sems/KGs/CommonRTArgs/CBs/Running BM_pgm_dispatch) in either, while BM_pgm_dispatch benchmark lines and pgm_dispatch_perf kernel JIT-compile invocations are present in both (1938/1896 pgm_dispatch-related lines), confirming the path was exercised not skipped. Outcome commented (/codeowners ping) and PR marked ready for review (2026-09-24).",
       "pr": 57606,
       "last_state": "success"
+    },
+    {
+      "branch": "silencer/register-no-reset-default-device-marker",
+      "title": "[silencer] Register no_reset_default_device pytest marker",
+      "pattern": "PytestUnknownMarkWarning: Unknown pytest.mark.no_reset_default_device - is this a typo? -- marker consumed by root conftest.py's autouse reset_default_device fixture (conftest.py:903) but never registered in pytest.ini; fires on every collection of test_device_perf.py::test_device_perf_* (4 of 6 sampled jobs in run 35969197075)",
+      "source_run_id": "35969197075",
+      "source_job_ids": [
+        "107539492240",
+        "107539492251",
+        "107539492253",
+        "107539492274"
+      ],
+      "source_workflow": "models-t1-device-perf-tests.yaml",
+      "category": 6,
+      "validation_workflow_dispatched": "models-t1-device-perf-tests",
+      "dispatched": "2026-09-24",
+      "status": "open-pr",
+      "reported": false,
+      "nonterminal_reported": false,
+      "note": "PR opened this run: registered no_reset_default_device in pytest.ini's markers list (Python-only change, no build needed). Dispatched models-t1-device-perf-tests for validation; awaiting run outcome next scan. Validation should re-grep test-execution logs of a job collecting models/tt_transformers/tests/test_device_perf.py for PytestUnknownMarkWarning/no_reset_default_device.",
+      "pr": null
     }
   ],
-  "backlog_cursor": "Phase A this run (2026-09-24): resolved silencer/demote-pgm-dispatch-config-dump (PR #57606) -- dispatched run 35919091501 (runtime-perf-tests) completed/success (39/39 checks). Re-grepped runtime_perf_pgm_dispatch test-execution logs (jobs 107381022785 wh_n300_civ2, 107381022647 bh_p150_perf): 0 occurrences of demoted templates in either, while BM_pgm_dispatch benchmark lines and pgm_dispatch_perf kernel JIT-compile invocations are present in both, confirming the path was exercised. Outcome commented (/codeowners ping) and PR marked ready for review. Phase B: tried rotating to t3000-profiler-tests.yaml and galaxy-profiler-tests.yaml (both in dispatch allowlist, both unsampled) -- both have zero recent runs on main since Jan 2026 and their job logs return 410 Gone (expired); deprioritize both, they look effectively dead on main. Re-sampled t3000-tests.yaml (fresh run 35962547130, failure) jobs 107515728713/107515729203/107515753074 (t3k_ccl_2d_tests, t3k_tteager_tests, t3k_ttnn_multiprocess_slow_tests -- all individually success). Histogram: info/Metal 138, info/UMD 96, info/Fabric 75, warning/UMD 65, info/Distributed 60 (no new severity classes). Findings: (1) warning/UMD hwloc_set_area_membind()/init_hugepage pair (32x each) -- confirmed via cloned tt-umd submodule (tt_metal/third_party/umd/device/cpuset_lib.cpp:434, chip_helpers/silicon_sysmem_manager.cpp:298) to live entirely in vendored tenstorrent/tt-umd source, not tt-metal-owned; message itself cites tt-umd issue #893 and tt-metal issue #2614 (closed 2024-11-01, tt-rkim: \"No, we can close. This is a UMD thing... We likely will continue seeing this on CI\"). Not auto-fixable per Silencer scope (third-party repo) -- no action taken, not worth reopening #2614 since maintainers already explicitly accepted this as a known UMD-side CI artifact. (2) warning/Metal \"Skipping RISC reset/ethernet routing reset during teardown: Timeout waiting for Ethernet core service remote IO request\" (2x each) -- only observed in the t3k_tt_metal_multiprocess_tests job whose BigMeshDualRankTest2x4 test itself FAILED; this teardown warning is a symptom of that failure/hang, not independent log spam -- deferred, do not silence a warning that is signal for a real failing test. (3) warning/Always \"Unknown motherboard\" (physical_system_discovery.cpp) already has an existing warn-once guard in source (std::unordered_set warned_mobo_names) -- already fixed, no action needed. All other diagnostic/gha-annotation hits (copy_dest_value -Wdeprecated-declarations, Node.js 20 deprecation notice) already tracked (PRs #56360/#56969, ledger entry a3d5e97c1b48). No new safe target found this run; did not open a PR or issue for phase B (per \"when in doubt, do nothing\"). Next run: continue rotating through single-card-profiler-tests.yaml (0 runs currently, recheck later), models-t1-device-perf-tests.yaml, or re-sample sanity-tests.yaml/pr-gate.yaml test-execution steps for fresh compile-warning candidates."
+  "backlog_cursor": "Phase A this run (2026-09-24): no in-flight validations pending reconciliation (all prior entries already reported/terminal). Phase B: sampled models-t1-device-perf-tests.yaml (fresh run 35969197075, failure overall -- unrelated model device-perf failures) across 6 jobs (107539492240/251/253/260/274/290). Histogram: info/UMD 154, info/Metal 107, info/Distributed 24, info/Fabric 24, info/Device 21, info/BuildKernels 20, warning/UMD 10, warning/Always 9, critical/Always 1 (no new severity classes; UMD/hwloc warning already known as vendored tt-umd issue, not tracked here). Diagnostic channel: found PytestUnknownMarkWarning for no_reset_default_device fired in every job that collects models/tt_transformers/tests/test_device_perf.py (4 of 6 sampled jobs) -- root conftest.py's autouse reset_default_device fixture (conftest.py:903) genuinely consumes this marker but it was never added to pytest.ini's markers list. Opened PR registering it (this run's one target-producing action) and dispatched models-t1-device-perf-tests for validation. Also reconfirmed the existing -Wdeprecated-declarations copy_dest_value warning at llk_math_eltwise_binary_sfpu_macros.h:55 (4x in job 107539492240) -- already tracked via PRs #56360/#56969, no new action. Next run: reconcile this PR's dispatched validation outcome first (Phase A), then continue Phase B scan; consider rotating to single-card-profiler-tests.yaml (0 runs previously) or re-sampling pr-gate.yaml test-execution steps."
 }
