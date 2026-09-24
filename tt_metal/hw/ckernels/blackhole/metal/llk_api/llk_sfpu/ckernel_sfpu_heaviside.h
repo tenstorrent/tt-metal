@@ -48,9 +48,7 @@ inline void calculate_heaviside(std::uint32_t value) {
 // Op class for heaviside(x, value).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Heaviside : SfpuUnaryOp<Heaviside<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate = calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { heaviside_init(); }
 };
 

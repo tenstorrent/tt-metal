@@ -32,9 +32,7 @@ void init_softsign() {
 // Op class for softsign: x / (1 + |x|).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Softsign : SfpuUnaryOp<Softsign<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_softsign<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_softsign<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { init_softsign<APPROXIMATION_MODE>(); }
 };
 

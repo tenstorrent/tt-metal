@@ -106,25 +106,20 @@ void calculate_sub_int32(std::uint32_t scalar) {
 // Op class for an elementwise float binop with a scalar (BINOP_MODE: 0 add, 1 sub, 2 mul, 3 div, 4 rsub).
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 struct BinopWithScalar : SfpuUnaryOp<BinopWithScalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, is_fp32_dest_acc_en>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t param) {
-        calculate_binop_with_scalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, is_fp32_dest_acc_en>(param);
-    }
+    static constexpr auto& calculate =
+        calculate_binop_with_scalar<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS, is_fp32_dest_acc_en>;
 };
 
 // Op class for an elementwise int32 add with a scalar.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct AddInt32Scalar : SfpuUnaryOp<AddInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
-        calculate_add_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    }
+    static constexpr auto& calculate = calculate_add_int32<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for an elementwise int32 subtract of a scalar.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct SubInt32Scalar : SfpuUnaryOp<SubInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
-        calculate_sub_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    }
+    static constexpr auto& calculate = calculate_sub_int32<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace ckernel::sfpu

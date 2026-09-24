@@ -122,10 +122,7 @@ inline void _calculate_sfpu_isinf_isnan_()
 template <bool APPROXIMATION_MODE, FiniteCheck CHECK, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct IsinfIsnan : SfpuUnaryOp<IsinfIsnan<APPROXIMATION_MODE, CHECK, ITERATIONS, SLOT>, SLOT>
 {
-    static inline __attribute__((always_inline)) void calculate()
-    {
-        _calculate_sfpu_isinf_isnan_<CHECK, APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = _calculate_sfpu_isinf_isnan_<CHECK, APPROXIMATION_MODE, ITERATIONS>;
 };
 
 } // namespace ckernel::sfpu

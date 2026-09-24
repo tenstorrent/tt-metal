@@ -39,9 +39,7 @@ inline void calculate_elu(std::uint32_t slope) {
 // Op class for elu with slope alpha (fp32 bits).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Elu : SfpuUnaryOp<Elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t slope) {
-        calculate_elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(slope);
-    }
+    static constexpr auto& calculate = calculate_elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { elu_init(); }
 };
 

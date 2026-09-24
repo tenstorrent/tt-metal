@@ -45,7 +45,7 @@ inline void hardmish() {
 // Op class for hardmish: x * clamp(0.5 * x + 1, 0, 1).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Hardmish : SfpuUnaryOp<Hardmish<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { hardmish<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = hardmish<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { hardmish_init(); }
 };
 

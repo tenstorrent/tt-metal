@@ -152,7 +152,7 @@ void i1_init() {
 // Op class for the modified Bessel function I1(x).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct I1 : SfpuUnaryOp<I1<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_i1<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_i1<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { i1_init<APPROXIMATION_MODE>(); }
 };
 

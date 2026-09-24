@@ -184,10 +184,7 @@ inline void div_floor_init() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct DivInt32Floor : SfpuBinaryOp<DivInt32Floor<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { div_floor_init<APPROXIMATION_MODE>(); }
 };
@@ -197,10 +194,7 @@ struct DivInt32Floor : SfpuBinaryOp<DivInt32Floor<APPROXIMATION_MODE, ITERATIONS
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct DivInt32Trunc : SfpuBinaryOp<DivInt32Trunc<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { div_trunc_init<APPROXIMATION_MODE>(); }
 };

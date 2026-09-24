@@ -33,10 +33,7 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
 // Op class for clamp(x, min_val, max_val) on floats (fp32 bits).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Clamp : SfpuUnaryOp<Clamp<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t min_val, const std::uint32_t max_val) {
-        calculate_clamp<APPROXIMATION_MODE, ITERATIONS>(min_val, max_val);
-    }
+    static constexpr auto& calculate = calculate_clamp<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { clamp_init(); }
 };
 
@@ -54,10 +51,7 @@ inline void calculate_clamp_int32(std::uint32_t min_val, std::uint32_t max_val) 
 // Op class for clamp(x, min_val, max_val) on int32.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct ClampInt32 : SfpuUnaryOp<ClampInt32<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t min_val, const std::uint32_t max_val) {
-        calculate_clamp_int32<APPROXIMATION_MODE, ITERATIONS>(min_val, max_val);
-    }
+    static constexpr auto& calculate = calculate_clamp_int32<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { clamp_init(); }
 };
 

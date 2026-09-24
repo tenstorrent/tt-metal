@@ -148,10 +148,7 @@ inline void fmod_binary_init() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct FmodInt32 : SfpuBinaryOp<FmodInt32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_fmod_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_fmod_int32<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { fmod_int32_init<APPROXIMATION_MODE>(); }
 };
@@ -165,11 +162,7 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct BinaryFmod : SfpuBinaryOp<BinaryFmod<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_binary_fmod<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_sfpu_binary_fmod<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
 
     static inline __attribute__((always_inline)) void init_op() { fmod_binary_init<APPROXIMATION_MODE>(); }
 };

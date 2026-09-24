@@ -52,10 +52,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Clamp : SfpuUnaryOp<Clamp<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t min_val, const std::uint32_t max_val) {
-        calculate_clamp<APPROXIMATION_MODE, ITERATIONS>(min_val, max_val);
-    }
+    static constexpr auto& calculate = calculate_clamp<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

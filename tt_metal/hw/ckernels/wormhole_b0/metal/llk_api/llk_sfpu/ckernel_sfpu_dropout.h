@@ -62,10 +62,7 @@ inline void dropout_init(const std::uint32_t seed) {
 // seeds the PRNG.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Dropout : SfpuUnaryOp<Dropout<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t probability, const std::uint32_t scale) {
-        calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(probability, scale);
-    }
+    static constexpr auto& calculate = calculate_dropout<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t seed) {
         dropout_init<APPROXIMATION_MODE>(seed);
     }

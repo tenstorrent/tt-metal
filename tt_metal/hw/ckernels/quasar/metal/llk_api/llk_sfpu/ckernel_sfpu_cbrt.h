@@ -86,9 +86,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Cbrt : SfpuUnaryOp<Cbrt<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { cube_root_init<APPROXIMATION_MODE>(); }
 };
 

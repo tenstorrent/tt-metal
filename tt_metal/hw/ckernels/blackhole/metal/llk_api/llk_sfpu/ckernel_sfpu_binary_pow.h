@@ -413,11 +413,7 @@ inline void sfpu_binary_pow_init() {
 // Op class for elementwise pow(in0, in1) of two float tiles in Dest.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct BinaryPow : SfpuBinaryOp<BinaryPow<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
     static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
 };
 

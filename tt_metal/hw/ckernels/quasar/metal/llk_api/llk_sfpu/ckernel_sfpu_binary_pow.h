@@ -429,11 +429,7 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct BinaryPow : SfpuBinaryOp<BinaryPow<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "calculate_sfpu_binary_pow assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>;
     static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
 };
 

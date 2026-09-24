@@ -362,11 +362,7 @@ inline void calculate_binary_eq_int(
 // Op class for elementwise compare of two float tiles in Dest: out = (in0 OP in1) ? 1.0 : 0.0.
 template <bool APPROXIMATION_MODE, CompareOp RELATIONAL_OP, int ITERATIONS = 8>
 struct BinaryComp : SfpuBinaryOp<BinaryComp<APPROXIMATION_MODE, RELATIONAL_OP, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_binary_comp_fp32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_binary_comp_fp32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>;
     static inline __attribute__((always_inline)) void init_op() { binary_comp_init(); }
 };
 

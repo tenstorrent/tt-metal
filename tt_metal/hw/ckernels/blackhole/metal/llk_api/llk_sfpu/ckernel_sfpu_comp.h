@@ -280,9 +280,7 @@ inline void calculate_comp_unary_int(int scalar) {
 // Op class for comparing a float tile in Dest against zero: x OP 0 ? 1.0 : 0.0.
 template <bool APPROXIMATION_MODE, CompareOp COMP_MODE, int ITERATIONS = 8>
 struct ZeroComp : SfpuUnaryOp<ZeroComp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_comp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_comp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         if constexpr (COMP_MODE == CompareOp::eq) {
             equal_zero_init();

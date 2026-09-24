@@ -80,9 +80,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct LeftShift : SfpuUnaryOp<LeftShift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t shift_amt) {
-        calculate_left_shift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS>(shift_amt);
-    }
+    static constexpr auto& calculate = calculate_left_shift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { left_shift_init(); }
 };
@@ -95,9 +93,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct RightShift : SfpuUnaryOp<RightShift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t shift_amt) {
-        calculate_right_shift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS>(shift_amt);
-    }
+    static constexpr auto& calculate = calculate_right_shift<APPROXIMATION_MODE, DATA_FORMAT, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { right_shift_init(); }
 };

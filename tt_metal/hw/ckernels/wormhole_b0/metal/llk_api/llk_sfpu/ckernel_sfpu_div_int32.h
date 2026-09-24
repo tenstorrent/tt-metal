@@ -55,10 +55,7 @@ inline void div_init() {
 // Op class for an elementwise division of two int32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct DivInt32 : SfpuBinaryOp<DivInt32<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { div_init<APPROXIMATION_MODE>(); }
 };

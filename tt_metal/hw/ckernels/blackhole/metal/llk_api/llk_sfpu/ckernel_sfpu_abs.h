@@ -44,16 +44,14 @@ inline void calculate_abs_int32() {
 // Op class for |x| on float tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Abs : SfpuUnaryOp<Abs<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_abs<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_abs<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { abs_init(); }
 };
 
 // Op class for |x| on int32 tiles.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct AbsInt32 : SfpuUnaryOp<AbsInt32<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_abs_int32<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_abs_int32<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { abs_init(); }
 };
 

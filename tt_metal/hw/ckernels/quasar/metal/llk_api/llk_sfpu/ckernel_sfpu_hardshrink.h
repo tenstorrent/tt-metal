@@ -37,9 +37,7 @@ inline void calculate_hardshrink(uint32_t param0) {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Hardshrink : SfpuUnaryOp<Hardshrink<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t param0) {
-        calculate_hardshrink<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
+    static constexpr auto& calculate = calculate_hardshrink<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { hardshrink_init(); }
 };
 

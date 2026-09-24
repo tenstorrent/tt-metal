@@ -116,14 +116,7 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Mac : SfpuTernaryOp<Mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_in2,
-        const std::uint32_t dst_index_out) {
-        calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
-            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_mac<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() {
         mac_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format>();

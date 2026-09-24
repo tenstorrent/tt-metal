@@ -55,10 +55,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Softcap : SfpuUnaryOp<Softcap<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t beta, const std::uint32_t beta_recip) {
-        calculate_softcap<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(beta, beta_recip);
-    }
+    static constexpr auto& calculate = calculate_softcap<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { softcap_init(); }
 };
 

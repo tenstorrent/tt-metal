@@ -41,18 +41,14 @@ inline void calculate_identity_uint() {
 // Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Identity : SfpuUnaryOp<Identity<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_identity<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_identity<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 // Op class for identity(x) on uint32 tiles. Same name and leading template parameters as on
 // Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct IdentityUint : SfpuUnaryOp<IdentityUint<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_identity_uint<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_identity_uint<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace sfpu

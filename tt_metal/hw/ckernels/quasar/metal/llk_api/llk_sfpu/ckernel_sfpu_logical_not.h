@@ -49,9 +49,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct LogicalNot : SfpuUnaryOp<LogicalNot<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_logical_not<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_logical_not<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { logical_not_unary_init(); }
 };
 

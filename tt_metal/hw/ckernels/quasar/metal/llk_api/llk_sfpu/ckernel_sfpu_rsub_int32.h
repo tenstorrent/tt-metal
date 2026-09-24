@@ -64,20 +64,14 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct RsubInt : SfpuBinaryOp<RsubInt<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_rsub_int<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_rsub_int<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>;
 };
 
 // Op class for an elementwise int32 reverse subtract with a scalar: y = scalar - x.
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct RsubInt32Scalar : SfpuUnaryOp<RsubInt32Scalar<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
-        calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    }
+    static constexpr auto& calculate = calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>;
 };
 
 }  // namespace ckernel::sfpu

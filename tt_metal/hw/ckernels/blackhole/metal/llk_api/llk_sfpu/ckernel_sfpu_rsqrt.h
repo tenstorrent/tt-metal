@@ -30,9 +30,7 @@ void rsqrt_init() {
 // Op class for the reciprocal square root.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en = false, bool FAST_APPROX = false>
 struct Rsqrt : SfpuUnaryOp<Rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>();
-    }
+    static constexpr auto& calculate = calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>;
     static inline __attribute__((always_inline)) void init_op() { rsqrt_init<APPROXIMATION_MODE>(); }
 };
 

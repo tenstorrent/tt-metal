@@ -157,9 +157,7 @@ inline void exp2_init() {
 // Op class for 2 ^ x. Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Exp2 : SfpuUnaryOp<Exp2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_exp2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_exp2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         exp2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }

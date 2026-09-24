@@ -143,9 +143,7 @@ inline void calculate_remainder() {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Remainder : SfpuUnaryOp<Remainder<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_remainder<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_remainder<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
         init_remainder<APPROXIMATION_MODE>(value, recip);
@@ -156,9 +154,7 @@ struct Remainder : SfpuUnaryOp<Remainder<APPROXIMATION_MODE, ITERATIONS, SLOT>, 
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct RemainderUint32Scalar : SfpuUnaryOp<RemainderUint32Scalar<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
-        calculate_remainder_uint32_scalar<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    }
+    static constexpr auto& calculate = calculate_remainder_uint32_scalar<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { remainder_uint32_init<APPROXIMATION_MODE>(); }
 };

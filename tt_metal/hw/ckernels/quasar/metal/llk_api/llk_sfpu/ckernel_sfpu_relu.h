@@ -16,11 +16,6 @@
 
 namespace ckernel {
 namespace sfpu {
-// tt-llk's ckernel_sfpu.h includes this file before llk_math_eltwise_unary_sfpu.h has defined
-// SfpuUnaryOp, so declare it for the op classes below; it is complete wherever they are used.
-template <typename Op, trisc::DstTileShape SLOT>
-struct SfpuUnaryOp;
-
 // SFPI clamp of val to [0, threshold]; copied from the Blackhole tt-llk relu header for the
 // SFPI kernels that call it (activations' hardsigmoid).
 sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold) {
@@ -120,9 +115,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Lrelu : SfpuUnaryOp<Lrelu<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t slope) {
-        _calculate_lrelu_<ITERATIONS>(slope);
-    }
+    static constexpr auto& calculate = _calculate_lrelu_<ITERATIONS>;
 };
 
 // Calculates RELU MIN for number of rows of output SFPU ops (Quasar = 2 rows)
@@ -163,9 +156,7 @@ template <
     typename T = std::uint32_t,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct ReluMin : SfpuUnaryOp<ReluMin<VectorType, APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold) {
-        _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
-    }
+    static constexpr auto& calculate = _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>;
 };
 
 // Calculates RELU MAX for number of rows of output SFPU ops (Quasar = 2 rows)
@@ -207,9 +198,7 @@ template <
     typename T = std::uint32_t,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct ReluMax : SfpuUnaryOp<ReluMax<VectorType, APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold) {
-        _relu_max_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>(threshold);
-    }
+    static constexpr auto& calculate = _relu_max_<VectorType, APPROXIMATION_MODE, ITERATIONS, T>;
 };
 
 }  // namespace sfpu

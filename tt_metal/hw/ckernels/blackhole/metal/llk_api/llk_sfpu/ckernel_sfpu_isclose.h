@@ -106,15 +106,7 @@ inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
 // out = |in0 - in1| <= atol + rtol * |in1| ? 1.0 : 0.0, with rtol and atol passed as float bits.
 template <bool APPROXIMATION_MODE, bool EQUAL_NAN = false, int ITERATIONS = 8>
 struct IsClose : SfpuBinaryOp<IsClose<APPROXIMATION_MODE, EQUAL_NAN, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_out,
-        std::uint32_t rtol_bits,
-        std::uint32_t atol_bits) {
-        calculate_sfpu_isclose<APPROXIMATION_MODE, ITERATIONS, EQUAL_NAN>(
-            dst_index_in0, dst_index_in1, dst_index_out, rtol_bits, atol_bits);
-    }
+    static constexpr auto& calculate = calculate_sfpu_isclose<APPROXIMATION_MODE, ITERATIONS, EQUAL_NAN>;
     static inline __attribute__((always_inline)) void init_op() { isclose_init(); }
 };
 

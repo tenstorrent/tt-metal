@@ -72,7 +72,7 @@ inline void calculate_fmod() {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Fmod : SfpuUnaryOp<Fmod<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_fmod<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_fmod<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
         init_fmod<APPROXIMATION_MODE>(value, recip);

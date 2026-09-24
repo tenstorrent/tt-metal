@@ -34,10 +34,7 @@ inline void calculate_hardtanh(uint param0, uint param1) {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Hardtanh : SfpuUnaryOp<Hardtanh<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t param0, const std::uint32_t param1) {
-        calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
-    }
+    static constexpr auto& calculate = calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { hardtanh_init(); }
 };
 

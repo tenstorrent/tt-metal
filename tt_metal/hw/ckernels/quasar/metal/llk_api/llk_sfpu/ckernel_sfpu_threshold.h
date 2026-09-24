@@ -58,9 +58,7 @@ template <
     typename T = std::uint32_t,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Threshold : SfpuUnaryOp<Threshold<APPROXIMATION_MODE, ITERATIONS, T, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const T threshold, const T value) {
-        _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>(threshold, value);
-    }
+    static constexpr auto& calculate = _calculate_threshold_<APPROXIMATION_MODE, ITERATIONS, T>;
 };
 
 } // namespace ckernel::sfpu

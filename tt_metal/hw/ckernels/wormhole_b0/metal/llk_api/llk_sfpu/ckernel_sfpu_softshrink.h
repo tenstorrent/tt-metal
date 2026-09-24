@@ -30,9 +30,7 @@ inline void calculate_softshrink(std::uint32_t param0) {
 // Op class for softshrink with threshold lambda (param0, fp32 bits).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Softshrink : SfpuUnaryOp<Softshrink<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t param0) {
-        calculate_softshrink<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
+    static constexpr auto& calculate = calculate_softshrink<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { softshrink_init(); }
 };
 

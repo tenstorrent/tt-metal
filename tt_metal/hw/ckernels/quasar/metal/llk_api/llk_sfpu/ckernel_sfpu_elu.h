@@ -44,9 +44,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Elu : SfpuUnaryOp<Elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t slope) {
-        calculate_elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(slope);
-    }
+    static constexpr auto& calculate = calculate_elu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { elu_init(); }
 };
 

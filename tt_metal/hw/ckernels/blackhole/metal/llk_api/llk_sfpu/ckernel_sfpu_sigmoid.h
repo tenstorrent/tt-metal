@@ -73,9 +73,7 @@ inline void sigmoid_init() {
 // Op class for sigmoid(x) = 1 / (1 + exp(-x)). Only run() needs is_fp32_dest_acc_en.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct Sigmoid : SfpuUnaryOp<Sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { sigmoid_init<APPROXIMATION_MODE>(); }
 };
 

@@ -34,10 +34,7 @@ inline void calculate_hardtanh(std::uint32_t param0, std::uint32_t param1) {
 // Op class for hardtanh: clamp(x, param0, param1) (fp32 bits).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Hardtanh : SfpuUnaryOp<Hardtanh<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t param0, const std::uint32_t param1) {
-        calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
-    }
+    static constexpr auto& calculate = calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { hardtanh_init(); }
 };
 

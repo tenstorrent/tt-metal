@@ -172,9 +172,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 // init seeds the PRNG.
 template <bool APPROXIMATION_MODE>
 struct Rand : SfpuUnaryOp<Rand<APPROXIMATION_MODE>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t from, const std::uint32_t scale) {
-        rand<APPROXIMATION_MODE>(from, scale);
-    }
+    static constexpr auto& calculate = rand<APPROXIMATION_MODE>;
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t seed) {
         rand_init<APPROXIMATION_MODE>(seed);
     }

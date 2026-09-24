@@ -67,7 +67,7 @@ void erfinv_init() {
 // Op class for erfinv(x).
 template <bool APPROXIMATION_MODE>
 struct Erfinv : SfpuUnaryOp<Erfinv<APPROXIMATION_MODE>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_erfinv<APPROXIMATION_MODE>(); }
+    static constexpr auto& calculate = calculate_erfinv<APPROXIMATION_MODE>;
     static inline __attribute__((always_inline)) void init_op() { erfinv_init<APPROXIMATION_MODE>(); }
 };
 

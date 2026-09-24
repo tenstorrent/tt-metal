@@ -58,9 +58,8 @@ template <
     RoundingMode rounding_mode = RoundingMode::None,
     int ITERATIONS = 8>
 struct Rdiv : SfpuUnaryOp<Rdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, rounding_mode, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_rdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, rounding_mode, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate =
+        calculate_rdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, rounding_mode, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { rdiv_init<APPROXIMATION_MODE>(); }
 };
 

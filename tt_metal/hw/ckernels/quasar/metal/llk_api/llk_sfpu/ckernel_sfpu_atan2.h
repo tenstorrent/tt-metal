@@ -194,11 +194,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Atan2 : SfpuBinaryOp<Atan2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_sfpu_atan2<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>(
-            dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_sfpu_atan2<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>;
     static inline __attribute__((always_inline)) void init_op() {
         calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }

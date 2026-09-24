@@ -155,7 +155,7 @@ void i1_init() {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct I1 : SfpuUnaryOp<I1<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_i1<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_i1<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { i1_init<APPROXIMATION_MODE>(); }
 };
 

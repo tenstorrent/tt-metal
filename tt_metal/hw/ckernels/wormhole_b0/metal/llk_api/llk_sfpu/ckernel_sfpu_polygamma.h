@@ -144,10 +144,7 @@ void polygamma_init() {
 // Op class for polygamma(n, x), with n and the scale packed by the host.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct Polygamma : SfpuUnaryOp<Polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t n_packed, const std::uint32_t scale_packed) {
-        calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(n_packed, scale_packed);
-    }
+    static constexpr auto& calculate = calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { polygamma_init<APPROXIMATION_MODE>(); }
 };
 

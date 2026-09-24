@@ -30,9 +30,7 @@ inline void calculate_alt_complex_rotate90() {
 // on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct AltComplexRotate90 : SfpuUnaryOp<AltComplexRotate90<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_alt_complex_rotate90<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_alt_complex_rotate90<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { alt_complex_rotate90_init(); }
 };
 

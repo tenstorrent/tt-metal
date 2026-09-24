@@ -184,9 +184,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct LgammaStirling : SfpuUnaryOp<LgammaStirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_lgamma_stirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_lgamma_stirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
 };
 
@@ -195,10 +193,7 @@ struct LgammaStirling : SfpuUnaryOp<LgammaStirling<APPROXIMATION_MODE, is_fp32_d
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct LgammaStirlingFp32 : SfpuBinaryOp<LgammaStirlingFp32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_lgamma_stirling_fp32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_lgamma_stirling_fp32<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
 };
 
@@ -211,14 +206,7 @@ template <
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct LgammaAdjusted : SfpuTernaryOp<LgammaAdjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
     static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_in2,
-        const std::uint32_t dst_index_out) {
-        calculate_lgamma_adjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(
-            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
-    }
+    static constexpr auto& calculate = calculate_lgamma_adjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
 };
 
 }  // namespace ckernel::sfpu

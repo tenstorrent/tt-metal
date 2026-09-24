@@ -46,7 +46,7 @@ inline void hardmish() {
 // Same name and leading template parameters as on Wormhole/Blackhole.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Hardmish : SfpuUnaryOp<Hardmish<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate() { hardmish<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = hardmish<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { hardmish_init(); }
 };
 

@@ -248,9 +248,7 @@ inline void unary_max_min_int32_init() {
 // Op class for max(x, value) / min(x, value) on float tiles. unary_max_min_init programs ADDR_MOD_6.
 template <bool IS_MAX_OP, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct UnaryMaxMin : SfpuUnaryOp<UnaryMaxMin<IS_MAX_OP, APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_unary_max_min<IS_MAX_OP, APPROXIMATION_MODE, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate = calculate_unary_max_min<IS_MAX_OP, APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { unary_max_min_init<IS_MAX_OP>(); }
 };
 
@@ -258,9 +256,8 @@ struct UnaryMaxMin : SfpuUnaryOp<UnaryMaxMin<IS_MAX_OP, APPROXIMATION_MODE, ITER
 // programs ADDR_MOD_6.
 template <bool IS_MAX_OP, bool IS_UNSIGNED, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct UnaryMaxMinInt32 : SfpuUnaryOp<UnaryMaxMinInt32<IS_MAX_OP, IS_UNSIGNED, APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_unary_max_min_int32<IS_MAX_OP, IS_UNSIGNED, APPROXIMATION_MODE, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate =
+        calculate_unary_max_min_int32<IS_MAX_OP, IS_UNSIGNED, APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { unary_max_min_int32_init<IS_MAX_OP, IS_UNSIGNED>(); }
 };
 

@@ -206,9 +206,7 @@ void expm1_init() {
 // Op class for exp(x) - 1.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Expm1 : SfpuUnaryOp<Expm1<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_expm1<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_expm1<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         expm1_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }

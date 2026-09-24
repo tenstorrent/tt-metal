@@ -40,7 +40,7 @@ inline void silu_init() {
 // Op class for silu(x) = x * sigmoid(x). Only run() needs is_fp32_dest_acc_en.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 struct Silu : SfpuUnaryOp<Silu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_silu<is_fp32_dest_acc_en, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_silu<is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { silu_init<APPROXIMATION_MODE>(); }
 };
 

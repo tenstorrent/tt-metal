@@ -36,9 +36,7 @@ inline void calculate_prelu(std::uint32_t value) {
 // Op class for prelu with a scalar slope (fp32 bits).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Prelu : SfpuUnaryOp<Prelu<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
-        calculate_prelu<APPROXIMATION_MODE, ITERATIONS>(value);
-    }
+    static constexpr auto& calculate = calculate_prelu<APPROXIMATION_MODE, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { prelu_init(); }
 };
 }  // namespace sfpu

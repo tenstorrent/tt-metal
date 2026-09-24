@@ -173,9 +173,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Cumsum : SfpuUnaryOp<Cumsum<APPROXIMATION_MODE, ITERATIONS>> {
     static constexpr bool walks_faces = false;
 
-    static inline __attribute__((always_inline)) void calculate(const bool first) {
-        calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>(first);
-    }
+    static constexpr auto& calculate = calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op() { cumsum_init<APPROXIMATION_MODE>(); }
 };

@@ -173,13 +173,9 @@ void recip_init() {
 }
 
 // Op class for the reciprocal. On Blackhole its init programs ADDR_MOD_6.
-// On Wormhole the precise BF16 init loads the seed that makes calculate_reciprocal correctly rounded, as
-// recip_tile_init does; ops that call recip_init directly keep its default constants.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 struct Reciprocal : SfpuUnaryOp<Reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() {
-        calculate_reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    }
+    static constexpr auto& calculate = calculate_reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() {
         recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, !APPROXIMATION_MODE && !is_fp32_dest_acc_en>();
     }

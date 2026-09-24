@@ -47,10 +47,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Celu : SfpuUnaryOp<Celu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t alpha, const std::uint32_t alpha_recip) {
-        calculate_celu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(alpha, alpha_recip);
-    }
+    static constexpr auto& calculate = calculate_celu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { celu_init(); }
 };
 

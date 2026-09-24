@@ -72,7 +72,7 @@ inline void calculate_fmod() {
 // Op class for an elementwise fmod by the scalar denominator that init() loads.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 struct Fmod : SfpuUnaryOp<Fmod<APPROXIMATION_MODE, ITERATIONS>> {
-    static inline __attribute__((always_inline)) void calculate() { calculate_fmod<APPROXIMATION_MODE, ITERATIONS>(); }
+    static constexpr auto& calculate = calculate_fmod<APPROXIMATION_MODE, ITERATIONS>;
 
     static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
         init_fmod<APPROXIMATION_MODE>(value, recip);

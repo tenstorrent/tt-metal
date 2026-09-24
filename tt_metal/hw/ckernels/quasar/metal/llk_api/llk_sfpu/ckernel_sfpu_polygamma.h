@@ -149,10 +149,7 @@ template <
     int ITERATIONS = 8,
     trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
 struct Polygamma : SfpuUnaryOp<Polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
-    static inline __attribute__((always_inline)) void calculate(
-        const std::uint32_t n_packed, const std::uint32_t scale_packed) {
-        calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(n_packed, scale_packed);
-    }
+    static constexpr auto& calculate = calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
     static inline __attribute__((always_inline)) void init_op() { polygamma_init<APPROXIMATION_MODE>(); }
 };
 
