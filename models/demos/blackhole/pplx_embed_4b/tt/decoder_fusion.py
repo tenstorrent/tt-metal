@@ -119,7 +119,16 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
     def forward(x, *args, **kwargs):
         mode = kwargs.get("mode", args[4] if len(args) > 4 else "decode")  # (current_pos, rot_g, rot_l, user_id, mode)
         is_prefill = mode == Mode.PREFILL or mode == "prefill"
-        if not is_prefill or not supported(x, x):
+        if not is_prefill:
+            return orig_forward(x, *args, **kwargs)
+        if not supported(x, x):
+            # bs1: the previous layer's residual add already wrote the norm's block-shard layout. That input is
+            # not a fused-add operand, but this layer's adds still have to write the shard layout, or every
+            # other layer falls back to interleaved adds + a real I2S in front of each norm.
+            if x.is_sharded() and model_args is not None and os.getenv("QWEN_BS1_RESID_SHARDED", "1") == "1":
+                return _forward_resid_sharded(
+                    layer, orig_forward, model_args, next_attn_consts is not None, x, args, kwargs
+                )
             return orig_forward(x, *args, **kwargs)
         rows = int(x.padded_shape[-2]) * int(x.padded_shape[-3]) * int(x.padded_shape[0])
         fuse = None

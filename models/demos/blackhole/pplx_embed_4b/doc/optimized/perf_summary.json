@@ -217,5 +217,21 @@
     "#57722 head-major output / in0 tile-id remap in minimal_matmul (~-10 ms bs32)",
     "device is harvested 120/130 cores, so absolute numbers are ~8% pessimistic vs a full P150"
   ],
-  "records": "doc/POSITIVE_RESULTS.md (landings), doc/NEGATIVE_RESULTS.md (rejected experiments with numbers), doc/PERF_GUIDE.md (how to run, measure, profile)"
+  "records": "doc/POSITIVE_RESULTS.md (landings), doc/NEGATIVE_RESULTS.md (rejected experiments with numbers), doc/PERF_GUIDE.md (how to run, measure, profile)",
+  "bs1_resid_sharded_every_layer_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); not the chip-4 host of e2e_ms / device_ms_one_traced_replay",
+    "device_ms_one_traced_replay": {
+      "before": 16.97,
+      "after": 16.798
+    },
+    "interleaved_to_sharded_calls": {
+      "before": 36,
+      "after": 1
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 17.285,
+      "after": 17.218
+    },
+    "stsb_bs1_eval_accuracy_tt": 0.8161
+  }
 }
