@@ -24,6 +24,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/test_cb_pages.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_emule_compute_fidelity.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_emule_host_wait.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_emule_llk_dependencies.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_host_alignment.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_metadata_size.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_noc_without_barrier.cpp
