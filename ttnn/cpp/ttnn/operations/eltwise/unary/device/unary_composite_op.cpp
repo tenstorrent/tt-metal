@@ -4,6 +4,7 @@
 
 #include "unary_composite_op.hpp"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <variant>
@@ -109,25 +110,31 @@ namespace ttnn {
 // ln(Gamma_4(a)) = 3*ln(pi) + ln(Gamma(a)) + ln(Gamma(a - 0.5)) + ln(Gamma(a - 1.0)) + ln(Gamma(a - 1.5))
 // Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
+// lgamma(a - 1) = lgamma(a) - ln(a - 1) and lgamma(a - 1.5) = lgamma(a - 0.5) - ln(a - 1.5), so
+//   ln(Gamma_4(a)) = 2 * (ln(Gamma(a)) + ln(Gamma(a - 0.5))) - ln((a - 1) * (a - 1.5)) + 3*ln(pi)
+// which needs two lgamma evaluations instead of four; the shifts, the log and the final scale/offset are
+// fused into the two binary ops as activations.
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::lgamma(x, output_mem_config);
-    result = ttnn::add(
-        result,
+    using operations::unary::EltwiseUnaryWithParam;
+    using operations::unary::UnaryOpType;
+    constexpr float three_ln_pi = 3.434189657547f;
+
+    Tensor lgamma_sum = ttnn::add(
+        ttnn::lgamma(x, output_mem_config),
         ttnn::lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
-    result = ttnn::add(
-        result,
-        ttnn::lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    result = ttnn::add(
-        result,
-        ttnn::lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    result = ttnn::add(result, 3.434189657547f, std::nullopt, output_mem_config);
-    return result;
+
+    const std::array minus_one{EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f}};
+    const std::array minus_one_and_half{EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.5f}};
+    const std::array then_log{EltwiseUnaryWithParam{UnaryOpType::LOG}};
+    Tensor log_shift_product =
+        ttnn::multiply(x, x, std::nullopt, output_mem_config, std::nullopt, then_log, minus_one, minus_one_and_half);
+
+    const std::array times_two{EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 2.0f}};
+    const std::array plus_three_ln_pi{EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, three_ln_pi}};
+    return ttnn::subtract(
+        lgamma_sum, log_shift_product, std::nullopt, output_mem_config, std::nullopt, plus_three_ln_pi, times_two);
 }
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {

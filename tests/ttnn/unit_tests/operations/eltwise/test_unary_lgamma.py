@@ -46,3 +46,15 @@ def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
         f"{err_inside:.4e} ({err_boundary / err_inside:.1f}x). The boundary is being sent to "
         f"the Stirling arm instead of the bridge it belongs to."
     )
+
+
+# multigammaln (p = 4) is computed from two lgamma evaluations plus ln((a - 1)(a - 1.5)) via
+# lgamma(a - 1) = lgamma(a) - ln(a - 1). Evaluating lgamma(a - 1.5) directly near the a > 1.5 domain
+# edge cost up to ~1e-2 relative error in fp32; the recurrence keeps the whole domain near fp32 accuracy.
+def test_multigammaln_fp32(device):
+    x = torch.linspace(1.5 + 2**-10, 100.0, 32 * 32 * 8, dtype=torch.float32).reshape(1, 1, 256, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.multigammaln(tt_x)).double()
+    expected = torch.special.multigammaln(x.double(), 4)
+    rel = (result - expected).abs() / expected.abs().clamp(min=1.0)
+    assert rel.max().item() < 1e-4, f"max relative error {rel.max().item():.3e} at x={x.flatten()[rel.argmax()].item()}"
