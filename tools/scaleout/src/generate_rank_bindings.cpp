@@ -626,11 +626,12 @@ int main(int argc, char** argv) {
             mgds.emplace_back(MeshGraphDescriptor(mgd_path, /*backwards_compatible=*/true));
             mgd_paths_in_order.push_back(mgd_path);
         }
-        PhysicalGroupingDescriptor pgd = PhysicalGroupingDescriptor::find_and_load(
+        std::optional<PhysicalGroupingDescriptor> pgd = PhysicalGroupingDescriptor::find_and_load(
             args.physical_grouping_descriptor_path.has_value()
                 ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
                 : std::nullopt,
             &psd);
+        const PhysicalGroupingDescriptor* pgd_ptr = pgd.has_value() ? &*pgd : nullptr;
 
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();
@@ -705,7 +706,7 @@ int main(int argc, char** argv) {
                 // Same enumerator as the single-solution path, built once. Each next() yields one mapping
                 // from the live SAT session; this loop is the only extra work for --all-solutions.
                 MultiMeshSolutionEnumerator enumerator =
-                    make_topology_mapping_enumerator(psd, &pgd, mgds, mgd_paths_in_order, unique_shapes);
+                    make_topology_mapping_enumerator(psd, pgd_ptr, mgds, mgd_paths_in_order, unique_shapes);
 
                 std::vector<SolutionIndexEntry> index_entries;
 
@@ -828,7 +829,7 @@ int main(int argc, char** argv) {
                 // Stage: Run topology mapping
                 log_info(tt::LogFabric, "Stage: Running topology mapping...");
 
-                TopologyMappingParts topology = run_topology_mapping(psd, &pgd, mgds, mgd_paths_in_order);
+                TopologyMappingParts topology = run_topology_mapping(psd, pgd_ptr, mgds, mgd_paths_in_order);
 
                 if (topology.parts.empty() || !topology.parts.front().success) {
                     log_error(

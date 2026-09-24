@@ -789,7 +789,7 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
     }
 }
 
-PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
+std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_load(
     const std::optional<std::filesystem::path>& pgd_path,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     // Physical grouping descriptor textprotos ship in two different trees depending on how tt-metal is
@@ -833,7 +833,7 @@ PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
 
     if (pgd_path.has_value() && !pgd_path->empty()) {
         if (auto loaded = load_if_regular_file(*pgd_path)) {
-            return *loaded;
+            return loaded;
         }
         TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
     }
@@ -842,7 +842,7 @@ PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
     if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
         const std::filesystem::path explicit_path(pgd_path_env);
         if (auto loaded = load_if_regular_file(explicit_path)) {
-            return *loaded;
+            return loaded;
         }
         TT_THROW(
             "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
@@ -857,11 +857,11 @@ PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
             std::filesystem::path("/data/scaleout_configs") / cluster_name /
             (cluster_name + "_physical_grouping_descriptor.textproto");
         if (auto loaded = load_if_regular_file(scaleout_path)) {
-            return *loaded;
+            return loaded;
         }
         searched.push_back(scaleout_path);
         if (auto loaded = load_from_grouping_dirs(cluster_name + "_physical_grouping_descriptor.textproto")) {
-            return *loaded;
+            return loaded;
         }
     }
 
@@ -889,17 +889,17 @@ PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
     }
     if (arch_cluster_filename.has_value()) {
         if (auto loaded = load_from_grouping_dirs(*arch_cluster_filename)) {
-            return *loaded;
+            return loaded;
         }
     }
 
     // 3. Default fallback (also searched in both grouping dirs).
     if (auto loaded = load_from_grouping_dirs("default_physical_grouping_descriptor.textproto")) {
         log_info(tt::LogFabric, "No specific Physical Grouping Descriptor found; using default.");
-        return *std::move(loaded);
+        return loaded;
     }
 
-    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
+    std::string error_msg = "No Physical Grouping Descriptor file found; mapping without a PGD. Searched:\n";
     for (const auto& path : searched) {
         error_msg += "  - " + path.string() + "\n";
     }
@@ -908,7 +908,8 @@ PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
     } else {
         error_msg += "TT_CLUSTER_NAME not set\n";
     }
-    throw std::runtime_error(error_msg);
+    log_warning(tt::LogFabric, "{}", error_msg);
+    return std::nullopt;
 }
 
 }  // namespace tt::tt_fabric

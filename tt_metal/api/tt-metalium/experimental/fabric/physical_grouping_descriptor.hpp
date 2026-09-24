@@ -222,8 +222,9 @@ public:
 
     // Explicit path, then TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH, then cluster-name and
     // arch-specific files. The default descriptor is used only when none of those exist.
-    // Throws if an explicit path or env path is set but missing, or if the default file is missing too.
-    static PhysicalGroupingDescriptor find_and_load(
+    // Returns nullopt when no descriptor file is present. Throws if an explicit path or env path
+    // is set but the file is missing.
+    static std::optional<PhysicalGroupingDescriptor> find_and_load(
         const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
 
