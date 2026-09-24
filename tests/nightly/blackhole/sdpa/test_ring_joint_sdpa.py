@@ -5060,9 +5060,6 @@ def test_ring_joint_attention_create_perf_table(model_name):
         if config_id.startswith(model_name)
     ]
 
-    # Look up model configuration
-    model = model_configs[model_name]
-
     # Use hardware config values (cannot query device due to TLB conflicts with subprocess tests)
     full_grid_rows = mesh_config.grid_rows
     total_compute_cores = mesh_config.sdpa_cores
@@ -5352,8 +5349,6 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
         pytest.skip("ring_mla perf config unavailable for current mesh")
 
     model = MODEL_CONFIGS[model_name]
-    joint_config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
-    mla_config_id = RING_MLA_TEST_CONFIG_IDS[0]
 
     def profile_with_runtime(run_fn):
         runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
@@ -5437,7 +5432,6 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }
-CHUNKED_PREFILL_MODELS = list(CHUNKED_PREFILL_MODEL_CONFIGS.keys())
 
 # ring_mla (latent-V) chunked-prefill configs are identical to the classic separate-V configs
 # except V lives in the first d_v columns of the shared K/V latent (the MLA deployment shape):

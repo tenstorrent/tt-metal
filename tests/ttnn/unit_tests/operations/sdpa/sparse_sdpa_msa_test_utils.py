@@ -101,7 +101,6 @@ def pcc(out, golden_t):
 def run_op_msa_composed(q, k, v, indices, device, *, k_chunk_size=128):
     assert k.shape[1] == 1 and v.shape[1] == 1, "composition baseline is n_kv==1 only"
     _, H, S, d = q.shape
-    T = k.shape[2]
     v_dim = v.shape[-1]
     topk = indices.shape[-1]
     B = BLK_KV

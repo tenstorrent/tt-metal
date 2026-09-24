@@ -4,6 +4,7 @@
 
 // Regression fence for RunOutcome::HostWait: host-resolvable stalls vs device faults. Negatives are death tests.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <unistd.h>
@@ -16,7 +17,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "impl/emulation/emule_fiber_scheduler.hpp"
+#include "emule_fiber_scheduler.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
 
 namespace {
@@ -25,6 +26,20 @@ using tt::tt_metal::emule_fiber::FiberEngineStall;
 using tt::tt_metal::emule_fiber::FiberIdentity;
 using tt::tt_metal::emule_fiber::FiberScheduler;
 using tt::tt_metal::emule_fiber::RunOutcome;
+
+// A livelock must not only stall but NAME its cause. FiberEngineStall::what() carries dump_parked(),
+// so match the diagnostic substring on the exception — the attribution IS what these tests assert.
+#define EXPECT_STALL_NAMING(stmt, substr)                                            \
+    do {                                                                             \
+        try {                                                                        \
+            stmt;                                                                    \
+            ADD_FAILURE() << "expected FiberEngineStall, but none was thrown";       \
+        } catch (const FiberEngineStall& e) {                                        \
+            EXPECT_THAT(e.what(), ::testing::HasSubstr(substr));                     \
+        } catch (...) {                                                              \
+            ADD_FAILURE() << "expected FiberEngineStall, got a different exception"; \
+        }                                                                            \
+    } while (0)
 
 // A distinct identity per fiber so a hang dump names which one wedged.
 FiberIdentity ident(uint8_t x, uint8_t y, const char* src) {
@@ -64,6 +79,9 @@ protected:
     void SetUp() override { ::testing::FLAGS_gtest_death_test_style = "threadsafe"; }
 
     void TearDown() override {
+        // Unconditional: a test whose body threw before its own disarm must not leak the fast
+        // watchdog env into later tests (some of which never arm and would then flake).
+        disarm_fast_watchdog();
         tt::tt_metal::emule_fiber::set_peer_progress_probe({});
         tt::tt_metal::emule_fiber::set_peer_liveness_probe({});
         // A leaked fiber poisons the global registry, so every later test fails too — fix the FIRST.
@@ -215,7 +233,6 @@ TEST_F(EmuleHostWait, FiniteComputeOutlivesConsumerResumptionWindow) {
     // Without this the run never reached the unfair budget, so a pass proves nothing:
     // 2000 is arm_fast_watchdog's TT_EMULE_FIBER_PROGRESS_WINDOW.
     EXPECT_GT(consumer_resumes.load(), 2000u);
-    disarm_fast_watchdog();
 }
 
 // A raw-L1 busy-waiter is Ready and carries no poll tag, so it is runnable internal work — but
@@ -242,12 +259,11 @@ TEST_F(EmuleHostWait, HostFedPollReachesHostWaitBesideAnUntaggedYieldSpinner) {
     done.store(true, std::memory_order_release);
     stop_spin.store(true, std::memory_order_release);
     ASSERT_EQ(sched.pump(), RunOutcome::Completed);
-    disarm_fast_watchdog();
 }
 
 TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
     arm_fast_watchdog();
-    EXPECT_DEATH(
+    EXPECT_STALL_NAMING(
         {
             for (uint8_t core = 0; core < 2; ++core) {
                 spawn_fiber(
@@ -262,49 +278,46 @@ TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
             FiberScheduler::instance().run_until_idle();
         },
         "resumption window");
-    disarm_fast_watchdog();
 }
 
 // The existential host root must not become a sticky exemption. Once it clears, an unrelated
 // peer-fed poll remains a genuine d2d-only deadlock and must retain the peer diagnostic.
 TEST_F(EmuleHostWait, D2DPollStillDeadlocksAfterHostPollClears) {
     arm_fast_watchdog();
-    EXPECT_DEATH(
+    EXPECT_STALL_NAMING(
         {
             std::atomic<bool> host_ready{false};
             std::atomic<bool> peer_never_ready{false};
             spawn_fiber(polling_body(&host_ready, /*host_fed=*/true, nullptr), 4, "h2d_pipeline_source");
             spawn_fiber(polling_body(&peer_never_ready, /*host_fed=*/false, nullptr), 5, "d2d_pipeline_receiver");
 
+            // In-process now (not a forked death test), so a wrong outcome fails the case rather than
+            // killing the binary: EXPECT_EQ records it and the pump below still drives to the stall.
             auto& sched = FiberScheduler::instance();
-            if (sched.run_persistent() != RunOutcome::HostWait) {
-                std::exit(2);
-            }
+            EXPECT_EQ(sched.run_persistent(), RunOutcome::HostWait);
             host_ready.store(true, std::memory_order_release);
             (void)sched.pump();
-            std::exit(3);
         },
         "spin-polling a d2d socket");
-    disarm_fast_watchdog();
 }
 
-// A d2d sender is a PEER, so dying on this regex proves the attribution, not just the outcome.
+// A d2d sender is a PEER, so the stall dump must attribute the wait to a peer-fed poll — matching the
+// substring proves the attribution, not just the outcome.
 TEST_F(EmuleHostWait, PeerFedPollIsNamedAsPeerFedInTheDump) {
     arm_fast_watchdog();
-    EXPECT_DEATH(
+    EXPECT_STALL_NAMING(
         {
             std::atomic<bool> never{false};
             spawn_fiber(polling_body(&never, /*host_fed=*/false, nullptr), 3, "d2d_receiver_poll");
             (void)FiberScheduler::instance().run_persistent();
         },
         "spin-polling a d2d socket");
-    disarm_fast_watchdog();
 }
 
 // The tag is sticky, so a kernel that LEAVES the loop must age out or it pins the run host-waiting.
 TEST_F(EmuleHostWait, StalePollTagAgesOut) {
     arm_fast_watchdog();
-    EXPECT_DEATH(
+    EXPECT_STALL_NAMING(
         {
             // Tag once, then spin elsewhere: freshness is this fiber's own resumes, so its yields age it.
             spawn_fiber(
@@ -320,7 +333,6 @@ TEST_F(EmuleHostWait, StalePollTagAgesOut) {
             (void)FiberScheduler::instance().run_persistent();
         },
         "no global progress");
-    disarm_fast_watchdog();
 }
 
 // Parking must retire the tag: a parked fiber never resumes, so its freshness delta would freeze.
@@ -392,7 +404,6 @@ TEST_F(EmuleHostWait, UnpumpedHostWaitStillTripsTheWatchdog) {
             std::exit(3);
         },
         "no global progress");
-    disarm_fast_watchdog();
 }
 
 // The mirror: a watchdog still ticking after the completing pump would abort the NEXT program.
@@ -408,7 +419,6 @@ TEST_F(EmuleHostWait, CompletedRunLeavesNoWatchdogBehind) {
 
     // Idle for longer than the armed backstop (3s). A leaked watchdog aborts the process here.
     ::usleep(4500 * 1000);
-    disarm_fast_watchdog();
 
     // And the engine is still usable: a fresh run works normally.
     std::atomic<unsigned> ran{0};
@@ -446,7 +456,7 @@ TEST_F(EmuleHostWait, EmptyLaunchAfterAStalledRunIsNotAHostWait) {
 // One CB slot per fiber, kept by the starving CB: recording the LAST probed points at a healthy one.
 TEST_F(EmuleHostWait, CbPollTagNamesTheStarvingCbNotTheLastProbed) {
     arm_fast_watchdog();
-    EXPECT_DEATH(
+    EXPECT_STALL_NAMING(
         {
             spawn_fiber(
                 [] {
@@ -462,7 +472,6 @@ TEST_F(EmuleHostWait, CbPollTagNamesTheStarvingCbNotTheLastProbed) {
             (void)FiberScheduler::instance().run_persistent();
         },
         "spin-polling CB 3 for 2 page");
-    disarm_fast_watchdog();
 }
 
 // Generations gate the keepalive reclaim: a false "dead" frees DFB/ASAN state under a running kernel.

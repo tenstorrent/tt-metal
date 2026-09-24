@@ -208,9 +208,9 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against team time budgets
-        run: |
-          python3 .github/scripts/utils/verify_time_budget.py \
-            --comment-file "${{ runner.temp }}/budget-report.md"
+        uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
+        with:
+          args: --comment-file "${{ runner.temp }}/budget-report.md"
       # Every failure kind gets explained on the PR, not just an over-budget bucket:
       # a missing budget_type or an undeclared bucket is just as opaque to the author.
       # One comment is kept up to date across pushes rather than stacking per run, and
