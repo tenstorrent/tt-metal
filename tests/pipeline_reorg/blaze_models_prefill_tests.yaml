@@ -1064,7 +1064,37 @@
       timeout: 30
       tier: 1
       release_ready: false
-  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+
+- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
+    mpirun --bind-to none --pernode --tag-output \
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+  test_type: gemma4_prefill_kv_pcc
+  test_tags: [gemma4_d_p, runner, kv_cache]
+  test_group: disagg_prefill
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
   team: models
   sp_config: sc1
 

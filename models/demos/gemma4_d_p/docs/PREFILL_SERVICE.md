@@ -1,6 +1,6 @@
 # Gemma4 prefill service
 
-The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](tt/runners/manifest.json).
+The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](../tt/runners/manifest.json).
 
 Run this setup from the repository root in both terminals:
 
@@ -43,3 +43,5 @@ pytest models/demos/gemma4_d_p/tests/test_prefill_service.py -sv --basetemp=/tmp
 ```
 
 It checks all six full-context prompts, final-chunk trace/eager PCC above 0.999, finite hidden states, nonzero first/last KV rows from every layer, distinct slot contents, and preservation of completed slots. It then reuses all six slots with 8193-token prompts to check partial final chunks. Producer logs, including timings, are saved in the pytest temporary directory. For the canonical demo, add `--timeout=3600` if loading weights exceeds the repository's default 300-second timeout.
+
+For source KV correctness and real loopback migration, see [Migration tests](PREFILL_MIGRATION.md).
