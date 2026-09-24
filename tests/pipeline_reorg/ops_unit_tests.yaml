@@ -557,3 +557,16 @@
   team: models
   budget_type: e2e
   category: dp_op_unit_tests
+
+# Reports which fabrics a 6U Galaxy can actually open at 8x4. Deliberately carries its own category
+# so a dispatch selecting it runs this entry alone. Must not run under a fabric profile: the test
+# fails when TT_MESH_GRAPH_DESC_PATH is set, because it exercises topology auto-discovery.
+- name: BH Galaxy fabric availability probe
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/utils/test_fabric_availability.py -v -rA
+  skus:
+    bh_galaxy:
+      timeout: 20
+  owner_id: U08ARDXARPF # Ilija Anastasijevic
+  team: models
+  budget_type: unit
+  category: fabric_probe
