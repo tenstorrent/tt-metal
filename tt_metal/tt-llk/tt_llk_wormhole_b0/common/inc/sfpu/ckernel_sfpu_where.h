@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "llk_defs.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -97,6 +98,15 @@ inline void _calculate_where_(
 template <bool APPROXIMATION_MODE>
 inline void _init_where_()
 {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_2, which addr_mod_base maps to hardware slot 6.
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSETCC(0, 0, 12, 6); // SFPSETCC_MOD1_LREG_EQ0
@@ -136,5 +146,27 @@ inline void _init_where_()
     TTI_SFPCONFIG(0x770, 8, 1);
 #endif
 }
+
+/**
+ * @brief Op class for where(condition, true_value, false_value) on tiles in Dest.
+ *
+ * @tparam APPROXIMATION_MODE: Approximation mode, unused by this op
+ * @tparam data_format: Format of the tiles in Dest, values = <Float32/Float16_b/Int32/UInt32>; only run() needs it
+ * @tparam ITERATIONS: Rows of 32 datums processed per face, default = 8
+ */
+template <bool APPROXIMATION_MODE, DataFormat data_format = DataFormat::Invalid, int ITERATIONS = 8>
+struct Where : SfpuTernaryOp<Where<APPROXIMATION_MODE, data_format, ITERATIONS>>
+{
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
+    {
+        _calculate_where_<APPROXIMATION_MODE, data_format, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op()
+    {
+        _init_where_<APPROXIMATION_MODE>();
+    }
+};
 
 } // namespace ckernel::sfpu

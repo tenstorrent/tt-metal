@@ -6,6 +6,7 @@
 #pragma once
 
 #include <type_traits>
+#include <cstdint>
 
 #include "ckernel_addrmod.h"
 #include "sfpi.h"
@@ -22,24 +23,26 @@ template <SfpuType Op>
 inline constexpr bool is_fp32_weak_ordered_compare_v = Op == SfpuType::le || Op == SfpuType::ge;
 
 template <SfpuType Op>
-inline constexpr bool is_fp32_compare_v = is_fp32_equal_compare_v<Op> || is_fp32_strict_ordered_compare_v<Op> || is_fp32_weak_ordered_compare_v<Op>;
+inline constexpr bool is_fp32_compare_v =
+    is_fp32_equal_compare_v<Op> || is_fp32_strict_ordered_compare_v<Op> || is_fp32_weak_ordered_compare_v<Op>;
 
 template <SfpuType>
 inline constexpr bool unsupported_fp32_compare_v = false;
 
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
-inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_fp32_equal(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_equal_compare_v<RELATIONAL_OP>, "Supported operation types: eq, ne");
 
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint abs_a = p_sfpu::LREG2;
-    constexpr uint abs_b = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint default_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
-    constexpr uint equal_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_a = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_b = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t default_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
+    constexpr std::uint32_t equal_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
+    constexpr std::uint32_t dst_tile_size = 64;
 
     TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
 
@@ -49,13 +52,13 @@ inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uin
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
         TT_SFPSTORE(default_result, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        TTI_SFPSETSGN(0, b, abs_b, 1); // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPSETSGN(0, a, abs_a, 1); // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, b, abs_b, 1);  // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, a, abs_a, 1);  // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPMAD(p_sfpu::LCONST_1, abs_a, abs_b, sum, 0);
 
-        TTI_SFPLE(0, b, a, 1); // SFPLE_MOD1_SET_CC
+        TTI_SFPLE(0, b, a, 1);  // SFPLE_MOD1_SET_CC
         // if total-order a == b
-        TTI_SFPLE(0, a, b, 1); // SFPLE_MOD1_SET_CC
+        TTI_SFPLE(0, a, b, 1);  // SFPLE_MOD1_SET_CC
         // if abs(a) + abs(b) <= inf; rejects NaN
         TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
         TT_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
@@ -72,20 +75,20 @@ inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uin
 
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_strict_ordered(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_strict_ordered_compare_v<RELATIONAL_OP>, "Supported operation types: lt, gt");
 
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint abs_a = p_sfpu::LREG2;
-    constexpr uint abs_b = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_a = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_b = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr bool swap_operands = RELATIONAL_OP == SfpuType::gt;
-    const uint dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
-    const uint dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
+    const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
+    const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
     TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
 
@@ -95,12 +98,12 @@ inline void calculate_binary_comp_fp32_strict_ordered(
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_b * dst_tile_size);
         TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        TTI_SFPSETSGN(0, a, abs_a, 1); // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPSETSGN(0, b, abs_b, 1); // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, a, abs_a, 1);  // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, b, abs_b, 1);  // SFPSETSGN_MOD1_ARG_IMM
 
         TTI_SFPMAD(p_sfpu::LCONST_1, abs_a, abs_b, sum, 0);
         // if total-order a < b
-        TTI_SFPGT(0, a, b, 1); // SFPGT_MOD1_SET_CC
+        TTI_SFPGT(0, a, b, 1);  // SFPGT_MOD1_SET_CC
 
         // if abs(a) + abs(b) != 0; rejects if both are ±subnormal
         TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -114,20 +117,20 @@ inline void calculate_binary_comp_fp32_strict_ordered(
 
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_weak_ordered(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(is_fp32_weak_ordered_compare_v<RELATIONAL_OP>, "Supported operation types: le, ge");
 
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint abs_a = p_sfpu::LREG2;
-    constexpr uint abs_b = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_a = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_b = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr bool swap_operands = RELATIONAL_OP == SfpuType::ge;
-    const uint dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
-    const uint dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
+    const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
+    const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
     TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
 
@@ -137,12 +140,12 @@ inline void calculate_binary_comp_fp32_weak_ordered(
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_b * dst_tile_size);
         TT_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        TTI_SFPSETSGN(0, a, abs_a, 1); // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPSETSGN(0, b, abs_b, 1); // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, a, abs_a, 1);  // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(0, b, abs_b, 1);  // SFPSETSGN_MOD1_ARG_IMM
 
         TTI_SFPMAD(p_sfpu::LCONST_1, abs_a, abs_b, sum, 0);
         // if total-order a > b
-        TTI_SFPGT(0, b, a, 1); // SFPGT_MOD1_SET_CC
+        TTI_SFPGT(0, b, a, 1);  // SFPGT_MOD1_SET_CC
 
         // if abs(a) + abs(b) != 0; rejects if both are ±subnormal
         TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
@@ -167,15 +170,15 @@ template <
     int ITERATIONS,
     SfpuType RELATIONAL_OP,
     std::enable_if_t<is_fp32_compare_v<RELATIONAL_OP>, int> = 0>
-inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_fp32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     if constexpr (is_fp32_equal_compare_v<RELATIONAL_OP>) {
         calculate_binary_comp_fp32_equal<ITERATIONS, RELATIONAL_OP>(dst_index_in0, dst_index_in1, dst_index_out);
     } else if constexpr (is_fp32_strict_ordered_compare_v<RELATIONAL_OP>) {
         calculate_binary_comp_fp32_strict_ordered<ITERATIONS, RELATIONAL_OP>(
             dst_index_in0, dst_index_in1, dst_index_out);
     } else if constexpr (is_fp32_weak_ordered_compare_v<RELATIONAL_OP>) {
-        calculate_binary_comp_fp32_weak_ordered<ITERATIONS, RELATIONAL_OP>(
-            dst_index_in0, dst_index_in1, dst_index_out);
+        calculate_binary_comp_fp32_weak_ordered<ITERATIONS, RELATIONAL_OP>(dst_index_in0, dst_index_in1, dst_index_out);
     } else {
         static_assert(unsupported_fp32_compare_v<RELATIONAL_OP>, "Unsupported fp32 comparison operation");
     }
@@ -188,7 +191,8 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
 // original sign relationship with the subtraction result. The final shift
 // converts the selected top bit to 0 or 1.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
-inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
             RELATIONAL_OP == SfpuType::ge,
@@ -196,28 +200,28 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 
     constexpr bool use_ge = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
     constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint scratch = p_sfpu::LREG2;
-    constexpr uint sign = use_ge ? 1 : 0;
-    constexpr uint tmp = use_ge ? b : a;
-    constexpr uint xor_src = use_ge ? a : b;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t scratch = p_sfpu::LREG2;
+    constexpr std::uint32_t sign = use_ge ? 1 : 0;
+    constexpr std::uint32_t tmp = use_ge ? b : a;
+    constexpr std::uint32_t xor_src = use_ge ? a : b;
+    constexpr std::uint32_t dst_tile_size = 64;
 
-    const uint dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
-    const uint dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
+    const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
+    const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_a * dst_tile_size);
         TT_SFPLOAD(b, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
-        TTI_SFPSETSGN(sign, b, scratch, 1); // SFPSETSGN_MOD1_ARG_IMM
+        TTI_SFPSETSGN(sign, b, scratch, 1);  // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPIADD(0, a, scratch, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPXOR(0, xor_src, tmp, 0);
         TTI_SFPOR(0, scratch, tmp, 0);
         TTI_SFPXOR(0, b, a, 0);
-        TTI_SFPSHFT((-31) & 0xfff, a, a, 1); // SFPSHFT_MOD1_ARG_IMM
+        TTI_SFPSHFT((-31) & 0xfff, a, a, 1);  // SFPSHFT_MOD1_ARG_IMM
         TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * dst_tile_size);
     }
 }
@@ -228,7 +232,8 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 // UInt32 uses the same subtract/fold structure as Int32. On Blackhole, LO16
 // zero-extends UInt16 values, so sign-magnitude compare matches uint16 order.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
-inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_uint(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
         "Unsupported data format for calculate_binary_comp_uint(). Supported formats: UInt16, UInt32.");
@@ -241,16 +246,16 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
     constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
     constexpr bool needs_msb_handling = (DATA_FORMAT == DataFormat::UInt32);
     constexpr InstrModLoadStore ld_st_mod = needs_msb_handling ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint scratch = p_sfpu::LREG2;
-    constexpr uint sign = use_ge ? 1 : 0;
-    constexpr uint result = use_ge ? a : b;
-    constexpr uint xor_src = use_ge ? b : a;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t scratch = p_sfpu::LREG2;
+    constexpr std::uint32_t sign = use_ge ? 1 : 0;
+    constexpr std::uint32_t result = use_ge ? a : b;
+    constexpr std::uint32_t xor_src = use_ge ? b : a;
+    constexpr std::uint32_t dst_tile_size = 64;
 
-    const uint dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
-    const uint dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
+    const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
+    const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -258,20 +263,20 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
         TT_SFPLOAD(b, ld_st_mod, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
         if constexpr (needs_msb_handling) {
-            TTI_SFPSETSGN(sign, b, scratch, 1); // SFPSETSGN_MOD1_ARG_IMM
+            TTI_SFPSETSGN(sign, b, scratch, 1);  // SFPSETSGN_MOD1_ARG_IMM
             TTI_SFPIADD(0, a, scratch, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPXOR(0, xor_src, result, 0);
             TTI_SFPOR(0, scratch, result, 0);
             TTI_SFPXOR(0, xor_src, result, 0);
-            TTI_SFPSHFT((-31) & 0xfff, result, result, 1); // SFPSHFT_MOD1_ARG_IMM
+            TTI_SFPSHFT((-31) & 0xfff, result, result, 1);  // SFPSHFT_MOD1_ARG_IMM
             TT_SFPSTORE(result, ld_st_mod, ADDR_MOD_6, dst_index_out * dst_tile_size);
         } else {
             if constexpr (use_ge) {
-                TTI_SFPLE(0, a, b, 8); // SFPLE_MOD1_SET_VD: b = (a >= b) ? -1 : 0
+                TTI_SFPLE(0, a, b, 8);  // SFPLE_MOD1_SET_VD: b = (a >= b) ? -1 : 0
             } else {
-                TTI_SFPGT(0, a, b, 8); // SFPGT_MOD1_SET_VD: b = (a < b) ? -1 : 0
+                TTI_SFPGT(0, a, b, 8);  // SFPGT_MOD1_SET_VD: b = (a < b) ? -1 : 0
             }
-            TTI_SFPSHFT((-31) & 0xfff, b, b, 1); // SFPSHFT_MOD1_ARG_IMM
+            TTI_SFPSHFT((-31) & 0xfff, b, b, 1);  // SFPSHFT_MOD1_ARG_IMM
             TT_SFPSTORE(b, ld_st_mod, ADDR_MOD_6, dst_index_out * dst_tile_size);
         }
     }
@@ -281,7 +286,8 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
 // XOR a and b; the result is zero if a == b. A conditional store writes
 // the appropriate integer 0 or 1 result.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
-inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_eq_int(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
         "Unsupported data format for calculate_binary_eq_int(). Supported formats: Int32, UInt16, UInt32.");
@@ -289,14 +295,14 @@ inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_ind
 
     constexpr InstrModLoadStore ld_st_mod =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    constexpr uint a = p_sfpu::LREG0;
-    constexpr uint b = p_sfpu::LREG1;
-    constexpr uint one = p_sfpu::LREG2;
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t a = p_sfpu::LREG0;
+    constexpr std::uint32_t b = p_sfpu::LREG1;
+    constexpr std::uint32_t one = p_sfpu::LREG2;
+    constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr bool is_eq = (RELATIONAL_OP == SfpuType::eq);
-    constexpr uint default_result = is_eq ? p_sfpu::LCONST_0 : one;
-    constexpr uint equal_result = is_eq ? one : p_sfpu::LCONST_0;
+    constexpr std::uint32_t default_result = is_eq ? p_sfpu::LCONST_0 : one;
+    constexpr std::uint32_t equal_result = is_eq ? one : p_sfpu::LCONST_0;
 
     TTI_SFPLOADI(one, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
 
@@ -311,5 +317,12 @@ inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_ind
         TT_SFPSTORE(equal_result, ld_st_mod, ADDR_MOD_6, dst_index_out * dst_tile_size);
         TTI_SFPENCC(0, 0, 0, 0);
     }
+}
+
+// Per-op init for the binary compare kernels (lt/gt/le/ge/eq/ne and their _int variants), which
+// until now got ADDR_MOD_6 only from the SfpuType-selected LLK init.
+inline void binary_comp_init() {
+    // The compare kernels store through ADDR_MOD_6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 }  //  namespace ckernel::sfpu

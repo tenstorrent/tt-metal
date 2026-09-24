@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "lltt.h"
 
 using namespace sfpi;
@@ -15,10 +17,11 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool IS_MAX_OP = true, int ITERATIONS = 8>
-inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    uint offset0 = (dst_index_in0 * 32) << 1;
-    uint offset1 = (dst_index_in1 * 32) << 1;
-    uint offset2 = (dst_index_out * 32) << 1;
+inline void calculate_binary_max_min(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    std::uint32_t offset0 = (dst_index_in0 * 32) << 1;
+    std::uint32_t offset1 = (dst_index_in1 * 32) << 1;
+    std::uint32_t offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -62,10 +65,10 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
 inline void calculate_binary_max_min_int32(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    uint offset0 = (dst_index_in0 * 32) << 1;
-    uint offset1 = (dst_index_in1 * 32) << 1;
-    uint offset2 = (dst_index_out * 32) << 1;
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    std::uint32_t offset0 = (dst_index_in0 * 32) << 1;
+    std::uint32_t offset1 = (dst_index_in1 * 32) << 1;
+    std::uint32_t offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -145,6 +148,10 @@ inline void calculate_binary_max_min_int32(
 
 template <bool IS_MAX_OP = true>
 inline void binary_max_min_init() {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int b = p_sfpu::LREG2;
 
@@ -156,10 +163,10 @@ inline void binary_max_min_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (3 << 3) | 5;
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (3 << 3) | 5;
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -168,10 +175,10 @@ inline void binary_max_min_init() {
 
     // Macro 1
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -189,6 +196,10 @@ inline void binary_max_min_init() {
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
 inline void binary_max_min_int32_init() {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int b0 = p_sfpu::LREG1;
     constexpr int b1 = p_sfpu::LREG3;
@@ -209,10 +220,10 @@ inline void binary_max_min_int32_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 4;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (3 << 3) | 4;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (5 << 3) | 7;
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -221,10 +232,10 @@ inline void binary_max_min_int32_init() {
 
     // Macro 1
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 5;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (3 << 3) | 5;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (5 << 3) | 7;
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -233,10 +244,10 @@ inline void binary_max_min_int32_init() {
 
     // Macro 2:
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (4 << 3) | 6;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (6 << 3) | 7;
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (4 << 3) | 6;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (6 << 3) | 7;
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -245,10 +256,10 @@ inline void binary_max_min_int32_init() {
 
     // Macro 3:
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x40 | (4 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (4 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -263,6 +274,26 @@ inline void binary_max_min_int32_init() {
     TTI_SFPCONFIG(0xff0, 8, 1);
 #endif
 }
+
+// Op class for elementwise max/min of two float tiles in Dest.
+template <bool IS_MAX_OP, int ITERATIONS = 8>
+struct BinaryMaxMin : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_max_min<IS_MAX_OP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { binary_max_min_init<IS_MAX_OP>(); }
+};
+
+// Op class for elementwise max/min of two int32 or uint32 tiles in Dest.
+template <bool IS_MAX_OP, bool IS_UNSIGNED, int ITERATIONS = 8>
+struct BinaryMaxMinInt32 : SfpuBinaryOp<BinaryMaxMinInt32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_max_min_int32<IS_MAX_OP, IS_UNSIGNED, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { binary_max_min_int32_init<IS_MAX_OP, IS_UNSIGNED>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
