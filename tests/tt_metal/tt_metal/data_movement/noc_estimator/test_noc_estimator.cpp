@@ -303,6 +303,28 @@ int main() {
         expect_near_pct("Test 11 NOC_1 latency", result_noc1.latency_cycles, 592.0, 2.0);
     }
 
+    // Test 12: when another parameter has to be relaxed, the requested NoC's data is still used
+    {
+        // There is no stateful DRAM data, so stateful gets relaxed while both NoCs have a match
+        NocEstimatorParams params{
+            .mechanism = NocMechanism::UNICAST,
+            .pattern = NocPattern::ALL_FROM_ALL,
+            .memory = MemoryType::DRAM_INTERLEAVED,
+            .arch = Architecture::WORMHOLE_B0,
+            .num_transactions = 64,
+            .num_transactions_per_barrier = 64,
+            .transaction_size_bytes = 512,
+            .num_subordinates = 0,
+            .stateful = true,
+            .noc_index = 1};
+
+        NocEstimate result = estimate_noc_performance(params);
+        std::cout
+            << "Test 12 - Wormhole DRAM interleaved all from all NOC_1 with relaxed stateful (512 bytes, 64 txns):\n";
+        std::cout << "  Latency: " << result.latency_cycles << " cycles\n\n";
+        expect_near_pct("Test 12 latency", result.latency_cycles, 28611.0, 2.0);
+    }
+
     if (g_failures > 0) {
         std::cout << "Total failures: " << g_failures << "\n";
     }

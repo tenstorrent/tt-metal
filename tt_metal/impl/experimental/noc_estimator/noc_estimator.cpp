@@ -79,7 +79,7 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
             find_with_relaxation(key, params.transaction_size_bytes, g_transaction_sizes, g_entries, relaxed_param);
         // Some patterns are only measured on one NoC, so a query on the default NoC falling back
         // to the other one is expected and not worth a warning
-        bool expected_noc_fallback = relaxed_param == "noc_index" && params.noc_index == DEFAULT_NOC_INDEX;
+        bool expected_noc_fallback = relaxed_param == RELAX_PARAM_NOC_INDEX && params.noc_index == DEFAULT_NOC_INDEX;
         if (result.latency_cycles > 0) {
             if (!expected_noc_fallback) {
                 std::cerr << "Warning: Used fallback (relaxed " << relaxed_param << ")\n";

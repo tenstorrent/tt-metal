@@ -192,8 +192,10 @@ bool has_matching_data(const GroupKey& key, const std::map<GroupKey, LatencyData
 
 // Only allow relaxation of noc_index, same_axis, stateful, and loopback parameters
 // Other parameters (memory, mechanism, pattern, arch) must match exactly
-static const char* RELAX_PARAM_NAMES[] = {"noc_index", "same_axis", "stateful", "loopback"};
+static const char* RELAX_PARAM_NAMES[] = {RELAX_PARAM_NOC_INDEX, "same_axis", "stateful", "loopback"};
 static constexpr std::size_t RELAX_PARAM_COUNT = 4;
+// Mask bit for noc_index, matching its position in RELAX_PARAM_NAMES
+static constexpr std::uint32_t NOC_INDEX_RELAX_BIT = 1u << 0;
 
 // Check if two keys match, ignoring parameters where mask bit is set
 // All other parameters must match exactly
@@ -204,7 +206,7 @@ static bool matches_with_mask(const GroupKey& a, const GroupKey& b, std::uint32_
     }
 
     // Check relaxable parameters
-    if (!(ignore_mask & (1 << 0)) && a.noc_index != b.noc_index) {
+    if (!(ignore_mask & NOC_INDEX_RELAX_BIT) && a.noc_index != b.noc_index) {
         return false;
     }
     if (!(ignore_mask & (1 << 1)) && a.same_axis != b.same_axis) {
@@ -240,7 +242,7 @@ double find_with_relaxation(
         ignore_mask |= (1 << level);
 
         // Prefer an entry on the requested NoC, only fall back to the other NoC if there is none
-        const GroupKey* match = find_match(ignore_mask & ~1u);
+        const GroupKey* match = find_match(ignore_mask & ~NOC_INDEX_RELAX_BIT);
         if (match == nullptr) {
             match = find_match(ignore_mask);
         }
