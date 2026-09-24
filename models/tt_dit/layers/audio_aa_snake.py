@@ -181,7 +181,7 @@ class FusedActivation1d(Module):
         modes = [ttnn.UnpackToDestMode.Default] * 64
         for i in (CB_UP, CB_AB, CB_DN):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
-        compute_cfg.unpack_to_dest_mode = ttnn.VectorUnpackToDestMode(modes)
+        compute_cfg.unpack_to_dest_mode = modes
 
         taps = [_f32_bits(2.0 * t) for t in self._up_taps] + [_f32_bits(t) for t in self._down_taps]
         return dict(
