@@ -322,7 +322,7 @@ def test_elu_allclose(low, high, expected_atol, expected_rtol, device):
 
     tt_result = ttnn.elu(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+    assert_allclose(expected_result=golden, actual_result=result, atol=expected_atol, rtol=expected_rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ def test_celu_allclose(low, high, expected_atol, expected_rtol, device):
 
     tt_result = ttnn.celu(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+    assert_allclose(expected_result=golden, actual_result=result, atol=expected_atol, rtol=expected_rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

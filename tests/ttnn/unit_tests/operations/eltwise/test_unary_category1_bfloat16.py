@@ -11,6 +11,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits_in_range,
     flush_to_zero,
     to_tt_tensor,
+    MAX_BF16,
     SMALLEST_NORMAL_BF16,
 )
 
@@ -351,14 +352,36 @@ def test_error_functions(device, ttnn_op, low, high):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# reciprocal: 1/x, undefined at 0; use positive range (1, 3e36)
-# Large inputs produce outputs near zero — flush both sides at 2*smallest normal
+# reciprocal: 1/x, swept over both signs
+#
+# The kernel's only departure from 1 ULP is at the small-output end, and it is
+# sharp on the input side: the device packs zero as soon as 1/x would land at
+# or below the smallest normal, which is |x| >= 2^126 exactly. Splitting the
+# sweep there is what keeps the comparison honest. Flushing both outputs at a
+# fixed threshold instead straddles pairs that are 1 ULP apart — at
+# x = 8.474e37 the golden is 1.1847e-38 and the device returns the adjacent
+# 1.1755e-38, and a threshold between them zeroes one side and reports the
+# 129 ULP of a value-against-zero comparison.
 # ─────────────────────────────────────────────────────────────────────────────
 
+RECIPROCAL_FTZ_INPUT = 2.0**126
+RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
 
-def test_reciprocal(device):
-    input_tensor = generate_bfloat16_bits_in_range(1.0, 3e36)
-    input_tensor[input_tensor == 0] = 1.0  # avoid division by zero
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (SMALLEST_NORMAL_BF16, RECIPROCAL_MAX_INPUT),
+        (-RECIPROCAL_MAX_INPUT, -SMALLEST_NORMAL_BF16),
+    ],
+    ids=["positive", "negative"],
+)
+def test_reciprocal(device, low, high):
+    """Every normal bfloat16 of one sign whose reciprocal the device can still
+    represent. This covers |x| < 1, where 1/x amplifies instead of shrinking
+    and the output runs all the way up to 2^126, as well as the shrinking half.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
 
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -368,11 +391,61 @@ def test_reciprocal(device):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    threshold = 2 * SMALLEST_NORMAL_BF16
-    result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
-    golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
-
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (RECIPROCAL_FTZ_INPUT, MAX_BF16),
+        (-MAX_BF16, -RECIPROCAL_FTZ_INPUT),
+    ],
+    ids=["positive", "negative"],
+)
+def test_reciprocal_flushes_to_zero(device, low, high):
+    """From |x| = 2^126 up the device returns exactly 0, and the sign goes with
+    the magnitude — the negative half returns +0, not -0.
+
+    The cutoff is a step early rather than a rounding artifact: 1/2^126 is the
+    smallest normal itself, so the device gives up before subnormals even
+    start, and every input in this range has a nonzero reciprocal that
+    bfloat16 can hold.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden = ttnn.get_golden_function(ttnn.reciprocal)(input_tensor, device=device)
+    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
+
+    assert (golden != 0).all(), "expected every reciprocal in this range to be representable"
+    assert_equal(torch.zeros_like(result), result)
+    assert not torch.signbit(result).any(), "flushed results must be +0 for both input signs"
+
+
+def test_reciprocal_zero_and_nonfinite(device):
+    """Signed zero divides the way torch does; two of the non-finite inputs do
+    not.
+
+    The device carries the sign of zero into the infinity it returns, which
+    makes this the one place in the op where -0 and +0 are distinguishable.
+    1/+inf is +0 on both sides, but the remaining two diverge: 1/-inf comes
+    back as +0 where torch gives -0, and NaN comes back as 0 instead of
+    propagating. Both are pinned as the device's behavior rather than endorsed
+    as correct, and they are why the sweeps above stay inside the finite
+    normals.
+    """
+    special = [0.0, -0.0, float("inf"), float("-inf"), float("nan")]
+    input_tensor = torch.ones(32, 32, dtype=torch.bfloat16)
+    input_tensor.view(-1)[: len(special)] = torch.tensor(special, dtype=torch.bfloat16)
+
+    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device))).view(-1)
+    pos_zero, neg_zero, pos_inf, neg_inf, nan = (result[i] for i in range(len(special)))
+
+    assert pos_zero == float("inf") and not torch.signbit(pos_zero), "1/+0 must be +inf"
+    assert neg_zero == float("-inf") and torch.signbit(neg_zero), "1/-0 must be -inf"
+
+    assert pos_inf == 0.0 and not torch.signbit(pos_inf), "1/+inf is +0, matching torch"
+    assert neg_inf == 0.0 and not torch.signbit(neg_inf), "1/-inf is +0 on device, -0 in torch"
+    assert nan == 0.0, "the device returns 0 for NaN instead of propagating it"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,7 +542,7 @@ def test_exp_allclose(device):
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert torch.allclose(golden, result, atol=1e-3, rtol=1e-2)
+    torch.testing.assert_close(actual=result, expected=golden, atol=1e-3, rtol=1e-2)
 
 
 def test_exp2_allclose(device):
@@ -488,7 +561,7 @@ def test_exp2_allclose(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert torch.allclose(golden, result, atol=1e-3, rtol=1e-2)
+    torch.testing.assert_close(actual=result, expected=golden, atol=1e-3, rtol=1e-2)
 
 
 @pytest.mark.parametrize(
@@ -502,9 +575,9 @@ def test_exp2_allclose(device):
 def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
     """expm1 cancellation-band and extended-range allclose check.
 
-    The ULP sweep in test_exp_ops covers the working range with bit-exact
-    tolerance; this test verifies allclose bounds over three subdomains that
-    partition the same range with different atol/rtol requirements.
+    The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test verifies
+    allclose bounds over three subdomains that extend the negative tail to
+    -1.6e38 and split the wider range by tolerance requirements.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -516,7 +589,7 @@ def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
     tt_result = ttnn.expm1(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+    torch.testing.assert_close(actual=result, expected=golden, atol=expected_atol, rtol=expected_rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

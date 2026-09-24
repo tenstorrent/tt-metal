@@ -91,7 +91,7 @@ read off the failing elements.
     TT_FATAL. C is a sub-tile optimization for narrow inputs; on a full
     32x32 tile the unprocessed columns hold stale DEST content rather than a
     sigmoid output. vector_mode=4 is the exhaustive sweep in test_sigmoid_op;
-    vector_mode=2 is covered by test_sigmoid_vector_mode2.
+    vector_mode=2 is covered by the vm2 cases in test_sigmoid_op.
   - the fast exp approximation stops saturating from x ~= 172 (0.98 at 172,
     0.26 at 177, 0.05 at 179) instead of holding 1.0. This hits both entry
     points -- SigmoidMode.AccurateWithFastExp and
