@@ -11,6 +11,12 @@
  * LLK ELTWISE BINARY
  *************************************************************************/
 
+template <std::uint32_t dst_capacity, bool is_fp32_dest_acc_en>
+inline void llk_math_rmsnorm_clear_product_tile(const std::uint32_t dst_index) {
+    SAN_HOOK(unsupported());
+    _llk_math_rmsnorm_clear_product_tile_<dst_capacity, is_fp32_dest_acc_en>(dst_index);
+}
+
 // Version with operands
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands(

@@ -6,16 +6,19 @@
 # embed, position embeddings, every block, the output and deepstack mergers, at
 # the released depth and only production grid shapes.
 
+import time
+
 import pytest
 import torch
 import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (
+    FABRIC,
     HIDDEN_ACT,
     HIDDEN_SIZE,
     INTERMEDIATE_SIZE,
@@ -95,9 +98,14 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 # perf mode skips the quadratic CPU golden (shapes/finiteness only) and says nothing about accuracy
 _PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
 assert all(name in GRIDS for name in _PERF_GRIDS)
-_CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
-    pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS
-]
+# The largest grids' check-mode CPU golden exceeds the default 300 s pytest timeout.
+_TIMEOUTS = {"ref_4to1": 900, "ref_1to4": 900, "max_load": 1800}
+_CASES = [
+    pytest.param(
+        name, True, id=f"check-{name}", marks=[pytest.mark.timeout(_TIMEOUTS[name])] if name in _TIMEOUTS else []
+    )
+    for name in GRIDS
+] + [pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS]
 
 
 @VISION_PARAMS
@@ -125,14 +133,35 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
     tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
-    cos, sin = tower.prepare_rope(grid)
-    pos = tower.prepare_pos_embeds(grid)
-    tokens, deepstack = tower.forward(
-        sp_shard(patches, submesh, sp_axis),
-        pos_embeds=sp_shard(pos, submesh, sp_axis),
-        rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
-        cu_seqlens=cu_seqlens,
-    )
+    n_iters = 1 if check_pcc else 2
+    for iteration in range(n_iters):
+        print(f"Tower Forward ({iteration + 1}/{n_iters})")
+        ttnn.synchronize_device(submesh)
+        t_start = time.time()
+
+        cos, sin = tower.prepare_rope(grid)
+        pos = tower.prepare_pos_embeds(grid)
+        tt_patches = sp_shard(patches, submesh, sp_axis)
+        tt_pos = sp_shard(pos, submesh, sp_axis)
+        tt_cos, tt_sin = sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)
+        ttnn.synchronize_device(submesh)
+        t_prep_done = time.time()
+
+        tokens, deepstack = tower.forward(
+            tt_patches,
+            pos_embeds=tt_pos,
+            rope=(tt_cos, tt_sin),
+            cu_seqlens=cu_seqlens,
+        )
+        ttnn.synchronize_device(submesh)
+        t_end = time.time()
+
+        print(
+            f"iter {iteration + 1}/{n_iters}: "
+            f"prep {(t_prep_done - t_start) * 1000:8.1f} ms (host build + H2D) | "
+            f"op {(t_end - t_prep_done) * 1000:8.1f} ms (tower.forward) | "
+            f"e2e {(t_end - t_start) * 1000:8.1f} ms"
+        )
 
     merged = total // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
@@ -156,3 +185,59 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         assert not torch.allclose(
             features[i], features[i + 1], atol=1e-2
         ), f"deepstack features {i} and {i + 1} are identical; layer routing is wrong"
+
+
+# 26,944 patches: misaligned for every SP factor here, so each config exercises pad_patches_for_sp.
+_MISALIGNED_GRID = [[1, 128, 128], [1, 110, 96]]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
+    [
+        pytest.param((8, 4), (8, 4), 0, 1, 2, FABRIC, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, 1, 2, FABRIC, id="tp4_sp8"),
+        pytest.param((4, 32), (4, 32), 0, 1, 2, FABRIC, id="tp4_sp32"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
+    """A patch count not divisible by `sp * 32` runs via `pad_patches_for_sp` and still matches the reference."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    grid = torch.tensor(_MISALIGNED_GRID, dtype=torch.long)
+    total = sum(t * h * w for t, h, w in _MISALIGNED_GRID)
+    sp_factor = tuple(submesh.shape)[sp_axis]
+    assert total % (sp_factor * 32) != 0, "grid is aligned; this test would not exercise the pad path"
+
+    torch.manual_seed(0)
+    patch_dim = 3 * 2 * 16 * 16
+    patches = torch.randn(total, patch_dim)
+    with torch.no_grad():
+        ref_out = reference(patches, grid_thw=grid, return_dict=True)
+    golden_tokens = ref_out.pooler_output.float()
+    golden_deepstack = [f.float() for f in ref_out.deepstack_features]
+
+    tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
+    cos, sin = tower.prepare_rope(grid)
+    pos = tower.prepare_pos_embeds(grid)
+    p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+        patches, pos, (cos, sin), vision_cu_seqlens(grid), sp_factor=sp_factor
+    )
+    assert logical == total and p_patches.shape[0] % (sp_factor * 32) == 0
+    assert len(p_cu) == len(vision_cu_seqlens(grid)) + 1, "expected one phantom window for the pad"
+
+    tokens, deepstack = tower.forward(
+        sp_shard(p_patches, submesh, sp_axis),
+        pos_embeds=sp_shard(p_pos, submesh, sp_axis),
+        rope=(sp_shard(p_cos, submesh, sp_axis), sp_shard(p_sin, submesh, sp_axis)),
+        cu_seqlens=p_cu,
+        logical_patches=logical,
+    )
+
+    merged = total // SPATIAL_MERGE_SIZE**2
+    actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
+    assert actual_tokens.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
+    assert_quality(golden_tokens, actual_tokens, pcc=0.99)
+    for golden_feature, feature_tt in zip(golden_deepstack, deepstack):
+        feature = tensor.to_torch(feature_tt, mesh_axes=[None, None])
+        assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
+        assert_quality(golden_feature, feature, pcc=0.99)

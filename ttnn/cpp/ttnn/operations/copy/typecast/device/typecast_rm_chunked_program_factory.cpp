@@ -73,9 +73,9 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "This factory is only for ROW_MAJOR layout");
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = cb_dataformat_for(input.dtype());
     const uint32_t input_element_size = tt::datum_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     const uint32_t output_element_size = tt::datum_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -214,15 +214,29 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
-                 {"per_core_block_dim", 1u}},
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-                .bfp_pack_precision_mode =
-                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
-                .enable_32_bit_dest = args.fp32_dest_acc_en,
-                .unpack_modes = unpack_modes,
-            }},
+                 {"per_core_block_dim", 1u},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+            // Quasar (Gen2) rejects a ComputeGen1Config; emit the Gen2 equivalent there (no
+            // bfp_pack_precision_mode on Gen2 — MXFP replaces BFP). WH/BH keep the legacy Gen1 config.
+            .hw_config = [&]() -> ComputeHardwareConfig {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return ComputeGen2Config{
+                        .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+                        .enable_32_bit_dest = args.fp32_dest_acc_en,
+                        .unpack_modes = unpack_modes,
+                    };
+                }
+                return ComputeGen1Config{
+                    .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+                    .bfp_pack_precision_mode = args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise
+                                                                      : tt::tt_metal::Precision::Approximate,
+                    .enable_32_bit_dest = args.fp32_dest_acc_en,
+                    .unpack_modes = unpack_modes,
+                };
+            }(),
         };
     };
 

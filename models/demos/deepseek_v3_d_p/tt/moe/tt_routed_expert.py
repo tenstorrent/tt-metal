@@ -17,11 +17,10 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
@@ -363,6 +362,7 @@ class TtRoutedExpert(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -394,7 +394,7 @@ class TtRoutedExpert(LightweightModule):
         # tensor, no eltwise mask and no host sync. Measured crossover is per model -- compare the
         # two ops' perf gates at the shape -- so the caller supplies the number.
         if hybrid_token_threshold is not None:
-            if not is_blackhole():
+            if not self._is_blackhole:
                 raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
             if hybrid_token_threshold < 0:
                 raise ValueError(f"hybrid_token_threshold must be >= 0, got {hybrid_token_threshold}")
@@ -411,7 +411,7 @@ class TtRoutedExpert(LightweightModule):
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
         # always computes SiLU. Reject here rather than silently returning SiLU output.
-        if activation != ttnn.RoutedExpertActivation.Silu and not is_blackhole():
+        if activation != ttnn.RoutedExpertActivation.Silu and not self._is_blackhole:
             raise NotImplementedError(
                 f"TtRoutedExpert {activation} is only supported on the Blackhole fused path; "
                 "the fallback path computes SiLU"
@@ -592,9 +592,10 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        if is_blackhole():
+        if self._is_blackhole:
             # Fused path. The composite op selects its strategy from the input
             # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
             # bf8-packed internally, fresh output); a TILE buffer takes the
@@ -627,7 +628,7 @@ class TtRoutedExpert(LightweightModule):
 
             expert_outputs = None
             if not fused_only:
-                signpost(header="UnifiedRoutedExpertMoe")
+                ttnn.tracy_message("`TT_SIGNPOST: UnifiedRoutedExpertMoe`")
                 expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                     composite_input,
                     expert_region_offsets,
@@ -656,7 +657,7 @@ class TtRoutedExpert(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             if threshold is not None:
-                signpost(header="MoeFusedSwiGlu")
+                ttnn.tracy_message("`TT_SIGNPOST: MoeFusedSwiGlu`")
                 ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
                     dispatched_buffer,
                     self.gate_projs,
@@ -679,7 +680,8 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                 )
-            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
         if self.gate_biases is not None:
@@ -698,7 +700,7 @@ class TtRoutedExpert(LightweightModule):
             dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+            ttnn.tracy_message(f"`TT_SIGNPOST: Expert {local_expert+1}/{self.experts_per_chip}`")
 
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
@@ -708,7 +710,8 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
                 tokens,
@@ -718,7 +721,8 @@ class TtRoutedExpert(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 output=None,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
@@ -729,5 +733,6 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
             )
 
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs

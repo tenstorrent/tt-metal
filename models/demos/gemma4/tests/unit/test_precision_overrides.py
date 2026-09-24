@@ -41,3 +41,27 @@ def test_unknown_model_still_empty():
     assert p._overrides == {}
     # default fallback stays the caller-supplied dtype
     assert p.get("shared_mlp", ttnn.bfloat16) == ttnn.bfloat16
+
+
+# ── The bfp8 context ceiling is mesh-scoped ─────────────────────────────────
+
+
+def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on():
+    """31B/tp=8 at 262k degenerates with shared_mlp in bfp8, so it downgrades."""
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
+    assert o.get("shared_mlp") == ttnn.bfloat16
+
+
+def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
+    """The downgrade DOUBLES those weights, so it may only be declared where
+    bf16 fits. Applying it to every mesh hung Gemma4-31B on bh_quietbox_2
+    (1x4) in model init -- 31B shared_mlp in bf16 at 262144 does not fit on
+    four chips, and the leg passed on main, which had no ceiling at all. A mesh
+    with no entry keeps bfp8, i.e. main's behaviour."""
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4), max_seq_len=262144)
+    assert o.get("shared_mlp") == ttnn.bfloat8_b
+
+
+def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072)
+    assert o.get("shared_mlp") == ttnn.bfloat8_b

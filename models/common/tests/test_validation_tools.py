@@ -460,7 +460,6 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
         },
     )(TorchLinearRef.forward)
 
-    ttnn.SetDefaultDevice(ttnn_mesh_device)
     _ = validated_call(ref_layer, x.unsqueeze(0))
 
     assert len(registry.results) == before + 1
