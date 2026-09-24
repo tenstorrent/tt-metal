@@ -606,6 +606,7 @@ def run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype, has_wei
     elif dtype == ttnn.bfloat16:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.019, 0.003
         if not (has_weight and has_bias):
+            # Without gamma/beta the output norm is smaller, so the relative Frobenius error is larger.
             frobenius_threshold = 0.005
     else:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.013, 0.003
