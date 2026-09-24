@@ -4,8 +4,28 @@
 
 #pragma once
 
-#define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
-#define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
+#if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" ::"n"(unsigned(ENCODING))); })
+#define TT_INSN(ENCODING)  void(::ckernel::instrn_buffer[0] = unsigned(ENCODING))
+#elif defined(ARCH_QUASAR) && defined(LLK_BOOT_BRISC)
+// The llk test infra uses TTI macros on brisc and somehow executes
+// it. So icky. See #58141
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte ((%0 >> 30) & 3) | ((%0 & 0x3fffffff) << 2)" ::"n"(unsigned(ENCODING))); })
+#define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+#else
+// Quasar test infra also compiles TTI macros somewhere else without
+// enabling tensix.  And it fails if we don't use .ttinsn, for unknown
+// reasons.  See #58144
+#if 1
+// works
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0 # qsr" ::"n"(unsigned(ENCODING))); })
+#else
+// fails
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte ((%0 >> 30) & 3) | ((%0 & 0x3fffffff) << 2) # qsr" ::"n"(unsigned(ENCODING))); })
+#endif
+#define TT_INSN(ENCODING) ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+#endif
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
