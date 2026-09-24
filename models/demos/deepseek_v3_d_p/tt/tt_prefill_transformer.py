@@ -140,9 +140,8 @@ class TtPrefillTransformer(LightweightModule):
             ):
                 return False
 
-        # Final norm + LM head: MTP only. #55796 removed the trunk's tail -- production prefill hands
-        # the KV cache to decode -- so these are loaded iff a predictor runs on this rank: h^0 is
-        # post-norm, and a generated level's lookahead token comes out of the LM head.
+            # Final norm and LM head are MTP-only: h^0 is post-norm, and a generated level takes its
+            # lookahead token from the LM head. Loaded iff a predictor runs on this rank.
         if mtp_levels and is_last_rank and not kv_only_last_layer:
             if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
                 return False
@@ -213,9 +212,8 @@ class TtPrefillTransformer(LightweightModule):
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
 
-        # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
-        # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
-        # take the scalar TP element.
+        # Blocks take the full per-axis topology and split SP/TP internally; the norm and LM head
+        # are pure TP-axis collectives, so they take the scalar TP element.
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         sp_topology = topology[0] if isinstance(topology, tuple) else topology
 
@@ -302,14 +300,8 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
-        # --- Final norm + LM head: MTP only ---
-        # #55796 removed the trunk's norm/LM-head/sampling tail: production prefill hands the KV
-        # cache to decode, and a test that wants logits runs the tail on the host. MTP is the one
-        # consumer that still needs it ON DEVICE, for two independent reasons -- h^0, the tensor
-        # level 1's `hnorm` consumes, is post-norm, and every level at or above `provided_levels`
-        # generates its own lookahead token through the LM head (see `mtp_generate_embedding`). So
-        # the tail is built iff a predictor runs here. A kv_only last layer produces no hidden
-        # state and a non-last pipeline rank forwards it, so both still skip the tail.
+        # Final norm and LM head, built iff a predictor runs here: MTP needs both on device for h^0 and
+        # for a generated level's lookahead token. A kv_only last layer and a non-last rank skip them.
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
             TtDistributedRmsNorm(
@@ -326,9 +318,8 @@ class TtPrefillTransformer(LightweightModule):
             if build_tail
             else None
         )
-        # --- LM Head: MTP only, same gate as the norm above ---
-        # A level at or above `provided_levels` has no supplied lookahead token and generates its
-        # own: argmax over these logits, then embed (see `mtp_generate_embedding`).
+        # LM head, same MTP-only gate as the norm above: a level at or above `provided_levels`
+        # generates its own lookahead token by argmax over these logits, then embeds it.
         self.lm_head = (
             TtLMHead(
                 mesh_device=mesh_device,
@@ -636,10 +627,8 @@ class TtPrefillTransformer(LightweightModule):
         if not self.is_last_rank:
             return h
 
-        # The norm and the LM head exist on this rank iff MTP does (see __init__). With no
-        # predictor the populated KV cache is this rank's whole product, so the final hidden state
-        # is dropped here, exactly as the kv_only last layer above drops it; a caller that wants
-        # logits runs norm + LM head on the host from intermediates["layer_<last>"].
+        # Norm and LM head exist on this rank iff MTP does. Without a predictor the KV cache is the whole
+        # product, so the final hidden state is dropped; a caller wanting logits runs the tail on the host.
         if self.norm is not None:
             h = self.norm(h)  # h^0: the tensor level 1's `hnorm` consumes
 
@@ -684,9 +673,6 @@ class TtPrefillTransformer(LightweightModule):
             if on_mtp_complete is not None:
                 on_mtp_complete(mtp_out, mtp_generated)
 
-        # No token from prefill: #55796 gave that job to decode. The 3-tuple arity is kept -- it is
-        # what the kv_only early return above already hands back -- so this stays a one-file change;
-        # main's callers, which expect the bare dict, arrive with the merge.
         return intermediates
 
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:

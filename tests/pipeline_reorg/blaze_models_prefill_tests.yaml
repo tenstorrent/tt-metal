@@ -1654,12 +1654,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # An estimate: MTP7 has never run at this rank count. The unknown is loading seven MTP modules
-      # from a second ttnn cache over NFS; the 11-chunk loop itself is minutes and there is no warmup.
       timeout: 60
       tier: 1
-      # Not a release gate yet: MTP7 is first-execution code and its thresholds are carried over from
-      # single-galaxy MTP4. Flip this once it has been green twice.
+      # Not a release gate yet; flip once MTP7 has been green twice.
       release_ready: false
   owner_id: U09L76N1MAT # Nenad Babin
   team: models
@@ -1749,8 +1746,6 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # Sized off a cold host like the DFlash runner leg: one rank builds all 78 trunk layers plus
-      # seven MTP modules out of the NFS-mounted TTNN cache, which dominates the run.
       timeout: 120
       tier: 1
       release_ready: false

@@ -236,8 +236,7 @@ def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
     """
 
     def next_token(h_normed):
-        # Inlined from the transformer's own `_lm_head_and_extract`, which #55796 deleted along with
-        # the trunk's sampling tail: this test is its only remaining caller, so it lives here now.
+        # The transformer no longer carries a sampling tail; this test is its only caller, so it lives here.
         row = actual_isl - 1 if transformer.padding_side == "right" else transformer.seq_len - 1
         lm_head = transformer.lm_head
         raw, (device_id, token_offset) = lm_head(h_normed, row)

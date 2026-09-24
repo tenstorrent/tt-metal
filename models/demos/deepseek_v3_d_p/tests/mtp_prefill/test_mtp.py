@@ -39,16 +39,11 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
-# Two distributed RMSNorms and one matmul -- the same op class as tests/pcc/test_rmsnorm.py and
-# test_ffn.py, so it earns their threshold rather than a block-level one. One value for both weight
-# options.
+# Two distributed RMSNorms and one matmul, so it earns the op-level threshold from tests/pcc rather
+# than a block-level one. One value for both weight options.
 FUSED_MTP_PCC = 0.999
-# The MTP layer is an ordinary GLM MoE decoder block; what it earns depends on its weights, so this is
-# keyed by the use_pretrained axis. Each value is what its own regime is already gated at in this repo:
-# 0.98 is the GLM block threshold from tests/test_prefill_block.py, 0.96 is what
-# test_mtp_transformer_chunks.py gates the pretrained MTP module at. Measured on host: at matched
-# relative logit noise the trained gate flips its top-8-of-256 on 2.2x as many tokens as the seeded
-# one, because selection there is bias-dominated.
+# The MTP layer is an ordinary GLM MoE decoder block, so each regime takes the threshold it is already
+# gated at elsewhere; trained weights route more sensitively, hence the lower one.
 MTP_MODULE_OUTPUT_PCC = {False: 0.98, True: 0.96}
 # The KVPE cache is written by the same ttMLA op whatever the model variant, so it earns the value
 # tests/test_prefill_block.py:74 measured for it (PrefillBlockThresholds.kvpe_kv / kvpe_pe).
@@ -470,10 +465,8 @@ def test_mtp_predictor_pcc(
         return_indexer_indices=True,
     )
 
-    # Only the FIRST MTP level runs the lightning indexer; levels 2..K attend at its top-k
-    # (index_share_for_mtp_iteration). Exact by object identity: ttMLA returns the very tensor it
-    # handed to self._attention. It also has to hold -- the MTP layer's indexer owns ONE compacted
-    # index-K slot, so a level that ran its own would overwrite level 1's index keys in place.
+    # Only the first MTP level runs the indexer; the rest attend at its top-k. Checked by object
+    # identity, and it must hold: the layer owns one index-K slot, so a second run would overwrite it.
     if predictor.index_share and num_levels > 1:
         assert all(
             t is res.indexer_indices[0] for t in res.indexer_indices[1:]
