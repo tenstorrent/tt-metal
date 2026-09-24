@@ -38,18 +38,13 @@ inline constexpr uint32_t worker_go_threshold = 1;
 // worker arms its go interrupt mask only after auto dispatch is enabled and groups are programmed.
 inline constexpr uint32_t interrupts_disabled = 0;
 
-// The four cycle counts below are temporary placeholders and will be updated to their actual values later.
+// The three cycle counts below are temporary placeholders and will be updated to their actual values later.
 
 // At init, dispatch writes idle to the go wire directly and holds it this long before enabling
 // auto dispatch. Worker filters capture only when the wire value changes, so every worker has to
 // capture idle first; otherwise a first go that repeats the group the previous run left on the wire
-// is never seen. The hold must exceed the filter length.
+// is never seen.
 inline constexpr uint32_t init_go_park_hold_cycles = 4096;
-
-// Init normally waits for the previous run's queue to drain at the previous run's cycle count. A
-// count of 0 means one release every 2^32 cycles, so when the previous run left auto dispatch enabled
-// with a count of 0, init waits this long instead.
-inline constexpr uint32_t unbounded_drain_fallback_cycles = 4096;
 
 // Auto dispatch pacing on dispatch: queued gos go out one every count + 1 cycles, so each go stays on
 // the wire long enough for every worker's filter to capture it before the next value replaces it.
