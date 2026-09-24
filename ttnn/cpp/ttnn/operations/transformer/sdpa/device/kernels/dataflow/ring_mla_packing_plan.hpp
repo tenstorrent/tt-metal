@@ -18,23 +18,6 @@ struct PackedKVMaskRun {
     uint32_t column_end;
 };
 
-// Even a K tile at q_start_tile needs its within-tile diagonal mask. Skip only
-// when every run ends strictly before that tile; packed source order need not
-// be monotonic in global sequence coordinates. This predicate addresses causality
-// only: callers must separately mask K >= effective N, packed padding, invalid Q
-// rows, and any sliding/rotation conditions before eliding mask work.
-constexpr bool packed_kv_runs_need_causal_mask(const PackedKVMaskRun* runs, uint32_t count, uint32_t q_start_tile) {
-    uint32_t column_start = 0;
-    for (uint32_t run = 0; run < count; ++run) {
-        const uint32_t length = runs[run].column_end - column_start;
-        if (runs[run].global_start_tile + length > q_start_tile) {
-            return true;
-        }
-        column_start = runs[run].column_end;
-    }
-    return false;
-}
-
 // Preconditions checked by the host: nonzero source/chunk sizes, group size <= 32,
 // products representable in uint32_t, source IDs in the resolved tensor-rank range.
 // Chunk and stream indices passed to addressing helpers must be in range.
@@ -91,10 +74,25 @@ struct PackedKVGroupPlan {
         }
         return count;
     }
-    constexpr uint32_t global_tile(
-        uint32_t stream_tile, uint32_t source_id, uint32_t region_tiles, uint32_t global_chunk_tiles) const {
-        const uint32_t local = source_offset(stream_tile);
-        return (local / region_tiles) * global_chunk_tiles + source_id * region_tiles + local % region_tiles;
+};
+
+// Readiness advances once per source in sequencer order, and is reused across Q
+// chunks in the same group. The callback must complete its wait before returning.
+// Drain also covers cores with no Q work, preserving the receiver's signal cadence.
+struct PackedKVSourceReadiness {
+    uint32_t ready_sources = 0;
+
+    template <typename WaitSource>
+    void drain(uint32_t required_sources, WaitSource&& wait_source) {
+        while (ready_sources < required_sources) {
+            wait_source(ready_sources);
+            ++ready_sources;
+        }
+    }
+
+    template <typename WaitSource>
+    void wait_for_chunk(const PackedKVGroupPlan& plan, uint32_t chunk, WaitSource&& wait_source) {
+        drain(plan.last_source(chunk) + 1, wait_source);
     }
 };
 

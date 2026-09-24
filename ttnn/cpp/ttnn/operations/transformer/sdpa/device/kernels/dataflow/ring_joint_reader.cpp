@@ -788,13 +788,24 @@ void kernel_main() {
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
+        PackedKVSourceReadiness packed_readiness;
         if (packed_sources) {
+            // Planning identities must not wait for every member. Compute and
+            // writer also derive this order without gather waits; this reader
+            // alone gates access to the corresponding gathered source data.
+            auto preview = fused_op_receiver.seq;
             for (uint32_t source = 0; source < source_group_size; ++source) {
                 packed_source_ids[source] =
                     ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                        preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
             }
         }
+        const auto wait_packed_source = [&](uint32_t source) {
+            const uint32_t ready_id =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            ASSERT(ready_id == packed_source_ids[source]);
+        };
         const bool ring_iter_is_active =
             packed_sources || has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
@@ -1066,6 +1077,13 @@ void kernel_main() {
                 const bool joint_chunk_is_local =
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
+                if (packed_sources) {
+                    // A chunk can span several sources. Wait through its last
+                    // member before either a local read or chain receive; later
+                    // Q chunks reuse the readiness already established here.
+                    packed_readiness.wait_for_chunk(packed_kv, k_chunk, wait_packed_source);
+                }
+
                 // K: either read locally (injector or not participant) or receive from chain
                 const uint32_t k_chain_head = [&]() {
                     if constexpr (gqa_grouped_kv) {
@@ -1311,6 +1329,11 @@ void kernel_main() {
                     cb_v.push_back(v_cb_entry_tiles);
                 }
             }
+        }
+        if (packed_sources) {
+            // Cores without Q work still consume the group in sequencer order,
+            // so the next group and subsequent dispatches start at the right source.
+            packed_readiness.drain(source_group_size, wait_packed_source);
         }
         if constexpr (!has_sliding_window) {
             for (uint32_t dummy_chunk = 0;
