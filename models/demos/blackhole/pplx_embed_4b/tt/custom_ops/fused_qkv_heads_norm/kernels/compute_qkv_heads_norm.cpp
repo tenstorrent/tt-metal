@@ -230,8 +230,8 @@ void kernel_main() {
         ct.wait_front(1);
     }
 
+    uint32_t sub = work_unit_start % q_split;  // Q half of the current unit, advanced as a rotating counter
     for (uint32_t w = 0; w < num_work_units; ++w) {
-        const uint32_t sub = (q_split == 1) ? 0 : ((work_unit_start + w) % q_split);
         const bool has_k = (q_split == 1) || sub == 0;
         const bool has_v = (q_split == 1) || sub == 1;
         const uint32_t v_in_off = sub_q_tiles + (has_k ? group_kv_tiles : 0);
@@ -289,5 +289,8 @@ void kernel_main() {
         }
         out.push_back(out_tiles);
         in.pop_front(unit_tiles);
+        if (++sub == q_split) {
+            sub = 0;
+        }
     }
 }
