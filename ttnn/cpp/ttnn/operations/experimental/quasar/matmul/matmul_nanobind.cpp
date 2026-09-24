@@ -648,14 +648,14 @@ void py_module(nb::module_& mod) {
         tt_serializable_class<MatmulUnifiedProgramConfig>(mod, "MatmulUnifiedProgramConfig", R"doc(
         Placement-first program config (Quasar-native matmul, stage A).
 
-        GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores and
-        the C slice of C (C_slice_M_tiles x C_slice_N_tiles tiles) each core produces; the factory walks the
-        C slices of a batch (across N, then down M) and hands that walk to the cores in
-        enumeration order as contiguous runs (a core may produce several, and produces them for every batch; surplus cores idle). Edge
-        C slices are clipped on read and write, so any M / N works. Every
-        operand is addressed through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded
-        inputs and outputs all take the same kernels. The 1D, 2D and DRAM-sharded strategies are
-        particular choices of (cores, C_slice_M_tiles, C_slice_N_tiles).
+        GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores; every
+        other field defaults to auto. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
+        the factory walks the C slices of a batch (across N, then down M) and hands that walk to the cores
+        in enumeration order as contiguous runs (a core may produce several, for every batch; surplus cores
+        idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
+        through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
+        the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
+        (cores, C_slice_M_tiles, C_slice_N_tiles).
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
         only; a sharded output needs batch 1 and exactly one C slice per core.
@@ -663,27 +663,39 @@ void py_module(nb::module_& mod) {
 
     matmul_unified_program_config
         .def(
-            nb::init<CoreRangeSet, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool>(),
+            nb::init<
+                CoreRangeSet,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                tt::tt_metal::ShardOrientation>(),
             nb::kw_only(),
             nb::arg("cores"),
-            nb::arg("C_slice_M_tiles").noconvert(),
-            nb::arg("C_slice_N_tiles").noconvert(),
+            nb::arg("C_slice_M_tiles").noconvert() = 0,
+            nb::arg("C_slice_N_tiles").noconvert() = 0,
             nb::arg("K_chunk_tiles").noconvert() = 0,
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
-            nb::arg("row_major_cores") = true)
+            nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR)
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet.
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
-            Height of the C slice of C each core produces, in tiles.
+            Height of the C slice each core produces, in tiles. 0 = auto: the output shard height when C is
+            sharded, else M in tiles split over the rows of the bounding box of `cores`.
         )doc")
         .def_rw("C_slice_N_tiles", &MatmulUnifiedProgramConfig::C_slice_N_tiles, R"doc(
-            Width of the C slice of C each core produces, in tiles.
+            Width of the C slice each core produces, in tiles. 0 = auto: the output shard width when C is
+            sharded, else N in tiles split over the columns of the bounding box of `cores`.
         )doc")
         .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
-            K tiles accumulated per K chunk (one A slice and one B slice resident at a time); must
-            divide K in tiles. 0 = auto (largest divisor <= 8 whose rings fit L1).
+            K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
+            one B slice (K_chunk_tiles x C_slice_N_tiles tiles) are resident in L1 at a time, and the partial
+            sums round-trip L1 between steps. Must divide K in tiles. 0 = auto: the largest divisor of K in
+            tiles up to 8 whose buffers fit L1 (8 bounds the L1 footprint of the double-buffered slices; it is
+            a tuning point, not a hardware limit).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
             Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
@@ -694,20 +706,21 @@ void py_module(nb::module_& mod) {
             Subblock width in tiles; need not divide C_slice_N_tiles (padded and clipped like the height). A
             subblock holds at most 8 tiles (4 with fp32 accumulation), the DST capacity.
         )doc")
-        .def_rw("row_major_cores", &MatmulUnifiedProgramConfig::row_major_cores, R"doc(
-            Core enumeration order for the work-item assignment: x fastest when True, y fastest when False.
+        .def_rw("orientation", &MatmulUnifiedProgramConfig::orientation, R"doc(
+            Order the cores are walked when handing out C slices: ROW_MAJOR is x fastest, COL_MAJOR is y
+            fastest. A sharded C gets this shard orientation.
         )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
                 "MatmulUnifiedProgramConfig(cores={}, C_slice_M_tiles={}, C_slice_N_tiles={}, K_chunk_tiles={}, "
-                "subblock_M_tiles={}, subblock_N_tiles={}, row_major_cores={})",
+                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={})",
                 config.cores.str(),
                 config.C_slice_M_tiles,
                 config.C_slice_N_tiles,
                 config.K_chunk_tiles,
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,
-                config.row_major_cores);
+                config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR");
         });
 
     ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(

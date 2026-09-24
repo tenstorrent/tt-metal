@@ -2197,8 +2197,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes,
                         std::nullopt);
                     const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
-                    const ShardOrientation orientation =
-                        plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
+                    const ShardOrientation orientation = plan.orientation;
                     ShardSpec shard_spec = ShardSpec{
                         grid,
                         {plan.C_slice_M_tiles * in0_tile.get_height(), plan.C_slice_N_tiles * in1_tile.get_width()},

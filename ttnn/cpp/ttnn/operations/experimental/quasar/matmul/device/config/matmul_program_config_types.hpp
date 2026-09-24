@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -93,17 +94,23 @@ struct MatmulMultiCoreProgramConfig {
 // sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
-    std::size_t C_slice_M_tiles{};
-    std::size_t C_slice_N_tiles{};
-    // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
-    // 0 = auto: the largest divisor of K_tiles <= 8 whose DFBs fit L1.
+    // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else
+    // M / N split over the bounding box of `cores` (its rows down M, its columns across N).
+    std::size_t C_slice_M_tiles = 0;
+    std::size_t C_slice_N_tiles = 0;
+    // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
+    // the partial sums round-trip L1 between steps. Must divide K_tiles. 0 = auto: the largest divisor of
+    // K_tiles up to 8 whose buffers fit L1 (8 bounds the double-buffered slice footprint; a tuning point,
+    // not a hardware limit).
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
     // overshoot is clipped on write. 0 for both = auto (max-volume subblock).
     std::size_t subblock_M_tiles = 0;
     std::size_t subblock_N_tiles = 0;
-    bool row_major_cores = true;
+    // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A
+    // sharded C gets this shard orientation.
+    tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
 };
 
 using MatmulProgramConfig = std::variant<

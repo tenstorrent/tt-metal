@@ -48,7 +48,7 @@ struct UnifiedMatmulPlan {
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
     uint32_t C_slices_per_batch = 0;
-    bool row_major_cores = true;
+    tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
     std::vector<tt::tt_metal::CoreCoord> cores;
     uint32_t max_C_slices_per_core = 0;  // sizes the DFBs and gates partials aliasing
 

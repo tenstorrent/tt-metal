@@ -6,6 +6,7 @@
 // subblock (what DST holds) at a time; running sums spill to C_partials between K chunks (or
 // accumulate there via packer_l1_acc) and the last K chunk packs into C_slice for the writer.
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks, k_tile.
+// Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <cstdint>
 
@@ -17,21 +18,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-void kernel_main() {
+template <
+    uint32_t batch_size,
+    uint32_t K_chunk_tiles,
+    uint32_t num_K_chunks,
+    uint32_t C_slice_M_padded_tiles,  // C slice dims rounded up to subblock multiples; overshoot is clipped by the
+                                      // writer
+    uint32_t C_slice_N_padded_tiles,
+    uint32_t subblock_M_tiles,
+    uint32_t subblock_N_tiles,
+    uint32_t packer_l1_acc,
+    uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
+TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices, per batch
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
-    const uint32_t num_C_slices = get_arg(args::num_C_slices);  // this core's C slices, per batch
-
-    constexpr uint32_t batch_size = get_arg(args::batch_size);
-    constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
-    constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
-    // C slice dims rounded up to subblock multiples; overshoot tiles are clipped by the writer.
-    constexpr uint32_t C_slice_M_padded_tiles = get_arg(args::C_slice_M_padded_tiles);
-    constexpr uint32_t C_slice_N_padded_tiles = get_arg(args::C_slice_N_padded_tiles);
-    constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
-    constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
-    constexpr bool packer_l1_acc = get_arg(args::packer_l1_acc) != 0;
-    constexpr bool partials_format_differs = get_arg(args::partials_format_differs) != 0;
-
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t C_slice_tiles = C_slice_M_padded_tiles * C_slice_N_padded_tiles;

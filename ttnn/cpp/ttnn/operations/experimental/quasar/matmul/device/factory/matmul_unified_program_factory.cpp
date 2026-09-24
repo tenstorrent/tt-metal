@@ -206,10 +206,25 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.batch_size);
 
     // ---- C slice assignment ----
-    TT_FATAL(
-        config.C_slice_M_tiles > 0 && config.C_slice_N_tiles > 0, "C_slice_M_tiles and C_slice_N_tiles must be > 0");
-    plan.C_slice_M_tiles = config.C_slice_M_tiles;
-    plan.C_slice_N_tiles = config.C_slice_N_tiles;
+    TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
+    const CoreRange bounding_box = config.cores.bounding_box();
+    // Auto C slice: the output shard when C is sharded, else M / N split over the bounding box of the cores.
+    const std::optional<tt::tt_metal::ShardSpec>& C_shard =
+        output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
+    const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
+    if (C_slice_from_shard) {
+        TT_FATAL(
+            C_shard->shape[0] % TILE_HEIGHT == 0 && C_shard->shape[1] % TILE_WIDTH == 0,
+            "A sharded C needs a tile-multiple shard shape to derive the C slice from, got {}x{}",
+            C_shard->shape[0],
+            C_shard->shape[1]);
+    }
+    plan.C_slice_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
+                           : C_slice_from_shard        ? C_shard->shape[0] / TILE_HEIGHT
+                                                       : tt::div_up(plan.M_tiles, bounding_box.grid_size().y);
+    plan.C_slice_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
+                           : C_slice_from_shard        ? C_shard->shape[1] / TILE_WIDTH
+                                                       : tt::div_up(plan.N_tiles, bounding_box.grid_size().x);
     // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
     const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, plan.C_slice_N_tiles);
     plan.C_slices_across_N = C_slices_across_N;
@@ -219,17 +234,16 @@ UnifiedMatmulPlan plan_unified_matmul(
                                  : C_slices_down_M == 1 ? tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED
                                                         : tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
 
-    TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
     const CoreCoord grid = device.compute_with_storage_grid_size();
-    const CoreRange bounding_box = config.cores.bounding_box();
     TT_FATAL(
         bounding_box.end_coord.x < grid.x && bounding_box.end_coord.y < grid.y,
         "MatmulUnifiedProgramConfig.cores {} exceed the device compute grid {}x{}",
         config.cores.str(),
         grid.x,
         grid.y);
-    plan.row_major_cores = config.row_major_cores;
-    const std::vector<CoreCoord> all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
+    plan.orientation = config.orientation;
+    const std::vector<CoreCoord> all_cores =
+        corerange_to_cores(config.cores, std::nullopt, config.orientation == ShardOrientation::ROW_MAJOR);
     const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
     plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
     plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
@@ -560,7 +574,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"A_borrowed", plan.borrow_A ? 1u : 0u},
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"C_slice_first_M_tile", "C_slice_first_N_tile", "num_C_slices"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
         .hw_config =
             ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -585,7 +599,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"C_slice_first_M_tile", "C_slice_first_N_tile", "num_C_slices"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
         .hw_config =
             ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -671,9 +685,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
         const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
-            {"C_slice_first_M_tile", (next_C_slice / plan.C_slices_across_N) * plan.C_slice_M_tiles},
-            {"C_slice_first_N_tile", (next_C_slice % plan.C_slices_across_N) * plan.C_slice_N_tiles},
-            {"num_C_slices", num_C_slices}};
+            {"first_C_slice", next_C_slice}, {"num_C_slices", num_C_slices}};
         next_C_slice += num_C_slices;
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, plan.cores[core], run_start);
