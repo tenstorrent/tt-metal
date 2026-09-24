@@ -18,7 +18,7 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_config
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_program_config
 
 from .weights import AttentionWeights
 
@@ -30,17 +30,18 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def projection_matmul_kwargs(hidden_states, weight):
-    """Explicit blocking with fp32 accumulation for an attention projection, or {} for ttnn's defaults.
+def projection_matmul_configs(hidden_states, weight):
+    """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
+    accumulation, or (None, None) for ttnn's defaults.
 
     Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
     prefill KV accuracy; HiFi2 with fp32 accumulation improves on the default config.
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()
-    program_config = prefill_matmul_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)
+    program_config = prefill_matmul_program_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)
     if program_config is None:
-        return {}
+        return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -48,17 +49,19 @@ def projection_matmul_kwargs(hidden_states, weight):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    return {"program_config": program_config, "compute_kernel_config": compute_kernel_config}
+    return program_config, compute_kernel_config
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
+    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
     return ttnn.linear(
         hidden_states,
         w_tensor,
         memory_config=memory_config,
-        **projection_matmul_kwargs(hidden_states, w_tensor),
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
     )
 
 
