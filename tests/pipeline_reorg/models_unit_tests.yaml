@@ -2205,3 +2205,22 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: unit
+
+# LLVC (PR #49699). Both suites build a reduced random-weight config in-process; no weights or
+# assets are fetched. The PR's own conftest opens device 0 with its L1-small / trace-region sizes.
+- name: LLVC unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    pytest --timeout 600 models/demos/llvc/tests/pcc/test_llvc.py -v
+  model: llvc
+  model_family: LLVC
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 3
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719
+  team: models
+  budget_type: unit

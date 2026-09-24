@@ -107,6 +107,7 @@ it is classified differently on different systems.
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
+| LLVC | WH N150, BH P150 |
 | Falcon-7B | WH N150 |
 | Falcon-40B | WH LLMBox |
 | Gemma-2-2B | WH N150, WH N300 |
