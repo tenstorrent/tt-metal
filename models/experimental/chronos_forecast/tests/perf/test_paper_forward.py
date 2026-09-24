@@ -109,6 +109,7 @@ def test_paper_forward_perf(mesh_device):
 
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
+    mesh_device.enable_program_cache()
 
     model, weight_source = _load_reference()
     cfg = tt_chronos_config_from_torch_model(model)
@@ -157,6 +158,32 @@ def test_paper_forward_perf(mesh_device):
 
     assert got.shape == expected_shape
 
+    preprocess_start = time.perf_counter()
+    prepared = tt.prepare_inputs(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
+    preprocess_s = time.perf_counter() - preprocess_start
+    upload_start = time.perf_counter()
+    device_inputs = tt.upload_inputs(prepared)
+    ttnn.synchronize_device(mesh_device)
+    upload_s = time.perf_counter() - upload_start
+    output_device = None
+    try:
+        device_start = time.perf_counter()
+        output_device = tt.forward_device(device_inputs)
+        ttnn.synchronize_device(mesh_device)
+        device_s = time.perf_counter() - device_start
+        postprocess_start = time.perf_counter()
+        device_resident_got = tt.postprocess_output(
+            output_device,
+            prepared.loc_scale,
+            num_output_patches=NUM_OUTPUT_PATCHES,
+        )
+        postprocess_s = time.perf_counter() - postprocess_start
+    finally:
+        if output_device is not None:
+            ttnn.deallocate(output_device)
+        tt.deallocate_inputs(device_inputs)
+    assert device_resident_got.shape == expected_shape
+
     series_per_s = BATCH / steady_s
     print(
         "\n[PERF] paper forward"
@@ -168,4 +195,10 @@ def test_paper_forward_perf(mesh_device):
         f"\n  series_per_s:       {series_per_s:.2f}"
         f"\n  a10g_wall_s:        {A10G_WALL_S:.3f}"
         f"\n  a10g_series_per_s:  {A10G_SERIES_PER_S:.0f}"
+        "\n[PERF] device-resident split"
+        f"\n  preprocess_s:       {preprocess_s:.3f}"
+        f"\n  upload_s:           {upload_s:.3f}"
+        f"\n  device_s:           {device_s:.3f}"
+        f"\n  postprocess_s:      {postprocess_s:.3f}"
+        f"\n  split_total_s:      {preprocess_s + upload_s + device_s + postprocess_s:.3f}"
     )

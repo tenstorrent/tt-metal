@@ -54,7 +54,7 @@ class TtEncoderBlock:
         self.device = device
         self.weights = weights
         self.time_core = TtMhaCore(device, weights.time.to_mha())
-        self.group_core = TtMhaCore(device, weights.group.to_mha())
+        self.group_core = TtMhaCore(device, weights.group.to_mha(), enable_diagonal_v_path=True)
         self._ff = self._move_ff_weights_to_device(device, weights)
 
     @staticmethod
@@ -81,7 +81,7 @@ class TtEncoderBlock:
         )
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
-    def forward_device(self, x, cos, sin, time_mask, group_mask):
+    def forward_device(self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False):
         """Device (B,T,d) + cos/sin (B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
         import ttnn
 
@@ -93,7 +93,10 @@ class TtEncoderBlock:
 
         # Sublayer 2: group attention (batch-axis) + residual vs original layout
         x_flip = ttnn.permute(x, (1, 0, 2))
-        out = self.group_core(x_flip, group_mask)
+        if diagonal_group_attention:
+            out = self.group_core.forward_diagonal_group(x_flip)
+        else:
+            out = self.group_core(x_flip, group_mask)
         ttnn.deallocate(x_flip)
         back = ttnn.permute(out, (1, 0, 2))
         ttnn.deallocate(out)

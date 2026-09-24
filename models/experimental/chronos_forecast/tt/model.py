@@ -20,6 +20,7 @@ from einops import rearrange
 
 from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
 from models.experimental.chronos_forecast.tt.group_attention import build_group_mask
+from models.experimental.chronos_forecast.tt.mha_core import maybe_upload_mask
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     instance_norm_inverse,
     prepare_patched_context,
@@ -42,6 +43,40 @@ class TtChronosConfig:
     use_reg_token: bool
     num_quantiles: int
     d_model: int
+
+
+@dataclass(frozen=True)
+class TtChronosPreparedInputs:
+    """Host tensors prepared once for the device-resident forward."""
+
+    patched_context: torch.Tensor
+    patched_future: torch.Tensor
+    cos: torch.Tensor
+    sin: torch.Tensor
+    time_mask: torch.Tensor
+    group_mask: torch.Tensor | None
+    reg_token: torch.Tensor | None
+    loc_scale: tuple[torch.Tensor, torch.Tensor]
+    num_context_patches: int
+    num_output_patches: int
+    unique_groups: bool
+
+
+@dataclass(frozen=True)
+class TtChronosDeviceInputs:
+    """Address-stable device inputs used by eager-device and trace execution."""
+
+    patched_context: object
+    patched_future: object
+    cos: object
+    sin: object
+    time_mask: object | None
+    group_mask: object | None
+    reg_token: object | None
+    batch_size: int
+    num_context_patches: int
+    num_output_patches: int
+    unique_groups: bool
 
 
 @dataclass(frozen=True)
@@ -98,6 +133,201 @@ class TtChronos:
         """Build from a reference ``Chronos2Model`` (weights + geometry)."""
         weights = TtChronosWeights.from_torch_model(model)
         return cls(device, weights, tt_chronos_config_from_torch_model(model))
+
+    def prepare_inputs(
+        self,
+        context: torch.Tensor,
+        context_mask: torch.Tensor | None = None,
+        group_ids: torch.Tensor | None = None,
+        future_covariates: torch.Tensor | None = None,
+        future_covariates_mask: torch.Tensor | None = None,
+        num_output_patches: int = 1,
+    ) -> TtChronosPreparedInputs:
+        """Run host-only patching, normalization, masks, and RoPE construction."""
+        cfg = self.config
+        batch_size = context.shape[0]
+        patched_context, attention_mask, loc_scale = prepare_patched_context(
+            context,
+            context_mask,
+            patch_size=cfg.input_patch_size,
+            patch_stride=cfg.input_patch_stride,
+            context_length=cfg.context_length,
+            time_encoding_scale=cfg.time_encoding_scale,
+            use_arcsinh=cfg.use_arcsinh,
+        )
+        num_context_patches = attention_mask.shape[-1]
+        patched_future, _ = prepare_patched_future(
+            future_covariates,
+            loc_scale,
+            num_output_patches=num_output_patches,
+            output_patch_size=cfg.output_patch_size,
+            batch_size=batch_size,
+            time_encoding_scale=cfg.time_encoding_scale,
+            future_covariates_mask=future_covariates_mask,
+            use_arcsinh=cfg.use_arcsinh,
+        )
+
+        if group_ids is None:
+            group_ids = torch.arange(batch_size, dtype=torch.long)
+        unique_groups = bool(torch.unique(group_ids).numel() == batch_size)
+        reg_token = None
+        if cfg.use_reg_token:
+            reg_token = (
+                self.weights.shared_weight[self.weights.reg_token_id]
+                .reshape(1, 1, -1)
+                .expand(batch_size, -1, -1)
+                .contiguous()
+            )
+            attention_mask = torch.cat([attention_mask, torch.ones(batch_size, 1, dtype=attention_mask.dtype)], dim=-1)
+
+        future_mask = torch.ones(batch_size, num_output_patches, dtype=attention_mask.dtype)
+        full_mask = torch.cat([attention_mask, future_mask], dim=-1)
+        if not bool((full_mask > 0).all()):
+            raise ValueError("TtChronos v1 supports all-valid masks only (got a masked position)")
+        seq_len = full_mask.shape[-1]
+        time_mask = torch.zeros(1, 1, seq_len, seq_len)
+        group_mask = None if unique_groups else build_group_mask(group_ids, (full_mask > 0).float())
+        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+        inv_freq = self.weights.encoder.blocks[0].time.inv_freq
+        cos, sin = build_rope_cache(position_ids, inv_freq)
+        return TtChronosPreparedInputs(
+            patched_context=patched_context,
+            patched_future=patched_future,
+            cos=cos,
+            sin=sin,
+            time_mask=time_mask,
+            group_mask=group_mask,
+            reg_token=reg_token,
+            loc_scale=loc_scale,
+            num_context_patches=num_context_patches,
+            num_output_patches=num_output_patches,
+            unique_groups=unique_groups,
+        )
+
+    def upload_inputs(self, prepared: TtChronosPreparedInputs) -> TtChronosDeviceInputs:
+        """Upload prepared tensors once; returned tensors may be reused by a trace."""
+        import ttnn
+
+        def upload(tensor: torch.Tensor):
+            return ttnn.from_torch(
+                tensor.detach().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        batch_size = prepared.patched_context.shape[0]
+        seq_len = (
+            prepared.num_context_patches + (1 if prepared.reg_token is not None else 0) + prepared.num_output_patches
+        )
+        return TtChronosDeviceInputs(
+            patched_context=upload(prepared.patched_context),
+            patched_future=upload(prepared.patched_future),
+            cos=ttnn.unsqueeze(upload(prepared.cos), 1),
+            sin=ttnn.unsqueeze(upload(prepared.sin), 1),
+            time_mask=(
+                None
+                if not bool((prepared.time_mask != 0).any())
+                else maybe_upload_mask(self.device, prepared.time_mask, seq_len=seq_len)
+            ),
+            group_mask=(
+                None
+                if prepared.unique_groups
+                else maybe_upload_mask(self.device, prepared.group_mask, seq_len=batch_size)
+            ),
+            reg_token=upload(prepared.reg_token) if prepared.reg_token is not None else None,
+            batch_size=batch_size,
+            num_context_patches=prepared.num_context_patches,
+            num_output_patches=prepared.num_output_patches,
+            unique_groups=prepared.unique_groups,
+        )
+
+    def forward_device(self, inputs: TtChronosDeviceInputs):
+        """Execute embeddings, encoder, and output head without a host round-trip."""
+        import ttnn
+
+        context_embeds = self._input_embed.forward_device(inputs.patched_context)
+        future_embeds = self._input_embed.forward_device(inputs.patched_future)
+        context_embeds = ttnn.reshape(
+            context_embeds,
+            (inputs.batch_size, inputs.num_context_patches, self.config.d_model),
+        )
+        future_embeds = ttnn.reshape(
+            future_embeds,
+            (inputs.batch_size, inputs.num_output_patches, self.config.d_model),
+        )
+        pieces = [context_embeds]
+        if inputs.reg_token is not None:
+            pieces.append(inputs.reg_token)
+        pieces.append(future_embeds)
+        x = ttnn.concat(pieces, dim=-2)
+        ttnn.deallocate(context_embeds)
+        ttnn.deallocate(future_embeds)
+
+        hidden = self._encoder.forward_device(
+            x,
+            inputs.cos,
+            inputs.sin,
+            inputs.time_mask,
+            inputs.group_mask,
+            diagonal_group_attention=inputs.unique_groups,
+        )
+        seq_len = hidden.shape[-2]
+        forecast_embeds = ttnn.slice(
+            hidden,
+            (0, seq_len - inputs.num_output_patches, 0),
+            (inputs.batch_size, seq_len, self.config.d_model),
+        )
+        ttnn.deallocate(hidden)
+        return self._output_embed.forward_device(forecast_embeds, deallocate_input=True)
+
+    def postprocess_output(
+        self,
+        output_device,
+        loc_scale: tuple[torch.Tensor, torch.Tensor],
+        *,
+        num_output_patches: int,
+    ) -> torch.Tensor:
+        """Download and unscale the device output into `(B, Q, horizon)`."""
+        import ttnn
+
+        out = ttnn.to_torch(output_device).float()
+        if out.dim() == 4 and out.shape[0] == 1:
+            out = out.squeeze(0)
+        out = out[:, :num_output_patches, :]
+        quantile_preds = rearrange(
+            out,
+            "b n (q p) -> b q (n p)",
+            n=num_output_patches,
+            q=self.config.num_quantiles,
+            p=self.config.output_patch_size,
+        )
+        batch_size = quantile_preds.shape[0]
+        quantile_preds = rearrange(
+            quantile_preds,
+            "b q h -> b (q h)",
+            b=batch_size,
+            q=self.config.num_quantiles,
+        )
+        quantile_preds = instance_norm_inverse(quantile_preds, loc_scale)
+        return rearrange(quantile_preds, "b (q h) -> b q h", q=self.config.num_quantiles)
+
+    @staticmethod
+    def deallocate_inputs(inputs: TtChronosDeviceInputs) -> None:
+        import ttnn
+
+        for tensor in (
+            inputs.patched_context,
+            inputs.patched_future,
+            inputs.cos,
+            inputs.sin,
+            inputs.time_mask,
+            inputs.group_mask,
+            inputs.reg_token,
+        ):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
 
     def encode(
         self,

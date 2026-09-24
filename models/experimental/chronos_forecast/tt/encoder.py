@@ -58,12 +58,19 @@ class TtEncoder:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_device(self, x, cos, sin, time_mask, group_mask):
+    def forward_device(self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False):
         """Device (B,T,d) + cos/sin (B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
         import ttnn
 
         for block in self.blocks:
-            x = block.forward_device(x, cos, sin, time_mask, group_mask)
+            x = block.forward_device(
+                x,
+                cos,
+                sin,
+                time_mask,
+                group_mask,
+                diagonal_group_attention=diagonal_group_attention,
+            )
         x = ttnn.rms_norm(x, epsilon=self.weights.final_eps, weight=self._final_norm)
         return x
 

@@ -56,10 +56,23 @@ def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int):
 class TtMhaCore:
     """TTNN MHA core. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtMhaWeights):
+    def __init__(self, device, weights: TtMhaWeights, *, enable_diagonal_v_path: bool = False):
         self.device = device
         self.weights = weights
         self._tt = self._move_weights_to_device(device, weights)
+        self._diagonal_v_weight = None
+        if enable_diagonal_v_path:
+            import ttnn
+
+            inner = weights.num_heads * weights.head_dim
+            v_weight = weights.wqkv[2 * inner : 3 * inner].detach().to(torch.float32).t().contiguous()
+            self._diagonal_v_weight = ttnn.from_torch(
+                v_weight,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     @staticmethod
     def _move_weights_to_device(device, weights: TtMhaWeights):
@@ -143,16 +156,8 @@ class TtMhaCore:
             pad = 32 - head_dim
 
             def _pad_heads(t):
-                zeros = ttnn.zeros(
-                    (batch, num_heads, seq, pad),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                padded = ttnn.concat([t, zeros], dim=-1)
+                padded = ttnn.pad(t, [(0, 0), (0, 0), (0, 0), (0, pad)], value=0.0)
                 ttnn.deallocate(t)
-                ttnn.deallocate(zeros)
                 return padded
 
             q, k, v = _pad_heads(q), _pad_heads(k), _pad_heads(v)
@@ -207,6 +212,24 @@ class TtMhaCore:
         ttnn.deallocate(ctx)
         out = ttnn.linear(merged, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
+        return out
+
+    def forward_diagonal_group(self, x):
+        """Exact group-attention specialization when every group has size one.
+
+        Softmax over one allowed key is one, so Q/K, scores, masking, softmax,
+        head split, and head concat are unnecessary. The context is exactly V.
+        """
+        import ttnn
+
+        if self._diagonal_v_weight is None:
+            raise RuntimeError("diagonal group path was not enabled for this MHA core")
+        _wqkv, wo, rms_w = self._tt
+        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
+        value = ttnn.linear(x_norm, self._diagonal_v_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_norm)
+        out = ttnn.linear(value, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(value)
         return out
 
     __call__ = forward

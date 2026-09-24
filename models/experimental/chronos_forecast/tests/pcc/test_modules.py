@@ -294,6 +294,42 @@ def test_tt_forward_pcc(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_tt_forward_device_resident_pcc(mesh_device):
+    """Device-resident embeddings + encoder + output head vs reference."""
+    ttnn = pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    tt = TtChronos.from_torch_model(mesh_device, model)
+    torch.manual_seed(0)
+    context = torch.randn(2, 32)
+    with torch.no_grad():
+        expected = model(context=context, num_output_patches=1).quantile_preds
+
+    prepared = tt.prepare_inputs(context=context, num_output_patches=1)
+    inputs = tt.upload_inputs(prepared)
+    output_device = None
+    try:
+        output_device = tt.forward_device(inputs)
+        got = tt.postprocess_output(output_device, prepared.loc_scale, num_output_patches=1)
+    finally:
+        if output_device is not None:
+            ttnn.deallocate(output_device)
+        tt.deallocate_inputs(inputs)
+
+    assert got.shape == expected.shape
+    log_golden("tt_forward_device_resident/device_quantiles", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_tt_forward_pretrained_pcc(mesh_device):
     """TT forward with real amazon/chronos-2 weights via preprocess_model_parameters.
 

@@ -88,7 +88,6 @@ class TtResidualBlock:
         """Forward starting from host input. Returns host torch (float32) for PCC."""
         import ttnn
 
-        hidden_w, hidden_b, output_w, output_b, residual_w, residual_b = self._tt
         x = ttnn.from_torch(
             x_host.detach().to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -96,6 +95,23 @@ class TtResidualBlock:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        out = self.forward_device(x, deallocate_input=True)
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,C).
+        host = ttnn.to_torch(out).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        ttnn.deallocate(out)
+        return host
+
+    def forward_device(self, x, *, deallocate_input: bool = False):
+        """Run the residual MLP entirely on device.
+
+        ``x`` is borrowed by default so address-stable trace inputs can be
+        refreshed and replayed. Set ``deallocate_input`` for owned temporaries.
+        """
+        import ttnn
+
+        hidden_w, hidden_b, output_w, output_b, residual_w, residual_b = self._tt
         # Main path: 48 -> h (fused relu) -> out.
         hidden_act = ttnn.linear(
             x,
@@ -118,16 +134,13 @@ class TtResidualBlock:
             bias=residual_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(x)
+        if deallocate_input:
+            ttnn.deallocate(x)
         if skip.memory_config() != main.memory_config():
             skip = ttnn.to_memory_config(skip, main.memory_config())
         out = ttnn.add(main, skip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(main)
         ttnn.deallocate(skip)
-        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,C).
-        host = ttnn.to_torch(out).float()
-        if host.dim() == 4 and host.shape[0] == 1:
-            host = host.squeeze(0)
-        return host
+        return out
 
     __call__ = forward
