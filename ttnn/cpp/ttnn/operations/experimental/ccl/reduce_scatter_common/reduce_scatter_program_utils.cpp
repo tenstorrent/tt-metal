@@ -106,6 +106,10 @@ uint32_t reduce_scatter_default_workers(
             return worker_count;
         }
     }
+    TT_FATAL(
+        !candidate_worker_counts.empty(),
+        "reduce_scatter_default_workers only supports Ring and Linear topologies, got {}",
+        static_cast<int>(topology));
     TT_THROW(
         "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
         "links {}: {} worker cores stay on the grid after core_grid_offset ({}, {}), the smallest candidate needs {}",

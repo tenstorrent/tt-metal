@@ -18,8 +18,8 @@ the 2-worker band and is the scatter-header case above. M=2048 is the real prefi
 moved per link crosses the Blackhole 1 MiB ring threshold, so reduce_scatter_default_workers asks
 for 8 workers, and with reduce_scatter_core_grid_offset=(0, 8) only the two bottom rows of the
 grid can host them. Before the heuristic counted only the cores that stay on the grid after the
-offset, that combination failed in try_choose_worker_cores with "Not all worker cores could be
-placed" (#57507).
+offset, choose_worker_cores failed that combination with "Core grid offset 0-8 pushed 14 of the 36
+selected worker cores (first: 0-10) off the worker grid" (#57519, fixed in #57507).
 """
 import math
 
