@@ -17,7 +17,8 @@
 //      wait_not_full(batch); UNPACK is a deliberately slow consumer that records the highest value it ever
 //      observes. With the host's max_value = kDepth that high-water mark stays <= kDepth (batch > 1 takes
 //      the RISC-poll form of wait_not_full). `nosync`=1 drops the wait_not_full() (negative control: PACK
-//      runs to the 15 ceiling, posts are lost, UNPACK times out).
+//      runs ahead of the consumer past kDepth; the host runs it at capacity 15 with fewer than 15 credits so
+//      no SEMPOST ever lands at Max, which is non-contractual).
 //
 // The hardware semaphore is 4-bit (0..15) and starts every kernel at 0: compute_kernel_hw_startup()
 // seeds it on PACK (pattern D), and every pattern leaves it balanced at 0 for the next program. The
