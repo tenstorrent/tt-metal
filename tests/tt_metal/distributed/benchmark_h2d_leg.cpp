@@ -271,6 +271,8 @@ protected:
                     }
                 }
                 FrameTrailer* const t = reinterpret_cast<FrameTrailer*>(slot + payload_bytes_);
+                // No sequence: the ring is filled before any frame exists, and land_one()
+                // never checks armed, so nothing reads this guard as an arrival flag.
                 t->guard = tt_uva_frame_guard(kFrameVersion);
                 t->length = payload_bytes_;
                 t->origin = tt_uva_t6_global_selector(0, 0, c, 1);
