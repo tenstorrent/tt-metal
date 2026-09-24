@@ -241,7 +241,30 @@ def _load_attempts(dirs: list, slug: str | None) -> list:
     return out
 
 
-def _serving_metrics(stages: list, fullpipe: dict | None, stage_unit: str | None) -> dict | None:
+def _parse_batch(run_dir: Path) -> int | None:
+    """The resolved batch / concurrent-user count for the perf run.
+
+    The perf harness prints ``PERF_BATCH_STREAMS=<n>`` to its profile log at runtime (the batch it
+    actually ran, after resolve_batch). Surfacing it lets the dashboard show the batch on top and
+    label throughput as per-user. Reads the newest profile log; returns None if not found."""
+    prof = run_dir / "profiles"
+    if not prof.is_dir():
+        return None
+    logs = sorted(prof.glob("*.log"), key=lambda p: (p.stat().st_mtime if p.exists() else 0.0), reverse=True)
+    for lg in logs:
+        try:
+            txt = lg.read_text(errors="replace")
+        except Exception:
+            continue
+        m = re.findall(r"PERF_BATCH_STREAMS=(\d+)", txt)
+        if m:
+            return int(m[-1])
+    return None
+
+
+def _serving_metrics(
+    stages: list, fullpipe: dict | None, stage_unit: str | None, throughput: dict | None = None
+) -> dict | None:
     """The serving-style headline metrics (first-token / per-token / end-to-end / throughput),
     derived from stage VALUES alone. Which stage is the per-token one is read from the banked
     per-token pipeline time (the full-pipeline baseline declares unit="token"), and the first-token
@@ -257,11 +280,17 @@ def _serving_metrics(stages: list, fullpipe: dict | None, stage_unit: str | None
     if stage_unit == "token" and fp_ms:
         tok_name = min(cur, key=lambda n: abs(cur[n] - fp_ms))
         tok_ms = cur[tok_name]
-        out["per_token"] = {"ms": tok_ms, "baseline_ms": fp_ms, "stage": tok_name}
+        # Prefer the top-level, ledger-based throughput: its baseline is the TRUE original reading.
+        # Deriving the baseline from fp_ms (the CURRENT full-pipeline) pins baseline==current and
+        # hides the real gain as a bogus "0.0% vs baseline". Throughput is PER USER (= 1/TPOT).
+        tt = throughput or {}
+        tp_cur, tp_base = tt.get("current"), tt.get("baseline")
+        base_tok_ms = (1000.0 / tp_base) if tp_base else fp_ms  # per-token decode = 1/throughput
+        out["per_token"] = {"ms": tok_ms, "baseline_ms": base_tok_ms, "stage": tok_name}
         out["throughput"] = {
-            "per_s": (1000.0 / tok_ms) if tok_ms else None,
-            "baseline": 1000.0 / fp_ms,
-            "unit": "tok/s",
+            "per_s": tp_cur if tp_cur is not None else ((1000.0 / tok_ms) if tok_ms else None),
+            "baseline": tp_base if tp_base is not None else (1000.0 / fp_ms),
+            "unit": "tok/s/user",
         }
         oneshot = {n: v for n, v in cur.items() if n != tok_name}
         if oneshot:
@@ -450,7 +479,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> d
         for r in ledger.get("modeled_floor") or []
         if isinstance(r, dict) and r.get("depth") == "all" and r.get("value_ms")
     ]
-    serving = _serving_metrics(stages, fullpipe, stage_unit)
+    serving = _serving_metrics(stages, fullpipe, stage_unit, throughput)
     if floors:
         cur_total = (serving or {}).get("e2e_latency", {}).get("ms")
         if cur_total:
@@ -507,6 +536,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> d
             if config.get(k) is not None
         },
         "metric": state.get("metric"),
+        "batch": _parse_batch(run_dir),
         "stages": stages,
         "serving": serving,
         "headroom": headroom,

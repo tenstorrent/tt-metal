@@ -126,6 +126,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
   <h1>Optimize — <span id="model">…</span></h1>
   <span class="sub" id="runinfo"></span>
   <div class="right">
+    <span id="batchbadge" class="badge" style="display:none;background:#123a2a;color:#8ef0c0;border:1px solid #1f6b4a"></span>
     <span class="updated" id="updated"></span>
     <span id="livebadge" class="badge idle">CONNECTING</span>
   </div>
@@ -153,6 +154,9 @@ const PALETTE = ["#3b82f6","#34d399","#fbbf24","#f778ba","#76e3ea","#e3b341","#f
 function deltaTxt(cur, base, dir) {
   if (cur == null || base == null || !base) return "";
   const d = (cur - base) / base * 100;
+  // No meaningful delta when current is pinned to baseline (some stage baselines are the current
+  // full-pipeline snapshot, not a true original) — don't imply a "0.0% vs baseline" comparison.
+  if (Math.abs(d) < 0.05) return "";
   const better = dir === "max" ? d > 0 : d < 0;
   return `<span class="${better ? "up" : "dn"}">${d > 0 ? "+" : ""}${d.toFixed(1)}%</span> vs baseline`;
 }
@@ -164,14 +168,22 @@ function cardSpec(S) {
   const cards = [];
   if (sv.first_token || sv.per_token) {
     const ft = sv.first_token, pt = sv.per_token, e2 = sv.e2e_latency, th = sv.throughput || {};
+    // Prefer the top-level, ledger-based throughput: its baseline is the TRUE original reading.
+    // The serving-derived one pins baseline to the current full-pipeline, which hides the real gain
+    // (shows a bogus "0.0% vs baseline"). Throughput here is PER USER (= 1/TPOT), labeled as such.
+    const tt = S.throughput || {};
+    const thPerS = tt.current != null ? tt.current : th.per_s;
+    const thBase = tt.baseline != null ? tt.baseline : th.baseline;
+    // Per-token decode time is 1/throughput, so its true baseline is 1000/throughput.baseline.
+    const ptBase = tt.baseline ? (1000 / tt.baseline) : (pt && pt.baseline_ms);
     if (ft) cards.push({k: "TTFT", v: ft.ms, unit: "ms", sub: ft.stage, d: deltaTxt(ft.ms, ft.baseline_ms, "min")});
     if (pt) {
-      cards.push({k: "TPOT", v: pt.ms, unit: "ms", sub: pt.stage, d: deltaTxt(pt.ms, pt.baseline_ms, "min")});
-      cards.push({k: "ITL", v: pt.ms, unit: "ms", sub: pt.stage, d: deltaTxt(pt.ms, pt.baseline_ms, "min")});
+      cards.push({k: "TPOT", v: pt.ms, unit: "ms", sub: pt.stage, d: deltaTxt(pt.ms, ptBase, "min")});
+      cards.push({k: "ITL", v: pt.ms, unit: "ms", sub: pt.stage, d: deltaTxt(pt.ms, ptBase, "min")});
     }
     if (e2) cards.push({k: "E2EL", v: e2.ms, unit: "ms", sub: "all stages", d: deltaTxt(e2.ms, e2.baseline_ms, "min")});
-    if (th.per_s != null || th.baseline != null)
-      cards.push({k: "Throughput", v: th.per_s, unit: " " + (th.unit || "tok/s"), sub: "", d: deltaTxt(th.per_s, th.baseline, "max")});
+    if (thPerS != null || thBase != null)
+      cards.push({k: "Throughput", v: thPerS, unit: " tok/s/user", sub: "per user", d: deltaTxt(thPerS, thBase, "max")});
     return cards;
   }
   const m = S.metric || {};
@@ -804,7 +816,13 @@ function render(S) {
   if (S.run.live) { b.className = "badge live"; b.textContent = "Live"; }
   else { b.className = "badge idle"; b.textContent = S.run.age_s != null ? "Idle" : "No run"; }
   $("model").textContent = (S.model && S.model.slug) || "…";
+  const bb = $("batchbadge");
+  if (bb) {
+    if (S.batch != null) { bb.style.display = ""; bb.textContent = "batch " + S.batch + " users"; }
+    else { bb.style.display = "none"; }
+  }
   $("runinfo").textContent = [S.run.id, S.run.state,
+    S.batch != null ? "batch " + S.batch : "",
     S.run.iteration != null ? "iter " + S.run.iteration : ""].filter(Boolean).join(" · ");
   const now = new Date();
   $("updated").textContent = "Last updated: " + now.toLocaleTimeString([], {hour: "numeric", minute: "2-digit", second: "2-digit"}) +
