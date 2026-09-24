@@ -252,12 +252,14 @@ ttnn::Tensor transpose_impl(
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
-    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
+    const bool identity =
+        (normalized_dim1 == normalized_dim2) || (input_unsqueezed.padded_shape()[normalized_dim1] == 1 &&
+                                                 input_unsqueezed.padded_shape()[normalized_dim2] == 1);
+    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !identity;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     Tensor output;
-    if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
-                                                 input_typecasted.padded_shape()[normalized_dim2] == 1)) {
+    if (identity) {
         if (memory_config_arg.has_value() && input_typecasted.memory_config() != memory_config_arg.value()) {
             output = ttnn::clone(
                 input_typecasted,

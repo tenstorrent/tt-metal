@@ -982,3 +982,37 @@ def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_squa
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((2, 3, 64, 96), 0),
+        ((2, 3, 64, 96), 1),
+        ((2, 3, 64, 96), -2),
+        ((2, 3, 64, 96), -1),
+        ((3, 64, 96), 0),
+    ],
+)
+@pytest.mark.parametrize("out_mc", [None, ttnn.L1_MEMORY_CONFIG])
+def test_transpose_bfloat8_b_identity_skips_typecast(shape, dim, out_mc, device):
+    torch.manual_seed(0)
+    x = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    result = ttnn.transpose(x, dim, dim, memory_config=out_mc)
+    captured_graph = ttnn.graph.end_graph_capture()
+    device_ops = [
+        node["params"]["name"]
+        for node in captured_graph
+        if node.get("node_type") == "function_start" and "program_factory_type" in node.get("params", {})
+    ]
+    assert device_ops == ([] if out_mc is None else ["CloneOperation"]), device_ops
+    assert result.dtype == ttnn.bfloat8_b
+    assert result.memory_config() == (out_mc or ttnn.DRAM_MEMORY_CONFIG)
+    assert_with_ulp(expected_result=ttnn.to_torch(x), actual_result=ttnn.to_torch(result), ulp_threshold=0)
