@@ -45,6 +45,18 @@ real-checkpoint quality qualified.
 11 DiT models, FAST parity with legacy. This branch is the reference and test
 source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 
+## Merged-head validation (bh-38, b41e8cc8 + 2f05777f)
+
+| Suite | Result |
+| --- | --- |
+| Dense geometry sweep (25 geometries, 7 variants, 3 regimes) + constant V | green (L1 skips only) |
+| Dense regression (recipes, accuracy, Q/K chunks, head dims, joint, tails, GQA, preparation) | 922 passed |
+| Frozen digests (recipes, accuracy, joint, tails) | 405 passed |
+| Ring / continuation+mesh / exp ring | 714 / 183 / 131 passed |
+| Masks | 131 passed |
+| Blocking | 195 passed |
+| DiT model host / model smoke / Ideogram4+LTX | 113 / 58 / 36 passed (one stale LTX test rewritten) |
+
 ## Task 2 notes
 
 - Dense/joint bounds: Q chunk 32-1024 rows (recurrent-state arrays hold 32 tile
