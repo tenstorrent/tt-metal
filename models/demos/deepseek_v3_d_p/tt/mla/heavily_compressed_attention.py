@@ -644,7 +644,7 @@ class TtHCA(_TtHCABase):
             **kwargs,
         )
 
-    def _q_stem(self, hidden_states, cos, sin):
+    def _q_stem(self, hidden_states, cos, sin, return_latent: bool = False):
         """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]. ``cos``/``sin`` cover the padded
         slab and are built once per call: both stems and the output un-rope want the same rotation, and
         building it again costs ~2.9 ms of host time."""
@@ -681,6 +681,7 @@ class TtHCA(_TtHCABase):
             )
 
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
+        latent = q  # q_a_norm(q_a_proj(h)), TP-replicated: the CSA indexer's q_b input as well
         q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
 
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -696,7 +697,8 @@ class TtHCA(_TtHCABase):
         nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads_local, seq_len, nope_dim])
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_len, self.head_dim])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
-        return ttnn.concat([nope, rope], dim=-1)
+        q = ttnn.concat([nope, rope], dim=-1)
+        return (q, latent) if return_latent else q
 
     def _kv_stem(self, hidden_states, cos, sin):
         """[B, 1, S/sp, hidden/tp] -> single-head sliding_kv [B, 1, S/sp, head_dim], TP-replicated.
@@ -900,24 +902,25 @@ class TtHCA(_TtHCABase):
     def _carry_key(self, real_len):
         """The carry index is tabulated per whole compression window. A ragged chunk rounds down, which is
         safe because only the final chunk may be ragged and nothing reads its carry."""
-        step = self.compressor.compress_rate if self.compressor is not None else ttnn.TILE_SIZE
+        step = self._carry_step()
         return max(self.sliding_window, (int(real_len) // step) * step)
+
+    def _carry_step(self) -> int:
+        """Carry index granularity: one compression window for HCA (rate 128 = the window), one TILE otherwise
+        (no compressor, or CSA's rate 4 -- the tensor-indexed slice honours 32-aligned starts, DS4F-0243)."""
+        if self.compressor is not None and self.compressor.compress_rate % self.sliding_window == 0:
+            return self.compressor.compress_rate
+        return ttnn.TILE_SIZE
 
     def _build_carry_index(self, chunk_tokens):
         """start/end index tensors for the carry slice, one pair per real_len a chunk can have. Built here
         because forward must build no host tensors; each pair is 8 uint32s."""
         sw = self.sliding_window
-        if self.compressor is not None:
-            rate = self.compressor.compress_rate
-            assert sw % ttnn.TILE_SIZE == 0 and rate % sw == 0, (
-                f"the carry slice needs a tile-aligned start and one whole window per step: sliding_window "
-                f"{sw} must be a multiple of {ttnn.TILE_SIZE} and divide compress_rate {rate}"
-            )
-        else:
-            # Sliding-window layer: the carry start real_len - sw only has to be tile-aligned, so tabulate
-            # per TILE from one full window up (a shorter non-final chunk is rejected by forward).
-            rate = ttnn.TILE_SIZE
-            assert sw % ttnn.TILE_SIZE == 0, f"sliding_window {sw} must be a multiple of {ttnn.TILE_SIZE}"
+        assert sw % ttnn.TILE_SIZE == 0, f"sliding_window {sw} must be a multiple of {ttnn.TILE_SIZE}"
+        # HCA: one whole window per step (rate 128 = the window). SWA / CSA: the carry start real_len - sw only
+        # has to be tile-aligned, so tabulate per TILE from one full window up (a shorter non-final chunk is
+        # rejected by forward).
+        rate = self._carry_step()
 
         def idx(vals):
             return self._from_torch(

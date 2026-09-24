@@ -163,13 +163,13 @@ def test_kv_geometry_rows_and_group_order(expect_error):
     assert shapes["swa_window"] == (2, 1, 128, 512)
     # allocated rows = migrated extent + the writers' whole-tile headroom (96 for HCA's tail-tile write, 32 for CSA)
     assert shapes["hca_unified"] == (20, 1, 128 + 512 + 96, 512) and g.extent("hca_unified") == 128 + 512
-    assert shapes["csa_unified"] == (21, 1, 128 + 16384 + 32, 512) and g.extent("csa_unified") == 128 + 16384
-    assert shapes["csa_index_k"] == (21, 1, 16384 + 32, 128) and g.extent("csa_index_k") == 16384
+    assert shapes["csa_unified"] == (21, 1, 128 + 16384 + 1280, 512) and g.extent("csa_unified") == 128 + 16384
+    assert shapes["csa_index_k"] == (21, 1, 16384 + 1280, 128) and g.extent("csa_index_k") == 16384
     assert shapes["csa_pending"] == (21, 1, 32, 1024)
     assert shapes["hca_pending"] == (20, 1, 128, 1024)
     assert tuple(g.group_shapes(include_pending=False)) == MIGRATED_GROUPS
     # two users double the batch axis only
-    assert g.group_shapes(num_users=2)["csa_index_k"] == (42, 1, 16384 + 32, 128)
+    assert g.group_shapes(num_users=2)["csa_index_k"] == (42, 1, 16384 + 1280, 128)
     # a ragged entry count rounds up to whole tiles: 5120 tokens -> 40 HCA entries -> 64 rows above the window
     g2 = V4FlashKvGeometry.from_config(cfg, max_seq_len=5120, sp_factor=1)
     assert (g2.extent("hca_unified"), g2.extent("csa_unified"), g2.extent("csa_index_k")) == (
@@ -180,7 +180,7 @@ def test_kv_geometry_rows_and_group_order(expect_error):
     assert g2.rows("hca_unified") == 128 + 64 + 96
     # per-chip bytes at 128k (26 chunks): CSA unified ~0.7 GB, index keys ~94 MB, HCA ~12 MB
     b = V4FlashKvGeometry.from_config(cfg, max_seq_len=133120, sp_factor=8).group_bytes()
-    assert 0.70e9 < b["csa_unified"] < 0.74e9 and 0.09e9 < b["csa_index_k"] < 0.10e9 and b["hca_unified"] < 0.02e9
+    assert 0.70e9 < b["csa_unified"] < 0.76e9 and 0.09e9 < b["csa_index_k"] < 0.10e9 and b["hca_unified"] < 0.02e9
     with expect_error(ValueError, "multiple of the HCA rate"):
         V4FlashKvGeometry.from_config(cfg, max_seq_len=1000, sp_factor=3)
 

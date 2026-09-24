@@ -38,6 +38,10 @@ HEAD_DIM = 512
 INDEX_HEAD_DIM = 128
 CSA_RATE = 4
 HCA_RATE = 128
+ENGINE_CHUNK_TOKENS = (
+    5120  # the prefill engine's chunk (PREFILL_CHUNK_OUTPUT_TOKENS); CSA writes chunk/4 entries per chunk
+)
+CSA_CHUNK_ENTRIES = ENGINE_CHUNK_TOKENS // CSA_RATE
 
 # dtype tags (ttnn-free); bytes per 32-row chunk of ``width`` columns
 _BFP8_TILE_BYTES = 1088  # 32x32 bfp8_b tile: 1024 B mantissas + 64 B shared exponents
@@ -125,8 +129,13 @@ def build_contract(window_dtype_tag: str | None = None) -> tuple[KvGroupSpec, ..
     return (
         KvGroupSpec("swa_window", "sliding_attention", wd, HEAD_DIM),
         KvGroupSpec("hca_unified", "heavily_compressed_attention", wd, HEAD_DIM, write_headroom=96),
-        KvGroupSpec("csa_unified", "compressed_sparse_attention", "bf16_rm", HEAD_DIM, write_headroom=TILE),
-        KvGroupSpec("csa_index_k", "compressed_sparse_attention", "bfp8_tile", INDEX_HEAD_DIM, write_headroom=TILE),
+        # CSA writes a whole chunk's entries at once (1280 for the engine's 5120-token chunk), padded width included
+        KvGroupSpec(
+            "csa_unified", "compressed_sparse_attention", "bf16_rm", HEAD_DIM, write_headroom=CSA_CHUNK_ENTRIES
+        ),
+        KvGroupSpec(
+            "csa_index_k", "compressed_sparse_attention", "bfp8_tile", INDEX_HEAD_DIM, write_headroom=CSA_CHUNK_ENTRIES
+        ),
         KvGroupSpec("csa_pending", "compressed_sparse_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
         KvGroupSpec("hca_pending", "heavily_compressed_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
     )
