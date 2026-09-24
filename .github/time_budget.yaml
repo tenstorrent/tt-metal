@@ -222,8 +222,8 @@ scaleout:
     wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_n300_perf: 45
-    bh_p150_perf: 45
+    wh_n300_perf: 5
+    bh_p150_perf: 5
   perf:
     wh_llmbox_perf: 185
     bh_quietbox_2: 90
