@@ -24,7 +24,7 @@
 //   in0 (A, the [M,K] operand)  -> SrcB, tile shape [{1,2,4,8}, 32]  (only the top two
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
 //   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles
-//   rt_dim = 1, ct_dim in [1,16], kt_dim even in [2,256], LoFi only.
+//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
@@ -47,8 +47,8 @@
 //
 // The single unpack call issues one MOP covering the whole kt walk; the single math call
 // loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1 and replays one
+// more kt iteration when kt is odd; the finalize path is disabled here).
 
 #include <algorithm>
 #include <cstdint>

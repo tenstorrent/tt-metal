@@ -22,7 +22,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32]
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
-// kt_dim: even number from 2 to 256 (inclusive)
+// kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -212,7 +212,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim)
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim)
 {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
@@ -228,8 +229,25 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    // We can issue mop only once for up to 256 kt_dim
-    TT_MOP(0, (kt_dim / 2) - 1, 0);
+    // We can issue mop only once for up to 256 kt_dim. Each mop iteration covers two kt iterations.
+    if (kt_dim >= 2)
+    {
+        TT_MOP(0, (kt_dim / 2) - 1, 0);
+    }
+
+    // An odd kt_dim leaves one kt iteration the mop cannot express. Replay that iteration's first and second
+    // half directly: the counters and CFGSHIFTMASK increments already point at the next k-tile.
+    // Starting at 0 for both tunings is safe, post1 only records a leading NOP there.
+    if (kt_dim & 1)
+    {
+        const std::uint32_t first_half_iterations  = (ct_dim + 1) >> 1;
+        const std::uint32_t second_half_iterations = ct_dim >> 1;
+        lltt::replay(0, 2 + first_half_iterations * 3);
+        if (second_half_iterations)
+        {
+            lltt::replay(32 - second_half_iterations * 3, second_half_iterations * 3);
+        }
+    }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
@@ -272,5 +290,5 @@ inline void _llk_unpack_AB_custom_mm_(
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

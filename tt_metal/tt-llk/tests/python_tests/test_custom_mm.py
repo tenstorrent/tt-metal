@@ -17,7 +17,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim even in [2,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
@@ -214,8 +214,9 @@ CUSTOM_MM_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
-# kt is even in [2,256]; small values keep L1 in budget while still accumulating over K.
-KT_DIMS = [2, 4]
+# kt in [1,256]; small values keep L1 in budget while still accumulating over K. The odd values
+# exercise the single kt iteration the unpack replays after its two-kt-per-iteration mop.
+KT_DIMS = [1, 2, 3, 4]
 
 # ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
 # first_half/second_half MOP split treats asymmetrically (the ct in {7,9,11} question).

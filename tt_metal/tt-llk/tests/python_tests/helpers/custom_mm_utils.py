@@ -20,7 +20,7 @@ import torch
 
 from .tile_constants import FACE_C_DIM
 
-# Header contract: ct_dim 1..16, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
+# Header contract: ct_dim 1..16, kt_dim 1..256, in0 rows in {1, 2, 4, 8}.
 CT_DIMS = [1, 2, 4, 8, 16]
 KT_DIMS = [2, 4]
 # NOT rt_dim: the header contract pins rt_dim at 1, and in0 is a single partial tile. This axis is
