@@ -174,7 +174,7 @@ def page_table_setup(batch_size: int, config: PagedAttentionConfig) -> torch.Ten
     Returns:
         page_table: The page table tensor.
     """
-    block_size, max_num_blocks = config.block_size, config.max_num_blocks
+    max_num_blocks = config.max_num_blocks
     assert (
         max_num_blocks % batch_size == 0
     ), f"max_num_blocks {max_num_blocks} must be divisible by batch_size {batch_size}."
