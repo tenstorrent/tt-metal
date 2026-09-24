@@ -575,8 +575,13 @@ void kernel_main() {
         CircularBuffer cb_meta_scratch(cb_out);
         uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
-        kv_actual_isl =
-            trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        if constexpr (has_sliding_window) {
+            kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
+                kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+        } else {
+            kv_actual_isl =
+                trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        }
         logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
             kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.

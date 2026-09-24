@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
@@ -58,21 +59,9 @@ struct RingWorkPlan {
     RingWorkMasks masks;
 };
 
-struct KVPadQMapping {
-    uint32_t q_pre_wrap_start_tile = 0;
-    uint32_t q_pre_wrap_tile_count = 0;
-    uint32_t q_post_wrap_start_tile = 0;
-    uint32_t q_valid_tile_count = 0;
-};
-
-struct TileSegment {
-    uint32_t start_tile = 0;
-    uint32_t tile_count = 0;
-};
-
 struct RingJointRuntimePlan {
     uint32_t logical_nt = 0;
-    KVPadQMapping kv_pad_q_mapping;
+    ring_joint::ChunkedQMapping kv_pad_q_mapping;
     RingWorkPlan ring_work_plan;
     bool kernel_chunked = false;
     bool kernel_is_causal = false;
@@ -350,15 +339,12 @@ RingWorkPlan build_ring_work_plan(
     return plan;
 }
 
-KVPadQMapping build_kv_pad_q_mapping(
+ring_joint::ChunkedQMapping build_kv_pad_q_mapping(
     uint32_t kv_actual_tile_count,
     uint32_t logical_tile_count,
     uint32_t ring_size,
     uint32_t q_local_padded_tile_count,
     uint32_t device_index) {
-    // The current Q range is [kv_actual_tile_count, logical_tile_count). In KV-pad rotation it is packed into
-    // this device's fixed Q tile slab, but it may straddle one global chunk-group boundary.
-    // Store the first-group segment followed by the optional next-group segment; padded rows stay invalid.
     const uint32_t q_chunk_group_tile_count = ring_size * q_local_padded_tile_count;
     const uint32_t first_group = kv_actual_tile_count / q_chunk_group_tile_count;
     const uint32_t last_group = (logical_tile_count - 1) / q_chunk_group_tile_count;
@@ -370,26 +356,8 @@ KVPadQMapping build_kv_pad_q_mapping(
         logical_tile_count - kv_actual_tile_count,
         q_chunk_group_tile_count);
 
-    const auto intersect_device_group = [&](uint32_t group) -> TileSegment {
-        const uint32_t block_start_tile = group * q_chunk_group_tile_count + device_index * q_local_padded_tile_count;
-        const uint32_t block_end_tile = block_start_tile + q_local_padded_tile_count;
-        const uint32_t start_tile = std::max(kv_actual_tile_count, block_start_tile);
-        const uint32_t end_tile = std::min(logical_tile_count, block_end_tile);
-        if (end_tile <= start_tile) {
-            return {};
-        }
-        return TileSegment{start_tile, end_tile - start_tile};
-    };
-
-    const TileSegment first_segment = intersect_device_group(first_group);
-    const TileSegment second_segment =
-        last_group == first_group ? TileSegment{} : intersect_device_group(first_group + 1);
-
-    KVPadQMapping mapping;
-    mapping.q_pre_wrap_start_tile = first_segment.start_tile;
-    mapping.q_pre_wrap_tile_count = first_segment.tile_count;
-    mapping.q_post_wrap_start_tile = second_segment.start_tile;
-    mapping.q_valid_tile_count = first_segment.tile_count + second_segment.tile_count;
+    const auto mapping = ring_joint::build_chunked_q_mapping(
+        kv_actual_tile_count, logical_tile_count, q_local_padded_tile_count, ring_size, device_index);
     TT_FATAL(
         mapping.q_valid_tile_count <= q_local_padded_tile_count,
         "KV-pad-aware rotation mapped more valid Q tiles to this device than its local Q slab can hold. "
@@ -753,13 +721,14 @@ void apply_ring_joint_scalar_runtime_args(
             tt::constants::TILE_HEIGHT,
             runtime_ring_size,
             runtime_plan.logical_nt,
-            derived_kv_slab_count(args, tensor_args));
+            derived_kv_slab_count(args, tensor_args),
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
         TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
         // Relocate every per-link reader/writer slice from the descriptor's previous group to the current group.
-        const uint32_t runtime_tail_start_Ht =
-            runtime_chunked_sliding_layout.send_tail_start_tile(ring_write_plan.transport_rank);
+        const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank);
         auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex);
         auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex);
         TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
@@ -780,33 +749,25 @@ void apply_ring_joint_scalar_runtime_args(
                                                  in * neighbor_reader_tensor_descriptor_field_count;
                     const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
                                                  in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
-                    const uint32_t writer_origin_idx = writer_base + ag_rt::kNeighborWriterInputOriginPageFieldOffset;
                     TT_FATAL(
-                        writer_args.size() > writer_origin_idx, "Directional gather writer descriptor is incomplete");
+                        writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
+                        "Directional gather writer descriptor is incomplete");
                     const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
-                    const uint32_t runtime_origin_page = runtime_tail_start_Ht * input_Wt;
-                    const uint32_t previous_origin_page = writer_args[writer_origin_idx];
-                    if (previous_origin_page != runtime_origin_page) {
-                        const int64_t page_delta = static_cast<int64_t>(runtime_origin_page) - previous_origin_page;
-                        const auto relocate_pages = [&](auto& runtime_args, uint32_t start_idx, uint32_t end_idx) {
-                            const int64_t relocated_start = static_cast<int64_t>(runtime_args[start_idx]) + page_delta;
-                            const int64_t relocated_end = static_cast<int64_t>(runtime_args[end_idx]) + page_delta;
-                            TT_FATAL(
-                                relocated_start >= 0 && relocated_end >= relocated_start,
-                                "Invalid cached neighbor-halo relocation");
-                            runtime_args[start_idx] = static_cast<uint32_t>(relocated_start);
-                            runtime_args[end_idx] = static_cast<uint32_t>(relocated_end);
-                        };
-                        relocate_pages(
-                            reader_args,
-                            reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset,
-                            reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset);
-                        relocate_pages(
-                            writer_args,
-                            writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset,
-                            writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset);
-                    }
-                    writer_args[writer_origin_idx] = runtime_origin_page;
+                    const uint32_t halo_pages = runtime_chunked_sliding_layout.halo_tile_rows * input_Wt;
+                    const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
+                    const uint32_t num_links = args.all_gather_operation_attributes.num_links;
+                    const uint32_t pages = sources.count * halo_pages;
+                    const uint32_t start = link * (pages / num_links) + std::min(link, pages % num_links);
+                    const uint32_t end = (link + 1) * (pages / num_links) + std::min(link + 1, pages % num_links);
+                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
+                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
+                    reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
+                        sources.first_start_tile * input_Wt;
+                    reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
+                        sources.second_start_tile * input_Wt;
+                    reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
+                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
+                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
                 }
             }
         }
@@ -840,7 +801,13 @@ void apply_ring_joint_scalar_runtime_args(
             layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
             layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
         "RingJoint scalar runtime argument blocks must be contiguous");
-    const std::array reader_values = {runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask};
+    const std::array reader_values = {
+        runtime_plan.logical_nt,
+        ring_work_masks.active_ring_iter_mask,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
+        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
     const std::array writer_values = {
         runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
     const std::array compute_values = {
@@ -1082,7 +1049,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t logical_nt = runtime_plan.logical_nt;
-    const KVPadQMapping& kv_pad_q_mapping = runtime_plan.kv_pad_q_mapping;
+    const ring_joint::ChunkedQMapping& kv_pad_q_mapping = runtime_plan.kv_pad_q_mapping;
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -1114,7 +1081,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::constants::TILE_HEIGHT,
             ring_size,
             logical_nt,
-            circular_kv_slab_count);
+            circular_kv_slab_count,
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1792,6 +1761,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines["SLIDING_HALO_SLOT_COUNT"] =
+        std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -2818,6 +2789,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
         reader_args.push_checked(
             runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
+        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_start_tile);
+        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
+        reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
+        reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -2930,14 +2905,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
-        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
-        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
-        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
-        // rest of the op reads and let them derive the start themselves; the value above then serves as
-        // the baked origin they shift away from.
+        // Metadata kernels derive source tails on-device for each trace replay.
+        const auto halo_sources = chunked_sliding_halo_layout.send_sources(transport_rank);
         const RingAttentionNeighborHaloConfig neighbor_halo{
-            .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
-            .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
+            .send_to_next_start_Ht = halo_sources.first_start_tile,
+            .send_to_next_count_Ht = halo_sources.count * chunked_sliding_halo_layout.halo_tile_rows,
+            .send_second_start_Ht = halo_sources.second_start_tile,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
             .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
