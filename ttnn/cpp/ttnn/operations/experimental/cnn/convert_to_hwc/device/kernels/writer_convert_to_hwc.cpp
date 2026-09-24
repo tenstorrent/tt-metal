@@ -57,6 +57,7 @@ void kernel_main() {
     for (uint32_t block_id = 0; block_id < num_blocks && block_id < input_num_blocks; block_id++) {
         // Output write address for this block. Per-tile advance skips the other
         // writer, so it is not used to move from one block to the next.
+        // Assumes equal-width blocks (select_block_size + TT_FATAL in the program factory).
         uint32_t l1_output_write_addr = base_l1_write_addr + block_id * block_size_bytes;
         if constexpr (is_reader) {
             cb_in_batch_obj.reserve_back(input_block_size_sticks_per_core);
