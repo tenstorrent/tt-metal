@@ -8,18 +8,16 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9999, exact=False):
-    """Run a binary eltwise op on bf16 inputs in [low, high) and assert vs the torch golden.
-
-    Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy/bias_gelu) where
-    the expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
-    is a bit-exact selection or boolean (logical_and/or/xor)."""
+def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9999):
+    """Run a binary eltwise op on bf16 inputs in [low, high) and assert vs the torch golden
+    with ``assert_with_pcc(pcc)`` -- these are all composite math (ldexp/logaddexp/xlogy/
+    bias_gelu) where the expected error exceeds the ULP <= 5 policy."""
     torch.manual_seed(0)
     low = low
     high = high
@@ -37,10 +35,7 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if exact:
-        assert_equal(torch_output_tensor.to(output_tensor.dtype), output_tensor)
-    else:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
