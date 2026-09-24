@@ -3566,6 +3566,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         self._dflash_owner_tables = None
         self._dflash_last_pt = None
         self._dflash_stale_rows = set()
+        self._dflash_steps = 0
+        self._dflash_committed = 0
         self._dflash_ring = self._dflash_ring_geometry()
 
     def _dflash_ring_geometry(self):
@@ -3670,6 +3672,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
                 pass
 
     def _dflash_end_session(self):
+        if self._dflash_steps:
+            # One line per session, comparable with the block rail's decode
+            # summary: every step of the session counts, the first ordinary
+            # step included, and tokens are what the runner committed.
+            logger.info(
+                f"Gemma4DFlash contract summary: {self._dflash_steps} steps, {self._dflash_committed} tokens, "
+                f"{self._dflash_committed / self._dflash_steps:.2f} tokens/step"
+            )
+        self._dflash_steps = 0
+        self._dflash_committed = 0
         self._dflash_retained = None
         self._dflash_live_owner = None
         self._dflash_owner_tables = None
@@ -4257,6 +4269,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         block = self._dflash_row(committed, rows, row)
         n = int(counts.reshape(-1)[row]) if counts is not None else 1
         n = max(1, min(n, len(block)))
+        self._dflash_steps += 1
+        self._dflash_committed += n
         anchor = block[n - 1]
         anchor_position = self._dflash_row(positions, rows, row)[n - 1] if positions is not None else None
         dec.contract_commit(n, anchor)

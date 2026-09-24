@@ -570,6 +570,20 @@ def test_a_plain_decode_with_no_drafter_history_does_not_force_a_reload(model):
     assert model.reloads == [False]
 
 
+def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch):
+    """The block rail logs tokens per iteration on release; the contract rail
+    logs the same per session, counting the first ordinary step as a step."""
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    _start_solo(model)  # first ordinary step (1 token) then the first proposal
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    model.release_request(0)
+    summary = [m for m in messages if "contract summary" in m]
+    assert summary == ["Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step"]
+    assert model._dflash_steps == 0 and model._dflash_committed == 0
+
+
 # -- identity and release --------------------------------------------------------
 
 
