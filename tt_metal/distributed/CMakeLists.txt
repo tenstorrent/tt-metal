@@ -61,6 +61,28 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# The host-to-host hop is MPI one-sided RMA and there is no version of it without one, so
+# these two follow USE_MPI while the device legs build unconditionally.
+if(USE_MPI)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_rdma_window.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_h2h_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
+    )
+endif()
+
+# Both legs define a file-local byte_span() for noc_write_immediate; a unity blob would merge
+# them into a redefinition. Keep them as their own translation units.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_d2h_leg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_h2d_leg.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation

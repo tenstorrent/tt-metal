@@ -1,0 +1,70 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+// The wire frame: one message is [payload | trailer] occupying one socket FIFO page.
+// Trailer last so the same bytes double as the H2H arrival flag when forwarded.
+#pragma once
+
+#include <stdint.h>
+
+#include "tt_metal/distributed/host_uva.hpp"
+
+namespace tt::tt_metal::experimental {
+
+// 64 B keeps payload + trailer PCIe-aligned whenever the payload alone is.
+constexpr uint32_t kFrameTrailerBytes = 64;
+
+constexpr uint64_t kFrameMagic = 0x5556ull;  // 'UV'
+// 2 gave the reserved words meaning. A v1 sender never cleared them, so its garbage would
+// read as a signal opcode.
+constexpr uint32_t kFrameVersion = 2;
+constexpr uint32_t kFrameGuardMagicShift = 16;
+
+// Non-zero only while a frame is armed; the consumer zeroes it after snapshotting.
+constexpr uint64_t tt_uva_frame_guard(uint32_t version) {
+    return (kFrameMagic << kFrameGuardMagicShift) | static_cast<uint64_t>(version);
+}
+constexpr bool tt_uva_frame_armed(uint64_t guard) { return guard == tt_uva_frame_guard(kFrameVersion); }
+
+// Cycles on the sender's own clock; the host applies a measured ns/cycle rate. Low half is
+// the payload write and its barrier, high half the wait for a free slot ahead of it.
+constexpr uint64_t kFrameElapsedMask = 0xFFFFFFFFull;
+constexpr uint64_t tt_uva_frame_elapsed_pack(uint64_t issue, uint64_t stall) {
+    return ((stall > kFrameElapsedMask ? kFrameElapsedMask : stall) << 32) |
+           (issue > kFrameElapsedMask ? kFrameElapsedMask : issue);
+}
+constexpr uint32_t tt_uva_frame_elapsed_issue(uint64_t packed) {
+    return static_cast<uint32_t>(packed & kFrameElapsedMask);
+}
+constexpr uint32_t tt_uva_frame_elapsed_stall(uint64_t packed) { return static_cast<uint32_t>(packed >> 32); }
+
+// How the receiver updates the signal word once the payload has landed. SET stamps a value,
+// ADD accumulates -- so N senders can drive one counter.
+enum UvaSignalOp : uint32_t { kSignalNone = 0, kSignalSet = 1, kSignalAdd = 2 };
+
+// Written by the device, read by both hosts, forwarded unrewritten.
+struct FrameTrailer {
+    uint64_t guard;
+    uint64_t dst;     // tt_uva_t bits
+    uint32_t length;  // payload bytes ahead of this trailer
+    uint32_t origin;  // sender's tt_uva_t6_global_selector
+    uint64_t elapsed;
+    // The signal rides the frame rather than racing it, so data-before-signal needs no
+    // fence: the payload and these words arrive in one page.
+    uint32_t sig_off;  // signal word, as an offset from l1_base on the TARGET
+    uint32_t sig_val;
+    uint32_t sig_op;  // UvaSignalOp
+    uint32_t reserved0;
+    uint64_t reserved[2];
+};
+static_assert(sizeof(FrameTrailer) == kFrameTrailerBytes, "the trailer must fill its slot");
+
+// A peer's bytes name the address this core stores to, so the span is bounded before use.
+constexpr bool tt_uva_frame_signal_ok(uint32_t sig_op, uint32_t sig_off, uint32_t l1_size) {
+    return sig_op == kSignalNone ||
+           (sig_op <= kSignalAdd && static_cast<uint64_t>(sig_off) + sizeof(uint32_t) <= l1_size);
+}
+
+constexpr uint32_t tt_uva_frame_page_size(uint32_t payload_bytes) { return payload_bytes + kFrameTrailerBytes; }
+
+}  // namespace tt::tt_metal::experimental

@@ -198,6 +198,9 @@ set(JITAPI_FILES
     api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
+    distributed/host_uva.hpp
+    distributed/host_uva_frame.hpp
+    distributed/host_uva_layout.hpp
     core_descriptors/blackhole_140_arch.yaml
     core_descriptors/blackhole_140_arch_eth_dispatch.yaml
     core_descriptors/blackhole_140_arch_fabric_mux.yaml
