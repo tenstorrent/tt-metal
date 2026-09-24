@@ -70,8 +70,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-const bool is_int_fpu_en = false;
-
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_swiglu.h"
