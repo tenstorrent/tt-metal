@@ -161,7 +161,8 @@ serve_profiles:
       TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto   # = tp2 (2-channel floor, see there)
       QWEN36_DRAFTER: dflash2
       QWEN36_DFLASH_TP: "1"                # the TP drafter (the class default; the replicated oracle is test-only)
-      QWEN36_GDN_SPEC_FUSED: "0"           # composite verify: the fused gdn_spec_step needs 2*Nv <= 32 (Nv=24 at TP=2)
+      QWEN36_GDN_SPEC_FUSED: "1"           # fused gdn_spec_step verify: since 4d4935650c5 the op reads the a|b gate pair from two tiles, so Nv=24 (TP=2) runs it
+                                           # (-43 ms/iter vs the composite verify at every ISL; lossless-class, 0 confident mismatches; profiles/thatch_adopt/laneH_RESULTS.md)
       QWEN36_DFLASH_BLOCK: "8"
       QWEN36_DFLASH_FOLD_SEED: "1"
       QWEN36_DFLASH_SERVE_BLOCK: "32"
@@ -218,10 +219,10 @@ card:
     |---|---|---|---|---|---|---|
     | `tp2` (default) | 32 | 64K | 622K tokens | 17.1 | 0.3 s / 1.9 s / 8.2 s | speed, long prompts, many users, all sampling options |
     | `p1d1` | 8 | 64K | 164K tokens | 13.6 | 0.4 s / 3.8 s / 16 s | steady per-token latency while long prompts keep arriving (decode never pauses for a prefill) |
-    | `tp2-dflash2` | 4 | 64K | 262K tokens | 26.1 (52 on code) | 0.15 s / 2.1 s / 9.5 s | 1-4 greedy users, code, prompts under ~8k tokens |
+    | `tp2-dflash2` | 4 | 64K | 262K tokens | 43.1 (70 on code) | 0.15 s / 2.1 s / 9.2 s | 1-4 greedy users, code, prompts under ~16k tokens |
 
     * `tp2` is 1.3x faster per user than `p1d1` at 1 user and has 3.8x the KV pool; `p1d1` keeps TPOT at 71-88 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 146-285 ms once prompts reach 16k-32k tokens. At 8 users on prompts up to 4k tokens `p1d1` is within 5-10% of `tp2`'s aggregate throughput.
-    * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (1.5x at 128 tokens, 1.05x at 32k) and grows with answer length (2.0-2.2x at 1k-token answers).
+    * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (2.5x at 128 tokens, 1.6x at 8k, 1.2x at 32k) and grows with answer length (2.8-3.4x at 1k-token answers).
 
     ### Performance
 
@@ -281,15 +282,15 @@ card:
 
     | ISL / OSL | `tp2` t/s/u | `tp2-dflash2` t/s/u | speed-up | `tp2-dflash2` TTFT / TPOT ms |
     |---|---|---|---|---|
-    | 128 / 128 | 17.1 | 26.1 | 1.53x | 153 / 37 |
-    | 2,048 / 128 | 16.3 | 23.6 | 1.44x | 520 / 39 |
-    | 8,192 / 128 | 13.9 | 17.1 | 1.23x | 2,088 / 43 |
-    | 32,768 / 128 | 8.2 | 8.6 | 1.05x | 9,459 / 43 |
-    | 128 / 1,024 | 17.6 | 35.7 | 2.03x | 153 / 28 |
-    | 8,192 / 1,024 | 16.9 | 37.7 | 2.23x | 2,087 / 25 |
-    | code (SPEED-Bench, EOS-terminated) | 14.2 | 52.2 | 3.67x | - |
+    | 128 / 128 | 17.1 | 43.1 | 2.53x | 151 / 22 |
+    | 2,048 / 128 | 16.3 | 33.7 | 2.06x | 510 / 26 |
+    | 8,192 / 128 | 13.9 | 22.5 | 1.62x | 2,055 / 29 |
+    | 32,768 / 128 | 8.2 | 9.7 | 1.19x | 9,166 / 32 |
+    | 128 / 1,024 | 17.6 | 59.7 | 3.40x | 151 / 17 |
+    | 8,192 / 1,024 | 16.9 | 47.1 | 2.79x | 2,058 / 19 |
+    | code (SPEED-Bench, EOS-terminated) | 14.2 | 69.8 | 4.9x | 200 / 12 |
 
-    * 4 greedy users on 8 chat prompts: 77 vs 45 t/s aggregate (1.73x).
+    * 4 users: 118 vs 54 t/s aggregate at 128/128 (2.2x), 171 vs 64 at 128/1,024 (2.7x), 42 vs 31 at 8k/128 (1.3x); no gain at 32k prompts with 4 users.
 
     ### Notes
 
