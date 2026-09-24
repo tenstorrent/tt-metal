@@ -37,8 +37,6 @@ constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
 // stored 4-tile row holds two consecutive K rows (W0 k, W1 k, W0 k+1, W1 k+1).
 constexpr uint32_t W0_W1_HALF_BLOCK_TILES_W = W0_W1_BLOCK_TILES_W / 2;
 
-constexpr uint32_t TOKENS_PER_CHUNK = 32;
-
 // Let's call this a constant
 constexpr uint32_t W2_TILES_PER_A2A_ITER_W = 4;
 // Half-width last a2a iteration (ALT_TILES_PER_TXN only, when every core has 1 or 2 output tiles left for it):
