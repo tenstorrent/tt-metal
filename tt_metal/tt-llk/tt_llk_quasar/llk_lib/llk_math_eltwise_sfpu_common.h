@@ -160,6 +160,10 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_for_each_face_
  * that is a 32x32, 16x32 and 32x16 tile. Any other mode (None, RC_custom) calls sfpu_func once, for
  * functors that walk Dest themselves.
  *
+ * A slot narrower than 32x16 is a single 16-row block, so there is nothing to walk: RC, C, None and
+ * RC_custom call sfpu_func once, over the whole tile. R would need the top 16 rows of the tile
+ * alone, which that block does not separate, so it is unsupported there and runs nothing.
+ *
  * @tparam SLOT: Destination tile shape the tile lives in
  * @tparam Callable: Type of the SFPU functor
  * @tparam Args: Argument types forwarded to the functor
@@ -172,25 +176,37 @@ template <ckernel::trisc::DstTileShape SLOT = ckernel::trisc::DstTileShape::Tile
 inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, VectorMode vector_mode, Args&&... args)
 {
     constexpr std::uint8_t SLOT_FACES_C = _llk_math_eltwise_sfpu_slot_faces_c_<SLOT>();
-    constexpr TensorShape SHAPE_RC      = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, SLOT_FACES_C);
-    constexpr TensorShape SHAPE_R       = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, 1, SLOT_FACES_C);
-    constexpr TensorShape SHAPE_C       = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, 1);
 
-    if (vector_mode == VectorMode::RC)
+    if constexpr (SLOT_FACES_C == 0)
     {
-        _llk_math_eltwise_sfpu_for_each_face_<SHAPE_RC, SLOT>(sfpu_func, args...);
-    }
-    else if (vector_mode == VectorMode::R)
-    {
-        _llk_math_eltwise_sfpu_for_each_face_<SHAPE_R, SLOT>(sfpu_func, args...);
-    }
-    else if (vector_mode == VectorMode::C)
-    {
-        _llk_math_eltwise_sfpu_for_each_face_<SHAPE_C, SLOT>(sfpu_func, args...);
+        LLK_ASSERT(vector_mode != VectorMode::R, "VectorMode::R is not supported for Dest slots narrower than 32x16");
+        if (vector_mode != VectorMode::R)
+        {
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+        }
     }
     else
     {
-        std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+        constexpr TensorShape SHAPE_RC = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, SLOT_FACES_C);
+        constexpr TensorShape SHAPE_R  = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, 1, SLOT_FACES_C);
+        constexpr TensorShape SHAPE_C  = make_tensor_shape(MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, 1);
+
+        if (vector_mode == VectorMode::RC)
+        {
+            _llk_math_eltwise_sfpu_for_each_face_<SHAPE_RC, SLOT>(sfpu_func, args...);
+        }
+        else if (vector_mode == VectorMode::R)
+        {
+            _llk_math_eltwise_sfpu_for_each_face_<SHAPE_R, SLOT>(sfpu_func, args...);
+        }
+        else if (vector_mode == VectorMode::C)
+        {
+            _llk_math_eltwise_sfpu_for_each_face_<SHAPE_C, SLOT>(sfpu_func, args...);
+        }
+        else
+        {
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+        }
     }
 }
 
