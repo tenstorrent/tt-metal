@@ -1030,9 +1030,13 @@ FF1 −1.6% at M=16384; FF2 prefers sharded, +1.4%); at M=4096 the sharded layou
 and the bs1 legacy kernel needs it. Knob `QWEN_WEIGHT_INTERLEAVED_K<k>_N<n>=1` in
 `create_dram_sharded_mem_config`; e2e bs32 441.9 → 436.9 (chip 6).
 
-**bs16.** Every one of these sits inside bs16's run-to-run band (217–231 ms between process
-launches); the alternating multi-launch A/Bs (`ab_multi.sh`, 2–3 pairs per arm, compare minima) are
-recorded in the negatives file §46 and decide the bs16 gates.
+**bs16, and what "best of 10" measures.** tt-smi sampled during bs16 runs shows the two recurring
+readings are the clock: 216.7 ms at AICLK 1281–1350 MHz, 232–243 ms at 1112–1162 MHz, the board's power
+manager pulling the clock down ≈ 0.6 s into a sustained load and deeper as the chip warms (no power or
+clock setting was changed; `AICLK_LIMIT_MAX` 1350). "Best of 10" is therefore the cold-chip number.
+Sustained (median of iterations 5–9) with these defaults: bs1 17.8, bs8 123.8, bs16 232, bs32 452.6 ms
+(previous defaults 18.0 / 126.7 / 235 / 452.3): the bs32 changes only help the cold iteration, bs8 holds
+−2.3% sustained, bs16 ≈ −1.5%. The alternating multi-launch A/Bs for bs16 are in the negatives file §46.
 
 ## 6. Profiling
 
