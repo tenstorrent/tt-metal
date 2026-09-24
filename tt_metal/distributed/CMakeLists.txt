@@ -61,16 +61,6 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
-# Both legs define a file-local byte_span() for noc_write_immediate; a unity blob would merge
-# them into a redefinition. Keep them as their own translation units.
-set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/host_d2h_leg.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/host_h2d_leg.cpp
-    PROPERTIES
-        SKIP_UNITY_BUILD_INCLUSION
-            ON
-)
-
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
