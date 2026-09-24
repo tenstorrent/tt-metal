@@ -542,6 +542,26 @@ TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 }
 
+TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value())};
+
+    const std::vector<int> device_ids{0, 1};
+    auto meshes = mock_env.create_unit_meshes(device_ids);
+    ASSERT_EQ(meshes.size(), device_ids.size());
+    for (ChipId device_id : device_ids) {
+        ASSERT_TRUE(meshes.contains(device_id));
+        EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
+    }
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    // The parent mesh owns the context. Its devices must be closed before the context is destroyed; a failure
+    // there is caught in ~ScopedDevices and only logged.
+    testing::internal::CaptureStdout();
+    meshes.clear();
+    const std::string teardown_log = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
+}
+
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.
 TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
