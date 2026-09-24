@@ -66,7 +66,7 @@
     "bs32": 417.5
   },
   "device_ms_one_traced_replay": {
-    "bs1": 16.634,
+    "bs1": 16.648,
     "bs8": 106.633,
     "bs16": 199.829,
     "bs32": 365.318
@@ -79,14 +79,14 @@
   },
   "device_op_breakdown_ms": {
     "bs1": {
-      "MatmulDeviceOperation": 10.051,
-      "BinaryNgDeviceOperation": 2.393,
-      "SDPAOperation": 1.664,
-      "GenericOpDeviceOperation": 1.6,
-      "LayerNormDeviceOperation": 0.599,
-      "ShardedToInterleavedDeviceOperation": 0.2,
-      "InterleavedToShardedDeviceOperation": 0.091,
+      "MatmulDeviceOperation": 10.06,
+      "BinaryNgDeviceOperation": 2.378,
+      "SDPAOperation": 1.77,
+      "GenericOpDeviceOperation": 1.599,
+      "LayerNormDeviceOperation": 0.602,
+      "ShardedToInterleavedDeviceOperation": 0.199,
       "EmbeddingsDeviceOperation": 0.03,
+      "InterleavedToShardedDeviceOperation": 0.004,
       "UntilizeCodegenDeviceOperation": 0.003,
       "SliceDeviceOperation": 0.002
     },
