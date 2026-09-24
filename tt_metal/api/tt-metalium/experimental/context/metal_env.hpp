@@ -30,29 +30,21 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricRouterConfig router_config = {};
 };
 
-// Configuration for a MetalEnv.
+// Configuration for a MetalEnv. The default targets the physical cluster with fabric disabled.
 //
-// The default descriptor discovers and connects to the physical cluster present in the system.
-// A custom MetalEnvDescriptor can be supplied to target a mock/simulated cluster instead.
+// Set mock_cluster_desc_path to bind a mock cluster instead: a path, or a bare filename that is searched for in the
+// known cluster descriptor directories. nullopt is the physical cluster. An empty path is not a mock cluster.
 //
-// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations.
-class MetalEnvDescriptor {
-public:
-    MetalEnvDescriptor() = default;
+// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations. There is no limit on the
+// number of mock clusters.
+//
+//     MetalEnv env({.mock_cluster_desc_path = "blackhole_P150.yaml",
+//                   .fabric = {.fabric_config = tt_fabric::FabricConfig::FABRIC_2D}});
+struct MetalEnvDescriptor {
+    std::optional<std::string> mock_cluster_desc_path = std::nullopt;
+    FabricConfigDescriptor fabric = {};
 
-    explicit MetalEnvDescriptor(const std::string& mock_cluster_desc_path);
-
-    explicit MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
-
-    MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc);
-
-    bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
-    const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
-    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_config_desc_; }
-
-protected:
-    std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
-    FabricConfigDescriptor fabric_config_desc_;
+    bool is_mock_device() const { return mock_cluster_desc_path.has_value() && !mock_cluster_desc_path->empty(); }
 };
 
 class MetalEnvImpl;

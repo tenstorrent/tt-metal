@@ -35,22 +35,11 @@
 
 namespace tt::tt_metal {
 
-// ─── MetalEnvDescriptor ───────────────────────────────────────────────────────
+// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 std::mutex MetalEnvImpl::s_registry_mutex_;
 std::set<MetalEnvImpl*> MetalEnvImpl::s_registry_;
 std::once_flag MetalEnvImpl::s_atfork_registered_;
-
-MetalEnvDescriptor::MetalEnvDescriptor(const std::string& mock_cluster_desc_path) :
-    mock_cluster_desc_path_(
-        mock_cluster_desc_path.empty() ? std::nullopt : std::optional<std::string>(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(
-    std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)), fabric_config_desc_(fabric_config_desc) {}
-
-// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 void MetalEnvImpl::prefork_check_all() {
     std::lock_guard<std::mutex> lock(s_registry_mutex_);
@@ -64,7 +53,7 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     verify_fw_capabilities();
 
     // Apply fabric config from descriptor
-    const auto& fc = descriptor_.fabric_config_descriptor();
+    const auto& fc = descriptor_.fabric;
     fabric_config_ = fc.fabric_config;
     fabric_reliability_mode_ = fc.reliability_mode;
     fabric_tensix_config_ = fc.fabric_tensix_config;
@@ -163,8 +152,8 @@ void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
     if (descriptor_.is_mock_device()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", descriptor_.mock_cluster_desc_path());
-        this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *descriptor_.mock_cluster_desc_path);
+        this->rtoptions_->set_mock_cluster_desc(*descriptor_.mock_cluster_desc_path);
     }
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
@@ -334,10 +323,7 @@ bool MetalEnvImpl::set_fabric_config(
                 prev_fabric_config,
                 this->fabric_config_);
         } else {
-            log_debug(
-                tt::LogMetal,
-                "Fabric config unchanged ({}), reinitializing control plane",
-                this->fabric_config_);
+            log_debug(tt::LogMetal, "Fabric config unchanged ({}), reinitializing control plane", this->fabric_config_);
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();

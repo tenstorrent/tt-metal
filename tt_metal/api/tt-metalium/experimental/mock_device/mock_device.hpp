@@ -44,11 +44,11 @@ std::optional<std::string> get_mock_cluster_desc();
 // Get the cluster descriptor filename for a specific (arch, num_chips) pair.
 // Returns nullopt if the configuration is not supported.
 //
-// This is the recommended way to construct a MetalEnvDescriptor for a mock cluster
-// without going through the global configure_mock_mode() flag, e.g.:
+// To construct a MetalEnv for a mock cluster without going through the global configure_mock_mode()
+// flag, pass the descriptor filename. .value() throws when the pair is unsupported, e.g.:
 //
-//     MetalEnv mock_env(MetalEnvDescriptor(
-//         experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()));
+//     MetalEnv mock_env({.mock_cluster_desc_path =
+//         experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
 //
 // Supported configurations (see implementation for the authoritative list):
 //   WORMHOLE_B0: 1, 2, 4, 8, 32
