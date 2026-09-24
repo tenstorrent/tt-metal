@@ -5,22 +5,9 @@
 // Item 6 of #57444: object-size comparison. One translation unit, compiled once per candidate via
 // -DCANDIDATE_{STD,ZOO,FU2}, so the resulting .o sizes are directly comparable.
 
-#include "candidates.hpp"
+#include "selected_candidate.hpp"
 
-#include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <utility>
-
-#if defined(CANDIDATE_STD)
-using Fn = bench::StdFunction<void()>;
-#elif defined(CANDIDATE_FU2)
-using Fn = bench::Fu2Function<void()>;
-#elif defined(CANDIDATE_ZOO)
-using Fn = bench::ZooFunction<void()>;
-#else
-#error "define one of CANDIDATE_STD / CANDIDATE_ZOO / CANDIDATE_FU2"
-#endif
 
 std::uint64_t g_sink = 0;
 
@@ -32,14 +19,14 @@ struct Capture {
 };
 
 template <int N>
-[[gnu::noinline]] Fn make() {
+[[gnu::noinline]] Fn<void()> make() {
     Capture<N> cap{};
-    return Fn{[cap]() mutable { g_sink += cap.data[0] + N; }};
+    return Fn<void()>{[cap]() mutable { g_sink += cap.data[0] + N; }};
 }
 
 template <int N>
 [[gnu::noinline]] void run() {
-    Fn f = make<N>();
+    Fn<void()> f = make<N>();
     f();
 }
 

@@ -5,36 +5,9 @@
 // Item 7 of #57444: compile-time impact. Instantiates the chosen candidate over many distinct
 // signatures and capture types; time this TU per candidate, best-of-N.
 
-// This TU exists to measure one library's parse and instantiation cost, so it must not pay to
-// include the others.
-#if defined(CANDIDATE_STD)
-#define BENCH_SKIP_ZOO
-#define BENCH_SKIP_FU2
-#elif defined(CANDIDATE_ZOO)
-#define BENCH_SKIP_FU2
-#elif defined(CANDIDATE_FU2)
-#define BENCH_SKIP_ZOO
-#endif
+#include "selected_candidate.hpp"
 
-#include "candidates.hpp"
-
-#include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <utility>
-
-#if defined(CANDIDATE_STD)
-template <typename Sig>
-using Fn = bench::StdFunction<Sig>;
-#elif defined(CANDIDATE_FU2)
-template <typename Sig>
-using Fn = bench::Fu2Function<Sig>;
-#elif defined(CANDIDATE_ZOO)
-template <typename Sig>
-using Fn = bench::ZooFunction<Sig>;
-#else
-#error "define one of CANDIDATE_STD / CANDIDATE_ZOO / CANDIDATE_FU2"
-#endif
 
 template <int N>
 struct Tag {
