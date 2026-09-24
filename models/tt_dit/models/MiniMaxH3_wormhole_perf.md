@@ -522,8 +522,8 @@ frame index) -- which is what a changed bf16 reduction order looks like after 9 
 **TP1/SP32 hangs, deterministically.** Two attempts, the second on a freshly reset board with
 kernels coming from the cache (zero `BuildKernels` lines), both stall in the *first* forward:
 the last log line is the generic-blocking warning for `proj_in` `(107872, 96, 5376)`, then nothing.
-Fingerprint identical to `MiniMaxH3_wormhole_hang.md`: 180-365% CPU with CPU-time far past
-elapsed, all ~448 threads in `futex_wait_queue`, `pytest --timeout` does not fire, board needs
+Fingerprint identical to the mid-denoise hang (see "If a hang recurs" below): 180-365% CPU with
+CPU-time far past elapsed, all ~448 threads in `futex_wait_queue`, `pytest --timeout` does not fire, board needs
 `tt-smi -r all` afterwards (which warns that Galaxy CPLD FW < 1.16 should use `-glx_reset`, but did
 work here). Not root-caused; TP=1 is also the configuration with the least to gain (each device
 holds all 56 heads, so the KV ring moves 4x the bytes of TP4, and FSDP gathers full 5376-wide
@@ -548,10 +548,11 @@ shell `timeout` (the hang wedges the process, not just the test), and do not gat
 
 ## Open issues
 
-Fixed items have been removed; their forensics live in the commits and in
-**`MiniMaxH3_wormhole_hang.md`**. The mid-denoise hang (root-caused, 18/18 pass), the accidental
-Wormhole fused MM/RS path (`eab3dfbd599`) and the VBench setup gaps (now in `MiniMaxH3.md`) were
-all closed.
+Fixed items have been removed; their forensics live in the commits. The intermittent mid-denoise
+hang was root-caused to Wormhole taking the fused MM/RS fallback by accident (one reduce-scatter
+worker per link on the 8x9 grid, 50 times per step) and closed by gating that path on a blocking that
+resolves for the real core grid (`eab3dfbd599`): 2744 denoise steps and a full 18/18 sweep since, no
+recurrence, and 4.7% faster. The VBench setup gaps moved to `MiniMaxH3.md`.
 
 1. **Cache key omits device params** — `cache.load_model` keys on parallel config, mesh
    shape, dtype and FSDP, but not `l1_small_size`/device params. A cache written under a
@@ -586,8 +587,54 @@ all closed.
    same-(K, N) entry with the same `M_per_core` after an exact miss, which makes every table robust
    to a 32-row discrepancy and to prompt length within a padding bucket. Confirmed on a live
    generation: `13664 rows/device`, and neither ff1 nor ff2 appears among the fallback warnings (qkv
-   and to_out do, by design -- their shipped blockings measured optimal / within noise). Root cause
-   and history: **`MiniMaxH3_rows_per_device_mismatch.md`**.
+   and to_out do, by design -- their shipped blockings measured optimal / within noise). Root cause:
+   the block-perf harness counted audio latents once where the pipeline packs two rows per latent,
+   and assumed a 512-token prompt, so every table was keyed on 4768 / 9216 / 13632 -- lengths the
+   pipeline never produces (13632 is unreachable at 15 s at any prompt length).
+
+## If a hang recurs
+
+Symptom fingerprint of the two hangs seen here (the closed mid-denoise one and the open TP1/SP32 one):
+
+- No further log output, indefinitely. No exception, no traceback.
+- Process **spinning, not idle**: 170-370% CPU, CPU-time climbing past elapsed, every thread in
+  `futex_wait_queue` -- host dispatch busy-polling a device that stopped retiring work:
+  ```bash
+  P=$(pgrep -f "^python -m pytest models/tt_dit" | head -1)
+  ps -o pid,stat,etime,time,wchan:24,pcpu -p $P
+  for t in /proc/$P/task/*; do echo "$(basename $t) $(cat $t/wchan)"; done | sort | uniq -c
+  ```
+- `@pytest.mark.timeout` does not fire (pytest-timeout cannot interrupt a C-level stall), and the
+  board is wedged afterwards (`failed to initialize FW`, `Timed out waiting for ETH heartbeat`). A
+  graceful `kill -TERM` exits cleanly but does not un-wedge it.
+
+Run so that a stall becomes a raised timeout with a device-state dump, instead of destroying the
+evidence with a shell `timeout` and a reset:
+
+```bash
+export TT_METAL_HOME=/home/jameslee/tt-metal
+export TT_METAL_INSPECTOR=1
+export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=300     # >> the 12.7 s worst-case step
+export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TT_METAL_HOME/tools/tt-triage.py --disable-progress --triage-summary-path=$OUT/triage_summary.txt --sqlite-output-path=$OUT/triage.sqlite"
+```
+
+The triage scripts that matter: `dump_op_mesh` (op-ID skew across the mesh shows which chip
+stopped), `dump_callstacks`, `check_eth_status`, `check_noc_status`. Watcher
+(`TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1`) adds per-RISC waypoints but perturbs timing; hold
+it in reserve. Keep any SIGBUS log: a fault in the hugepage readback is what a device dropping off
+PCIe looks like, and `dmesg -T` would show the AER event.
+
+Recovery, after confirming nobody else is on the box:
+
+```bash
+for p in $(ls /proc | grep -E '^[0-9]+$'); do
+  ls -l /proc/$p/fd 2>/dev/null | grep -q tenstorrent && \
+    echo "pid $p user=$(stat -c %U /proc/$p) cmd=$(tr '\0' ' ' </proc/$p/cmdline | cut -c1-60)"
+done
+tt-smi -r      # supersedes the deprecated -glx_reset
+python -c "import ttnn; d=ttnn.open_mesh_device(ttnn.MeshShape(1,1)); print('OK'); ttnn.close_mesh_device(d)"
+```
 
 ## VBench (16:9/5s, verified passing)
 

@@ -320,10 +320,9 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 
 ### Meshes
 
-Those numbers are Blackhole. For the Wormhole Galaxy port -- the full aspect x duration sweep,
-the DiT-FSDP memory fix it needs, and the open mid-denoise hang -- see
-[`MiniMaxH3_wormhole_perf.md`](MiniMaxH3_wormhole_perf.md) and
-[`MiniMaxH3_wormhole_hang.md`](MiniMaxH3_wormhole_hang.md).
+Those numbers are Blackhole. For the Wormhole Galaxy port -- the full aspect x duration sweep, the
+DiT-FSDP memory fix it needs, and its open issues -- see
+[`MiniMaxH3_wormhole_perf.md`](MiniMaxH3_wormhole_perf.md).
 
 Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
