@@ -175,8 +175,25 @@ class BgeM3Attention(LightweightModule):
         if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
+        # Without a mask, the shapes in _concat_sdpa_config run the model-local SDPA. It
+        # reads Q/K/V from the QKV output and writes the concat-heads layout, so Stages
+        # 2, 3 and 5 do not run.
+        fused_sdpa_config = None
+        if (
+            attention_mask is None
+            and qkv_fused.dtype == ttnn.bfloat8_b
+            and self.config.score_dtype in (None, ttnn.bfloat8_b)
+        ):
+            fused_sdpa_config = _concat_sdpa_config(
+                seq_len, batch_size, self.config.mesh_device, self.config.attention_scale
+            )
+            if fused_sdpa_config is not None:
+                fused_sdpa_config = replace(fused_sdpa_config, fused_qkv_input=True)
+
         # Stage 2: split Q/K/V heads (fused head-split kernel on the S512 shapes).
-        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        if fused_sdpa_config is not None:
+            q = k = v = qkv_fused
+        elif self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
             head_groups = 4 if self.config.max_batch_size in (8, 16, 32) else self.config.num_heads
@@ -194,7 +211,8 @@ class BgeM3Attention(LightweightModule):
                 transpose_k_heads=False,
                 memory_config=self.config.create_heads_memcfg,
             )
-        ttnn.deallocate(qkv_fused)
+        if fused_sdpa_config is None:
+            ttnn.deallocate(qkv_fused)
 
         # Stage 3: optional cast to score dtype
         if self.config.score_dtype is not None and q.dtype != self.config.score_dtype:
@@ -229,20 +247,14 @@ class BgeM3Attention(LightweightModule):
             if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Stage 4: SDPA (chunk sizes depend on runtime seq_len). Without a mask, the
-        # shapes in _concat_sdpa_config run the model-local SDPA, which writes the
-        # concat-heads layout and removes the Stage 5 op.
-        concat_sdpa_config = (
-            _concat_sdpa_config(seq_len, batch_size, self.config.mesh_device, self.config.attention_scale)
-            if sdpa_mask is None and q.dtype == ttnn.bfloat8_b and k.dtype == ttnn.bfloat8_b
-            else None
-        )
-        if concat_sdpa_config is not None:
+        # Stage 4: SDPA (chunk sizes depend on runtime seq_len).
+        if fused_sdpa_config is not None:
             from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa.op import bge_encoder_sdpa_experimental
 
             context = bge_encoder_sdpa_experimental(
-                q, k, v, config=concat_sdpa_config, output_mem_config=self.config.output_memcfg
+                qkv_fused, qkv_fused, qkv_fused, config=fused_sdpa_config, output_mem_config=self.config.output_memcfg
             )
+            ttnn.deallocate(qkv_fused)
         else:
             sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
             context = ttnn.transformer.scaled_dot_product_attention(
@@ -256,12 +268,12 @@ class BgeM3Attention(LightweightModule):
                 compute_kernel_config=self.config.score_compute_kernel_cfg,
                 memory_config=self.config.score_memcfg,
             )
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
 
         # Stage 5: concat heads
-        if concat_sdpa_config is not None:
+        if fused_sdpa_config is not None:
             pass
         elif self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
