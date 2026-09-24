@@ -18,6 +18,43 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+void validate_external_semaphores(const HighBwAllGatherParams& args, const Tensor& input_tensor) {
+    const bool has_ready = args.ready_semaphore.has_value();
+    const bool has_data_valid = args.data_valid_semaphore.has_value();
+    TT_FATAL(
+        has_ready == has_data_valid,
+        "high_bw_all_gather ready_semaphore and data_valid_semaphore must be supplied together or both omitted");
+    if (!has_ready) {
+        return;
+    }
+
+    const auto& ready = args.ready_semaphore.value();
+    const auto& data_valid = args.data_valid_semaphore.value();
+    TT_FATAL(
+        ready.address() != data_valid.address(),
+        "high_bw_all_gather ready_semaphore and data_valid_semaphore must be distinct");
+
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(
+        ready.device() == static_cast<IDevice*>(mesh_device) &&
+            data_valid.device() == static_cast<IDevice*>(mesh_device),
+        "high_bw_all_gather external semaphores must be created on the input tensor's mesh device");
+
+    // attribute_values() is a temporary tuple; copy the metadata before inspecting it.
+    const auto ready_attributes = ready.attribute_values();
+    const auto data_valid_attributes = data_valid.attribute_values();
+    const auto ready_buffer_type = std::get<1>(ready_attributes);
+    const auto data_valid_buffer_type = std::get<1>(data_valid_attributes);
+    const bool has_l1_small = mesh_device->allocator()->get_bank_size(BufferType::L1_SMALL) > 0;
+    const auto expected_buffer_type = has_l1_small ? BufferType::L1_SMALL : BufferType::L1;
+    TT_FATAL(
+        ready_buffer_type == expected_buffer_type && data_valid_buffer_type == expected_buffer_type,
+        "high_bw_all_gather external semaphores must use buffer type {}, got ready={} and data_valid={}",
+        expected_buffer_type,
+        ready_buffer_type,
+        data_valid_buffer_type);
+}
+
 tt::tt_metal::TensorTopology derive_output_topology(
     const Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis, uint32_t gather_dim) {
     const auto& input_topology = input_tensor.tensor_topology();
@@ -55,37 +92,170 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     // input_batch_index / gathered_dim_size alter only runtime page ranges and iterator strides;
     // exclude their values so changing cache slot or prefix does not recompile the program.
+    // Routing is fixed for the lifetime of a cached program. Clear the program cache before
+    // reconfiguring fabric routing. Include placement so a mesh reshape cannot reuse old routes.
+    auto* device = tensor_args.input_tensor.device();
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
+    fabric_nodes.reserve(device->shape().mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(device->shape())) {
+        fabric_nodes.push_back(device->get_fabric_node_id(coord));
+    }
     return tt::tt_metal::operation::hash_operation<HighBwAllGatherDeviceOperation>(
         args.dim,
         args.output_mem_config,
         args.cluster_axis,
         args.linearized_mesh_ring,
-        args.snake_ring_orientation,
         args.fabric_config,
-        args.axis_topology,
         args.axis_num_devices,
-        args.axis_num_links,
         args.num_devices,
         args.num_links,
         args.mesh_rows,
         args.mesh_cols,
         args.packet_size,
-        args.neighbor_unicast_eligible,
-        args.neighbor_route_plan_hash,
+        device->shape(),
+        fabric_nodes,
         args.subdevice_id,
-        args.sub_core_grid,
+        args.resolved_worker_core_grid,
+        args.ready_semaphore.has_value(),
         args.input_batch_index.has_value(),
         args.gathered_dim_size.has_value(),
+        // Slot select via metadata changes the reader binary (it reads the page base on-device instead of
+        // taking it as a runtime argument), so the PRESENCE is hashed. The value is not: it lives in a
+        // tensor the kernel reads each dispatch, which is the whole point.
+        tensor_args.has_batch_index_metadata(),
+        // batch_slot_num_layers / batch_slot_layer_idx are deliberately NOT hashed. They are RUNTIME
+        // arguments, re-patched every dispatch, so this shape-identical op keeps ONE cached program
+        // across layers (that is why input_batch_index is hash-excluded too). The binding constraint is
+        // the LAYER INDEX: hashing it would give one program PER LAYER, and each program allocates two
+        // global semaphores -- which exhausts a tightly budgeted L1_SMALL region (GLM: 1152 B total) at
+        // the second or third layer. The layer COUNT is constant per cache and would fork only per
+        // distinct cache depth; it is left unhashed so one program also serves caches of different
+        // depth, and so both terms share a single patch site.
+        // Freezing them into a captured program is still correct: they are layer-constant, and each
+        // layer is its own op instance in the captured graph. Only the per-REQUEST user id needs a tensor.
+        // Same reasoning as the slot-select flag: reading the extent on-device changes the reader binary,
+        // so the PRESENCE is hashed while the per-chunk value stays in the tensor. gathered_slab_global IS
+        // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
+        tensor_args.has_gathered_prefix_metadata(),
+        args.gathered_slab_global,
         tensor_args);
 }
+
+namespace {
+
+// Structural checks for the trace-safe slot-select tensor. Mirrors the metadata validation on the other
+// per-element-tensor ops (ring_indexer_score_dsa, topk_large_indices, update_padded_kv_cache): the value
+// is read on-device, so only the container can be checked here.
+void validate_batch_index_metadata(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_batch_index_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        !args.input_batch_index.has_value(),
+        "high_bw_all_gather: input_batch_index and input_batch_index_tensor are mutually exclusive -- pass the "
+        "scalar OR the 1-element tensor, never both (the tensor is the trace-safe form)");
+    const auto& meta = *tensor_args.input_batch_index_tensor;
+    TT_FATAL(
+        meta.storage_type() == StorageType::DEVICE,
+        "high_bw_all_gather input_batch_index_tensor must be on device (the reader NoC-reads it)");
+    TT_FATAL(
+        meta.dtype() == DataType::UINT32,
+        "high_bw_all_gather input_batch_index_tensor must be UINT32, got {}",
+        meta.dtype());
+    TT_FATAL(
+        meta.layout() == Layout::ROW_MAJOR,
+        "high_bw_all_gather input_batch_index_tensor must be ROW_MAJOR, got {}",
+        meta.layout());
+    TT_FATAL(
+        meta.logical_volume() == 1,
+        "high_bw_all_gather input_batch_index_tensor must hold exactly one element, got volume {}",
+        meta.logical_volume());
+    TT_FATAL(
+        meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "high_bw_all_gather input_batch_index_tensor must be INTERLEAVED");
+    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments while the program hash
+    // records only that metadata is present, so an L1 tensor on one dispatch and a DRAM one on the next would
+    // cache-hit a binary built for the other address space. Pin the placement, as indexer_score and
+    // topk_large_indices do.
+    TT_FATAL(
+        meta.memory_config().buffer_type() == BufferType::DRAM,
+        "high_bw_all_gather input_batch_index_tensor must be in DRAM");
+}
+
+// Structural checks for the trace-safe active-extent tensor.
+void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_gathered_prefix_metadata()) {
+        TT_FATAL(
+            args.gathered_slab_global == 0,
+            "high_bw_all_gather gathered_slab_global is only meaningful with gathered_prefix_tensor");
+        return;
+    }
+    TT_FATAL(
+        !args.gathered_dim_size.has_value(),
+        "high_bw_all_gather: gathered_dim_size and gathered_prefix_tensor are mutually exclusive -- pass the "
+        "scalar extent OR the 1-element start-position tensor (the tensor is the trace-safe form)");
+    TT_FATAL(
+        args.gathered_slab_global > 0,
+        "high_bw_all_gather gathered_prefix_tensor requires gathered_slab_global > 0 (the block-cyclic slab "
+        "width in gathered-dim elements); the reader rounds the populated prefix up to whole slabs");
+    TT_FATAL(
+        args.gathered_slab_global % args.num_devices == 0,
+        "high_bw_all_gather gathered_slab_global {} must divide evenly across {} devices",
+        args.gathered_slab_global,
+        args.num_devices);
+    const auto& meta = *tensor_args.gathered_prefix_tensor;
+    TT_FATAL(
+        meta.storage_type() == StorageType::DEVICE,
+        "high_bw_all_gather gathered_prefix_tensor must be on device (the reader NoC-reads it)");
+    TT_FATAL(
+        meta.dtype() == DataType::UINT32,
+        "high_bw_all_gather gathered_prefix_tensor must be UINT32, got {}",
+        meta.dtype());
+    TT_FATAL(
+        meta.layout() == Layout::ROW_MAJOR,
+        "high_bw_all_gather gathered_prefix_tensor must be ROW_MAJOR, got {}",
+        meta.layout());
+    TT_FATAL(
+        meta.logical_volume() == 1,
+        "high_bw_all_gather gathered_prefix_tensor must hold exactly one element, got volume {}",
+        meta.logical_volume());
+    TT_FATAL(
+        meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "high_bw_all_gather gathered_prefix_tensor must be INTERLEAVED");
+    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments while the program hash
+    // records only that metadata is present, so an L1 tensor on one dispatch and a DRAM one on the next would
+    // cache-hit a binary built for the other address space. Pin the placement, as indexer_score and
+    // topk_large_indices do.
+    TT_FATAL(
+        meta.memory_config().buffer_type() == BufferType::DRAM,
+        "high_bw_all_gather gathered_prefix_tensor must be in DRAM");
+}
+
+void validate_slot_extent_control_mix(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_gathered_prefix_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        args.input_batch_index.value_or(0) == 0,
+        "high_bw_all_gather: a non-zero scalar input_batch_index ({}) cannot be combined with "
+        "gathered_prefix_tensor -- the reader derives its page range from the extent metadata and ignores the "
+        "scalar slot, so this would silently gather slot 0. Pass input_batch_index_tensor instead.",
+        args.input_batch_index.value_or(0));
+}
+
+}  // namespace
 
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    validate_batch_index_metadata(args, tensor_args);
+    validate_gathered_prefix_metadata(args, tensor_args);
+    validate_slot_extent_control_mix(args, tensor_args);
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
+    validate_external_semaphores(args, input_tensor);
 
     // Constraints on other inputs
     int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
@@ -99,14 +269,10 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     // participate when it has been linearized into one Hamiltonian ring.
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
-        const uint32_t snake_lane_count =
-            args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
         TT_FATAL(
-            mesh_shape[0] > 1 && mesh_shape[1] > 1 && snake_lane_count % 2 == 0,
-            "high_bw_all_gather full-mesh ring requires a 2D mesh whose selected snake orientation has an even "
-            "lane count; mesh={}, orientation={}",
-            mesh_shape,
-            static_cast<uint32_t>(args.snake_ring_orientation));
+            mesh_shape.mesh_size() > 1,
+            "high_bw_all_gather full-mesh path requires at least two devices; mesh={}",
+            mesh_shape);
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor),
             "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
@@ -134,16 +300,6 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT || input_tensor.layout() == ttnn::TILE_LAYOUT,
         "high_bw_all_gather requires row-major or tile-layout input");
     TT_FATAL(input_tensor.buffer()->is_dram(), "high_bw_all_gather requires DRAM input");
-    TT_FATAL(
-        args.neighbor_unicast_eligible,
-        "high_bw_all_gather requires a direct-neighbor line/ring; devices={}, links={}, topology={}, "
-        "linearized_mesh_ring={}, route_hash={}",
-        args.axis_num_devices,
-        args.axis_num_links,
-        args.axis_topology,
-        args.linearized_mesh_ring,
-        args.neighbor_route_plan_hash);
-
     {
         const auto& output_tensor = tensor_args.output_tensor;
 
@@ -174,13 +330,34 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
-        if (args.input_batch_index.has_value()) {
+        // The scalar and metadata slot-select paths share every STRUCTURAL constraint (they address the
+        // same contiguous [1, ...] slot); only the value bound differs, since the metadata value is not
+        // known host-side.
+        if (args.input_batch_index.has_value() || tensor_args.has_batch_index_metadata()) {
             TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
-            TT_FATAL(
-                *args.input_batch_index < input_padded_shape[0],
-                "high_bw_all_gather input_batch_index {} must be < input batch {}",
-                *args.input_batch_index,
-                input_padded_shape[0]);
+            if (args.input_batch_index.has_value()) {
+                TT_FATAL(
+                    *args.input_batch_index < input_padded_shape[0],
+                    "high_bw_all_gather input_batch_index {} must be < input batch {}",
+                    *args.input_batch_index,
+                    input_padded_shape[0]);
+            } else {
+                // Metadata path: the kernel recomposes user_id * num_layers + layer_idx, so bound what
+                // the host CAN see. The user id itself is only known on-device; the caller is responsible
+                // for keeping it < num_users, exactly as it is for the scalar form.
+                TT_FATAL(
+                    args.batch_slot_layer_idx < args.batch_slot_num_layers,
+                    "high_bw_all_gather batch_slot_layer_idx {} must be < batch_slot_num_layers {}",
+                    args.batch_slot_layer_idx,
+                    args.batch_slot_num_layers);
+                TT_FATAL(
+                    args.batch_slot_num_layers <= input_padded_shape[0] &&
+                        input_padded_shape[0] % args.batch_slot_num_layers == 0,
+                    "high_bw_all_gather batch_slot_num_layers {} must divide the input batch {} (the cache batch "
+                    "dim is user-major: num_users * num_layers)",
+                    args.batch_slot_num_layers,
+                    input_padded_shape[0]);
+            }
             TT_FATAL(
                 output_shape[0] == 1,
                 "high_bw_all_gather selected-batch output must have batch 1, got {}",
@@ -230,15 +407,35 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     // The slot/prefix values are deliberately hash-excluded. Recheck only their cheap dynamic
     // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
     // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
+    if (args.linearized_mesh_ring) {
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input_tensor),
+            "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
+    }
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
+    validate_external_semaphores(args, tensor_args.input_tensor);
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    validate_slot_extent_control_mix(args, tensor_args);
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
         TT_FATAL(
             *args.input_batch_index < input_shape[0],
             "high_bw_all_gather input_batch_index {} must be < input batch {}",
             *args.input_batch_index,
+            input_shape[0]);
+    }
+    if (tensor_args.has_batch_index_metadata()) {
+        TT_FATAL(
+            args.batch_slot_layer_idx < args.batch_slot_num_layers,
+            "high_bw_all_gather batch_slot_layer_idx {} must be < batch_slot_num_layers {}",
+            args.batch_slot_layer_idx,
+            args.batch_slot_num_layers);
+        TT_FATAL(
+            args.batch_slot_num_layers <= input_shape[0] && input_shape[0] % args.batch_slot_num_layers == 0,
+            "high_bw_all_gather batch_slot_num_layers {} must divide the input batch {} (the cache batch dim is "
+            "user-major: num_users * num_layers)",
+            args.batch_slot_num_layers,
             input_shape[0]);
     }
     if (args.gathered_dim_size.has_value()) {
@@ -290,7 +487,14 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
-    std::optional<uint32_t> gathered_dim_size) {
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& input_batch_index_tensor,
+    uint32_t batch_slot_num_layers,
+    uint32_t batch_slot_layer_idx,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global,
+    const std::optional<GlobalSemaphore>& ready_semaphore,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -312,9 +516,10 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             *cluster_axis,
             mesh_shape);
     } else {
+        // The route is not resolved yet, so more than one device is all that can be asserted here.
         TT_FATAL(
-            mesh_shape[0] > 1 && mesh_shape[1] > 1 && (mesh_shape[0] % 2 == 0 || mesh_shape[1] % 2 == 0),
-            "high_bw_all_gather cluster_axis=None requires a 2D mesh with at least one even dimension, got {}",
+            mesh_shape.mesh_size() > 1,
+            "high_bw_all_gather cluster_axis=None requires a mesh with more than one device, got {}",
             mesh_shape);
     }
     TT_FATAL(
@@ -322,84 +527,50 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         "high_bw_all_gather input and output tensors must be on the same mesh device");
 
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    // Axis 0 is N/S, and axis 1 is E/W.
-    // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
-    std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    TT_FATAL(
+        !linearized_mesh_ring || tt::tt_fabric::is_2d_fabric_config(fabric_config),
+        "high_bw_all_gather cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
+        "FABRIC_2D_TORUS_X/Y/XY), got {}",
+        fabric_config);
+    // Resolve physical wiring only when creating a workload. Mesh shape, fabric configuration and
+    // coordinate placement remain in the key; routing must stay fixed until the program cache is cleared.
+    if (num_links.has_value()) {
+        TT_FATAL(
+            *num_links > 0, "high_bw_all_gather num_links must be greater than 0 when specified, got {}", *num_links);
+    }
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
-    std::array<uint32_t, 2> axis_num_links{0u, 0u};
-    std::optional<uint32_t> resolved_num_links;
     for (uint32_t axis = 0; axis < 2; ++axis) {
-        const bool is_axis_active = mesh_shape[axis] > 1 && (linearized_mesh_ring || *cluster_axis == axis);
-        if (!is_axis_active) {
-            continue;
+        if (linearized_mesh_ring || *cluster_axis == axis) {
+            axis_num_devices[axis] = mesh_shape[axis];
         }
-        axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
-        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
-        const auto discovered_num_links =
-            static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
-        if (num_links.has_value()) {
-            TT_FATAL(
-                *num_links > 0,
-                "high_bw_all_gather num_links must be greater than 0 when specified, got {}",
-                *num_links);
-            TT_FATAL(
-                *num_links <= discovered_num_links,
-                "high_bw_all_gather requested {} links, but only {} usable links were discovered on cluster_axis {}",
-                *num_links,
-                discovered_num_links,
-                axis);
-        }
-        axis_num_links[axis] = num_links.value_or(discovered_num_links);
-        resolved_num_links =
-            resolved_num_links.has_value() ? std::min(*resolved_num_links, axis_num_links[axis]) : axis_num_links[axis];
     }
-    TT_FATAL(resolved_num_links.has_value(), "high_bw_all_gather found no active collective axis");
-    const uint32_t collective_num_links = *resolved_num_links;
-    const uint32_t num_devices = linearized_mesh_ring ? static_cast<uint32_t>(mesh_shape.mesh_size())
-                                                      : axis_num_devices[0] * axis_num_devices[1];
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    ttnn::ccl::snake_ring::Orientation snake_orientation = linearized_mesh_ring && mesh_shape[0] % 2 != 0
-                                                               ? ttnn::ccl::snake_ring::Orientation::Column
-                                                               : ttnn::ccl::snake_ring::Orientation::Row;
-    std::optional<uint64_t> direct_neighbor_route_hash;
-    if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
-        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
-        if (mesh_ring_plan.has_value()) {
-            snake_orientation = mesh_ring_plan->orientation;
-            direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;
-        }
-    }
-    const uint32_t active_axis = cluster_axis.value_or(0);
-    const auto active_topology = axis_topology[active_axis];
-    const bool topology_supports_neighbor_unicast =
-        active_topology == tt::tt_fabric::Topology::Linear || active_topology == tt::tt_fabric::Topology::Ring;
-    // A direct physical line or ring is supported. The full edge proof keeps routed multi-hop logical rings out of
-    // this native one-hop implementation.
-    const bool neighbor_unicast_eligible =
-        collective_num_links > 0 &&
-        ((!linearized_mesh_ring && one_active_axis && !fabric_is_2d && topology_supports_neighbor_unicast) ||
-         (fabric_is_2d && direct_neighbor_route_hash.has_value()));
-
-    log_debug(
-        tt::LogOp,
-        "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}, num_links override: {}, "
-        "linearized_mesh_ring: {}, snake_orientation: {}, packet_size: {} B",
-        fabric_config,
-        axis_topology,
-        axis_num_devices,
-        axis_num_links,
-        num_links,
-        linearized_mesh_ring,
-        static_cast<uint32_t>(snake_orientation),
-        packet_size);
 
     // Resolve negative gather dim
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    const auto subdevice_manager_id = mesh_device->get_active_sub_device_manager_id();
+    const auto selected_subdevice_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto active_subdevice_ids = mesh_device->get_sub_device_ids();
+    TT_FATAL(
+        std::find(active_subdevice_ids.begin(), active_subdevice_ids.end(), selected_subdevice_id) !=
+            active_subdevice_ids.end(),
+        "high_bw_all_gather subdevice_id {} is not part of active subdevice manager {}",
+        selected_subdevice_id,
+        subdevice_manager_id);
+    const auto selected_subdevice_cores =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, selected_subdevice_id);
+    if (sub_core_grid.has_value()) {
+        TT_FATAL(
+            selected_subdevice_cores.contains(*sub_core_grid),
+            "high_bw_all_gather sub_core_grid {} must be fully contained in TENSIX subdevice {} cores {}",
+            *sub_core_grid,
+            selected_subdevice_id,
+            selected_subdevice_cores);
+    }
+    const auto resolved_worker_core_grid = sub_core_grid.value_or(selected_subdevice_cores);
 
     return {
         HighBwAllGatherParams{
@@ -407,23 +578,29 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .output_mem_config = output_tensor.memory_config(),
             .cluster_axis = cluster_axis.value_or(0),
             .linearized_mesh_ring = linearized_mesh_ring,
-            .snake_ring_orientation = snake_orientation,
             .fabric_config = fabric_config,
-            .axis_topology = axis_topology,
             .axis_num_devices = axis_num_devices,
-            .axis_num_links = axis_num_links,
             .num_devices = num_devices,
-            .num_links = collective_num_links,
+            .num_links = num_links,
             .mesh_rows = linearized_mesh_ring ? mesh_shape[0] : 0,
             .mesh_cols = linearized_mesh_ring ? mesh_shape[1] : 0,
             .packet_size = packet_size,
-            .neighbor_unicast_eligible = neighbor_unicast_eligible,
-            .neighbor_route_plan_hash = direct_neighbor_route_hash,
             .subdevice_id = subdevice_id,
             .sub_core_grid = sub_core_grid,
+            .subdevice_manager_id = subdevice_manager_id,
+            .resolved_worker_core_grid = resolved_worker_core_grid,
+            .ready_semaphore = ready_semaphore,
+            .data_valid_semaphore = data_valid_semaphore,
             .input_batch_index = input_batch_index,
-            .gathered_dim_size = gathered_dim_size},
-        HighBwAllGatherInputs{.input_tensor = input_tensor, .output_tensor = output_tensor}};
+            .gathered_dim_size = gathered_dim_size,
+            .batch_slot_num_layers = batch_slot_num_layers,
+            .batch_slot_layer_idx = batch_slot_layer_idx,
+            .gathered_slab_global = gathered_slab_global},
+        HighBwAllGatherInputs{
+            .input_tensor = input_tensor,
+            .output_tensor = output_tensor,
+            .input_batch_index_tensor = input_batch_index_tensor,
+            .gathered_prefix_tensor = gathered_prefix_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -439,7 +616,14 @@ Tensor high_bw_all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
-    std::optional<uint32_t> gathered_dim_size) {
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& input_batch_index_tensor,
+    uint32_t batch_slot_num_layers,
+    uint32_t batch_slot_layer_idx,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global,
+    const std::optional<GlobalSemaphore>& ready_semaphore,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -449,7 +633,14 @@ Tensor high_bw_all_gather(
         sub_core_grid,
         num_links,
         input_batch_index,
-        gathered_dim_size);
+        gathered_dim_size,
+        input_batch_index_tensor,
+        batch_slot_num_layers,
+        batch_slot_layer_idx,
+        gathered_prefix_tensor,
+        gathered_slab_global,
+        ready_semaphore,
+        data_valid_semaphore);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

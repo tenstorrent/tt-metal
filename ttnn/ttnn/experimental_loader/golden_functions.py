@@ -138,6 +138,18 @@ def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, 
 ttnn.attach_golden_function(ttnn.experimental.slice_write, _slice_write_golden_function)
 
 
+def _broadcast_to_golden_function(input, output_shape, *args, output=None, **kwargs):
+    result = input.broadcast_to(tuple(output_shape))
+    if output is not None:
+        # Mirror output= writes so retained local and global destination goldens stay current.
+        output.copy_(result)
+        return output
+    return result
+
+
+ttnn.attach_golden_function(ttnn.experimental.broadcast_to, _broadcast_to_golden_function)
+
+
 def _indexed_fused_update_cache_golden_function(
     cache_tensor1,
     input_tensor1,
@@ -165,3 +177,42 @@ ttnn.attach_golden_function(
     ttnn.experimental.indexed_fused_update_cache,
     _indexed_fused_update_cache_golden_function,
 )
+
+
+def _composite_example_golden_function(input_tensor, *args, **kwargs):
+    # composite_example applies the example copy op twice; the value is the input unchanged.
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.composite_example, _composite_example_golden_function)
+
+
+def _composite_example_multiple_return_golden_function(
+    input_tensor, return_output1=True, return_output2=True, *args, **kwargs
+):
+    # Each requested output is a copy of the input; unrequested outputs are None.
+    return [
+        input_tensor if return_output1 else None,
+        input_tensor if return_output2 else None,
+    ]
+
+
+ttnn.attach_golden_function(ttnn.composite_example_multiple_return, _composite_example_multiple_return_golden_function)
+
+
+def _dram_prefetcher_golden_function(tensors, *args, **kwargs):
+    import torch
+
+    # dram_prefetcher returns an otherwise unspecified 32x32 synchronization tensor.
+    output = torch.empty((32, 32), dtype=tensors[0].dtype)
+    ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
+    return output
+
+
+ttnn.attach_golden_function(ttnn.dram_prefetcher, _dram_prefetcher_golden_function)
+
+# generic_op executes a user-supplied program descriptor; it has no fixed semantics to reference.
+ttnn.attach_golden_function(ttnn.generic_op, golden_function=None)
+
+# test_hang_device_operation intentionally hangs the device for testing; it has no value golden.
+ttnn.attach_golden_function(ttnn.test_hang_device_operation, golden_function=None)

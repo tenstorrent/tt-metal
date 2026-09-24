@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <array>
 #include <type_traits>
 
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
@@ -27,6 +26,8 @@ static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
+
+static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
 
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {

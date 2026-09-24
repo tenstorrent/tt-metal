@@ -7,6 +7,9 @@
 #include <cstdint>
 #include "internal/cross_node_dfb_interface.h"
 #include "internal/circular_buffer_interface.h"
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
+#endif
 #include "api/alignment.h"
 #include "api/debug/assert.h"
 #include "internal/risc_attribs.h"
@@ -16,6 +19,25 @@
 
 namespace experimental {
 
+FORCE_INLINE volatile tt_l1_ptr uint32_t* prefetcher_pipe_config_word_ptr(
+    volatile tt_l1_ptr uint32_t* l1_config, uint32_t word_idx) {
+#ifdef ARCH_QUASAR
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        reinterpret_cast<uintptr_t>(l1_config + word_idx) + MEM_L1_UNCACHED_BASE);
+#else
+    return l1_config + word_idx;
+#endif
+}
+
+FORCE_INLINE uint32_t load_prefetcher_pipe_config_word(volatile tt_l1_ptr uint32_t* l1_config, uint32_t word_idx) {
+    return *prefetcher_pipe_config_word_ptr(l1_config, word_idx);
+}
+
+FORCE_INLINE void store_prefetcher_pipe_config_word(
+    volatile tt_l1_ptr uint32_t* l1_config, uint32_t word_idx, uint32_t value) {
+    *prefetcher_pipe_config_word_ptr(l1_config, word_idx) = value;
+}
+
 // Populate a kernel-owned PrefetcherPipe interface from
 // [config_page_addr, entry_size, relay_dfb_id].
 // Loads fifo_wr/rd_ptr from PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT (durable
@@ -23,20 +45,30 @@ namespace experimental {
 FORCE_INLINE void setup_prefetcher_pipe_interface(
     CrossNodeDFBInterface& interface, uint32_t config_page_addr, uint32_t entry_size_word, uint32_t relay_dfb_id_word) {
     ASSERT(config_page_addr != 0);
+    ASSERT(entry_size_word != 0);
+    ASSERT(entry_size_word % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
 
     const uint32_t entry_size = entry_size_word;
     const uint32_t config_page_ptr = config_page_addr;
 
     volatile tt_l1_ptr uint32_t* l1_config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_ptr);
 
-    const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
-    const uint32_t num_receivers = l1_config[REMOTE_DFB_CFG_NUM_RECEIVERS];
-    const uint32_t fifo_start_addr = l1_config[REMOTE_DFB_CFG_FIFO_START];
-    const uint32_t fifo_size = l1_config[REMOTE_DFB_CFG_FIFO_SIZE];
-    const uint32_t fifo_ptr_checkpoint = l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT];
-    const uint32_t noc_xy_addr = config_page_ptr + l1_config[PREFETCHER_PIPE_CFG_NOC_XY_OFFSET];
-    const uint32_t aligned_cnt_ptr = config_page_ptr + l1_config[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET];
-    const uint32_t remote_cnt_ptr = config_page_ptr + l1_config[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET];
+    const bool is_sender = static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
+    const uint32_t num_receivers = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_NUM_RECEIVERS);
+    const uint32_t fifo_start_addr = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_START);
+    const uint32_t fifo_size = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_SIZE);
+    const uint32_t fifo_ptr_checkpoint =
+        load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT);
+    const uint32_t noc_xy_addr =
+        config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_NOC_XY_OFFSET);
+    // Sender page: block bases. Receiver page: this receiver's lane-0 slot in each block.
+    // Sender and receiver pages share one layout, so each offset also addresses the mirror
+    // counter on the peer core.
+    const uint32_t sent_ptr =
+        config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET);
+    const uint32_t acked_ptr =
+        config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET);
+    // Active lane count (kernel-config slot) is cached by the PrefetcherPipe ctor, not the iface.
 
     const uint32_t size_aligned = fifo_size - (fifo_size % entry_size);
     const uint32_t fifo_limit = fifo_start_addr + size_aligned;
@@ -46,16 +78,19 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.config_ptr = config_page_ptr;
         iface.fifo_start_addr = fifo_start_addr;
         iface.fifo_page_size = entry_size;
+        // Receiver 0's checkpoint, for parity with the shared interface. A sender addresses
+        // through the per-receiver cursors in the credit slots, not through this field.
         iface.fifo_wr_ptr = fifo_ptr_checkpoint;
         iface.receiver_noc_xy_ptr = noc_xy_addr;
-        iface.aligned_pages_sent_ptr = aligned_cnt_ptr;
-        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, remote_cnt_ptr);
+        iface.aligned_pages_sent_ptr = sent_ptr;    // local, cached stores
+        iface.aligned_pages_acked_ptr = acked_ptr;  // receivers' NoC atomics
+        // Remote sent base = same offset on each receiver page.
+        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, sent_ptr);
         iface.fifo_limit_page_aligned = fifo_limit;
     } else {
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
         const uint32_t sender_noc_x = xy[0];
         const uint32_t sender_noc_y = xy[1];
-        const uint32_t aligned_acked_ptr = aligned_cnt_ptr + L1_ALIGNMENT;
 
         CrossNodeReceiverDFBInterface& iface = interface.receiver;
         iface.config_ptr = config_page_ptr;
@@ -64,10 +99,13 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.fifo_rd_ptr = fifo_ptr_checkpoint;
         iface.sender_noc_x = static_cast<uint16_t>(sender_noc_x);
         iface.sender_noc_y = static_cast<uint16_t>(sender_noc_y);
-        iface.aligned_pages_acked_ptr = aligned_acked_ptr;
-        iface.remote_pages_acked_ptr = remote_cnt_ptr;
+        // Lane 0 slots; PrefetcherPipe ctor offsets all three by tid * L1_ALIGNMENT when lanes > 1.
+        iface.aligned_pages_sent_ptr = sent_ptr;    // sender's NoC atomics
+        iface.aligned_pages_acked_ptr = acked_ptr;  // local, cached stores
+        iface.remote_pages_acked_ptr = acked_ptr;   // same slot on the sender page
         iface.fifo_limit_page_aligned = fifo_limit;
-        iface.relay_id = static_cast<uint8_t>(relay_dfb_id_word);
+        // Low byte only; the slot word also carries the active lane count (remote_dfb_constants.h).
+        iface.relay_id = static_cast<uint8_t>(prefetcher_pipe_slot_relay_id(relay_dfb_id_word));
     }
 }
 
@@ -85,9 +123,10 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     ASSERT(entry_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
 
     volatile tt_l1_ptr uint32_t* l1_config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_addr);
-    const uint32_t fifo_start_addr = l1_config[REMOTE_DFB_CFG_FIFO_START];
-    const uint32_t fifo_size = l1_config[REMOTE_DFB_CFG_FIFO_SIZE];
-    const uint32_t fifo_ptr_checkpoint = l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT];
+    const uint32_t fifo_start_addr = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_START);
+    const uint32_t fifo_size = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_SIZE);
+    const uint32_t fifo_ptr_checkpoint =
+        load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT);
 
     const uint32_t cb_size_page_aligned = fifo_size - (fifo_size % entry_size);
     const uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
@@ -96,6 +135,76 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
         next_fifo_rd_ptr = fifo_start_addr;
     }
 
+#ifdef ARCH_QUASAR
+    // Quasar relay DFB state lives in LocalDFBInterface / TC slots (not LocalCBInterface).
+    LocalDFBInterface& local = get_local_dfb_interface(relay_dfb_id);
+    ASSERT(local.num_tcs_to_rr >= 1);
+    const uint32_t entry_size_units = entry_size >> cb_addr_shift;
+    ASSERT(entry_size_units != 0);
+    ASSERT((cb_size_page_aligned >> cb_addr_shift) % entry_size_units == 0);
+    local.entry_size = static_cast<decltype(local.entry_size)>(entry_size_units);
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+    // Host precomputes stride in tile units as entry_size_units * stride_in_entries; keep
+    // stride_size_tiles / per-TC base+base_entry from DFB init and recompute stride_size for
+    // this launch's entry size. Never rewrite TC geometry: a STRIDED consumer hart still has
+    // num_tcs_to_rr==1 but a non-zero base_entry_idx that must be preserved.
+    // Multi-TC (num_tcs_to_rr > 1 or non-zero base_entry_idx): assumes entry_size still matches
+    // DFB serialization — live page-size resize with N>1 consumers is unsupported.
+    ASSERT(local.stride_size_tiles != 0);
+    local.stride_size = static_cast<uint16_t>(entry_size_units * local.stride_size_tiles);
+    local.num_entries = static_cast<uint16_t>((cb_size_page_aligned >> cb_addr_shift) / entry_size_units);
+    const uint32_t global_entry = (next_fifo_rd_ptr - fifo_start_addr) / entry_size;
+    const uint8_t stride = local.stride_size_tiles;
+    for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+        DFBTCSlot& slot = local.tc_slots[t];
+        uint32_t idx = slot.base_entry_idx;
+        if (global_entry > idx) {
+            const uint32_t delta = global_entry - idx;
+            idx = idx + ((delta + stride - 1) / stride) * stride;
+        }
+        if (idx >= local.num_entries) {
+            idx = slot.base_entry_idx;
+        }
+#if defined(UCK_CHLKC_UNPACK)
+        slot.rd_entry_idx = static_cast<uint16_t>(idx);
+#else
+        slot.wr_entry_idx = static_cast<uint16_t>(idx);
+#endif
+    }
+    local.tc_idx = 0;
+#elif !defined(COMPILE_FOR_TRISC)
+    // DM: ptrs/limits are raw bytes; entry_size is address units (cb_addr_shift==0 → bytes).
+    local.num_entries = static_cast<uint16_t>(cb_size_page_aligned / entry_size);
+    if (local.num_tcs_to_rr == 1) {
+        local.stride_size = entry_size;  // 1-entry stride in bytes
+        DFBTCSlot& slot = local.tc_slots[0];
+        slot.base_addr = fifo_start_addr;
+        slot.limit = fifo_limit_page_aligned;
+        slot.rd_ptr = next_fifo_rd_ptr;
+        slot.wr_ptr = next_fifo_rd_ptr;
+    } else {
+        // Preserve stride_size and per-TC base/limit from DFB init; snap rd/wr to the first
+        // owned byte at/after the durable checkpoint.
+        ASSERT(local.stride_size != 0);
+        ASSERT(local.stride_size % entry_size == 0);
+        for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+            DFBTCSlot& slot = local.tc_slots[t];
+            uint32_t ptr = slot.base_addr;
+            if (next_fifo_rd_ptr > slot.base_addr) {
+                const uint32_t delta = next_fifo_rd_ptr - slot.base_addr;
+                const uint32_t aligned = ((delta + local.stride_size - 1) / local.stride_size) * local.stride_size;
+                ptr = slot.base_addr + aligned;
+                if (ptr >= slot.limit) {
+                    ptr = slot.base_addr;
+                }
+            }
+            slot.rd_ptr = ptr;
+            slot.wr_ptr = ptr;
+        }
+    }
+    local.tc_idx = 0;
+#endif
+#else
     LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);
     const uint32_t fifo_limit = fifo_limit_page_aligned >> cb_addr_shift;
     const uint32_t fifo_size_units = fifo_limit - (fifo_start_addr >> cb_addr_shift);
@@ -109,13 +218,14 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     local.fifo_num_pages = fifo_size_units / page_size_units;
     local.fifo_wr_ptr = fifo_ptr_units;
     local.fifo_rd_ptr = fifo_ptr_units;
+#endif
 }
 
 // launch-msg lookup + checkpoint snap for a PrefetcherPipe relay local DFB.
 // Called from the DataflowBuffer(RelayDFBBindingToken) constructor on TRISC:
 // the token bakes prefetcher_pipe_id at compile time, so this indexes the dense
-// launch-msg persistent region directly and snaps get_local_cb_interface(relay_dfb_id)
-// to the durable checkpoint using this launch's [config_page_addr, entry_size] from the slot.
+// launch-msg persistent region directly and snaps the borrowed local iface to the
+// durable checkpoint using this launch's [config_page_addr, entry_size] from the slot.
 FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id, uint32_t prefetcher_pipe_id) {
     const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
@@ -125,14 +235,17 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
     const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
     volatile tt_l1_ptr uint32_t* region =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.prefetcher_pipe_offset);
-    ASSERT(prefetcher_pipe_id < region[0]);
+    // Host rewrites this dense region every launch; Quasar must read via the uncached alias.
+    ASSERT(prefetcher_pipe_id < load_prefetcher_pipe_config_word(region, 0));
 
     volatile tt_l1_ptr uint32_t* slot =
         region + REMOTE_DFB_REGION_HEADER_WORDS + prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+    const uint32_t config_page_addr = load_prefetcher_pipe_config_word(slot, 0);
+    const uint32_t entry_size = load_prefetcher_pipe_config_word(slot, 1);
     // Host must have registered this local DFB as the relay for this persistent slot
-    // (CreatePrefetcherPipeRelayDataflowBuffer); catches a mismatched token.
-    ASSERT(slot[2] == relay_dfb_id);
-    align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1]);
+    // (DFBAdvancedOptions::prefetcher_pipe_relays); catches a mismatched token.
+    ASSERT(load_prefetcher_pipe_config_word(slot, 2) == relay_dfb_id);
+    align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, config_page_addr, entry_size);
 }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
@@ -140,9 +253,47 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
 // Align DM's private local relay-DFB iface to the PrefetcherPipe receiver's
 // rd_ptr / page size / limit. Called from PrefetcherPipe::bind_relay() and from
 // set_receiver_entry_size() so a mid-kernel page-size change does not leave the
-// local CB on the old stride. No NOC — copies from the receiver iface.
+// local CB/DFB on the old stride. No NOC — copies from the receiver iface.
 FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     uint32_t relay_dfb_id, const CrossNodeReceiverDFBInterface& iface) {
+#ifdef ARCH_QUASAR
+    LocalDFBInterface& local = get_local_dfb_interface(relay_dfb_id);
+    ASSERT(local.num_tcs_to_rr >= 1);
+    const uint32_t entry_size = iface.fifo_page_size;
+    ASSERT(entry_size != 0);
+    ASSERT(entry_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
+    const uint32_t ring_bytes = iface.fifo_limit_page_aligned - iface.fifo_start_addr;
+    ASSERT(ring_bytes % entry_size == 0);
+    // DM: ptrs are raw bytes; entry_size field is address units (shift 0 → bytes).
+    local.entry_size = entry_size;
+    local.num_entries = static_cast<uint16_t>(ring_bytes / entry_size);
+    if (local.num_tcs_to_rr == 1) {
+        local.stride_size = entry_size;
+        DFBTCSlot& slot = local.tc_slots[0];
+        slot.base_addr = iface.fifo_start_addr;
+        slot.limit = iface.fifo_limit_page_aligned;
+        slot.rd_ptr = iface.fifo_rd_ptr;
+        slot.wr_ptr = iface.fifo_rd_ptr;
+    } else {
+        ASSERT(local.stride_size != 0);
+        ASSERT(local.stride_size % entry_size == 0);
+        for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+            DFBTCSlot& slot = local.tc_slots[t];
+            uint32_t ptr = slot.base_addr;
+            if (iface.fifo_rd_ptr > slot.base_addr) {
+                const uint32_t delta = iface.fifo_rd_ptr - slot.base_addr;
+                const uint32_t aligned = ((delta + local.stride_size - 1) / local.stride_size) * local.stride_size;
+                ptr = slot.base_addr + aligned;
+                if (ptr >= slot.limit) {
+                    ptr = slot.base_addr;
+                }
+            }
+            slot.rd_ptr = ptr;
+            slot.wr_ptr = ptr;
+        }
+    }
+    local.tc_idx = 0;
+#else
     LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);
     const uint32_t fifo_limit = iface.fifo_limit_page_aligned >> cb_addr_shift;
     const uint32_t fifo_size_units = fifo_limit - (iface.fifo_start_addr >> cb_addr_shift);
@@ -156,6 +307,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     local.fifo_num_pages = fifo_size_units / page_size_units;
     local.fifo_wr_ptr = fifo_ptr_units;
     local.fifo_rd_ptr = fifo_ptr_units;
+#endif
 }
 
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC

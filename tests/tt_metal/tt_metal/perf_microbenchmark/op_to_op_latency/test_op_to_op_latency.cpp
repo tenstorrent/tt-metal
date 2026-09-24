@@ -1001,7 +1001,7 @@ int main(int argc, char** argv) {
         auto mesh_device =
             distributed::MeshDevice::create_unit_mesh(cfg.device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size);
 
-        log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
+        log_info(LogTest, "Clock: {} MHz", mesh_device->get_clock_rate_mhz());
 
         const auto grid = mesh_device->compute_with_storage_grid_size();
         uint32_t effective_cores = grid.x * grid.y;

@@ -26,6 +26,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -45,6 +46,7 @@ from helpers.test_variant_parameters import (
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import (
     MX_SUPPORTED_TILE_SIZES,
@@ -177,20 +179,26 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
-PACK_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        DataFormat.Int32,
-        DataFormat.Int8,
-        DataFormat.UInt8,
-        DataFormat.Int16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+# MxFp8R/P encode only: one Float16_b -> MxFp8* pair each, kept off the cross
+# product. Decode of those two formats lives on test_unpack_unary_operand_quasar.
+PACK_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Int8,
+            DataFormat.UInt8,
+            DataFormat.Int16,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        ]
+    )
+    + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxFp8R)
+    + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxFp8P)
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
@@ -312,6 +320,9 @@ def test_pack_quasar(
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,

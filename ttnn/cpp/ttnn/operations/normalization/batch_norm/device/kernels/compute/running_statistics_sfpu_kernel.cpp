@@ -20,7 +20,7 @@ ALWI void maybe_typecast_stat(
     if constexpr (NeedsTypecast) {
         constexpr uint32_t onetile = 1;
         src_obj.wait_front(onetile);
-        DataflowBuffer dst_obj(dst_dfb);
+        DataflowBuffer dst_obj(static_cast<uint16_t>(dst_dfb));
         dst_obj.reserve_back(onetile);
 
         tile_regs_acquire();
@@ -67,9 +67,9 @@ constexpr auto dfb_writer_updated_var = dfb::updated_var;
 #endif
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg(args::num_tiles);
-    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
-    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr bool old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
+    constexpr bool old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
     static_assert(
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
@@ -119,8 +119,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
             copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
-            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
-            sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::momentum, tile_index, (tile_index * 2) + 1);
+            sub_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -140,8 +140,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
             copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
-            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
-            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::momentum, tile_index, (tile_index * 2) + 1);
+            mul_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -162,8 +162,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
             copy_init(dfb::tmp1);
             last_srca_dfb = dfb::tmp1;
-            copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
-            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::tmp1, tile_index, (tile_index * 2) + 1);
+            mul_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -188,8 +188,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
             copy_init(dfb::tmp2);
             last_srca_dfb = dfb::tmp2;
-            copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
-            add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::tmp2, tile_index, (tile_index * 2) + 1);
+            add_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -222,8 +222,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
             copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
-            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
-            sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::momentum, tile_index, (tile_index * 2) + 1);
+            sub_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -243,8 +243,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
             copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
-            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
-            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::momentum, tile_index, (tile_index * 2) + 1);
+            mul_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -264,8 +264,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
             copy_init(dfb::tmp1);
             last_srca_dfb = dfb::tmp1;
-            copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
-            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::tmp1, tile_index, (tile_index * 2) + 1);
+            mul_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -289,8 +289,8 @@ void kernel_main() {
             reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
             copy_init(dfb::tmp2);
             last_srca_dfb = dfb::tmp2;
-            copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
-            add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            copy_tile(dfb::tmp2, tile_index, (tile_index * 2) + 1);
+            add_binary_tile(tile_index * 2, (tile_index * 2) + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();

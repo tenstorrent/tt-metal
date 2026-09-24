@@ -9,6 +9,7 @@ from helpers.constraints import get_perf_math_operations
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
+    _flush_product_underflow,
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
@@ -26,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -62,14 +64,8 @@ REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -79,17 +75,11 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if (
-        formats.input_format == DataFormat.MxFp8R
-        or formats.input_format == DataFormat.MxFp8P
-    ):
-        supported_mathops = [MathOperation.Elwadd, MathOperation.Elwsub]
-    else:
-        supported_mathops = [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-            MathOperation.Elwmul,
-        ]
+    supported_mathops = [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
+    ]
     if is_perf:
         return [
             mathop
@@ -281,8 +271,21 @@ def test_eltwise_binary_reuse_dest_quasar(
             else None
         )
 
+        # The masking models the source registers, so it works in the format the operands
+        # unpack into: MX and BFP land in Float16_b, everything else keeps its own. Forcing
+        # Float16_b for every MX output costs a Float16 input three mantissa bits it never
+        # loses on the device, and this test chains four multiplies through Dest.
+        src_reg_format = (
+            DataFormat.Float16_b
+            if (
+                formats.input_format.is_mx_format()
+                or formats.input_format
+                in (DataFormat.Bfp2_b, DataFormat.Bfp4_b, DataFormat.Bfp8_b)
+            )
+            else formats.input_format
+        )
         math_format_for_fidelity = (
-            (DataFormat.Float16_b if use_mx else formats.output_format)
+            (src_reg_format if use_mx else formats.output_format)
             if eltwise_golden is not None
             else None
         )
@@ -331,6 +334,19 @@ def test_eltwise_binary_reuse_dest_quasar(
                     else:
                         dest = srcA * srcB
 
+            # Hardware decides a product has underflowed from the two Src exponents, before
+            # the mantissa product can carry into the next binade -- one binade coarser than
+            # "the result is subnormal in Dest". Same rule as EltwiseBinaryGolden's.
+            if mathop == MathOperation.Elwmul:
+                dest = _flush_product_underflow(
+                    srcA_m if eltwise_golden is not None else srcA,
+                    srcB_m if eltwise_golden is not None else srcB,
+                    dest,
+                    15 if internal_dtype == torch.float16 else 127,
+                )
+            else:
+                tiny = torch.finfo(internal_dtype).tiny
+                dest = torch.where(dest.abs() < tiny, torch.zeros_like(dest), dest)
             golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     if is_perf and perf_report is None:

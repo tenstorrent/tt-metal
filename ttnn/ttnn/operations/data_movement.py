@@ -6,6 +6,7 @@ from typing import Tuple, Union, List
 
 import ttnn
 import ttnn.decorators
+from ttnn.operations import integer_golden
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
@@ -390,7 +391,10 @@ ttnn.attach_golden_function(ttnn.tosa_scatter, golden_function=_golden_function)
 def _golden_function(input_tensor, *args, skip_negative_entries=False, **kwargs):
     import torch
 
-    if skip_negative_entries:
+    if integer_golden.is_unsigned_dtype(input_tensor.dtype):
+        # PyTorch cannot add UInt32 directly; widen and restore to preserve TTNN wraparound.
+        input_tensor.copy_(integer_golden.binary(input_tensor, 1, torch.add))
+    elif skip_negative_entries:
         keep = (input_tensor >= 0) & (input_tensor < (2**31 - 1))
         input_tensor.copy_(torch.where(keep, input_tensor + 1, input_tensor))
     else:
@@ -410,34 +414,59 @@ def _golden_function(buffer, shape, dtype, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
 
 
-def _golden_function(input, stride_h, stride_w, *args, padding=(0, 0), collapse_output=False, **kwargs):
-    import torch
-
+def _fold_nhwc(input, stride_h, stride_w, collapse_output):
     N, H, W, C = input.shape
-
-    if padding is not None:
-        if len(padding) == 2:
-            pad_top = pad_bottom = padding[0]
-            pad_left = pad_right = padding[1]
-            pad_c_front = pad_c_back = 0
-        elif len(padding) == 4:
-            pad_top, pad_bottom, pad_left, pad_right = padding
-            pad_c_front = pad_c_back = 0
-        else:
-            pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = padding
-        if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
-            input = torch.nn.functional.pad(
-                input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
-            )
-            N, H, W, C = input.shape
-
     reshaped = input.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
     transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
     output_tensor = transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
-
     if collapse_output:
         output_tensor = output_tensor.reshape(1, 1, N * (H // stride_h) * (W // stride_w), C * stride_h * stride_w)
     return output_tensor
+
+
+def _parse_fold_padding(padding):
+    if padding is None:
+        return 0, 0, 0, 0, 0, 0
+    if len(padding) == 2:
+        return padding[0], padding[0], padding[1], padding[1], 0, 0
+    if len(padding) == 4:
+        return tuple(padding) + (0, 0)
+    return tuple(padding)
+
+
+def _golden_function_fold_transposed(input_tensor, stride_h, stride_w, padding, collapse_output):
+    import torch
+
+    # The transpose-based device path consumes NCHW and emits NHWC; six-element padding also aligns channels.
+    pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
+    if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+        input_tensor = torch.nn.functional.pad(
+            input_tensor, (pad_left, pad_right, pad_top, pad_bottom, pad_c_front, pad_c_back), value=0.0
+        )
+    return _fold_nhwc(input_tensor.permute(0, 2, 3, 1), stride_h, stride_w, collapse_output)
+
+
+def _golden_function(
+    input,
+    stride_h,
+    stride_w,
+    *args,
+    padding=(0, 0),
+    collapse_output=False,
+    use_transpose_as_fold=False,
+    **kwargs,
+):
+    import torch
+
+    if use_transpose_as_fold:
+        return _golden_function_fold_transposed(input, stride_h, stride_w, padding, collapse_output)
+
+    pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
+    if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+        input = torch.nn.functional.pad(
+            input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
+        )
+    return _fold_nhwc(input, stride_h, stride_w, collapse_output)
 
 
 ttnn.attach_golden_function(ttnn.fold, golden_function=_golden_function)
@@ -542,6 +571,133 @@ def _golden_function(cache, input, update_index, batch_offset=0, *args, **kwargs
 
 
 ttnn.attach_golden_function(ttnn.kv_cache.update_cache_for_token_, golden_function=_golden_function)
+
+
+def _golden_function_copy(input_a, input_b, *_, _ttnn_global_golden=False, **__):
+    # copy writes input_a into input_b in place and returns input_b; the value is input_a cast to input_b's dtype.
+    result = input_a.to(input_b.dtype)
+    if _ttnn_global_golden:
+        input_b.copy_(result)
+        return input_b
+    return result
+
+
+_golden_function_copy._ttnn_mutates_global_inputs = True
+ttnn.attach_golden_function(ttnn.copy, golden_function=_golden_function_copy)
+
+
+def _golden_function_sort(input_tensor, dim=-1, descending=False, stable=False, *_, **__):
+    import torch
+
+    values, indices = torch.sort(input_tensor, dim=dim, descending=descending, stable=stable)
+    if not stable and values.shape[dim] > 1:
+        adjacent_values = values.narrow(dim, 1, values.shape[dim] - 1)
+        previous_values = values.narrow(dim, 0, values.shape[dim] - 1)
+        adjacent_ties = adjacent_values == previous_values
+        if bool(torch.any(adjacent_ties)):
+            # Unstable sort may legally permute equal values differently; only its tied indices are non-unique.
+            tie_mask = torch.zeros_like(indices, dtype=torch.bool)
+            tie_mask.narrow(dim, 0, values.shape[dim] - 1).logical_or_(adjacent_ties)
+            tie_mask.narrow(dim, 1, values.shape[dim] - 1).logical_or_(adjacent_ties)
+            ttnn.decorators.set_golden_comparison_config(
+                indices, method="allclose", scope="all", rtol=0.0, atol=0.0, mask=~tie_mask
+            )
+    return values, indices
+
+
+ttnn.attach_golden_function(ttnn.sort, golden_function=_golden_function_sort)
+
+
+def _golden_function_nonzero(input_tensor, *_, **__):
+    import torch
+
+    # The op returns (count, indices): count is [1, 1, 1, 8] with the non-zero count at [0, 0, 0, 0],
+    # indices is [1, 1, 1, volume * 4] holding one flat (b, n, h, c) 4-tuple per non-zero element.
+    # Both outputs are padded to a data-independent upper bound, so only the leading valid region is compared.
+    if input_tensor.ndim != 4:
+        raise ValueError(f"ttnn.nonzero golden requires rank-4 input, got rank {input_tensor.ndim}")
+
+    coordinates = torch.nonzero(input_tensor, as_tuple=False)
+    num_nonzero = coordinates.shape[0]
+
+    count = torch.zeros((1, 1, 1, 8), dtype=torch.int64)
+    count[0, 0, 0, 0] = num_nonzero
+    count_mask = torch.zeros((1, 1, 1, 8), dtype=torch.bool)
+    count_mask[0, 0, 0, 0] = True
+    ttnn.decorators.set_golden_comparison_config(count, method="allclose", scope="all", mask=count_mask)
+
+    flat_n = input_tensor.numel()
+    indices = torch.zeros((1, 1, 1, flat_n * 4), dtype=torch.int64)
+    if num_nonzero > 0:
+        indices[0, 0, 0, : num_nonzero * 4] = coordinates.reshape(-1)
+    indices_mask = torch.zeros((1, 1, 1, flat_n * 4), dtype=torch.bool)
+    indices_mask[0, 0, 0, : num_nonzero * 4] = True
+    ttnn.decorators.set_golden_comparison_config(indices, method="allclose", scope="all", mask=indices_mask)
+
+    return [count, indices]
+
+
+ttnn.attach_golden_function(ttnn.nonzero, golden_function=_golden_function_nonzero)
+
+
+def _broadcast_quantization_arg(arg, input_tensor, axis):
+    """Reshape a 1D per-channel scale/zero_point so it broadcasts against the input along `axis`."""
+    import torch
+
+    if not isinstance(arg, torch.Tensor) or axis is None:
+        return arg
+    rank = input_tensor.ndim
+    axis_normalized = axis % rank
+    broadcast_shape = [1] * rank
+    broadcast_shape[axis_normalized] = arg.numel()
+    return arg.reshape(broadcast_shape)
+
+
+def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, **__):
+    import torch
+
+    # q = round(x / scale + zero_point); per-channel args broadcast along `axis`.
+    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
+    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
+    output = torch.round(torch.div(input_tensor, scale) + zero_point)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    return output.to(torch_dtype)
+
+
+ttnn.attach_golden_function(ttnn.quantize, golden_function=_golden_function_quantize)
+
+
+def _golden_function_dequantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, **__):
+    import torch
+
+    # x = (q - zero_point) * scale; per-channel args broadcast along `axis`.
+    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
+    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
+    output = (input_tensor - zero_point) * scale
+    if dtype is not None:
+        output = output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+    return output
+
+
+ttnn.attach_golden_function(ttnn.dequantize, golden_function=_golden_function_dequantize)
+
+
+def _golden_function_requantize(
+    input_tensor, in_scale, in_zero_point, out_scale, out_zero_point, *_, axis=None, dtype=None, **__
+):
+    import torch
+
+    # q' = round((x - in_zero_point) * in_scale / out_scale + out_zero_point).
+    in_scale = _broadcast_quantization_arg(in_scale, input_tensor, axis)
+    in_zero_point = _broadcast_quantization_arg(in_zero_point, input_tensor, axis)
+    out_scale = _broadcast_quantization_arg(out_scale, input_tensor, axis)
+    out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
+    output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale) + out_zero_point)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    return output.to(torch_dtype)
+
+
+ttnn.attach_golden_function(ttnn.requantize, golden_function=_golden_function_requantize)
 
 
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams

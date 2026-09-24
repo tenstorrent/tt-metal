@@ -26,6 +26,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -50,16 +51,16 @@ from helpers.utils import passed_test
 TILE_ELEMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 FACE_ELEMS = 16 * 16
 
-BINARY_BROADCAST_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+BINARY_BROADCAST_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 BROADCAST_TYPES = [
     BroadcastType.Column,

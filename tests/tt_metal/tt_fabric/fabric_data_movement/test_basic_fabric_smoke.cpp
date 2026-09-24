@@ -137,7 +137,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Run programs
     fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate results

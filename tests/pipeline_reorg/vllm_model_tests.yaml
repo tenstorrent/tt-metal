@@ -21,6 +21,11 @@
 #   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
 #   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
 #   sampling-test-filter: -k filter for the sampling test step.
+#   chunked-prefill-budget: enables the chunked-prefill test step and tells it the
+#     served max_num_batched_tokens, which it uses to size prompts that are
+#     guaranteed to be split across engine steps. Must equal the
+#     --max-num-batched-tokens passed in additional-server-args.
+#   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -43,6 +48,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Gemma3-27B DP=4"
   model: google/gemma-3-27b-it
@@ -62,6 +68,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 # ── Gemma 4 ────────────────────────────────────────────────────────
 
@@ -80,11 +87,9 @@
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
-# Product path on QB2: 256k + chunked prefill + B=32. LoudBox legs are omitted
-# — models.vllm bh_loudbox budget (75) is fully consumed by Llama-3.1-8B.
-# SKU timeouts kept at main's allocation so verify_time_budget stays green
-# without touching .github/time_budget.yaml.
+# Product path on QB2: 256k + chunked prefill + B=32.
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
@@ -101,6 +106,116 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
+
+# tp=8 coverage on the 8-chip BH LoudBox (P150x8) — the flagship 12B config.
+# Serving knobs mirror the QB2 leg; the impl workflow additionally exports the
+# P150x8 target config (bounded sliding KV + batched prefill + eager chunks):
+# the gated traced-sequential-prefill default deterministically WEDGES 12B on
+# a 1x8 BH mesh under concurrent prefill+decode (chip-local NOC1 write/ack
+# stall at the fabric-heaviest chip), which is also why the tt-inference-server
+# P150X8 spec defaults to bounded. First run on a fresh runner cold-builds the
+# P150x8-mesh weight cache (~15 min, fits the gate; warm after).
+- name: "Gemma4-12B tp=8"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 40
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+# 31B tp=8 on the BH LoudBox. Unlike 12B, 31B keeps the gated (traced
+# sequential prefill) default — it is immune to the 12B 1x8 wedge and this is
+# the config validated by the full benchmark sweep on the link-exact emulated
+# LoudBox (rc=0, b32 identity byte-equal, 17.4 tok/s/u b32@4k). Serving knobs
+# mirror the 31B QB2 leg. First run on a fresh cache needs mlperf-write-access
+# and may take two dispatches (the 31B bfp8 conversion is resumable but can
+# exceed the 20 min server gate in one shot; warm thereafter).
+- name: "Gemma4-31B tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 40
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+- name: "Gemma4-31B dFlash tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  # conc-1 AT THE CLIENT, ON PURPOSE. The adaptive engine speculates only when
+  # decoding ALONE, so at the default --num-prompts 32 with no
+  # --max-concurrency the benchmark measured the plain batched baseline and
+  # never exercised speculation, while the single-request coherence guard did --
+  # a broken spec path passed perf and failed coherence. Driving one request at
+  # a time makes every decode solo, so both the benchmark and the guard take the
+  # spec path. Batched perf and batched coherency are tracked by
+  # "Gemma4-31B tp=8" instead.
+  #
+  # max_num_seqs stays 32: what selects speculation is how many requests are
+  # RESIDENT, not this cap. Setting it to 1 is not needed and hangs the device --
+  # requests 1 and 2 served, then request 3 died in the drafter read with
+  # "TT_THROW system_memory_manager ... TIMEOUT: device timeout ... the device is
+  # unrecoverable". Same failure at max_num_seqs=1 on a BH Galaxy.
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+- name: "Gemma4-12B MTP tp=8"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  # conc-1 at the CLIENT -- see the dFlash leg above, including why
+  # max_num_seqs stays 32. Batched perf and batched coherency are tracked by
+  # "Gemma4-12B tp=8".
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
 
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
@@ -118,6 +233,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
 #
@@ -155,7 +271,7 @@
 # benchmark gate gates on request *completion* only — the WH corruption class
 # returns well-formed garbage with completed == num_prompts and sails straight
 # through. Verified passing on T3K.
-- name: "Gemma4-31B"
+- name: "Gemma4-31B (T3K)"
   model: google/gemma-4-31B-it
   coherence-test: true
   server-timeout: 45
@@ -172,8 +288,9 @@
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
-- name: "Gemma4-31B"
+- name: "Gemma4-31B (P150x4)"
   model: google/gemma-4-31B-it
   coherence-test: true
   server-timeout: 20
@@ -189,6 +306,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # ── Qwen 3.6 ───────────────────────────────────────────────────────
 
@@ -209,6 +327,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 - name: "Qwen3.6-27B (batch=8)"
   model: Qwen/Qwen3.6-27B
@@ -227,6 +346,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
@@ -253,6 +373,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 - name: "GPT-OSS-120B (high-throughput)"
   model: openai/gpt-oss-120b
@@ -276,12 +397,13 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 # ── Llama ──────────────────────────────────────────────────────────
 
-- name: "Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests (T3K)"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 15
+  server-timeout: 20
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -299,10 +421,11 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct (prefix caching)"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 10
+  server-timeout: 15
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -322,6 +445,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -340,8 +464,9 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
 
-- name: "Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests (P150x8)"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 35
   benchmark-timeout: 10
@@ -364,6 +489,37 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
+
+- name: "Llama-3.1-8B-Instruct (chunked prefill)"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 15
+  benchmark-timeout: 5
+  chunked-prefill-test-timeout: 15
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  # sample_on_device_mode is what makes this leg cover the intermediate-chunk
+  # sampling fallback: the runner forces host sampling for a step containing a
+  # mid-prompt row, and with device sampling off that branch never runs.
+  # trace_region_size as on the prefix-caching leg: declaring chunked prefill
+  # also reserves a traced resumed prefill per traced sequence length at warmup,
+  # which the 50 MB default does not cover.
+  tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  multimodal: false
+  additional-server-args: "--enable-chunked-prefill --max-num-batched-tokens 2048 --max_model_len 32768 --async-scheduling"
+  # Prompts long enough to be split, at a concurrency that makes continuations
+  # and fresh admissions land in the same prefill step.
+  additional-benchmark-args: "--random-input-len 4096 --random-output-len 32 --num-prompts 8 --max-concurrency 4"
+  chunked-prefill-budget: 2048
+  skus:
+    wh_llmbox:
+      timeout: 45
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct DP=4"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -388,6 +544,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
   model: meta-llama/Llama-3.3-70B-Instruct
@@ -408,6 +565,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Qwen 3 ─────────────────────────────────────────────────────────
 
@@ -428,6 +586,31 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: vllm
+
+- name: "Qwen3-32B device (BH Galaxy)"
+  model: Qwen/Qwen3-32B
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-blackhole
+  tt-qwen3-text-ver: qwen3_32b_galaxy
+  # Blackhole Galaxy decode runs column-axis collectives that require a 2D-torus
+  # fabric (1D fabrics fail on the cross-column route); worker_l1_size follows the
+  # BH Qwen demo (text_qwen_demo.py).
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  sampling-tests: true
+  # Whole suite is ~6 min on a dev-box BH Galaxy (73 tests); 15 leaves headroom.
+  sampling-test-timeout: 15
+  multimodal: false
+  skus:
+    bh_galaxy:
+      timeout: 65
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: vllm
 
 # ── Qwen VL ────────────────────────────────────────────────────────
 
@@ -446,8 +629,9 @@
     wh_llmbox:
       timeout: 52
       tier: 2
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
@@ -467,6 +651,7 @@
       tier: 2
   owner_id: U08H31YMN4Q # Sarva Sanjay
   team: models
+  budget_type: vllm
 
 # ── Infra / overhead ───────────────────────────────────────────────
 
@@ -486,6 +671,7 @@
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Disabled entries (preserved for re-enable) ─────────────────────
 #

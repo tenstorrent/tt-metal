@@ -218,9 +218,7 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
-    DUMP_RAW_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_METRICS: ClassVar[bool] = False
-    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+    DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
@@ -416,13 +414,9 @@ class TestConfig:
 
     @staticmethod
     def perf_run_tag() -> str:
-        """Directory name for this run's reports. Unique per invocation.
+        """Name for this run's reports: the directory, the Parquet, and its run_id.
 
-        Purely a filesystem concern: it never reaches the published table. The
-        Parquet's ``run_id`` cannot serve here because every shard of one CI
-        workflow shares it by design (it is a ROW_KEY column, and the data team's
-        notion of "one run" spans all shards) — naming directories after it would
-        make two shards collide the moment their artefacts are unzipped together.
+        Unique per invocation, which is the one property all three need.
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; the pytest plugin sets it before workers spawn.
@@ -537,10 +531,10 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
-        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
-        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
-        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
-        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs
+        # and for perf jobs (set TT_LLK_DISABLE_ASSERTS=1 in the runner).
+        # With asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel.
         llk_assert_define = (
             ""
             if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
@@ -566,6 +560,7 @@ class TestConfig:
                     )
                 ],
                 "-I../common",
+                "-I../tools/include",
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
@@ -712,12 +707,13 @@ class TestConfig:
         """``-I`` dirs for one ``tt_llk_<arch>`` tree. ``-I`` is not recursive.
 
         Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
-        ``"sfpu/..."`` — the same three roots ``setup_compilation_options``
+        ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
         """
         root = Path(arch_root)
         return [
             root / "llk_lib",
+            root / "llk_lib" / "hal",
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
@@ -1833,8 +1829,12 @@ class TestConfig:
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
         for trisc_name in TestConfig.KERNEL_COMPONENTS:
-            temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
-            coverage_start = temp_elf.symbols["__coverage_start"].value
+            # ttexalens.parse_elf takes `elf_path: str`; its native ElfFile binding
+            # rejects a PosixPath outright, so stringify rather than relying on
+            # pathlib duck-typing.
+            temp_elf = parse_elf(str(VARIANT_DIR / f"elf/{trisc_name}.elf"))
+            coverage_symbol = temp_elf.find_symbol_by_name("__coverage_start")
+            coverage_start = coverage_symbol.value if coverage_symbol else None
             if not coverage_start:
                 raise TTException(
                     f"__coverage_start not found in variant's {trisc_name}.elf"

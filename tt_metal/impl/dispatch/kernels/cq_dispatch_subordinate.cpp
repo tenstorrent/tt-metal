@@ -182,17 +182,25 @@ static uint32_t num_worker_sems = 1;
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
+// Pre-program the XY coordinate register. Under ATT every V3 issue writes its
+// source as the full local-window operand, so there is nothing to latch.
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
+#if !defined(NOC_ATT_ENABLED)
     uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
     noc_cmd_buf_set_targ_addr_coordinate(
         my_noc_index, DISPATCH_S_WR_REG_CMD_BUF, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+#endif
 }
 
+// Pre-program the atomic return address. Under ATT it is the command
+// buffer's boot-time programming (overlay_cmd_buff_init).
 FORCE_INLINE
 void dispatch_s_atomic_cmd_buf_init() {
+#if !defined(NOC_ATT_ENABLED)
     uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_cmd_buf_set_ret_addr(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, atomic_ret_addr);
+#endif
 }
 
 FORCE_INLINE
@@ -315,6 +323,7 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
 
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
+    // The prefetcher publishes these credits with a NoC atomic.
     volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 
     WAYPOINT("DAPW");
@@ -336,7 +345,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
-    Semaphore<programmable_core_type>(sem_id).up(n);
+    fd_semaphore<sem_id, fd_upstream_sem_scope>().up(n);
 #else
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
@@ -344,12 +353,12 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
-        uncached_l1_ptr<uint32_t>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
     WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
@@ -384,7 +393,7 @@ void process_go_signal_mcast_cmd() {
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
@@ -478,7 +487,7 @@ void process_go_signal_mcast_cmd() {
 
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     // Limited Usage of Wait CMD: dispatch_s should get a wait command only if it's not on the
     // same core as dispatch_d and is used to clear the worker count
     ASSERT(
@@ -508,7 +517,7 @@ void process_dispatch_s_wait_cmd() {
 
 FORCE_INLINE
 void set_num_worker_sems() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -516,14 +525,19 @@ void set_num_worker_sems() {
 
 FORCE_INLINE
 void set_go_signal_noc_data() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t num_words = load_aligned<uint32_t>(&cmd->set_go_signal_noc_data.num_words);
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_words * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
@@ -573,6 +587,9 @@ void merge_dispatch_d_noc_counter_deltas() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
     DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
@@ -624,8 +641,13 @@ void kernel_main() {
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
-
-        volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
+        // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
+        // the NIU needs none.
+        invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmd));
+#endif
+        volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
             const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
@@ -691,7 +713,7 @@ void kernel_main() {
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
-        ASSERT(cmd_ptr <= (l1_cached_addr(reinterpret_cast<uintptr_t>(cmd)) + cb_page_size));
+        ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.

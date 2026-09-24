@@ -9,7 +9,7 @@ from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
-from .msa import index_branch_forward, msa_sp_attention, msa_sp_attention_nocache
+from .msa import index_branch_forward, msa_sp_attention_cache_read, msa_sp_attention_nocache
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -196,48 +196,19 @@ def attention_forward(
                     sp_axis=mesh_config.sp_axis,
                 )
         if cached_len > 0:
-            # Cache-read: current chunk attends the ACCUMULATED prefix. Slice this (user, layer) slot's
-            # block-cyclic accumulated K/V/index_k out of the packed cache, then gather+reorder+sparse.
-            sp = mesh_device.shape[mesh_config.sp_axis]
-            chunk_local = seq_len  # current chunk per-chip rows
-            n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)
-            n_rows = n_chunks * chunk_local  # accumulated per-chip cache rows
+            # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
+            # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). Chunks are
+            # chunk-aligned (asserted by the runtime), so cached_len is a whole number of chunks.
             slot = user_id * kv_cache.num_layers + layer_idx
-            # ttnn.slice on an NdShard(ROUND_ROBIN_1D) tensor corrupts the round-robin bank mapping (a
-            # subsequent read then pulls the wrong banks -> the accumulated context is scrambled, chunked
-            # KV-PCC craters). Convert the packed cache to plain DRAM-interleaved FIRST (the round-robin is
-            # intact for the full tensor), THEN slice the slot on the interleaved result. Verified on-device
-            # by test_ndshard_reorder_probe / test_msa_sp_cache_read_ndshard_pcc. Fully on-device (no host
-            # round-trip); the eventual slab-aware in-kernel cache read (ring_joint-style) supersedes it.
-            # NOTE (perf): the de-shard below converts the ENTIRE packed cache tensor — all
-            # num_users*num_layers slots, not just this layer's — on every MSA layer, because the
-            # round-robin bank mapping is only intact for the whole tensor. That is a
-            # (num_users*num_layers*seq_local*head_dim) read+write x3 tensors x 57 layers per chunk.
-            # The `cache_read/deshard` zone measures exactly that cost; `cache_read/slice` is the
-            # per-slot slice that follows.
-            with zone("cache_read"):
-                with zone("deshard", FINE):
-                    k_int = ttnn.to_memory_config(kv_cache.k, ttnn.DRAM_MEMORY_CONFIG)
-                    v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
-                    ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
-                with zone("slice", FINE):
-                    k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-                    v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-                    ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-                k_int.deallocate(True)
-                v_int.deallocate(True)
-                ik_int.deallocate(True)
-            tt_sdpa_out = msa_sp_attention(
+            tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,
-                k_acc,
-                v_acc,
                 tt_iq,
-                ik_acc,
+                kv_cache,
+                slot=slot,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
-                s_local=seq_len,
-                chunk_local=chunk_local,
+                chunk_local=seq_len,  # current chunk per-chip rows
                 scale=config.head_dim**-0.5,
                 block_size=config.msa_block_size,
                 topk_blocks=config.msa_topk_blocks,

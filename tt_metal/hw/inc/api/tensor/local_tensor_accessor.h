@@ -67,6 +67,12 @@ public:
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
+    // Construct from the "binding not present" token.
+    // Meant to be used with `get_token_if_present` to make the token-not-exist branch compile.
+    // This will never be run in runtime & NullTensorBindingToken is not constructible.
+    [[nodiscard]] explicit LocalTensorAccessor(const tensor_accessor::NullTensorBindingToken&) noexcept :
+        LocalTensorAccessor(uint32_t{0}) {}
+
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
     [[nodiscard]] explicit LocalTensorAccessor(uint32_t bank_base_address) noexcept :
@@ -95,11 +101,20 @@ public:
         return static_cast<uint32_t>(mem_.get_address());
     }
 
-    /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-     * (pointer arithmetic, scoped_lock, comparisons, ...).
+    /** @brief Lock num_elements elements starting at element `offset`.
      *
-     * For element access, prefer operator[]; use this only when you need the raw underlying handle
-     * (e.g. local_mem().get_unsafe_ptr()).
+     * @param offset       Index of the first element to lock.
+     * @param num_elements Number of T elements to lock.
+     */
+    [[nodiscard]] auto scoped_lock(uint32_t offset, uint32_t num_elements) const {
+        return (mem_ + offset).scoped_lock(num_elements);
+    }
+
+    /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
+     * (pointer arithmetic, comparisons, ...).
+     *
+     * For element access, prefer operator[] within a scoped_lock() scope. Use this only when you
+     * need the raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized.
     [[nodiscard]] CoreLocalMem<T> local_mem() const noexcept { return mem_; }

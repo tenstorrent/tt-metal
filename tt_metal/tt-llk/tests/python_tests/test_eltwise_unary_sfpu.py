@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from itertools import chain, product
 
 import pytest
@@ -36,6 +37,7 @@ from helpers.sfpu_domains import (
     for_op_pipeline,
     negative_zero_delivered,
     op_edge_points,
+    op_threshold,
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
@@ -50,6 +52,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
     DestSync,
@@ -62,26 +65,12 @@ SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Sqrt,
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The unary op sweep: two coverage profiles, one test
-#
-# Every op below runs through eltwise_unary_sfpu(), which takes its stimuli from the
-# op's registered domain in _OP_DOMAIN_REGISTRY. The only thing that differs between
-# the two lists is *how much of the format/mode matrix* each op is worth spending, so
-# they are coverage profiles rather than different kinds of test:
-#
-#   BROAD_SWEEP_OPS    - the full format matrix including the block floats (and the
-#                        Bfp4_b input formats), both approximation modes and both tile
-#                        shapes. For ops whose kernels have format-specific or
-#                        approx-mode-specific paths.
-#   STANDARD_SWEEP_OPS - Float16_b + Float32, approximation mode off, one tile shape.
-#                        Enough to validate the op's own math, and ~8x cheaper.
-#
-# Only the broad profile is listed by hand. The standard profile is every other unary
-# SFPU op the registry knows about, so registering a domain is all it takes to get an op
-# swept -- there is no second list to remember. Opting an op out of the sweep entirely is
-# still a deliberate act: it goes in sfpu_domains._UNARY_OPS_NOT_SWEPT with a reason.
-# ─────────────────────────────────────────────────────────────────────────────
+# The unary op sweep: two coverage profiles, one test. Every op takes its stimuli from its
+# registered domain in _OP_DOMAIN_REGISTRY; the profiles differ only in how much of the
+# format/mode matrix each op is worth. BROAD_SWEEP_OPS gets the full format matrix, both
+# approximation modes and both tile shapes; STANDARD_SWEEP_OPS is every other registered
+# unary op, on Float16_b + Float32 with approximation off. To opt an op out of the sweep
+# entirely, list it in sfpu_domains._UNARY_OPS_NOT_SWEPT.
 
 BROAD_SWEEP_OPS = [
     MathOperation.Abs,
@@ -162,61 +151,57 @@ FORMATS_BFP4_B = [
     ]
 ]
 
-# Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
-# instrumentation, so they are skipped only when WITH_COVERAGE is set:
-#   https://github.com/tenstorrent/tt-metal/issues/33268
-#   https://github.com/tenstorrent/tt-llk/issues/883
-# Covers ops from both sweep profiles.
-COVERAGE_COMPILE_SKIP_OPS = [
-    MathOperation.Acosh,
-    MathOperation.Log,
-    MathOperation.Log1p,
-    MathOperation.Reciprocal,
-    MathOperation.Sin,
-    MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Neg,
-    MathOperation.Exp2,
-    MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-    MathOperation.Tanh,
-    MathOperation.Gelu,
-    MathOperation.GeluDerivative,
-    MathOperation.LogWithBase,
-    MathOperation.GeluAppx,
-]
+
+# Ops whose coverage build returns wrong results, per arch, so they are skipped only when
+# WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
+# `--coverage` on the arch in question before adding it here.
+#
+# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# variants come back with alternate elements stale while its sfp* instruction stream
+# stays byte-identical to the non-coverage build, which is what makes it a timing fault
+# rather than a codegen one. Two things are needed to reproduce it, and neither predicts
+# it on its own:
+#
+#   - It needs the SFPLOADMACRO path: `--coverage --disable-sfploadmacro` passes 153/153.
+#     But emitting SFPLOADMACRO does not imply failing. Counting the mnemonic in the
+#     coverage-built math.elf of a Wormhole sweep that passes 6377/6377: Exp at
+#     ApproximationMode.Yes has 16 (the sweeps below hardcode CLAMP_NEGATIVE(True), which
+#     selects the macro branch), Signbit has 8, and the int max/min ops in _INT_UNARY_OPS
+#     have 8. So the macro is the mechanism, not the criterion.
+#   - It is Blackhole-only. calculate_reciprocal reaches the hand-written macro sequences
+#     only on Blackhole; Wormhole takes the pure sfpi Newton path and emits no
+#     SFPLOADMACRO at all -- 0 in every built math.elf, in the same audit that finds 8
+#     for Signbit. Its 168 Wormhole variants give 162 passed / 6 xfailed under coverage,
+#     the same split the non-coverage build gives, so keying on the arch keeps them in
+#     the coverage lane.
+#
+#   https://github.com/tenstorrent/tt-metal/issues/56751
+COVERAGE_MISMATCH_SKIP_OPS = {
+    ChipArchitecture.BLACKHOLE: [MathOperation.Reciprocal],
+}
 
 
 def _skip_coverage_unsupported(mathop):
     """Coverage-build exclusions, shared by every sweep that drives the unary ops.
 
-    A helper rather than a copy per sweep, because the exclusions are properties of the
-    *op* under coverage instrumentation, not of one sweep's envelope: any test that
-    compiles these kernels hits the same invalid assembly. The scheduled llk-e2e job runs
-    `not perf and not quasar` — nightly included — with coverage on, so a nightly sweep
-    without this guard fails the coverage job at build time instead of being skipped.
+    The exclusions are per-op, so this stays a helper called from every unary sweep even
+    where the sweep's current op pool cannot select an excluded one: a pool that later
+    gains one is then covered without touching the sweep. That has already been needed
+    once, when ReluMin joined _INT_UNARY_OPS.
     """
     if not TestConfig.WITH_COVERAGE:
         return
 
-    # Coverage runs skip the broad profile wholesale; only the standard profile runs.
-    if mathop in BROAD_SWEEP_OPS:
-        pytest.skip(
-            reason="Broad-profile ops are not run under coverage: "
-            "https://github.com/tenstorrent/tt-llk/issues/1435"
-        )
+    # Every entry in the table is mediated by SFPLOADMACRO, and -DDISABLE_SFPLOADMACRO
+    # compiles the non-macro path instead -- the build the exclusion is not about. Revisit
+    # this early return if an entry that is not macro-mediated is ever added.
+    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+        return
 
-    if mathop in COVERAGE_COMPILE_SKIP_OPS:
+    if mathop in COVERAGE_MISMATCH_SKIP_OPS.get(TestConfig.CHIP_ARCH, ()):
         pytest.skip(
-            reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
-            "assembly under coverage instrumentation: "
-            "https://github.com/tenstorrent/tt-metal/issues/33268 , "
-            "https://github.com/tenstorrent/tt-llk/issues/883"
+            reason="wrong results under coverage instrumentation: "
+            "https://github.com/tenstorrent/tt-metal/issues/56751"
         )
 
 
@@ -252,17 +237,11 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
 
 
 def _assert_broad_profile_valid():
-    """Everything the derived standard profile cannot check for itself.
+    """Check the hand-maintained half of the sweep configuration.
 
-    Non-overlap, registration and exhaustiveness hold by construction now that
-    STANDARD_SWEEP_OPS is the complement of BROAD_SWEEP_OPS within sfpu_unary_ops(). What
-    is left is the hand-written half:
-
-    - a repeated entry in BROAD_SWEEP_OPS runs that op's whole matrix twice,
-    - a non-unary op in BROAD_SWEEP_OPS fails to compile once the sweep reaches it, and
-      also silently drops out of the standard profile's complement,
-    - an _UNARY_OPS_NOT_SWEPT entry that is not a unary op exempts nothing, so the reason
-      recorded against it is misleading.
+    STANDARD_SWEEP_OPS is derived as the complement of BROAD_SWEEP_OPS, so only the
+    hand-written lists can go wrong: duplicate entries, non-unary ops, and stale
+    _UNARY_OPS_NOT_SWEPT exemptions.
     """
     duplicates = sorted(
         {op.name for op in BROAD_SWEEP_OPS if BROAD_SWEEP_OPS.count(op) > 1}
@@ -363,33 +342,6 @@ _UNARY_SWEEP_ARGNAMES = (
 )
 
 
-# Approximate exp overshoots the golden by a systematic ~5.7% (peak 6.75%) once its
-# argument passes ~8 -- measured on Wormhole, the smallest output that breaches the
-# default 5% rtol is exactly exp(8.00) = 2976, and 0.6% of elements in an affected
-# tile breach it. That is a property of the approximation itself, not of the stimuli:
-# it went unmeasured until this sweep stopped feeding exp uniform(0.1, 1.1), which
-# never produced an argument above 1.1.
-#
-# Whether a given combination trips the 5% bar is marginal, and two things decide it:
-# the domain its output format selects (high=16, or 10 when a Float16 output narrows
-# it) and whether a 16-bit dst rounds golden and result back together -- dest_acc=Yes
-# keeps an fp32 dst and exposes the full error. Hence Float32->Float16_b failing only
-# at dest_acc=Yes. Listed exhaustively rather than by predicate so that a combination
-# drifting in or out of tolerance shows up as a change here.
-_APPROX_EXP_ACCURACY_XFAIL = {
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.No),
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.Yes),
-    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-}
-
-# ...and it is a **Wormhole** limit. Measured on a Blackhole p150b: both of the three
-# combinations Blackhole can reach XPASSed, at both tile shapes, and no other unary variant
-# XPASSed. So Blackhole's exp approximation holds the default 5% rtol where Wormhole's
-# overshoots by ~5.7%, and Blackhole *asserts* the accuracy rather than tolerating it. Same
-# shape of gate as _WORMHOLE_ONLY_EDGE_CLASSES in test_eltwise_binary_sfpu.py.
-_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
-
-
 @pytest.mark.nightly
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
@@ -397,7 +349,6 @@ _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
 def test_eltwise_unary_sfpu(
-    request,
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -414,32 +365,6 @@ def test_eltwise_unary_sfpu(
 
     _skip_coverage_unsupported(mathop)
 
-    if (
-        mathop == MathOperation.Exp
-        and approx_mode == ApproximationMode.Yes
-        and (formats.input_format, formats.output_format, dest_acc)
-        in _APPROX_EXP_ACCURACY_XFAIL
-        and not (
-            _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY
-            and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        )
-    ):
-        # Marked dynamically rather than skipped so the case still executes: if the
-        # approximation tightens, this reports XPASS instead of quietly staying green.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Approximate exp exceeds the default 5% rtol above an argument "
-                "of ~8, peaking at 6.75%. See _APPROX_EXP_ACCURACY_XFAIL.",
-                strict=False,
-            )
-        )
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or
     # Float32->Float16, while the standard profile allows only Float32->Float32.
@@ -447,21 +372,6 @@ def test_eltwise_unary_sfpu(
         _skip_bh_unsupported_float_combo(formats, dest_acc)
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
-
-    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
-    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and formats.input_format != DataFormat.Bfp4_b
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related operations are not supported for bf8_b format in approximation mode."
-        )
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
@@ -478,225 +388,84 @@ def test_eltwise_unary_sfpu(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Deliberate edge values (Phase 4)
-#
-# The sweep above widens the *random* domain, so it lands near knees and poles but never
-# on them. This lands on them, using the shared metadata in sfpu_domains: domain
-# singularities straddled by a format-relative epsilon (cat A), op knees and exact
-# rounding ties (cat D), and IEEE specials where the pipeline can carry them (cat B).
-#
-# There is no new driver and no new C++ source — the whole thing is one spec_A. Because
-# edge_spec() is keyed off the op, adding an op to the registry auto-enrols it here.
-#
-# The format axis is the standard profile rather than the broad one: an edge probe is a
-# fixed value, so the block-float and approximation-mode axes vary nothing about it. What
-# *does* vary is whether specials can be injected, which specials_safe() decides per
-# (input, output, dest_acc) from the measured matrix — so the cat-A/cat-D probes run on
-# all 8 combinations and the cat-B ones only where they mean something.
-# ─────────────────────────────────────────────────────────────────────────────
+# Deliberate edge values. The random sweep above lands near knees and poles but never on
+# them; this lands on them, using the shared metadata in sfpu_domains: domain singularities
+# (cat A), op knees and rounding ties (cat D), and IEEE specials where the pipeline can carry
+# them (cat B). It is one spec_A on the same driver, and edge_spec() is keyed off the op, so
+# adding an op to the registry auto-enrols it here. The format axis is the standard profile;
+# what varies is whether specials can be injected, which specials_safe() decides per
+# (input, output, dest_acc).
 
 _EDGE_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
 )
 
-# What the cat-A/cat-D probes found on Wormhole, first time these points have been driven.
-# Recorded as xfails rather than tolerated or probed-around, following Phase 0's precedent
-# for approximate exp: the case still *executes* and reports XPASS if the behaviour
-# changes. Listed exhaustively per (input, output, dest_acc) rather than by predicate so a
-# combination drifting in or out shows up as a diff here.
+# What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
+# still executes and reports XPASS if the behaviour changes.
 #
-# Cross-checked against tt-isa-documentation, which splits these into "documented" and
-# "still open". Both groups stay xfailed — the test's job is to notice the divergence, not
-# to judge it — but only the second group is worth a kernel-side look.
+# Five of the six recorded divergences are fixed in the kernels: Sign and Heaviside on -0.0 in
+# #55306, and Sqrt, Rsqrt and SqrtCustom here. Only Reciprocal on 1/NaN is left, with its
+# reason in _EDGE_DIVERGENCE_REASON. Wormhole and Blackhole only; Quasar carries its own
+# kernels, and a failure there is a divergence to fix at the kernel rather than record here.
 #
-# DOCUMENTED, and the ISA is the authority:
+# This sweep does not settle the signed-zero results: passed_test() treats -0.0 and +0.0 as
+# equal, and it runs ApproximationMode.No only. test_sqrt_family_negative_zero_regression
+# reads the raw 32-bit result on both approximation modes instead.
 #
-#   -0.0 through a comparison, on the one path where -0.0 actually arrives. SFPSETCC is
-#   specified only "provided that VC is neither negative zero nor any kind of NaN"
-#   (WormholeB0/.../VectorUnit.md, and identically on Blackhole). So sign(-0.0) -> -1 and
-#   heaviside(-0.0) -> 0 are *outside the documented contract* of the primitive those
-#   kernels are built on, not hardware faults. The golden follows torch/IEEE-1985 and is
-#   right about the mathematics; the hardware was never promised to agree.
-#
-# THE -0.0 PROBE REACHES THE SFPU ON ONLY TWO OF THE EIGHT COMBINATIONS:
-#
-#   The signed-zero divergences partition *exactly* on unpack_to_dest, which
-#   eltwise_unary_sfpu sets to (input.is_32_bit() and dest_acc == Yes) — the only path on which
-#   the datum skips SrcA and the datacopy. Sign and Heaviside diverge on those 2 combinations
-#   and nowhere else; Signbit used to hold the complementary 6, which is what identified the
-#   split. Asserted rather than observed — see _assert_signed_zero_partition_valid below.
-#
-#   One cause explains all three. Neither calculate_sign nor calculate_heaviside guards
-#   |v| != 0 on its v_if(v < 0.0F), so a real -0.0 in the LREG would make them diverge on all
-#   8; passing on 6 says the LREG holds +0.0 there. Signbit reads the sign bit directly, so it
-#   returned 0 on those 6 and 1, correctly, on the 2 where the datum does arrive — a genuinely
-#   broken sign-bit read would fail on all 8.
-#
-#   Signbit's 6 entries are therefore gone rather than kept: they recorded a *stimulus*
-#   limitation that no kernel fix could clear. negative_zero_delivered() keeps the -0.0 probe
-#   off the pipelines that flatten it, so Sign and Heaviside no longer pass vacuously there
-#   either.
-#
-#   The host-side check on record establishes L1 only: -0.0 leaves the *host* correctly, which
-#   says nothing about unpack -> SrcA -> DEST.
-#
-# STILL OPEN — not explained by the ISA:
-#
-#   None left in this table. Both entries that were here have been fixed rather than
-#   reclassified: RsqrtCompat's saturating +0 pole in #53758, and Erfinv at ±1 by the
-#   sqrt_custom(+inf) fix below (it was never tolerance-shaped — sqrt_custom returned NaN
-#   for +inf and erfinv inherited it). What is still not explained by the ISA is the cat-B
-#   set derived below, which carries its own block.
+# Reciprocal is derived rather than listed: it diverges on exactly the combinations that
+# deliver the NaN probe, so the set stays right if the format axis changes.
 _EDGE_KNOWN_DIVERGENCES = {
-    MathOperation.Sign: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-    MathOperation.Heaviside: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-}
-
-
-# The cat-B divergences, derived rather than listed: each op diverges on exactly the
-# combinations that *deliver* the probe it diverges on, so the sets stay right when the format
-# axis grows or a delivery measurement is revised.
-#
-#   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
-#   SqrtCustom  every combination carrying specials at all -- sqrt_custom(-inf) is the probe.
-#   Sqrt, Rsqrt every combination that also delivers a real -0.0, the strictly smaller
-#               unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and agrees.
-#
-# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations, Sqrt and Rsqrt on
-# both of theirs. The rest of each set is Wormhole-only (_skip_bh_unless_fp32 takes dest_acc=No
-# down to Float32->Float32 there) and follows from the same kernel path.
-def _cat_b_divergences(delivers):
-    return tuple(
+    MathOperation.Reciprocal: tuple(
         (fmt.input_format, fmt.output_format, dest_acc)
         for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
         if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
-        and delivers(fmt.input_format, dest_acc)
-    )
-
-
-_EDGE_KNOWN_DIVERGENCES.update(
-    {
-        MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.SqrtCustom: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
-        MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
-    }
-)
-
-# The four whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
-# specials surviving the NaN-sign gate; see where the marker is applied.
-_CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {
-        MathOperation.Reciprocal,
-        MathOperation.SqrtCustom,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-    }
-)
+    ),
+}
 
 _EDGE_DIVERGENCE_REASON = {
-    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
-    "documented contract: SFPSETCC is specified only for inputs that are not negative "
-    "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md). These are the 2 "
-    "unpack-to-dest combinations, the only ones where -0.0 reaches the LREG — the other 6 "
-    "pass vacuously.",
-    MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
-    "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
-    MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
-    "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
-    "1/±0 = ±inf), so this is the NaN probe alone and it diverges on every combination that "
-    "delivers one. Not prescribed by the ISA, which says only that NaN inputs follow 'the "
-    "usual IEEE754 rules'.",
-    MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
-    "NaN. The non-finite guard added with the sqrt_custom(+inf) fix passes non-finite input "
-    "straight through rather than synthesising a NaN, which is right for +inf and NaN and "
-    "wrong for -inf -- a deliberate limit of the minimal fix. The constraint is erfinv, not "
-    "asin/acos: asin/acos seed quiet_NaN() and commit the range-reduced value only under "
-    "v_if(abs(val) <= 1.0f), so a NaN out of sqrt_custom on their |v| > 1 lanes is never "
-    "observable. erfinv's NR undershoot drives tmp + intermediate_result non-positive for "
-    "small in-domain x -- erfinv(1e-6) already reads 0x00000000 -- so a negative-to-NaN "
-    "guard would regress an ordinary input to NaN. Before the fix this combination returned "
-    "+inf, which agreed with the golden by accident: the golden's NaN is itself narrowed to "
-    "inf on a bf16 output. See https://github.com/tenstorrent/tt-metal/issues/52930.",
-    MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
-    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
-    "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
-    MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt.",
+    MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
+    "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
+    "combination that delivers one. Not prescribed by the ISA, and a guard costs the op "
+    "1.44x, so it is left unfixed.",
 }
 
 
-def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
-    """Mirror of the unpack_to_dest expression eltwise_unary_sfpu passes to TestConfig.
-
-    Kept as one expression rather than two literals so the claim below is checked against
-    the driver's actual routing, not against a copy of it that can drift.
-    """
-    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-
-
 def _assert_signed_zero_partition_valid():
-    """The three signed-zero ops must partition on unpack_to_dest, exactly.
+    """None of the signed-zero ops may carry edge divergences any more.
 
-    This is the whole basis for reading Signbit's former six entries as "the probe is not
-    delivered" rather than as a kernel-contract bug. It is an inference from *which*
-    combinations diverge, so it stops holding the moment the sets stop lining up — and a reason
-    string is prose, which no run checks. Assert the shape instead, so editing a table without
-    revisiting the explanation fails at collection.
-
-    Not asserting the *count*: what matters is that each op's divergent set is precisely one
-    side of the unpack_to_dest split, which stays true if the format axis grows.
+    Sign and Heaviside held the two unpack_to_dest combinations and Signbit the complementary
+    six, and the partition between them was the evidence that -0.0 reaches the LREG on exactly
+    those two. Sqrt and Rsqrt held the same two. All of it is gone, for the different reasons
+    recorded below. Asserting their absence at collection keeps a table edit from skipping the
+    reasoning: an entry here would be a non-strict xfail that XPASSes every run.
     """
-    all_combos = [
-        (fmt.input_format, fmt.output_format, dest_acc)
-        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-    ]
-
-    expectations = {
-        # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
-        MathOperation.Sign: True,
-        MathOperation.Heaviside: True,
+    fixed_or_not_delivered = {
+        MathOperation.Sign: (
+            "sign(-0.0) returns 0 now. calculate_sign takes its zero arm on sfpi::abs(v), "
+            "which puts -0.0 inside the documented SFPSETCC contract, so this was fixed rather than "
+            "reclassified -- an entry here means the kernel regressed."
+        ),
+        MathOperation.Heaviside: (
+            "heaviside(-0.0) returns the scalar now. Same sfpi::abs(v) guard and the same "
+            "SFPSETCC reasoning as Sign."
+        ),
+        MathOperation.Signbit: (
+            "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
+            "here means the delivery gate changed -- re-derive it rather than restoring it."
+        ),
+        MathOperation.Sqrt: (
+            "sqrt(-0.0) returns -0.0 now, from the zero-magnitude arm in ckernel_sfpu_sqrt.h; "
+            "an entry here means that arm regressed. test_sqrt_family_negative_zero_regression "
+            "is what actually pins the sign, since this sweep cannot tell the two zeros apart."
+        ),
+        MathOperation.Rsqrt: (
+            "rsqrt(-0.0) returns -inf now. Same arm and the same regression test as Sqrt."
+        ),
     }
 
-    # Signbit used to hold the other side of this partition: six xfails recording that the -0.0
-    # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
-    # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
-    assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
-        "Signbit's divergences were a stimulus limitation, not a kernel defect. The -0.0 "
-        "probe is no longer sent where it cannot be delivered, so re-adding entries here "
-        "means the delivery gate changed -- re-derive it rather than restoring the table."
-    )
-
-    for op, diverges_when_unpack_to_dest in expectations.items():
-        expected = {
-            combo
-            for combo in all_combos
-            if _unpack_to_dest(combo[0], combo[2]) == diverges_when_unpack_to_dest
-        }
-        recorded = set(_EDGE_KNOWN_DIVERGENCES.get(op, ()))
-        assert recorded == expected, (
-            f"{op.name}'s recorded divergences no longer match the unpack_to_dest "
-            f"partition (expected unpack_to_dest == "
-            f"{diverges_when_unpack_to_dest}).\n"
-            f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
-            f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
-            "The signed-zero explanation above rests on this partition — if the "
-            "measurement really moved, re-derive the explanation rather than only "
-            "editing the table."
-        )
-
-    assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
-        _EDGE_KNOWN_DIVERGENCES[MathOperation.Heaviside]
-    ), "Sign and Heaviside share one SFPSETCC cause, so their sets must stay identical"
+    for op, why in fixed_or_not_delivered.items():
+        assert op not in _EDGE_KNOWN_DIVERGENCES, why
 
 
 _assert_signed_zero_partition_valid()
@@ -722,9 +491,6 @@ def test_eltwise_unary_sfpu_edges(
 
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
     # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
     # defines a result for non-finite inputs, specials_safe() says the *pipeline* delivers
     # them intact. Neither implies the other.
@@ -734,15 +500,13 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate, not before, because four of these divergences are cat-B's and the
-    # gate can take cat B away: where it has, the probe is not sent, the divergence cannot
-    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign and
-    # Heaviside are unaffected -- their divergences are cat-A signed zeros that
-    # edge_values() emits with or without specials.
+    # Marked after the gate: the one recorded divergence left is Reciprocal's on the NaN
+    # probe, so where the gate has taken cat B away the probe is not sent and the entry
+    # would be a non-strict xfail that XPASSes every run.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
-    if diverges_here and (specials or mathop not in _CAT_B_DERIVED_DIVERGENCES):
+    if diverges_here and specials:
         request.node.add_marker(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
         )
@@ -755,9 +519,8 @@ def test_eltwise_unary_sfpu_edges(
         dest_acc=dest_acc,
     )
     if spec_A is None:
-        # Smooth everywhere: no singularity, no knee, and specials not carryable here.
-        # 47 of the 97 unary ops are in this class, and for them the random sweep above
-        # already covers everything an edge probe could add.
+        # Smooth everywhere: no singularity, no knee, and specials not carryable here, so the
+        # random sweep above already covers everything an edge probe could add.
         pytest.skip(
             reason=f"{mathop.name} has no edge values for this pipeline "
             f"(no domain boundary, no op knee, specials not preserved)"
@@ -779,47 +542,23 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# sqrt_custom(+inf): the strict regression assertion, deliberately outside the edge sweep
-# ─────────────────────────────────────────────────────────────────────────────
+# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
+# the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
+# because a 16-bit output narrows NaN to inf and could not show a regression.
 #
-# The sweep cannot carry this one. edge_values() puts +inf and -inf in the same SqrtCustom
-# tensor, and _EDGE_KNOWN_DIVERGENCES marks the whole parametrized invocation non-strict XFAIL
-# for the sqrt_custom(-inf) divergence. A return to sqrt_custom(+inf) = NaN would be absorbed
-# by that marker and never fail CI -- and keeping +inf is the entire point of the fix. Until
-# the sweep can record a divergence against a single probe rather than a whole combination,
-# the repaired value is asserted here on its own.
+# Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
+# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
+# copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
+# `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
 #
-# ONE COMBINATION -- THE ONLY ONE specials_safe() ADMITS THAT CAN SHOW A REGRESSION:
-#
-#   Float32 -> Float32 at dest_acc=Yes. Outbound is the real constraint: the pre-fix result was
-#   NaN, and a bf16 output narrows NaN to inf on the way to L1, which is exactly how this defect
-#   stayed hidden on six of the eight combinations. Run against a 16-bit output and the assertion
-#   passes whether the kernel is fixed or not.
-#
-#   Inbound, specials_safe() then leaves only the 32-bit input. It is a conservative gate, not a
-#   statement about +inf delivery: it rejects Float16_b -> Float32 at dest_acc=Yes on breaker 2,
-#   but breaker 2 is about the *whole* specials set -- that unpack loses -inf and NaN, not +inf.
-#   So that combination does deliver the probe and would show the regression too; the repaired
-#   pole is visible there in the accuracy record. It is excluded here only because this test
-#   asserts specials_safe() as its non-vacuity guard.
+# The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
+# into and nothing in production does. erfinv, asin and acos take the default and still get
+# -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
-
-    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
-    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
-    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
-                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
-                strict=False,
-            )
-        )
 
     # If this ever goes False the pipeline stopped delivering +inf and the assertion below
     # would pass vacuously -- fail loudly instead of quietly testing nothing.
@@ -833,6 +572,7 @@ def test_sqrt_custom_infinity_regression(request):
     # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
     src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
     src_A[0] = float("inf")
+    src_A[1] = float("-inf")
     src_B = torch.zeros(num_elements, dtype=torch.float32)
     tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
@@ -877,21 +617,227 @@ def test_sqrt_custom_infinity_regression(request):
     res = torch.tensor(configuration.run().result, dtype=torch.float32)
 
     assert res[0] == float("inf"), (
-        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. This is the defect the "
-        "non-finite guard in ckernel_sfpu_sqrt_custom.h exists to prevent: the "
-        "fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes it to +0, and the "
-        "next multiply is 0 * -inf = NaN. Every consumer inherits it -- erfinv(+/-1) is "
-        "how it was originally found. See tt-metal issue #52930."
+        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
+        "ckernel_sfpu_sqrt_custom.h is what prevents this. See tt-metal issue #52930."
     )
-    # Tolerance, not equality: sqrt_custom is a magic-seed + Newton-Raphson approximation
-    # (~14 correct bits after two iterations), so sqrt_custom(4.0) is near 2.0, not exactly
-    # 2.0. The band only has to be tight enough to separate "computed" from "passed through",
-    # and a pass-through lane would read 4.0.
-    assert torch.allclose(res[1:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
-        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probe "
-        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}). The non-finite guard is "
-        "supposed to divert only zero and the 255-exponent lanes; a finite lane reaching the "
-        "pass-through path means the predicate has been widened."
+    assert torch.isnan(res[1]), (
+        f"sqrt_custom(-inf) returned {res[1].item()!r}, expected NaN. The NEGATIVE_INFINITY_SAFE "
+        "arm in ckernel_sfpu_sqrt_custom.h is what produces this; a -inf means the arm did not "
+        "fire, and a +inf means the qNaN it writes is not a positive one."
+    )
+    # Tolerance, not equality: sqrt_custom is an approximation, so the band only has to
+    # separate a computed 2.0 from a passed-through 4.0.
+    assert torch.allclose(res[2:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
+        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probes "
+        f"(max deviation {(res[2:] - 2.0).abs().max().item():.6g}); the non-finite guard's "
+        "predicate has been widened to divert finite lanes."
+    )
+
+
+# reciprocal_compat(-0.0): the sign restore at the pole, deliberately outside the edge sweep.
+#
+# _reciprocal_compat_ returns |1/in|, so the signed wrapper's whole promise rests on the sign
+# restore. The kernel takes the sign bit with SFPSETSGN rather than a comparison, which stays
+# inside the documented SFPSETCC contract; this test is what holds that in place. It runs on
+# Float32 -> Float32 at dest_acc=Yes, the only pipeline that both delivers a real -0.0 and
+# keeps the two infinities distinguishable on the way back.
+@pytest.mark.nightly
+def test_reciprocal_compat_negative_zero_regression():
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering -0.0 and the assertion below
+    # would be testing +0.0 -- fail loudly rather than quietly testing nothing.
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # A positive control in the same tile: +0.0 must stay +inf. A restore that over-fires
+    # (copying the wrong sign, or negating unconditionally) breaks this one, not the probe.
+    src_A = torch.full((num_elements,), 1.0, dtype=torch.float32)
+    src_A[0] = -0.0
+    src_A[1] = 0.0
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.ReciprocalCompat),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    bits = res.view(torch.int32)
+
+    assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
+        f"reciprocal_compat(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} "
+        f"({res[0].item()!r}), expected -inf (0xFF800000). A 0x7F800000 means the sign "
+        "restore did not fire on a delivered -0.0; a 0xFEFFFD9E means the pole guard did "
+        "not fire either."
+    )
+    assert bits[1].item() & 0xFFFFFFFF == 0x7F800000, (
+        f"reciprocal_compat(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} "
+        f"({res[1].item()!r}), expected +inf. The restore is over-firing: it must move the "
+        "input's sign bit, not set one."
+    )
+    # The rest of the tile is 1.0, catching a restore widened to every lane. Tolerance, not
+    # equality: _reciprocal_compat_ is an approximation, so 1/1.0 lands near 1.0.
+    assert torch.all(bits[2:] >= 0), (
+        "reciprocal_compat(1.0) came back negative on some lane; the sign restore is "
+        "firing outside the negative inputs."
+    )
+    assert torch.allclose(res[2:], torch.tensor(1.0), rtol=1e-3, atol=0.0), (
+        f"reciprocal_compat(1.0) is no longer ~1.0 on the lanes around the probe "
+        f"(max deviation {(res[2:] - 1.0).abs().max().item():.6g})."
+    )
+
+
+# sqrt(-0) and rsqrt(-0), read back as raw bit patterns. Outside the edge sweep because
+# passed_test() treats -0.0 and +0.0 as equal, so only an integer comparison can tell them
+# apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a
+# second copy of these guards under APPROXIMATE. Float32 -> Float32 at dest_acc=Yes is the only
+# pipeline that delivers a real -0.0 and returns 32 bits intact.
+#
+# FastMode.No on both, and deliberately so rather than a gap: every edge arm in
+# _calculate_sqrt_body_ is gated on !FAST_APPROX, as the negative clamp alone was before this
+# fix, so sqrt_tile<true>/rsqrt_tile<true> have no signed-zero result to pin. That is the
+# kernel's standing trade, not a regression, and it is what the comment there records.
+@pytest.mark.nightly
+@pytest.mark.parametrize(
+    "approx_mode",
+    [ApproximationMode.No, ApproximationMode.Yes],
+    ids=lambda m: f"approx_{m.name}",
+)
+@pytest.mark.parametrize(
+    "mathop, negative_zero_bits, positive_zero_bits",
+    [
+        # IEEE: sqrt(-0) = -0, sqrt(+0) = +0.
+        (MathOperation.Sqrt, 0x80000000, 0x00000000),
+        # IEEE: rsqrt(-0) = -inf, rsqrt(+0) = +inf.
+        (MathOperation.Rsqrt, 0xFF800000, 0x7F800000),
+    ],
+    ids=lambda v: v.name if isinstance(v, MathOperation) else f"0x{v:08X}",
+)
+def test_sqrt_family_negative_zero_regression(
+    mathop, negative_zero_bits, positive_zero_bits, approx_mode
+):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering -0.0 and the -0.0 assertion
+    # below would really be testing +0.0 -- fail loudly rather than quietly testing nothing.
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # -0.0 and +0.0 side by side, so a guard that sets a sign rather than carrying the input's
+    # fails one of the two.
+    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A[0] = -0.0
+    src_A[1] = 0.0
+    # A negative that must stay NaN: catches the zero-magnitude arm being widened.
+    src_A[2] = -1.0
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    bits = res.view(torch.int32)
+    op = mathop.name.lower()
+
+    assert bits[0].item() & 0xFFFFFFFF == negative_zero_bits, (
+        f"{op}(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} ({res[0].item()!r}), "
+        f"expected 0x{negative_zero_bits:08X}. See the signed-zero arms in "
+        "ckernel_sfpu_sqrt.h."
+    )
+    assert bits[1].item() & 0xFFFFFFFF == positive_zero_bits, (
+        f"{op}(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} ({res[1].item()!r}), "
+        f"expected 0x{positive_zero_bits:08X}."
+    )
+    assert torch.isnan(res[2]), (
+        f"{op}(-1.0) returned {res[2].item()!r}, expected NaN; the zero-magnitude arm is "
+        "swallowing ordinary negative inputs."
+    )
+    # The rest of the tile is 4.0, catching a guard that fires on every lane.
+    expected = 2.0 if mathop == MathOperation.Sqrt else 0.5
+    assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
+        f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
+        f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
     )
 
 
@@ -905,6 +851,12 @@ _INT_UNARY_OPS = [
     MathOperation.UnaryMinInt32,
     MathOperation.UnaryMaxUint32,
     MathOperation.UnaryMinUint32,
+    # relu_min is the only entry that is not an integer-only op. sfpu_operations.h selects
+    # the vInt branch of _relu_min_ at runtime on math_format == Int32, and nothing else
+    # drives that branch -- the float sweeps all take the vFloat one -- so without this the
+    # integer half of the kernel, including its 2's-complement to sign+magnitude threshold
+    # conversion, has no coverage at all.
+    MathOperation.ReluMin,
 ]
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32.
@@ -921,13 +873,9 @@ def _int_unary_stimuli_spec(mathop):
     if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
         return StimuliSpec.uniform(low=0.0, high=1_000_000.0)
 
-    # Unary max/min compare against a fixed scalar; both branches plus the comparison
-    # tie itself have to be exercised. A uniform draw straddles the scalar but reaches
-    # it with probability ~0, so the tie — the one point where a `>` / `>=` slip is
-    # visible — was never tested. Take the exact value from op_edge_points(), which is
-    # where the golden's scalar is mirrored for exactly this purpose, and pair it with a
-    # deterministic spread either side. custom() zero-fills the rest of each face, which
-    # is itself a below-scalar probe.
+    # Unary max/min compare against a fixed scalar, and a uniform draw reaches that scalar
+    # with probability ~0, so the tie would never be driven. Take the exact value from
+    # op_edge_points() and pair it with a deterministic spread either side.
     edges = [int(v) for v in op_edge_points(mathop)]
     if not edges:
         raise AssertionError(
@@ -951,6 +899,13 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # No op in _INT_UNARY_OPS is excluded under coverage on any arch, so this call skips
+    # nothing today -- including the int max/min ops, which emit SFPLOADMACRO and pass.
+    # It stays because the exclusion table is per-op: the last time this sweep's pool
+    # changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and the coverage
+    # job built a kernel it should not have.
+    _skip_coverage_unsupported(mathop)
+
     int_format = (
         DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
     )
@@ -968,63 +923,85 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
-# Cat E: the shift amount itself, which is the last gap in that category.
-#
-# The unary shift ops take their amount as a compile-time immediate, not as an operand, so
-# until SFPU_SHIFT_AMOUNT existed the only amount ever tested was the fixed 3 that
-# sfpu_operations.h hard-coded. (The *binary* shift ops take theirs as a second operand and
-# have been swept over this same list for a while; that asymmetry is why this needed a C++
-# change.)
-#
-# The amounts are shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS
-# rather than copied, so the two suites cannot drift on what counts as an interesting shift.
-#
-# The two unary shifts do not share an out-of-range rule -- see
-# UnarySFPUGolden._shift_amount, which models each kernel separately.
+_INT32_MAX = 2**31 - 1
+
+# Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
+# reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
+# encoding. The negative extreme stops short of INT_MIN: CustomStrategy clamps stimuli at
+# info.min + 1, so no input could straddle it.
+_RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
+
+
+def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
+    """Values straddling *threshold*, plus both ends of int32.
+
+    Built around the threshold rather than a fixed span, so the clamp actually fires for a
+    negative threshold. The range ends exercise the compare between far-apart operands.
+    """
+    # Straddling the boundary, then a decade either side of it. Offsets that leave the
+    # stimuli range are dropped rather than folded onto its ends, which is what the thresholds
+    # at the extremes would otherwise turn most of them into.
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [threshold + d for d in offsets] + [-_INT32_MAX, _INT32_MAX]
+    values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
+    return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
+
+
+@parametrize(
+    threshold=_RELU_MIN_INT_THRESHOLDS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_min_int_threshold(
+    threshold: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_min on Int32 against both signs of threshold.
+
+    The negative half is the point, and the golden is an exact integer max, so a wrong
+    threshold shows up as a wrong clamp value rather than a tolerance miss.
+
+    Int32 stimuli are two's complement, which is how ttnn feeds the device -- see
+    use_int32_twos_complement in test_sfpu_reduce.py. Under this file's sign-magnitude
+    default a kernel that reads Dst in the other encoding would pass instead.
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMin,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_min_int_stimuli_spec(threshold),
+        relu_min_int_threshold=threshold,
+        twos_complement=True,
+    )
+
+
+# Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
+# shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 
-# The unary sweep takes the shared amounts but collapses the negatives to one.
-#
-# SFPU_SHIFT_AMOUNT emits the amount with a `u` suffix and both kernels branch on
-# `shift_amt >= 32` as unsigned, so every negative amount arrives as a large unsigned and takes
-# the same out-of-range path as 32, 33, 40, ... -- four amounts, one code path. The *binary*
-# shift ops take theirs as a signed operand, where the four are genuinely distinct, which is
-# why the shared list keeps them and only this consumer narrows.
-#
-# One is kept rather than none because the unsigned wrap is worth pinning: if SHIFT_AMOUNT ever
-# became signed, -1 would compare as in-range and `v << -1` is undefined behaviour.
+# Negatives collapse to one: the amount is emitted unsigned, so they all take the same
+# out-of-range path. One is kept to pin that wrap.
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
-# A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
-# straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch a
-# lost low bit, and zero. Non-negative only -- the docstring below says why.
-#
-# 2**30 is here for the *right* shift: without it the largest magnitude is 2**16, so every
-# stimulus is already 0 by an amount of 17 and each of 17..30 asserts nothing but 0 >> n == 0,
-# which cannot tell calculate_right_shift's `eff = 31` clamp from a clamp anywhere in that
-# range. The limit filter below drops it from every LeftShift variant that would overflow.
+# Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
+# zero. 2**30 keeps a large right shift working on a non-zero operand.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
-
-_INT32_MAX = 2**31 - 1
 
 
 def _shift_stimulus_values(mathop, shift_amount):
     """Values that stay representable after *mathop* shifts them by *shift_amount*.
 
-    A left shift is the only one that can leave int32, and the amount is a compile-time
-    immediate here, so the value set is chosen per variant. One bound suffices because the
-    magnitudes are non-negative: keeping the result <= INT32_MAX also keeps it clear of
-    INT32_MIN, which Dst stores as sign-magnitude and cannot represent. Out-of-range amounts
-    need no filter -- left shift returns 0, right shift clamps to 31.
-
-    Positive-only, for the reason _int_unary_stimuli_spec gives: Dst stores integers as
-    sign-magnitude, so a negative operand does not survive the round trip.
-
-    **That makes the out-of-range half weaker than it looks for RightShift.** An out-of-range
-    right shift of a *negative* gives -1 rather than 0, which UnarySFPUGolden models, but no
-    probe can reach it while negatives cannot be delivered -- so this only covers the positive
-    half, where the two kernels' rules coincide at 0. Re-measure once a negative int32 operand
-    can be delivered.
+    A left shift is the only one that can leave int32, so the value set is chosen per variant.
+    Positive-only, because Dst stores integers as sign-magnitude and a negative operand does
+    not survive the round trip -- which also means the out-of-range half only covers the
+    positive side, where the two kernels' rules coincide at 0.
     """
     magnitudes = _SHIFT_STIMULUS_MAGNITUDES
     if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
@@ -1048,10 +1025,7 @@ def test_eltwise_unary_sfpu_int_shift(
 ):
     """Sweep the unary shift ops over the amounts worth driving, in range and out.
 
-    Not the full axis: _UNARY_SHIFT_AMOUNTS carries 8 of the 32 in-range amounts, chosen the
-    way SHIFT_EDGE_AMOUNTS is, and all six of its non-negative out-of-range ones. Only the
-    *negative* amounts collapse to a single representative, for the reason recorded there --
-    the `u` suffix makes all four arrive as the same large unsigned value.
+    Not the full axis -- see _UNARY_SHIFT_AMOUNTS for which amounts are kept and why.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
     if not any(v for v in values):
@@ -1114,6 +1088,22 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
+# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
+# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
+# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
+# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
+# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+#
+# Skipping the whole op list here withheld those two as well; they are swept now, so a
+# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+_ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
+    MathOperation.Isinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+]
+
+
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
@@ -1144,14 +1134,17 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
-    # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
+    # +inf, which only the three predicates below can see; the rest are swept here.
+    # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
         pytest.skip(
-            reason="bf16->fp32 dest unpack does not preserve -inf/nan special values"
+            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
+            "predicate cannot be evaluated on this pipeline"
         )
 
     eltwise_unary_sfpu(
@@ -1166,39 +1159,43 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# Threshold comparison ops: each maps every element to 0/1 by comparing against a
-# fixed threshold, so a plain random float sweep never lands on the threshold and the
-# output collapses to a constant (PCC undefined). Keyed by mathop:
-#   logical_not(x) = (x == 0) ? 1 : 0   -> threshold 0.0
-#   unary_eq / unary_ne(x)  compare vs 0.5 -> threshold 0.5
+# Ops whose behaviour turns on a comparison against a fixed scalar. A random float sweep
+# reaches such a scalar with probability ~0, so the tie -- the one input where a `>` / `>=`
+# slip is visible -- never gets driven. The 0/1 ops are here because their output would
+# otherwise be constant; the clamps are here for the tie itself. Thresholds come from
+# op_threshold().
 _THRESHOLD_OPS = [
     MathOperation.LogicalNotUnary,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.ReluMin,
+    MathOperation.ReluMax,
 ]
 
 
 def _threshold_op_stimuli_spec(mathop):
-    # Force a regular subset onto the op's threshold so both the equal and not-equal
-    # branches fire and the output is non-constant.
+    # Force a regular subset onto the op's threshold so the tie branch fires and, for the
+    # 0/1 ops, the output is non-constant.
     #
-    # The threshold comes from op_edge_points() rather than a local literal, which could drift
-    # from UNARY_COMP_THRESHOLD -- the value the golden reads -- with no test noticing. These
-    # three ops are outside _OP_DOMAIN_REGISTRY, so this is the only consumer of their
-    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have.
-    edges = op_edge_points(mathop)
-    if not edges:
+    # The threshold comes from op_threshold() rather than a local literal, which could drift
+    # from the dispatch constant the golden reads with no test noticing. Deliberately NOT
+    # op_edge_points()[0]: that held only while every entry was exactly (threshold,), and the
+    # clamp entries now straddle their cutoff, so index 0 is a probe beside the threshold.
+    threshold = op_threshold(mathop)
+    if threshold is None:
         raise AssertionError(
-            f"{mathop.name} has no op_edge_points() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_EDGE_POINTS"
+            f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
+            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
         )
-    # logical_not's entry is the signed-zero pair (+0.0, -0.0); both are the same
-    # threshold, so the first element is the value to hit in every case.
-    threshold = edges[0]
 
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 5) - 2.0  # {-2, -1, 0, 1, 2}; none equal 0.5
+        # Spread *relative to* the threshold: {t-2, t-1, t, t+1, t+2}. An absolute
+        # {-2, -1, 0, 1, 2} spread works only for a threshold near zero -- against
+        # relu_min's 5.0 every value sat on the clamped side and the golden went constant,
+        # which is the same defect the widened domains fixed. Unchanged for logical_not,
+        # whose threshold is 0.0.
+        x = threshold + ((idx % 5) - 2.0)
         x[0::3] = threshold  # guaranteed threshold hits
         return x.to(dtype)
 
@@ -1219,6 +1216,10 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # As in test_eltwise_unary_sfpu_int: nothing in _THRESHOLD_OPS is excluded under
+    # coverage today, and the call stays so that a change to the pool cannot silently
+    # bypass the exclusion table.
+    _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(
@@ -1245,19 +1246,17 @@ def eltwise_unary_sfpu(
     custom_atol=None,
     custom_rtol=None,
     shift_amount=None,
+    relu_min_int_threshold=None,
+    twos_complement=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    # The op's own signed domain, not generate_stimuli's positive-only format default,
-    # which would leave the x<0 branch, the piecewise knees and the saturation tails
-    # unreached. A KeyError means a new op arrived with no _OP_DOMAIN_REGISTRY entry:
-    # register it rather than falling back to the positive-only default.
-    # The domain has to hold for the whole pipeline, so for_op_pipeline resolves against
-    # both formats and keeps the tighter — see its docstring for why both matter.
-    # approx_mode is passed because the exp family's positive side is bounded twice: by range
-    # always, and by the approximation's accuracy only in ApproximationMode.Yes. The registry
-    # carries the first; for_op applies the second from _APPROX_ACCURACY_MAX.
+    # The op's own signed domain, not generate_stimuli's positive-only format default, which
+    # would leave the x<0 branch, the knees and the saturation tails unreached. A KeyError
+    # means a new op arrived with no _OP_DOMAIN_REGISTRY entry -- register it. The domain has
+    # to hold for the whole pipeline, so for_op_pipeline resolves against both formats and the
+    # approximation mode and keeps the tightest result.
     if spec_A is None:
         spec_A = exclude_undefined(
             mathop,
@@ -1286,6 +1285,11 @@ def eltwise_unary_sfpu(
         formats.input_format,
         input_dimensions,
         **({} if shift_amount is None else {"shift_amount": shift_amount}),
+        **(
+            {}
+            if relu_min_int_threshold is None
+            else {"relu_min_int_threshold": relu_min_int_threshold}
+        ),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1309,6 +1313,11 @@ def eltwise_unary_sfpu(
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
+            *(
+                []
+                if relu_min_int_threshold is None
+                else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -1324,6 +1333,7 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)

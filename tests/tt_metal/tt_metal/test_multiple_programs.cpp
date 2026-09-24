@@ -219,7 +219,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    LaunchProgram(this->device(), std::move(program1), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program1));
 
     std::vector<uint32_t> intermediate_result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, intermediate_result_vec);
@@ -243,7 +243,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    LaunchProgram(this->device(), std::move(program2), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program2));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

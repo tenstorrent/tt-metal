@@ -8,6 +8,7 @@
 
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK hw_configure -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -32,6 +33,7 @@ template <
     ckernel::experimental::LLKMemDescriptor DESC_A,
     ckernel::experimental::LLKMemDescriptor DESC_B>
 inline void llk_unpack_hw_configure() {
+    SAN_HOOK(unsupported());
     constexpr DataFormat A = DESC_A.format;
     constexpr DataFormat B = DESC_B.format;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -56,6 +58,7 @@ template <
     ckernel::experimental::LLKMemDescriptor DESC_A,
     ckernel::experimental::LLKMemDescriptor DESC_B>
 inline void llk_math_hw_configure() {
+    SAN_HOOK(unsupported());
     constexpr DataFormat A = DESC_A.format;
     constexpr DataFormat B = DESC_B.format;
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(
@@ -69,6 +72,7 @@ inline void llk_math_hw_configure() {
 
 template <bool is_fp32_dest_acc_en, ckernel::experimental::LLKMemDescriptor OUT_DESC>
 inline void llk_pack_hw_configure() {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t pack_src = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src,

@@ -30,9 +30,12 @@
     tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
     tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
     tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_codegen
     tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
     tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
     tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
+    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_stable_index_parity
+    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_unstable_all_ones_permutation
     tests/ttnn/unit_tests/operations/data_movement/test_interleaved_to_sharded.py::test_interleaved_to_sharded_nd_with_equivalent_2d
     tests/ttnn/unit_tests/operations/data_movement/test_sharded_to_interleaved_oob.py::test_s2i_dram_height_sharded
     tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py::test_convert_to_hwc_dram_uneven_sharding
@@ -53,6 +56,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U05ACKAJTHS # Naif Tarafdar
 
 - name: "ttnn eltwise group 1"
@@ -69,6 +73,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 2"
@@ -85,6 +90,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 3"
@@ -101,6 +107,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 4"
@@ -117,6 +124,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn conv group"
@@ -133,6 +141,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn pool group"
@@ -149,6 +158,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn matmul group"
@@ -165,13 +175,14 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -181,13 +192,14 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 2"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -197,6 +209,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn misc ops group"
@@ -213,7 +226,8 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  budget_type: sanity
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
@@ -229,6 +243,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
@@ -248,13 +263,14 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn reduce group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -264,7 +280,26 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
+
+- name: "kernel lib tests"
+  # The device-perf tests in this directory shell out to `python3 -m tracy`, which needs a
+  # Tracy-enabled build; this job runs from the wheel, so they fail on a missing profiler
+  # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
+  # same tests by --ignore'ing both files; deselecting the marker instead keeps the
+  # functional cases in test_chain_perf.py, which do run here.
+  cmd: >-
+    pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
+    -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
+  skus:
+    wh_n300_civ2:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
+  team: ttnn
+  budget_type: sanity
+  owner_id: U0BCCPS862F # Milan Alimpic
 
 - name: "core ttnn unit test group"
   # The allocator suites run as their own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
@@ -276,7 +311,7 @@
     authoritative_job_status: true
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -286,11 +321,12 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 - name: "trace allocation tracker"
   cmd: |
-    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_config.py -xv
+    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_tracker_config.py -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
   skus:
@@ -299,4 +335,5 @@
     sim_wh_n150:
       timeout: 15
   team: ttnn
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  budget_type: sanity
+  owner_id: U091SNDA4TS # Tomasz Cheda

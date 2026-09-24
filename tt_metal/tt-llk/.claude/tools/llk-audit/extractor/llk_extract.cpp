@@ -178,11 +178,11 @@ public:
             return;
         }
         llvm::StringRef nm = II->getName();
-        // Denylist encoding-constant / internal expansion macros: TT_OP_* are the
-        // opcode-VALUE constants (not an issued instruction) and INSTRUCTION_WORD
-        // is expanded INSIDE the real instruction macros — both otherwise get
-        // recorded mislocated at their #define site and add noise.
-        if (nm.starts_with("TT_OP_") || nm == "INSTRUCTION_WORD")
+        // Denylist encoding-constant / internal expansion macros:
+        // TT_INSN and TTI_INSN are expanded INSIDE the real
+        // instruction macros — both otherwise get recorded mislocated
+        // at their #define site and add noise.
+        if (nm == "TT_INSN" || nm == "TTI_INSN")
         {
             return;
         }

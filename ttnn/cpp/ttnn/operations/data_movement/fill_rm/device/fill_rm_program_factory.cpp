@@ -51,34 +51,29 @@ ttnn::device_operation::ProgramArtifacts FillRMProgramFactory::create_program_ar
 
     // Resource names
     const KernelSpecName READER{"reader"};
-    const DFBSpecName IN0{"in0"};
-    const DFBSpecName IN1{"in1"};
+    const ScratchpadSpecName IN0{"in0"};
+    const ScratchpadSpecName IN1{"in1"};
     const TensorParamName OUT{"out"};
 
-    // Two single-toucher DFBs (the reader FIFO-produces each and uses it as the NoC write source; no
-    // separate consumer), so each is bound self-loop: the reader is both PRODUCER and CONSUMER.
-    DataflowBufferSpec dfb_in0{
+    // Two single-toucher scratchpads: the reader fills each and uses it as the NoC write source.
+    // (Formerly self-loop DFBs; a single DM kernel filled and drained each, so the FIFO machinery
+    // synchronized nothing. Converted to Scratchpad for Quasar, which rejects DM self-loop DFBs.)
+    ScratchpadSpec sp_in0{
         .unique_id = IN0,
-        .entry_size = single_tile_size,
-        .num_entries = num_cb_tiles,
-        .data_format_metadata = cb_data_format,
+        .size_per_node = single_tile_size * num_cb_tiles,
     };
-    DataflowBufferSpec dfb_in1{
+    ScratchpadSpec sp_in1{
         .unique_id = IN1,
-        .entry_size = single_tile_size,
-        .num_entries = num_cb_tiles,
-        .data_format_metadata = cb_data_format,
+        .size_per_node = single_tile_size * num_cb_tiles,
     };
 
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/kernels/dataflow/fill_rm_interleaved.cpp",
-        .dfb_bindings =
+        .scratchpad_bindings =
             {
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                ScratchpadBinding{.scratchpad_spec_name = IN0, .accessor_name = "in0"},
+                ScratchpadBinding{.scratchpad_spec_name = IN1, .accessor_name = "in1"},
             },
         .tensor_bindings =
             {
@@ -94,7 +89,7 @@ ttnn::device_operation::ProgramArtifacts FillRMProgramFactory::create_program_ar
     ProgramSpec spec{
         .name = "fill_rm",
         .kernels = {reader},
-        .dataflow_buffers = {dfb_in0, dfb_in1},
+        .scratchpads = {sp_in0, sp_in1},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = OUT, .spec = output_mesh_tensor.tensor_spec()},

@@ -388,6 +388,13 @@ ttnn::Tensor slice(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
+    // prim::slice writes into the caller's buffer verbatim, so it can only be the destination when the
+    // buffer's page geometry matches the output the op computes for `input`. rm_only downgrades a TILE
+    // input to ROW_MAJOR, which leaves the caller's TILE tensor tile-paged while the RM factories page
+    // it by row; hand it over only when the layouts agree and let ret_adjustment retilize into it via
+    // finalize_into_preallocated's copy otherwise.
+    const auto prim_output =
+        (optional_output_tensor.has_value() && can_land_in_preallocated(input)) ? optional_output_tensor : std::nullopt;
     auto res = ttnn::prim::slice(
         input,
         ttnn::Shape(modified_begins),
@@ -400,7 +407,7 @@ ttnn::Tensor slice(
         std::nullopt,
         std::nullopt,
         sub_core_grids,
-        optional_output_tensor);
+        prim_output);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
