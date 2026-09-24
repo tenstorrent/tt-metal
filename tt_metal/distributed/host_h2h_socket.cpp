@@ -155,11 +155,12 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
               " the credit array indexes";
         return nullptr;
     }
-    // Refused, not merely unimplemented: rx_slot_offset() has no host dimension and the
-    // receiver keeps one cursor per core, so two senders into one ring would collide.
-    if (cfg.topo.num > 2) {
-        err = "H2HSocket: " + std::to_string(cfg.topo.num) +
-              " hosts is not supported; the RX ring is not partitioned per origin (2 max)";
+    // Refused, not merely unimplemented -- see kMaxH2HHostsSupported for why it is below
+    // kMaxHosts. The receiver also keeps one cursor per core, not per core and origin.
+    if (cfg.topo.num > kMaxH2HHostsSupported) {
+        err = "H2HSocket: " + std::to_string(cfg.topo.num) + " hosts is not supported; the RX ring serves " +
+              std::to_string(kMaxH2HHostsSupported) + " (kMaxH2HHostsSupported), though the credit array indexes " +
+              std::to_string(kMaxHosts);
         return nullptr;
     }
     // Not just non-zero: the payload put is page_bytes - kFrameTrailerBytes, which wraps
