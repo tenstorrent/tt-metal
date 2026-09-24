@@ -237,7 +237,19 @@ void kernel_main() {
     // ===========================================================
     // PHASE 1: count my slice
     // ===========================================================
-    for (uint32_t e = 0; e < e_local; ++e) counts[e] = 0;
+    // local_expert_ids is an ordered set: the first position owns an expert
+    // and later duplicate positions are empty. Build that mask once per core
+    // in fill, which is otherwise unused until phase 3.
+    for (uint32_t e = 0; e < e_local; ++e) {
+        fill[e] = 1U;
+        for (uint32_t prior = 0; prior < e; ++prior) {
+            if (leids_u16[prior] == leids_u16[e]) {
+                fill[e] = 0U;
+                break;
+            }
+        }
+        counts[e] = 0;
+    }
 
     if (my_slice_size > 0U) {
         for (uint32_t block_start = my_slice_start; block_start < my_slice_end; block_start += block_rows) {
@@ -254,6 +266,9 @@ void kernel_main() {
             for (uint32_t row = block_start; row < block_end; ++row) {
                 uint32_t off = (row - block_start) * MD_ROW_STRIDE_U16;
                 for (uint32_t e = 0; e < e_local; ++e) {
+                    if (fill[e] == 0U) {
+                        continue;
+                    }
                     for (uint32_t ki = 0; ki < k; ++ki) {
                         if ((uint32_t)md_block[off + ki] == (uint32_t)leids_u16[e]) {
                             counts[e]++;
@@ -434,6 +449,11 @@ void kernel_main() {
                 uint32_t md_off = (row - block_start) * MD_ROW_STRIDE_U16;
                 uint32_t sc_off = (row - block_start) * SC_ROW_STRIDE_U16;
                 for (uint32_t e = 0; e < e_local; ++e) {
+                    // Later duplicate local IDs have a zero count on every
+                    // core and must not scatter into their empty interval.
+                    if (counts[e] == 0U) {
+                        continue;
+                    }
                     for (uint32_t ki = 0; ki < k; ++ki) {
                         if ((uint32_t)md_block[md_off + ki] == (uint32_t)leids_u16[e]) {
                             uint32_t slot = e * PLAN_CHUNK + fill[e];
