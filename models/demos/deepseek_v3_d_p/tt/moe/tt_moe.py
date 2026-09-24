@@ -20,7 +20,6 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -725,7 +724,8 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
-        signpost(header="MoE_START")
+        # Preserve profiler region labels without duplicating them through Python logging.
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_START`")
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
             logger.debug(f"  x.shape={x.shape}")
@@ -861,7 +861,7 @@ class TtMoe(LightweightModule):
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
-        signpost("dispatch_and_shared_expert_start")
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
@@ -928,7 +928,7 @@ class TtMoe(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        signpost("dispatch_and_shared_expert_end")
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -1085,5 +1085,5 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
-        signpost(header="MoE_END")
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_END`")
         return final_output, intermediates

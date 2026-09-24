@@ -21,6 +21,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -109,18 +110,16 @@ def valid_acc_to_dest(input_dimensions) -> list:
     return [False]
 
 
-ELTWISE_FORMATS = input_output_formats(
-    [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+ELTWISE_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 @pytest.mark.quasar

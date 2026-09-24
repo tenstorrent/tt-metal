@@ -244,6 +244,7 @@ def fast_device_to_host_yuv(
     debug: bool = False,
     logical_h: int | None = None,
     logical_w: int | None = None,
+    use_persistent_buffer: bool = True,
 ) -> np.ndarray | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -378,7 +379,7 @@ def fast_device_to_host_yuv(
                 dim=ag_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
-                use_persistent_buffer=True,
+                use_persistent_buffer=use_persistent_buffer,
             )
             # Drop back to ROW_MAJOR before repeat/mesh_partition so ttnn.repeat doesn't wrap itself in an Untilize →
             tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
