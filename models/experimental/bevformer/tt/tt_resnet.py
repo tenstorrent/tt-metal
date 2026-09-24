@@ -361,7 +361,14 @@ class TtBottleneck:
                 dilation=dilation,
                 bias=False,
             )
-            self.bn_parameters = conv_pth.bn2
+            # The DCN branch runs its BatchNorm as a separate op. Its parameters go to the
+            # device once here, so a forward writes nothing from the host.
+            bn = conv_pth.bn2
+            self.bn_running_mean = ttnn.to_device(bn.running_mean, device=device)
+            self.bn_running_var = ttnn.to_device(bn.running_var, device=device)
+            self.bn_weight = None if bn.weight is None else ttnn.to_device(bn.weight, device=device)
+            self.bn_bias = None if bn.bias is None else ttnn.to_device(bn.bias, device=device)
+            self.bn_eps = bn.eps
 
         self.conv3 = TtnnConv2D(
             conv_args.conv3,
@@ -400,11 +407,11 @@ class TtBottleneck:
             x = ttnn.permute(x, (0, 3, 1, 2))
             x = ttnn.batch_norm(
                 x,
-                running_mean=ttnn.to_device(self.bn_parameters.running_mean, device=self.device),
-                running_var=ttnn.to_device(self.bn_parameters.running_var, device=self.device),
-                eps=self.bn_parameters.eps,
-                weight=ttnn.to_device(self.bn_parameters.weight, device=self.device),
-                bias=ttnn.to_device(self.bn_parameters.bias, device=self.device),
+                running_mean=self.bn_running_mean,
+                running_var=self.bn_running_var,
+                eps=self.bn_eps,
+                weight=self.bn_weight,
+                bias=self.bn_bias,
             )
             x = ttnn.relu(x)
             x = ttnn.permute(x, (0, 2, 3, 1))
