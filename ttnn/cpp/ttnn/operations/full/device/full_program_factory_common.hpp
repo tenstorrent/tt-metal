@@ -5,12 +5,14 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <variant>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/types.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::full {
 
@@ -29,8 +31,18 @@ inline fill_value_t encode_fill_value(const std::variant<float, int>& fill_value
     fill_value_t u;
     switch (dtype) {
         case tt::tt_metal::DataType::INT32: {
-            int value = std::holds_alternative<int>(fill_value) ? std::get<int>(fill_value)
-                                                                : static_cast<int>(std::get<float>(fill_value));
+            int value;
+            if (std::holds_alternative<int>(fill_value)) {
+                value = std::get<int>(fill_value);
+            } else {
+                float float_value = std::get<float>(fill_value);
+                TT_FATAL(
+                    float_value >= static_cast<float>(std::numeric_limits<int32_t>::min()) &&
+                        float_value < static_cast<float>(std::numeric_limits<int32_t>::max()),
+                    "Full: fill_value {} is out of range for INT32",
+                    float_value);
+                value = static_cast<int>(float_value);
+            }
             u.u32 = static_cast<uint32_t>(value);
             break;
         }
