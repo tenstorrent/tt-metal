@@ -18,14 +18,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         pytest.param(None, id="bias_all_dram_banks"),
     ],
 )
-def test_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_tiles):
+# batches_per_core=1 is the control: the hoisted bias read must match the old single-push case.
+@pytest.mark.parametrize("batches_per_core", [1, 2], ids=["one_batch_per_core", "multi_batch_per_core"])
+def test_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_tiles, batches_per_core):
     """Compiles FUSE_BIAS via prim.invoke; ttnn.linear post-processes batched in1."""
     workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(workers)
     tile = 32
     m = k = tile
     n = tile * (num_banks if n_tiles is None else n_tiles)
-    batches_per_core = 2
     batch = batches_per_core * num_banks
 
     worker_grid = ttnn.CoreRangeSet(
