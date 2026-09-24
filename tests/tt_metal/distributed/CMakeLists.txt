@@ -65,6 +65,7 @@ set_target_properties(
 # Its own target, not a source in distributed_benchmarks: this binary keeps its own main so
 # DistributedContext::create sees argv, and that main must not displace benchmark_main there.
 add_executable(d2h_leg_benchmark)
+target_precompile_headers(d2h_leg_benchmark REUSE_FROM metal_test_pch)
 target_sources(
     d2h_leg_benchmark
     PRIVATE
@@ -107,6 +108,7 @@ set_target_properties(
 # Its own target for the same reason as d2h_leg_benchmark: both files carry a main, so they
 # cannot share one. Fold them together once the h2h leg lands and there are three of these.
 add_executable(h2d_leg_benchmark)
+target_precompile_headers(h2d_leg_benchmark REUSE_FROM metal_test_pch)
 target_sources(
     h2d_leg_benchmark
     PRIVATE
@@ -148,6 +150,7 @@ set_target_properties(
 # Guarded on the MPI target, so a non-MPI build simply does not build it.
 if(TARGET OpenMPI::MPI)
     add_executable(h2h_leg_benchmark)
+    target_precompile_headers(h2h_leg_benchmark REUSE_FROM metal_test_pch)
     target_sources(h2h_leg_benchmark PRIVATE benchmark_h2h_leg.cpp)
 
     target_link_libraries(
