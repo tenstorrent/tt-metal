@@ -184,12 +184,17 @@ int main(int argc, char* argv[]) {
             {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC, false},
             {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC, false},
 
-            // Raw Semaphore APIs
+            // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
             {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC, false},
             {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC, false},
             {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC, false},
             {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC, false},
             {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC, false},
+            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC, false},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC, false},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
 
             // Semaphore class APIs (dataflow)
             {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC, false},
@@ -209,14 +214,6 @@ int main(int argc, char* argv[]) {
             {2, 14, false, "Compute Sem: BRISC set + TRISC down()", Risc::BRISC, Risc::TRISC0, true},
             {17, 3, false, "Compute Sem: TRISC set() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
             {13, 3, false, "Compute Sem: TRISC up() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
-
-            // The raw remote APIs again, produced from NCRISC so the kernel's default NoC is 1. These
-            // exist so SYNC_SIGNAL_NOC_ADDR's noc-index bit is observed as 1 somewhere; every other
-            // remote case produces on BRISC (NoC 0) or pins Noc(0) explicitly. Append-only: the Python
-            // test indexes this table positionally.
-            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
         };
 
         constexpr int num_tests = sizeof(tests) / sizeof(tests[0]);

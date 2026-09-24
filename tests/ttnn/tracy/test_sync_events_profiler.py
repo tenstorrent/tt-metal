@@ -219,10 +219,12 @@ class ApiTest:
     payload_type: str  # "cb_id" or "sem_addr"
     expected_cb_id: Optional[int] = None
     requires_quasar: bool = False
-    # For tests that emit SYNC-SEM-SET-REMOTE: the NoC the producer's kernel uses, and
-    # whether the address is a unicast or a 1x1 multicast rectangle. None = no remote event.
+    # To check the noc that the remote semaphore is sent on.
     expected_noc: Optional[int] = None
+    # To check remote semaphore is unicast or multicast
     remote_kind: Optional[str] = None
+    # To check the multicast rectangle spans correct number of cores
+    mcast_cores: int = 1
 
 
 # Producers on BRISC default to NoC 0; producers on NCRISC default to NoC 1. The Semaphore
@@ -304,10 +306,58 @@ API_TESTS = [
         expected_noc=0,
         remote_kind="multicast",
     ),
+    # The remaining SYNC_SIGNAL_NOC_ADDR emitters, then the same raw remote APIs on NoC 1
+    # (driven from NCRISC); without those the noc-index bit is only ever observed as 0.
+    ApiTest(
+        7,
+        "raw_sem_set_remote",
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=0,
+        remote_kind="unicast",
+    ),
+    ApiTest(
+        8,
+        "raw_sem_set_multicast_loopback_src",
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=0,
+        remote_kind="multicast",
+        mcast_cores=2,  # loopback includes the sender, so the rectangle spans both cores
+    ),
+    ApiTest(
+        9,
+        "raw_sem_inc_remote_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="unicast",
+    ),
+    ApiTest(
+        10,
+        "raw_sem_inc_multicast_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="multicast",
+    ),
+    ApiTest(
+        11,
+        "raw_sem_set_multicast_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="multicast",
+    ),
     # ========== Semaphore Class APIs ==========
     # Semaphore::set() + Semaphore::wait()
     ApiTest(
-        7,
+        12,
         "class_set_wait",
         [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
@@ -315,7 +365,7 @@ API_TESTS = [
     ),
     # Semaphore::up() + Semaphore::wait_min()
     ApiTest(
-        8,
+        13,
         "class_up_wait_min",
         [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
@@ -323,7 +373,7 @@ API_TESTS = [
     ),
     # Semaphore::up() remote
     ApiTest(
-        9,
+        14,
         "class_up_remote",
         [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
@@ -333,7 +383,7 @@ API_TESTS = [
     ),
     # Semaphore::set() + Semaphore::down() (down = wait + decrement)
     ApiTest(
-        10,
+        15,
         "class_set_down",
         [
             ("SYNC-SEM-SET", "BRISC"),  # set()
@@ -345,7 +395,7 @@ API_TESTS = [
     ),
     # Semaphore::set_multicast()
     ApiTest(
-        11,
+        16,
         "class_set_multicast",
         [
             ("SYNC-SEM-SET", "BRISC"),  # local set first
@@ -359,7 +409,7 @@ API_TESTS = [
     ),
     # Semaphore::inc_multicast()
     ApiTest(
-        12,
+        17,
         "class_inc_multicast",
         [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
@@ -369,7 +419,7 @@ API_TESTS = [
     ),
     # ========== Compute RISC (TRISC) CB APIs - all architectures ==========
     ApiTest(
-        13,
+        18,
         "compute_cb_brisc_push_trisc_wait",
         [
             ("SYNC-CB-RESERVE", "BRISC"),  # instant reserve
@@ -382,7 +432,7 @@ API_TESTS = [
         expected_cb_id=0,
     ),
     ApiTest(
-        14,
+        19,
         "compute_cb_trisc_push_ncrisc_wait",
         [
             ("SYNC-CB-RESERVE", "TRISC"),  # instant reserve
@@ -395,7 +445,7 @@ API_TESTS = [
     ),
     # ========== Compute RISC (TRISC) Semaphore APIs - Quasar only ==========
     ApiTest(
-        15,
+        20,
         "compute_brisc_set_trisc_wait",
         [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
         "SYNC-SEM-WAIT",
@@ -403,7 +453,7 @@ API_TESTS = [
         requires_quasar=True,
     ),
     ApiTest(
-        16,
+        21,
         "compute_brisc_set_trisc_wait_min",
         [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
         "SYNC-SEM-WAIT",
@@ -411,7 +461,7 @@ API_TESTS = [
         requires_quasar=True,
     ),
     ApiTest(
-        17,
+        22,
         "compute_brisc_set_trisc_down",
         [
             ("SYNC-SEM-SET", "BRISC"),
@@ -424,7 +474,7 @@ API_TESTS = [
     ),
     # TRISC producer + NCRISC consumer
     ApiTest(
-        18,
+        23,
         "compute_trisc_set_ncrisc_wait",
         [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
@@ -432,42 +482,12 @@ API_TESTS = [
         requires_quasar=True,
     ),
     ApiTest(
-        19,
+        24,
         "compute_trisc_up_ncrisc_wait",
         [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
         requires_quasar=True,
-    ),
-    # ========== NoC 1 remote APIs ==========
-    # Same raw remote APIs as ids 3/5/6, driven from NCRISC so the default NoC is 1. Without
-    # these the noc-index bit of SYNC_SIGNAL_NOC_ADDR is only ever observed as 0.
-    ApiTest(
-        20,
-        "raw_sem_inc_remote_noc1",
-        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        expected_noc=1,
-        remote_kind="unicast",
-    ),
-    ApiTest(
-        21,
-        "raw_sem_inc_multicast_noc1",
-        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        expected_noc=1,
-        remote_kind="multicast",
-    ),
-    ApiTest(
-        22,
-        "raw_sem_set_multicast_noc1",
-        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        expected_noc=1,
-        remote_kind="multicast",
     ),
 ]
 
@@ -534,14 +554,13 @@ def check_remote_payload(event: SyncEvent, spec: ApiTest) -> list[str]:
         errors.append(f"{event.zone_name}: L1 offset {hex(fields['l1'])} outside (0, {hex(L1_MAX)}]")
 
     if fields["kind"] == "multicast":
-        # Every multicast case in the kernel targets a single core:
-        # get_noc_multicast_addr(x, y, x, y, addr). A corner that does not round-trip means
-        # the descriptor was mis-encoded or the tag bits collided with a coordinate field.
-        if (fields["start_x"], fields["start_y"]) != (fields["end_x"], fields["end_y"]):
-            errors.append(
-                f"{event.zone_name}: expected a 1x1 rectangle, got "
-                f"start=({fields['start_x']},{fields['start_y']}) end=({fields['end_x']},{fields['end_y']})"
-            )
+        # The rectangle must round-trip to the size the kernel asked for; a mis-encoded
+        # descriptor shows up here as a wrong core count.
+        width = fields["end_x"] - fields["start_x"] + 1
+        height = fields["end_y"] - fields["start_y"] + 1
+        if width * height != spec.mcast_cores:
+            rect = f"start=({fields['start_x']},{fields['start_y']}) end=({fields['end_x']},{fields['end_y']})"
+            errors.append(f"{event.zone_name}: expected {spec.mcast_cores} core(s) in the rectangle, got {rect}")
     print(f"  ✓ {event.zone_name}: noc={noc} {fields}")
     return errors
 
@@ -770,9 +789,22 @@ def test_full_coverage_summary():
     assert not missing, f"Event types never emitted: {sorted(missing)}"
     print("✓ All event types covered")
 
+    remote = [e for e in events if e.zone_name == "SYNC-SEM-SET-REMOTE" and e.payload is not None]
+    assert remote, "no SYNC-SEM-SET-REMOTE payloads in the full capture"
+
+    # The all-or-nothing rule, checked over the whole capture rather than per case: the presence
+    # flag only lets a consumer fall back on an untagged build if EVERY emitter tags. One
+    # SYNC_SIGNAL where SYNC_SIGNAL_NOC_ADDR belonged breaks that for the entire format, so this
+    # runs across every event the run produced, not just the ones a case declared a NoC for.
+    untagged = [e for e in remote if decode_noc_tag(e.payload)[0] is None]
+    assert not untagged, (
+        f"{len(untagged)}/{len(remote)} SYNC-SEM-SET-REMOTE payloads carry no NoC tag "
+        f"(e.g. {hex(untagged[0].payload)} on {untagged[0].risc}); every NoC address passed to "
+        "SYNC_SIGNAL must go through SYNC_SIGNAL_NOC_ADDR"
+    )
+    print(f"✓ All {len(remote)} SYNC-SEM-SET-REMOTE payloads carry a NoC tag")
+
     # Both NoC indices must appear, or the noc-index bit is untested.
-    nocs = {
-        decode_noc_tag(e.payload)[0] for e in events if e.zone_name == "SYNC-SEM-SET-REMOTE" and e.payload is not None
-    }
-    assert nocs == {0, 1}, f"expected SYNC-SEM-SET-REMOTE on both NoCs, saw {sorted(n for n in nocs if n is not None)}"
+    nocs = {decode_noc_tag(e.payload)[0] for e in remote}
+    assert nocs == {0, 1}, f"expected SYNC-SEM-SET-REMOTE on both NoCs, saw {sorted(nocs)}"
     print("✓ SYNC-SEM-SET-REMOTE observed on both NoC 0 and NoC 1")
