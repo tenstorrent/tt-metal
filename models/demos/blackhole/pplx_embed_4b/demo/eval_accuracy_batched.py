@@ -30,6 +30,15 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=0, help="only the first N pairs (0 = all 1379)")
     p.add_argument("--save", default="", help="save per-text embeddings (masked pool, pre-normalisation)")
     p.add_argument("--compare", default="", help="reference embeddings file from another --save run")
+    p.add_argument(
+        "--pool",
+        choices=["masked", "last"],
+        default="masked",
+        help="masked = mean over real tokens (pplx-embed); last = last real token (Qwen3-Embedding)",
+    )
+    p.add_argument(
+        "--eos", action="store_true", help="append the tokenizer's EOS token to every text (Qwen3-Embedding recipe)"
+    )
     args = p.parse_args()
     B, S = args.batch, args.max_length
 
@@ -63,7 +72,9 @@ def main() -> None:
         ids_all = torch.full((len(texts), S), pad_id, dtype=torch.long)
         lens = torch.zeros(len(texts), dtype=torch.long)
         for i, t in enumerate(texts):
-            enc = tok(t, truncation=True, max_length=S, return_tensors="pt")["input_ids"][0]
+            enc = tok(t, truncation=True, max_length=S - (1 if args.eos else 0), return_tensors="pt")["input_ids"][0]
+            if args.eos and getattr(tok, "eos_token_id", None) is not None:
+                enc = torch.cat([enc, torch.tensor([tok.eos_token_id])])
             ids_all[i, : len(enc)] = enc
             lens[i] = len(enc)
 
@@ -96,7 +107,7 @@ def main() -> None:
             h = h * torch.rsqrt((h * h).mean(-1, keepdim=True) + eps) * norm_w  # final RMSNorm on host
             for j, i in enumerate(idx):
                 n = int(lens[i])
-                embs_masked[i] = h[j, :n].mean(0)
+                embs_masked[i] = h[j, n - 1] if args.pool == "last" else h[j, :n].mean(0)
                 embs_fast[i] = h[j].mean(0)
             if start == 0 or (start // B) % 50 == 0:
                 print(f"  {start + len(idx)}/{len(texts)} texts, {time.perf_counter() - t0:.0f}s", flush=True)
@@ -109,7 +120,9 @@ def main() -> None:
 
         print("=" * 60)
         print(f"  STS-B through the batch-{B} prefill path  ({len(texts)} texts, {wall:.0f}s eager)")
-        print(f"  Spearman, masked mean over real tokens: {spear(embs_masked):.4f}")
+        print(
+            f"  Spearman, {'last real token' if args.pool == 'last' else 'masked mean over real tokens'}: {spear(embs_masked):.4f}"
+        )
         print(f"  Spearman, mean over the padded ISL:     {spear(embs_fast):.4f}")
         finite = bool(torch.isfinite(embs_masked).all())
         print(f"  all embeddings finite: {finite}")

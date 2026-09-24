@@ -2,6 +2,11 @@
 
 Optimized inference of [Qwen/Qwen3-Embedding-4B](https://huggingface.co/Qwen/Qwen3-Embedding-4B) on Tenstorrent Blackhole (P150) hardware.
 
+> **Faster path (2026-09-24):** the tuned stack in [`../pplx_embed_4b/`](../pplx_embed_4b/README.md) runs this
+> checkpoint unchanged with `HF_MODEL=Qwen/Qwen3-Embedding-4B` (causal attention and last-token pooling follow
+> the checkpoint): bs1 18.1 ms, bs8 115.7, bs16 217.6, bs32 426.9 ms cold (18.3 / 121.9 / 228.3 / 445.5 sustained)
+> at ISL 512 against the 32.3 / 725 ms profiled below. See `../pplx_embed_4b/doc/PERF_GUIDE.md` §9.
+
 ## Model overview
 
 | Property | Value |

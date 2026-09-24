@@ -98,6 +98,28 @@ bs32 → `QWEN_FUSED_ADD_NORM_R=4`, `QWEN_WEIGHT_INTERLEAVED_K{2560_N6144,4096_N
 all batches → `QWEN_FUSED_HEADS_NORM=1`, `QWEN_FUSED_ROTARY=1`, `QWEN_FUSED_Q_BFP8=force`,
 `QWEN_FUSED_KV_BFP8=1`, `QWEN_QKV_OUT_BFP8=1`, `QWEN_FUSED_ADD_NORM=1`, `QWEN_SILU_MUL=1` (bs32 rows).
 
+## Qwen3-Embedding-4B through the same stack (2026-09-24)
+
+Same backbone (2560 / 9728 / 36 layers / 32 Q + 8 KV heads / d 128), so the stack runs it unchanged with
+`HF_MODEL=Qwen/Qwen3-Embedding-4B`; only the recipe switches follow the checkpoint (causal attention via
+`QWEN_SDPA_CAUSAL=1`, set automatically for non-pplx checkpoints; last-token pooling with EOS). Nothing in
+the pplx path changed (bs1 re-measured at 17.7 ms with the switch in place). Run instructions:
+`PERF_GUIDE.md` §9.
+
+| batch | H200 | cold best (best of 10) | × H200 | sustained (median of it 15–29) | × H200 | 3× target | previous Qwen demo (`../qwen3_embedding_4b`) |
+|---|---|---|---|---|---|---|---|
+| 1 | 5.437 ms | **18.1** | 3.33× | 18.3 | 3.37× | 16.3 | 32.3 |
+| 8 | 33.081 | **115.7** | 3.50× | 121.9 | 3.68× | 99.2 | — |
+| 16 | 67.225 | **217.6** | 3.24× | 228.3 | 3.40× | 201.7 | — |
+| 32 | 139.150 | **426.9** | 3.07× | 445.5 | 3.20× | 417.5 | 725 |
+
+Within ±1–2% of pplx-embed-4B at every batch (run-to-run spread), as expected for identical compute; AICLK
+settled at 1328 / 1206 / 1190 / 1116 MHz. STS-B Spearman (last token + EOS,
+`eval_accuracy_batched.py --pool last --eos`, fixed ISL 512): bs1 0.8190, bs8 0.8095, bs16 0.8076,
+bs32 0.8073. The SDPA sweeps under causal attention pick the same grids and chunks as the bidirectional
+ones. One bs8 run died with a segfault while loading the tensor cache (host side, before any iteration);
+the rerun was clean — treat such a crash as transient and rerun before debugging.
+
 ## What is left, and who has it
 
 - `minimal_matmul` (K=2560, N=9728) at 332 TFLOP/s vs 473 for (K=9728, N=2560): ≈ −53 ms at bs32, −6 ms at bs8 — tenstorrent/tt-metal#57626 (Sankar Manoj).
