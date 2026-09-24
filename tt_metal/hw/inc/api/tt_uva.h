@@ -224,6 +224,9 @@ inline void tt_uva_put(uint32_t src_l1, tt_uva_t dst, uint32_t bytes) {
 // A sibling, not a wrapper: stage() commits, so a later signal would cost a second message.
 inline void tt_uva_put_signal(
     uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_addr, uint32_t sig_val, uint32_t sig_op) {
+    // Symmetric: the host gives sender and receiver the same l1_base, so an offset off ours
+    // names the word the target owns. Below that base it would wrap and the far bound drop it.
+    ASSERT(sig_addr >= detail::g_l1_base);
     detail::stage(src_l1, dst, bytes, sig_addr - detail::g_l1_base, sig_val, sig_op);
     socket_notify_receiver(detail::g_socket);
 }
