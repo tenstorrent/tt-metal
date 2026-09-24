@@ -41,6 +41,8 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(24);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(25);
+    constexpr uint32_t n_partial_col = get_compile_time_arg_val(26);
+    constexpr uint32_t mid_padded_tiles = get_compile_time_arg_val(27);
 
     uint32_t argidx = 0;
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
@@ -79,14 +81,25 @@ void kernel_main() {
         CircularBuffer(cb_identity_scale_in).wait_front(1);
         LightweightMaskContext lw_mask;
         lw_mask.neginf_tile_idx = 0;
+        constexpr uint32_t n_partial_tiles = n_partial_col > 0 ? 1u : 0u;
+        if constexpr (mask_chunk_0 != static_cast<uint32_t>(-1)) {
+            // The spatial segment ends inside chunk mask_chunk_0: its padded tiles are narrowed away and the
+            // partial tile, when there is one, is stamped from palette tile 1.
+            lw_mask.mid_mask_chunk = mask_chunk_0;
+            lw_mask.mid_padded_tiles = mid_padded_tiles;
+            lw_mask.mid_partial_col = n_partial_col;
+            lw_mask.mid_partial_tile_idx = 1;
+        }
         if constexpr (k_partial_col > 0) {
             // The joint tail ends inside the last K chunk: whole padded tiles are narrowed away, the partial
-            // tile is stamped from palette tile 1.
+            // tile is stamped from the palette tile after the spatial one.
             lw_mask.global_n_partial_col = k_partial_col;
-            lw_mask.global_n_partial_tile_idx = 1;
+            lw_mask.global_n_partial_tile_idx = 1 + n_partial_tiles;
             constexpr uint32_t last_chunk_first_tile = ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - (valid_Skt - last_chunk_first_tile);
-            CircularBuffer(cb_mask_in).wait_front(2);
+        }
+        if constexpr (n_partial_tiles + (k_partial_col > 0 ? 1u : 0u) > 0) {
+            CircularBuffer(cb_mask_in).wait_front(1 + n_partial_tiles + (k_partial_col > 0 ? 1u : 0u));
         }
         // The reader and writer walk nb, nq, q_chunk in this order; each (nb, nq) is one q chunk range.
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
