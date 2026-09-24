@@ -333,6 +333,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx) {
+    auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -353,7 +354,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         num_links,
         cluster_axis,
         mesh_device,
-        topology,
+        topology_1d,
         ccl_core_grid_offset,
         subdevice_id,
         /*is_causal=*/true,

@@ -294,6 +294,12 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     if (is_paged_cache) {
         optional_resource_defines.emplace("IS_PAGED_CACHE", "1");
     }
+    if (is_paged_cache && page_table->element_size() == sizeof(uint16_t)) {
+        // A page table sharded into L1 uses UINT16 entries (see validate_on_program_cache_miss);
+        // interleaved DRAM page tables use INT32. Tell the reader/writer which entry width to read
+        // so a sharded page table is not misread as half as many UINT32 entries.
+        optional_resource_defines.emplace("PAGE_TABLE_ENTRY_UINT16", "1");
+    }
 
     // ---------------- Reader ----------------
 
