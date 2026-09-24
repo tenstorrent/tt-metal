@@ -77,6 +77,9 @@ inline uint64_t wall_clock() {
 // Payload, then trailer, then the caller decides whether to commit. The signal fields are
 // written unconditionally: the staging slot is reused, so stale bytes would read as an op.
 inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
+    // One page is reserved, and the trailer takes its tail: a longer payload runs through
+    // the trailer and into the next page, which nothing has reserved.
+    ASSERT(g_page_size >= kFrameTrailerBytes && bytes <= g_page_size - kFrameTrailerBytes);
     // Bracketed separately from the write below: this is the wait for the host to retire a
     // page, which is the slot round trip and not a cost of sending.
     const uint64_t t_pre = wall_clock();
