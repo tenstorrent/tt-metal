@@ -27,7 +27,7 @@ kernels.
 | 1 | Contract + input recommendations docs | done (5cffae00) |
 | 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint implemented (b3c7d066), validating on bh-32; ring/exp follow task 4 |
 | 3 | Op-selected blocking and grid; `program_config` becomes an optional override | code done on `cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204 (host tests pass); device runs and perf table queued |
-| 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | in progress (`cglagovich/sdpa-recipe-ring-factories`) |
+| 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | done (`cglagovich/sdpa-recipe-ring-factories` @ 4b65adf7, merged); legacy kernels byte-identical in 204/206 configs, ring/exp/continuation/mesh green, perf unchanged |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
 | 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done on `cglagovich/sdpa-recipe-masks` @ f365ffc8 (131 mask tests, unmasked digests unchanged; merge after task 2 validates); lengths/exp geometry after task 4 |
 | 7 | Parity gates, then default flip for the four ops; drop model compute configs and tuning tables | planned |

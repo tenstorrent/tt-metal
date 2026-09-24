@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-// Shared host/kernel CB contract for exp-ring named precision recipes (SDPA_RECIPE_EXP_RING).
+// Shared host/kernel CB contract for the exp-ring named precision recipes (ExpRingJointSDPARecipeProgramFactory).
 // The recipe compute owns fixed CB indices 0-16 (Q=0, K=1, V=2, reduce scaler=3, column identity=4,
 // ...; see recipe_compute_program in sdpa_recipe.cpp). The exp-ring dataflow-only CBs that would collide
 // with that layout move to free indices above it. Only the K/V fabric-writer aliases survive in recipe
