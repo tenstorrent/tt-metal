@@ -237,6 +237,6 @@ inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig& confi
 // Delete the rvalue overload of unpack_modes to prevent dangling references
 // (The mutable accessors can't bind a temporary, and the const scalars return by value,
 // so only this one needs it.)
-inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig&&) = delete;
+const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig&&) = delete;
 
 }  // namespace tt::tt_metal::experimental

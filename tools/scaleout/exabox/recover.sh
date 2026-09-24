@@ -14,37 +14,7 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
-
-# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
-# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
-# "[host] " prefix at the source; this keeps that host, adds the time, and passes
-# already fully-tagged lines through unchanged (idempotent under a second pass).
-tag_stream() {
-    local line host rest
-    local esc=$'\x1b'
-    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
-    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
-    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
-    local self="${HOSTNAME:-$(hostname)}"
-    while IFS= read -r line; do
-        if [[ "$line" =~ $done_re ]]; then
-            printf '%s\n' "$line"
-            continue
-        fi
-        if [[ "$line" =~ $rank_re ]]; then
-            host="${BASH_REMATCH[1]}"
-            rest="${BASH_REMATCH[2]}"
-        else
-            host="$self"
-            rest="$line"
-        fi
-        if [[ "$rest" =~ $ts_re ]]; then
-            printf '[%s] %s\n' "$host" "$rest"
-        else
-            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
-        fi
-    done
-}
+source "$SCRIPT_DIR/utils/log_utils.sh"
 
 # Function to display help
 show_help() {
@@ -119,6 +89,23 @@ Optional:
                                             In --use-docker mode regen runs inside the image on the first host.
                                             Regen is skipped automatically when only --factory-descriptor-path is
                                             in use (cabling+deployment are required inputs).
+    --skip-cluster-debug                    Do not collect a cluster debug snapshot after a failed attempt.
+                                            By default every failed attempt, whatever failed, runs
+                                            run_cluster_debug.sh over the hosts and writes each Galaxy's ETH
+                                            and QSFP state as one file per host plus one merged cluster file
+                                            (~2 min). Never affects the outcome. A host without the collector
+                                            installed is named and the snapshot skipped.
+    --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
+                                            e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
+    --cluster-debug-use-ipmi                Read the QSFP cages with ipmitool on each host instead of the
+                                            BMC API (\$TT_BMC_API_URL / \$TT_BMC_API_TOKEN, passed through).
+    --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
+                                            visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
+                                            else the one on PATH)
+    --cluster-debug-log-root <directory>    Where the dumps go: <directory>/<host>/<YYYY-MM-DD>/ per host,
+                                            and <directory>/cluster_<YYYY-MM-DD>_<HHMMSS>.jsonl merged
+                                            (default: $CLUSTER_DEBUG_LOG_ROOT_DEFAULT; if that is not
+                                            writable, <output>/cluster_debug_attempt_<N>/)
     --help                                  Display this help message and exit
 
 ================================================================================
@@ -144,7 +131,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260916-29-gb69781b4a13"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260922-17-g86b55b92d0d"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -164,6 +151,13 @@ RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
+SKIP_CLUSTER_DEBUG=false
+CLUSTER_DEBUG_ALWAYS=false
+CLUSTER_DEBUG_USE_IPMI=false
+CLUSTER_DEBUG_TOOL=""
+CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
+CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
+CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -382,6 +376,34 @@ while [[ $# -gt 0 ]]; do
             REGENERATE_ON_FAILURE=false
             shift
             ;;
+        --skip-cluster-debug)
+            SKIP_CLUSTER_DEBUG=true
+            shift
+            ;;
+        --cluster-debug-always)
+            CLUSTER_DEBUG_ALWAYS=true
+            shift
+            ;;
+        --cluster-debug-use-ipmi)
+            CLUSTER_DEBUG_USE_IPMI=true
+            shift
+            ;;
+        --cluster-debug-tool)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cluster-debug-tool requires a non-empty value"
+                exit 1
+            fi
+            CLUSTER_DEBUG_TOOL="$2"
+            shift 2
+            ;;
+        --cluster-debug-log-root)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cluster-debug-log-root requires a non-empty value"
+                exit 1
+            fi
+            CLUSTER_DEBUG_LOG_ROOT="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -551,6 +573,13 @@ if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
 echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
+if [[ "$SKIP_CLUSTER_DEBUG" == true ]]; then
+    echo "Cluster debug snapshot: skipped"
+elif [[ "$CLUSTER_DEBUG_ALWAYS" == true ]]; then
+    echo "Cluster debug snapshot: every attempt, dumps under $CLUSTER_DEBUG_LOG_ROOT"
+else
+    echo "Cluster debug snapshot: every failed attempt, dumps under $CLUSTER_DEBUG_LOG_ROOT"
+fi
 echo "=========================================="
 echo ""
 
@@ -602,6 +631,46 @@ else
     echo "Skipping MPI stress test (--skip-mpi-stress-test)"
     echo ""
 fi
+
+# Every failed attempt gets the same snapshot: every ETH port and every QSFP cage of every
+# Galaxy, one file per host under the log root plus one merged cluster file beside them.
+# run_cluster_debug.sh looks for the cluster's factory descriptor itself unless recovery was
+# given one.
+collect_cluster_debug() {
+    local attempt="$1" validation_exit="$2"
+    # --per-host-root is the log tree; run_cluster_debug.sh falls back to <output> itself
+    # when a host cannot write there. --parallelize reads the four UBBs' cages at once,
+    # about two minutes per attempt instead of four; verified identical to the serial sweep.
+    local args=(
+        --hosts "$HOSTS"
+        --mpi-if "$MPI_IF"
+        --output "$OUTPUT_DIR/cluster_debug_attempt_${attempt}"
+        --cluster-name "recover_${CONFIG}"
+        --reason "recover.sh attempt ${attempt} of ${MAX_ATTEMPTS}, validation exit ${validation_exit}"
+        --per-host-root "$CLUSTER_DEBUG_LOG_ROOT"
+        --parallelize
+    )
+    [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    [[ -n "$CLUSTER_DEBUG_TOOL" ]] && args+=(--tool "$CLUSTER_DEBUG_TOOL")
+    [[ "$CLUSTER_DEBUG_USE_IPMI" == true ]] && args+=(--use-ipmi)
+    [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]] && args+=(--mpi-args "${MPI_EXTRA_ARGS[*]}")
+
+    echo ""
+    echo "Collecting a cluster debug snapshot for $([[ $validation_exit -eq 0 ]] && echo "passed" || echo "failed") attempt $attempt..."
+    # A failed snapshot is a warning; an interrupted one (Ctrl-C, or a TERM aimed at the
+    # collector) stops recovery here rather than rolling on to the next reset.
+    local debug_exit=0
+    "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
+    if [[ $debug_exit -eq 130 || $debug_exit -eq 143 ]]; then
+        echo "Cluster debug collection was interrupted; stopping recovery."
+        exit "$debug_exit"
+    elif [[ $debug_exit -eq 3 ]]; then
+        # run_cluster_debug.sh's "not installed" status: a setup gap, named above, not a failure.
+        echo "Cluster debug snapshot skipped: $CLUSTER_DEBUG_TOOL_NAME is not installed (see above); recovery continues"
+    elif [[ $debug_exit -ne 0 ]]; then
+        echo "Warning: cluster debug collection failed (see above); recovery continues"
+    fi
+}
 
 # Outer recovery loop: run the full reset + validation up to MAX_ATTEMPTS times, or until
 # validation succeeds. --num-iterations controls the inner validation loop; this controls how
@@ -788,6 +857,11 @@ else
 fi
 
 # Outer-loop control: stop as soon as an attempt succeeds; otherwise retry until attempts exhausted.
+# The snapshot: after a failed attempt, or after every attempt with --cluster-debug-always.
+if [[ "$SKIP_CLUSTER_DEBUG" == false ]] \
+   && [[ $VALIDATION_EXIT -ne 0 || "$CLUSTER_DEBUG_ALWAYS" == true ]]; then
+    collect_cluster_debug "$ATTEMPT" "$VALIDATION_EXIT"
+fi
 if [[ $VALIDATION_EXIT -eq 0 ]]; then
     echo ""
     echo "Recovery succeeded on attempt $ATTEMPT of $MAX_ATTEMPTS."

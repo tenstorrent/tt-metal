@@ -19,7 +19,7 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
+#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -357,15 +357,15 @@ public:
             } else {
                 TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
             }
-            // The dispatch kernels stay on the V2 API until their dedicated
-            // conversion, so fast dispatch cannot run under ATT yet. Check the
-            // effective runtime mode, not the raw env var.
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
+            // decodes XY operands and cannot run under ATT currently; the rest of the
+            // watcher never decodes an address, so allow it when the sanitizer
+            // is explicitly disabled.
             TT_FATAL(
-                !params.rtoptions.get_fast_dispatch(),
-                "TT_METAL_NOC_ATT requires slow dispatch (dispatch kernels are not converted to the V3 API yet)");
-            // The watcher NoC sanitizer decodes XY operands; reject the
-            // effective runtime state until it is ATT-aware.
-            TT_FATAL(!params.rtoptions.get_watcher_enabled(), "TT_METAL_NOC_ATT does not support the watcher yet");
+                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
+                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
+                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
             static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;

@@ -181,12 +181,11 @@ constexpr bool kPrefetchNextX = true;
 constexpr uint32_t P2_READ_TRID = 14;
 constexpr uint32_t NEXT_X_TRID = 15;
 
-// Runtime-arg layout: the 17-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
+// Runtime-arg layout: the 10-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
 // order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
 // makes the slice ownership agree grid-wide.
-constexpr uint32_t RT_PEERS = 17;
+constexpr uint32_t RT_PEERS = 10;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
-constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
 
 // The host emits the same five-word mcast descriptor used by kernel_lib:
 // active, data-ready semaphore, consumer-ready semaphore, active consumers,
@@ -196,12 +195,12 @@ constexpr uint32_t XMCAST_READY_SEM = get_compile_time_arg_val(CT_XMCAST + 1);
 constexpr uint32_t XMCAST_FREE_SEM = get_compile_time_arg_val(CT_XMCAST + 2);
 constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
 constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
-// h's descriptor has a rotating sender list of the whole grid.  The grouped
-// rectangle follows that list; only the rectangles are used by this raw path.
-constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
+// The group rectangle remains per core; the full-grid table is common.
+constexpr uint32_t RT_HGROUP_RECT = RT_XMCAST + 4 + 2 * HGROUPS;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
-constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
+// W_down addresses, shared by every worker through common runtime arguments.
+constexpr uint32_t COMMON_WEIGHTS = 4;  // Common runtime arguments: shared expert buffer addresses.
+constexpr uint32_t COMMON_HMCAST = COMMON_WEIGHTS + 2 * EXPERTS_PER_CHIP;
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
 // non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
@@ -218,10 +217,10 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 2),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 3))
                                : moe_fused_swiglu::McastRect<noc_index>(
-                                     get_arg_val<uint32_t>(RT_HMCAST + 0),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 1),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 2),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 3));
+                                     get_common_arg_val<uint32_t>(COMMON_HMCAST + 0),
+                                     get_common_arg_val<uint32_t>(COMMON_HMCAST + 1),
+                                     get_common_arg_val<uint32_t>(COMMON_HMCAST + 2),
+                                     get_common_arg_val<uint32_t>(COMMON_HMCAST + 3));
     const auto& rb = hrect.bounds();
     // EXCLUDE-source: `src == dst` on this send (the self-copy already placed this core's own copy),
     // so the fan-out is the rect area minus this core — the same count SenderPipe's
@@ -288,7 +287,8 @@ constexpr uint32_t cb_down_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 2);
 constexpr auto gate_bias_args = TensorAccessorArgs<BIAS_CB_OFFSET + 3>();
 constexpr auto up_bias_args = TensorAccessorArgs<gate_bias_args.next_compile_time_args_offset()>();
 constexpr auto down_bias_args = TensorAccessorArgs<up_bias_args.next_compile_time_args_offset()>();
-constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+// Optional biases follow the common full-grid rectangle and sender coordinate table.
+constexpr uint32_t COMMON_BIAS = COMMON_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
 #endif
 
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
@@ -316,25 +316,24 @@ void kernel_main() {
     // Bound to this kernel's noc_index (NOC_0). The raw ncrisc_* multicasts below pass the same
     // noc_index explicitly, so every transaction this kernel issues rides one NoC.
     Noc noc;
-    (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
-    const uint32_t x_addr = get_arg_val<uint32_t>(1);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(4);
-    const uint32_t idx_addr = get_arg_val<uint32_t>(5);
-    const uint32_t kr_rows = get_arg_val<uint32_t>(6);  // real K tiles this grid ROW owns
-    const uint32_t kstart = get_arg_val<uint32_t>(7);   // first emb tile index this row owns
-    const uint32_t hstart = get_arg_val<uint32_t>(8);   // first hidden linear index this COLUMN owns
-    const uint32_t hn_cols = get_arg_val<uint32_t>(9);  // real hidden tiles this column owns
-    const uint32_t ec = get_arg_val<uint32_t>(10);      // output emb tiles this CORE owns
-    const uint32_t out_col_start = get_arg_val<uint32_t>(11);
-    const uint32_t ec_group = get_arg_val<uint32_t>(12);  // paired-row output ownership
-    const uint32_t jstart_group = get_arg_val<uint32_t>(13);
-    const uint32_t my_col = get_arg_val<uint32_t>(14);
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t idx_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t kr_rows = get_arg_val<uint32_t>(0);  // real K tiles this grid ROW owns
+    const uint32_t kstart = get_arg_val<uint32_t>(1);   // first emb tile index this row owns
+    const uint32_t hstart = get_arg_val<uint32_t>(2);   // first hidden linear index this COLUMN owns
+    const uint32_t hn_cols = get_arg_val<uint32_t>(3);  // real hidden tiles this column owns
+    const uint32_t ec = get_arg_val<uint32_t>(4);       // output emb tiles this CORE owns
+    const uint32_t out_col_start = get_arg_val<uint32_t>(5);
+    const uint32_t ec_group = get_arg_val<uint32_t>(6);  // paired-row output ownership
+    const uint32_t jstart_group = get_arg_val<uint32_t>(7);
+    const uint32_t my_col = get_arg_val<uint32_t>(8);
     // My row in the grid column: which slice of the reduce-scatter I own (0 tiles = an idle core,
     // which still contributes and still invites).
-    const uint32_t my_row = get_arg_val<uint32_t>(15);
+    const uint32_t my_row = get_arg_val<uint32_t>(9);
     // `start` (= expert_region_offsets) base. Present in every dispatch (the host stands `counts`
     // in when the caller passes no offsets tensor) and read only when NEED_START.
-    const uint32_t start_addr = get_arg_val<uint32_t>(16);
+    const uint32_t start_addr = get_common_arg_val<uint32_t>(3);
     // Column `x`'s reduce root is row `x % KGROUPS` — the core that injects this column's h into
     // the phase-2 all-gather. Derived, not passed: one rule, three kernels.
     const bool is_root = (my_row == my_col % KGROUPS);
@@ -426,9 +425,10 @@ void kernel_main() {
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wg_acc =
+            TensorAccessor(wg_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(
+            wd_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
 #ifdef FUSE_BIAS
         // This expert's bias windows, fetched once. Gate/up take the COLUMN's whole HN_PAD window
         // rather than a per-core slice: after the reduce-scatter a core's gate/up slice is a flat
@@ -441,11 +441,17 @@ void kernel_main() {
             const uint32_t gbias_tile = get_tile_size(cb_gate_bias);
             const uint32_t dbias_tile = get_tile_size(cb_down_bias);
             const auto gb_acc = TensorAccessor(
-                gate_bias_args, get_arg_val<uint32_t>(RT_BIAS + 0 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+                gate_bias_args,
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * EXPERTS_PER_CHIP + local_expert_id),
+                gbias_tile);
             const auto ub_acc = TensorAccessor(
-                up_bias_args, get_arg_val<uint32_t>(RT_BIAS + 1 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+                up_bias_args,
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 1 * EXPERTS_PER_CHIP + local_expert_id),
+                gbias_tile);
             const auto db_acc = TensorAccessor(
-                down_bias_args, get_arg_val<uint32_t>(RT_BIAS + 2 * EXPERTS_PER_CHIP + local_expert_id), dbias_tile);
+                down_bias_args,
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 2 * EXPERTS_PER_CHIP + local_expert_id),
+                dbias_tile);
 
             cb_reserve_back(cb_gate_bias, HN_PAD);
             cb_reserve_back(cb_up_bias, HN_PAD);
@@ -634,8 +640,8 @@ void kernel_main() {
                 Semaphore<> hrow_free(SEM_HROW_FREE);
                 for (uint32_t x = 0; x < HGROUPS; ++x) {
                     const uint32_t sidx = my_row * HGROUPS + x;
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                    const uint32_t vx = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0);
+                    const uint32_t vy = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1);
                     hrow_free.up(noc, vx, vy, 1);
                 }
                 noc.async_atomic_barrier();
@@ -1053,8 +1059,8 @@ void kernel_main() {
                         while (next_ack < lr + ahead && next_ack < round_count) {
                             const uint32_t gr = round_base + next_ack;
                             const uint32_t sidx = gr * HGROUPS + gr;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                            const uint32_t svx = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0);
+                            const uint32_t svy = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1);
                             Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }
@@ -1147,8 +1153,8 @@ void kernel_main() {
                         // from a core that has already reserved, so no core waits on a core waiting on it.
                         while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
                             const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                            const uint32_t svx = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0);
+                            const uint32_t svy = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1);
                             Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }

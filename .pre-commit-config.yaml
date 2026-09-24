@@ -7,7 +7,8 @@ repos:
     - id: trailing-whitespace
       exclude: \.patch$
     - id: end-of-file-fixer
-      exclude: \.patch$
+      # Preserve the hashed, token-aligned book excerpt, including its missing final newline.
+      exclude: (\.patch$|^models/demos/llama_3p1_8b_d_p/tests/model/fixtures/book/pride_and_prejudice\.txt$)
     - id: check-yaml
       args: ["--unsafe"]
     - id: check-merge-conflict

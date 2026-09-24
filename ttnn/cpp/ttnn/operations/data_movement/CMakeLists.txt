@@ -44,6 +44,7 @@ file(
     repeat/codegen/kernels/*.cpp
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
+    scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
     sharded/device/kernels/*.cpp
     sharded/reshard/device/kernels/*.cpp

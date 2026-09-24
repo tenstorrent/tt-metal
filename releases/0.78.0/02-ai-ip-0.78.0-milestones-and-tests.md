@@ -18,7 +18,9 @@ Provenance differs by milestone, and that matters when checking this document:
 
 Known gaps, carried from the sources rather than omitted:
   - AIIPSW-9  (LLK: ResNet on Horizon)    - still "to be filled out"
-  - AIIPSW-53 (Qwen3-VL-2B LLK features)  - no test evidence supplied
+  - AIIPSW-53 (Qwen3-VL-2B LLK features)  - no PRs or test evidence. An
+    earlier draft cited PRs 54588 and 54625; Filip Vranic (LLK) reviewed on
+    2026-09-18 and confirmed neither is an LLK PR. Removed.
 
 Out of scope for Sep-15, so not listed: AIIPSW-26 (Trinity port of ResNet
 Kernel Ops) and AIIPSW-55 (Trinity runtime basic functionality). Neither
@@ -60,7 +62,7 @@ Counting only Quasar coverage, Sep-15 is 2 of 4.
 | Aug-15 | **Profiler** (AIIPSW-13) | Quasar LLK performance-test suite: eltwise binary (+broadcast, reuse_dest), unary broadcast/datacopy, pack / pack_l1_acc / pack_untilize, unpack_tilize / unpack_unary_operand, reduce, and transpose_dest (PRs 50584–50596); unary and binary SFPU tests (PR 51325); and the Quasar cache-write benchmark (PR 50898). | Trinity | [@Filip Vranic](https://tenstorrent.enterprise.slack.com/team/U08AU2A435Z) |
 | Sep-15 | **TTNN/Kernel Ops: Quasar ResNet with conv2D, pool and linear** (AIIPSW-16) | End-to-end model test on a two-compute-node (2x3) grid, plus the individual op tests used for debugging. `models/demos/vision/classification/resnet50/quasar/tests/ops/` now holds **50** op tests, up from 45 at v0.76.0. Commands and environment are given in full below. Verified on `main` at commit `5c73430ac16`. | Trinity | [@Borys Bradel](https://tenstorrent.enterprise.slack.com/team/U084B1CES7M) |
 | Sep-15 | **Debug tools: Exalens advanced debugging** (AIIPSW-52) | `rocket_step_test.py` (step-by-step debugging) and `rocket_callstack_test/rocket_callstack_test.py` (call-stack retrieval), both in `tenstorrent/tt-exalens` on branch `adjordjevic/release_testing`. See the note on test location below. | Debug Tools | [@Aleksandar Đorđević](https://tenstorrent.enterprise.slack.com/team/U082G4QEVGV) |
-| Sep-15 | **LLK: Qwen3-VL-2B related LLK features** (AIIPSW-53) | _to be filled out._ No PRs and no test evidence supplied at the v0.78.0 cut-off. Qwen3-VL op tests for Quasar do exist (PRs 54588, 54625) but were not offered as evidence for this requirement. | Trinity | [@Filip Vranic](https://tenstorrent.enterprise.slack.com/team/U08AU2A435Z) |
+| Sep-15 | **LLK: Qwen3-VL-2B related LLK features** (AIIPSW-53) | _to be filled out._ No PRs and no test evidence supplied at the v0.78.0 cut-off. PRs 54588 and 54625 were cited in an earlier draft; Filip Vranic (LLK) reviewed on 2026-09-18 and confirmed neither PR is from the LLK team or touches the LLK codebase. Removed. | Trinity | [@Filip Vranic](https://tenstorrent.enterprise.slack.com/team/U08AU2A435Z) |
 | Sep-15 | **Debug tools: dynamic visualizer / NPE support** (AIIPSW-54) | **Not Quasar coverage - see the note below.** SoC-descriptor dump: `pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_noc_event_profiler`, which runs on Wormhole or Blackhole only. Visualizer compatibility with the new SoC-descriptor information in the timeline file was verified manually, not by an automated test. | Debug Tools | [@Sohaib Nadeem](https://tenstorrent.enterprise.slack.com/team/U08M5PK2492) · [@Denis Kartashevsky](https://tenstorrent.enterprise.slack.com/team/U05BL8X4BED) |
 
 ## Sep-15 test detail
