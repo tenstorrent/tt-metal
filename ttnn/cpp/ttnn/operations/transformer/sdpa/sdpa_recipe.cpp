@@ -292,6 +292,15 @@ static std::vector<Tensor> run_recipe_segments(
         program.kernels.front().defines.emplace_back(
             "SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k.logical_shape()[2]));
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
+        // The tail mask pushes non-frozen paired geometries just past the kernel config buffer.
+        const bool frozen_geometry = q_tiles == 8 && k_tiles == 16 && d_tiles == 4;
+        const bool paired = policy.recurrent_state == RecurrentState::CompensatedBF16;
+        auto& defines = program.kernels.front().defines;
+        const bool already = std::any_of(
+            defines.begin(), defines.end(), [](const auto& d) { return d.first == "SDPA_RECIPE_SIZE_OPTIMIZED"; });
+        if (paired && !frozen_geometry && !already) {
+            defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
+        }
     }
     for (uint32_t i = 0; i < 3; ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
