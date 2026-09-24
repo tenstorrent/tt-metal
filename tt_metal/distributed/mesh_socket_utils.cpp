@@ -6,7 +6,6 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -90,6 +89,7 @@ void validate_fabric_config_for_sockets(
 // This does not return a FabricNodeId because for 1D fabric, we return a distance between the sender and receiver
 // instead of a chip id (FabricNodeId also stores its chip_id as uint32_t)
 std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
+    const tt_fabric::ControlPlane& control_plane,
     tt_fabric::FabricNodeId sender_node_id,
     tt_fabric::FabricNodeId recv_node_id,
     tt_fabric::FabricConfig fabric_config,
@@ -102,7 +102,6 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         TT_FATAL(
             sender_node_id.mesh_id == recv_node_id.mesh_id,
             "1D Fabric requires sender and receiver to be on the same mesh");
@@ -407,10 +406,11 @@ void write_socket_configs(
     const auto core_to_core_id = config_buffer_core_to_id(config_buffer, config, socket_endpoint);
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
-    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    auto& metal_env = mesh_device->impl().metal_env();
+    const SocketSenderSize sender_size(metal_env.get_hal().get_alignment(HalMemType::L1));
+    tt_fabric::FabricConfig fabric_config = metal_env.get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = metal_env.get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& global_bindings = control_plane.get_global_logical_bindings();
 
@@ -472,10 +472,10 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = 0;                                    // bytes_sent
-                config_data[md_offset++] = connections.size();                   // num_downstreams
-                config_data[md_offset++] = 0;  // write_ptr (offset from downstream_fifo_addr)
-                config_data[md_offset++] = peer_config_buf_addr;                 // downstream_bytes_sent_addr
+                config_data[md_offset++] = 0;                     // bytes_sent
+                config_data[md_offset++] = connections.size();    // num_downstreams
+                config_data[md_offset++] = 0;                     // write_ptr (offset from downstream_fifo_addr)
+                config_data[md_offset++] = peer_config_buf_addr;  // downstream_bytes_sent_addr
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
                 config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
                 config_data[md_offset++] = 0;                                    // is_d2h
@@ -500,7 +500,7 @@ void write_socket_configs(
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto sender_node = mesh_device->get_fabric_node_id(sender_core.device_coord);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                        sender_node, recv_fabric_node_id, fabric_config, SocketEndpoint::SENDER);
+                        control_plane, sender_node, recv_fabric_node_id, fabric_config, SocketEndpoint::SENDER);
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
                         enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
@@ -539,6 +539,7 @@ void write_socket_configs(
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
+                    control_plane,
                     sender_fabric_node_id,
                     mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
@@ -666,16 +667,17 @@ void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
-    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table) {
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table,
+    const tt_fabric::ControlPlane& control_plane) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto my_mesh_id = is_sender ? config.sender_mesh_id.value() : config.receiver_mesh_id.value();
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id.value() : config.sender_mesh_id.value();
 
     std::vector<tt_metal::distributed::multihost::Rank> my_mesh_id_ranks =
-        get_ranks_for_mesh_id(my_mesh_id, rank_translation_table);
+        get_ranks_for_mesh_id(control_plane, my_mesh_id, rank_translation_table);
     std::vector<tt_metal::distributed::multihost::Rank> peer_mesh_id_ranks =
-        get_ranks_for_mesh_id(peer_mesh_id, rank_translation_table);
+        get_ranks_for_mesh_id(control_plane, peer_mesh_id, rank_translation_table);
     tt_metal::distributed::multihost::Rank controller_rank =
         *std::min_element(my_mesh_id_ranks.begin(), my_mesh_id_ranks.end());
 
@@ -714,11 +716,12 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
-    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table) {
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table,
+    const tt_fabric::ControlPlane& control_plane) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id.value() : config.sender_mesh_id.value();
-    auto peer_ranks = get_ranks_for_mesh_id(peer_mesh_id, rank_translation_table);
+    auto peer_ranks = get_ranks_for_mesh_id(control_plane, peer_mesh_id, rank_translation_table);
     tt_metal::distributed::multihost::Rank peer_controller_rank =
         *std::min_element(peer_ranks.begin(), peer_ranks.end());
 
@@ -754,8 +757,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     // Receive the serialized descriptor
     execute_with_timeout([&]() {
         context->recv(
-            ttsl::as_writable_bytes(
-                ttsl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
             Rank{peer_controller_rank},
             desc.exchange_tag  // Read the descriptor over the specified tag
         );
@@ -807,12 +809,12 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
+    const tt_fabric::ControlPlane& control_plane,
     const std::shared_ptr<MeshDevice>& sender_device,
     const std::shared_ptr<MeshDevice>& receiver_device,
     const std::vector<uint32_t>& peer_sender_chip_ids,
     const std::vector<uint32_t>& peer_receiver_chip_ids) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& global_bindings = control_plane.get_global_logical_bindings();
 
@@ -871,9 +873,10 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
 }
 
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
-    tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table) {
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const tt_fabric::ControlPlane& control_plane,
+    tt_fabric::MeshId mesh_id,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table) {
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
     std::vector<multihost::Rank> ranks;
     ranks.reserve(global_logical_bindings.size());
 

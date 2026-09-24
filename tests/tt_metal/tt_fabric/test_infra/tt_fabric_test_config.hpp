@@ -544,10 +544,7 @@ private:
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_one_or_all_to_all_multicast(
-        ParsedTestConfig& test,
-        const ParsedTrafficPatternConfig& base_pattern,
-        HighLevelTrafficPattern pattern_type,
-        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
 
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);

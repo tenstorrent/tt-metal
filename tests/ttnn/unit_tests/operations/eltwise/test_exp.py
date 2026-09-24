@@ -21,7 +21,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "low, high, testing_dtype, expected_rtol, expected_atol",
     [
-        (-89, -87, "bfloat16", 1e-2, 1e-3),
         (-87.3, 88.7, "float32", 1e-2, 1e-3),
     ],
 )

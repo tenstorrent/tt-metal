@@ -1221,6 +1221,62 @@ def test_kimi_prefill_transformer_chunked_padded(
     )
 
 
+@pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
+@pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
+@pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
+            # semaphores; GLM needs 1216, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer_chunked_padded(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    splits,
+    num_links,
+    mode,
+):
+    """Padded/rotated chunked prefill for GLM-5.2, traced vs untraced (see _PADDED_MODES)."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_chunked_transformer_padded_trace(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        splits,
+        GateComputeMode.DEVICE_FP32,  # GLM's noaux_tc gate uses the grouped-topk fp32 device path
+        num_links,
+        topology,
+        routing_use_l1_small_for_semaphores=True,
+        # The harness names its untraced variant "scalar"; here the only question is trace or no trace.
+        mode="traced" if mode == "traced" else "scalar",
+        kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
+        assert_full_depth=True,
+    )
+
+
 # Mistral counterpart of the padded/rotated chunked row above. Three deviations, all forced by the
 # config rather than chosen:
 #   * GPT_DEVICE, not DEVICE_FP32. moe_grouped_topk.cpp's parse_score_func takes only sigmoid and
@@ -2913,6 +2969,8 @@ def run_chunked_transformer_padded_trace(
     topology,
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
+    kv_pcc_threshold=None,
+    assert_full_depth=False,
 ):
     """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
     param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
@@ -2953,6 +3011,9 @@ def run_chunked_transformer_padded_trace(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
+    has_indexer = resolve_has_indexer(config)
+    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+
     # Real-token cache, pad tail off the end (mirror run_chunked_transformer_padded).
     seq_len_cache, pad_overruns = _padded_cache_len(splits)
 
@@ -2992,8 +3053,6 @@ def run_chunked_transformer_padded_trace(
         weight_cache_path=effective_cache_path,
         is_chunked=True,
         slot_num=1,
-        # kv_only_last_layer: the last layer only fills its KV cache (dead work trimmed; the KV cache is
-        # the output). The forward is device-only either way, so ttnn trace can capture it.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -3020,14 +3079,34 @@ def run_chunked_transformer_padded_trace(
 
     def _make_cache():
         return init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BFP8_TILE,
+            cache_format=cache_format,
             hf_config=config,
             mesh_device=mesh_device,
             seq_len=seq_len_cache,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis if has_indexer else None,
             num_kvpe_cache_layers=num_layers,
             num_users=1,
+        )
+
+    def _make_index_cache():
+        """The sparse path's indexer key cache. Strided by the COMPACTED full-indexer count over the
+        built layers (>1 for glm_5_2 cross-layer reuse, where `shared` layers own no indexer and never
+        write), so it matches the indexer's cache_batch stride. None for dense variants."""
+        if not has_indexer:
+            return None
+        assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
         )
 
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None))
@@ -3037,9 +3116,57 @@ def run_chunked_transformer_padded_trace(
     # There is no scalar-vs-metadata cross-comparison: the scalar, metadata(eager) and trace(replay)
     # paths are independent tests, each validated only against the golden.
 
+    def _assert_caches(kvpe, index_kv, tag):
+        """Per-layer KV-cache PCC vs the golden, plus the indexer-K cache on the sparse path. Shared by
+        both modes so they cannot drift in WHAT they assert -- the whole point of this test is that a
+        traced-vs-scalar difference is the trace/metadata path, not a harness difference."""
+        _record_kv_cache_pcc(
+            trace_dir,
+            layout,
+            kvpe,
+            mesh_device,
+            sp,
+            num_layers,
+            seq_len_cache,
+            total_len,
+            config.kv_lora_rank,
+            assert_threshold=LAYER_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
+            # Sparse models are gated at FULL depth (assert_full_depth): their deep-layer KV is the
+            # product under test, and GATED_LAYER_DEPTH would leave every layer past 10 unasserted.
+            assert_layer_depth=None
+            if assert_full_depth
+            else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+            tp_shard_kv=has_indexer,
+        )
+        # REQUIRED on the sparse path, not best-effort: GLM has two device caches and checking only the
+        # KVPE one would leave the indexer's keys -- which decide top-k, i.e. WHICH latents attention
+        # even sees -- unverified. Some golden traces (notably the adapter's *serving* default) ship
+        # without dsa/indexer_k_layer_*, and a silent skip there turns this into a KVPE-only test that
+        # still reports green. Fail loudly and name the fix instead.
+        if index_kv is not None:
+            assert (trace_dir / "dsa" / "indexer_k_layer_0").exists(), (
+                f"golden trace {trace_dir} carries no dsa/indexer_k_layer_* tensors, so the indexer-K "
+                f"cache cannot be verified. Point PREFILL_TRACE_DIR at a trace that has them "
+                f"(the variant's test_prefill_trace_default does)."
+            )
+            _record_indexer_k_cache_pcc(
+                trace_dir,
+                layout,
+                index_kv,
+                mesh_device,
+                sp,
+                num_layers,
+                seq_len_cache,
+                total_len,
+                config,
+                tp_shard_kv=has_indexer,
+            )
+        logger.info(f"[padded-trace] {tag}: cache PCC recorded")
+
     # ---- SCALAR mode: untraced scalar path (host actual_start/actual_end), asserted vs GOLDEN. ----
     if mode == "scalar":
         cache = _make_cache()
+        index_cache = _make_index_cache()
         # UNTRACED ONLY: also PCC each layer's DECODER OUTPUT, not just the KV cache. This needs
         # return_intermediates=True, whose _to_host(h) + synchronize_device is a host readback and so
         # cannot live inside a trace capture — which is why the metadata/traced modes below assert KV
@@ -3081,6 +3208,7 @@ def run_chunked_transformer_padded_trace(
                 actual_start=ks,
                 actual_end=e,
                 cache_user_id=0,
+                index_kv_cache=index_cache,
                 metadata=None,
                 return_intermediates=True,
             )
@@ -3125,19 +3253,7 @@ def run_chunked_transformer_padded_trace(
             ), f"decoder-output min PCC {decoder_min:.6f} < {LAYER_PCC_THRESHOLD}"
 
         logger.info("[padded-trace] SCALAR path done; recording per-layer KV PCC vs GOLDEN")
-        _record_kv_cache_pcc(
-            trace_dir,
-            layout,
-            cache,
-            mesh_device,
-            sp,
-            num_layers,
-            seq_len_cache,
-            total_len,
-            config.kv_lora_rank,
-            assert_threshold=LAYER_PCC_THRESHOLD,
-            assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
-        )
+        _assert_caches(cache, index_cache, "SCALAR")
         ttnn.deallocate(cache.storage)
         transformer.release_sub_device_managers()
         logger.success("[padded-trace] SCALAR run complete (asserted vs golden)")
@@ -3145,6 +3261,7 @@ def run_chunked_transformer_padded_trace(
 
     # ---- METADATA modes (eager / traced): on-device per-split scalars, asserted vs GOLDEN. ----
     cache_B = _make_cache()  # persistent (captured) cache
+    index_cache_B = _make_index_cache()
     trace_input = ttnn.from_torch(
         chunk_tok_host[0],
         device=mesh_device,
@@ -3187,6 +3304,7 @@ def run_chunked_transformer_padded_trace(
             actual_start=None,
             actual_end=None,
             cache_user_id=0,
+            index_kv_cache=index_cache_B,
             metadata=trace_metadata,
         )
 
@@ -3244,18 +3362,6 @@ def run_chunked_transformer_padded_trace(
     for t in trace_metadata[:3]:
         ttnn.deallocate(t)
     logger.info(f"[padded-trace] {mode} metadata path done; recording per-layer KV PCC vs GOLDEN")
-    _record_kv_cache_pcc(
-        trace_dir,
-        layout,
-        cache_B,
-        mesh_device,
-        sp,
-        num_layers,
-        seq_len_cache,
-        total_len,
-        config.kv_lora_rank,
-        assert_threshold=LAYER_PCC_THRESHOLD,
-        assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
-    )
+    _assert_caches(cache_B, index_cache_B, mode)
     transformer.release_sub_device_managers()
     logger.success(f"[padded-trace] {mode} metadata run complete (asserted vs golden)")

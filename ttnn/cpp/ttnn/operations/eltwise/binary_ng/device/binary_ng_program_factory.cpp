@@ -31,7 +31,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }

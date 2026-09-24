@@ -277,7 +277,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_NoActiveWindow_NoViolation) {
 
 // Produced-region reuse control: a write back into an already-produced page
 // [read_idx, write_idx), outside the active reserve window, must NOT abort (the
-// conv activation-reuse pattern). See SANITIZER_CHECKS.md §7.
+// conv activation-reuse pattern).
 TEST_F(UnitMeshFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
