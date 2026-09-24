@@ -659,14 +659,18 @@
   "status": "PASS"
  },
  "P2.15": {
-  "duration_s": 169.8,
+  "duration_s": 90.8,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-24T19:57:18"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T20:45:16"
    }
   ],
-  "last_run": "2026-09-24T19:57:18",
+  "last_run": "2026-09-24T20:45:16",
   "log": "models/demos/ernie45_d_p/bringup/logs/P2.15.log",
   "metrics": {
    "contract_checks_failed": 0,
@@ -729,7 +733,7 @@
    "pcc_kv_contract_v_L27": 0.9978762761242155
   },
   "rc": 0,
-  "started": "2026-09-24T19:54:29",
+  "started": "2026-09-24T20:43:45",
   "status": "PASS"
  },
  "P2.16": {
