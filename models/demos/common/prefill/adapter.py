@@ -271,6 +271,9 @@ ADAPTER_PATHS = {
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # DeepSeek-V4-Flash: mHC hyper-connections + SWA / CSA(indexer) / HCA attention + V4 MoE (adapters/deepseek_v4_flash.py).
+    # Config + KV geometry + caches today; the block / transformer / runtime land per the plan (M2..M6).
+    "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4_flash:DeepSeekV4FlashAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
 }
