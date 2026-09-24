@@ -77,12 +77,18 @@
   cmd: |
     set -euo pipefail
     umask 077
+    run_started=$SECONDS
 
     cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
     model_dir=models/demos/gemma4_31b_qb2
     mkdir -p generated/test_logs generated/test_reports/gemma4_31b_qb2
     work=$(mktemp -d)
     results="$PWD/generated/test_reports/gemma4_31b_qb2"
+    mark_phase() {
+        printf 'Gemma CI phase=%s elapsed_seconds=%s\n' "$1" "$((SECONDS - run_started))" \
+            | tee -a "$results/phase-timings.log"
+    }
+    mark_phase setup
     export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
     export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
     # CI mounts the shared model cache read-only; evaluator caches must be local.
@@ -106,10 +112,12 @@
     # Weekly smoke: both attention kinds beyond the sliding-window/page boundary,
     # plus all inexpensive client and scheduler-input checks. Keep the full suite
     # available for model changes and release validation.
+    mark_phase model_tests
     python -m pytest "$model_dir/tests/test_benchmark.py" "$model_dir/tests/test_serving_inputs.py" \
         "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-sliding]" \
         "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-full]" \
         --timeout 600 --junitxml "$results/decoder.xml"
+    mark_phase model_tests_complete
 
     tt_config=$(python - <<'PY'
     import json
@@ -133,13 +141,14 @@
         wait "$server_pid" 2>/dev/null || true
         server_pid=
     }
-    trap 'cleanup; rm -rf "$work"' EXIT
+    trap 'cleanup; rm -rf "$work"; mark_phase cleanup_complete' EXIT
     trap 'exit 143' TERM
     trap 'exit 130' INT
     # Server crash dumps may contain token IDs even with request logging off.
     # Keep diagnostics outside public artifacts and AI-summary input directories.
     start_server() {
         local capacity=$1
+        mark_phase "start_server_$capacity"
         setsid python -u -m vllm.entrypoints.openai.api_server \
             --model "$HF_MODEL" --served-model-name google/gemma-4-31B-it \
             --hf-overrides '{"architectures":["TTGemma4QB2ForCausalLM"]}' \
@@ -178,17 +187,22 @@
     uv venv --python 3.11 "$work/eval-env"
     UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
         -r "$model_dir/tests/requirements-eval.txt"
+    mark_phase prepare_dataset
     run_benchmark --prepare-only --output-dir "$results"
+    mark_phase dataset_ready
 
     wait_for_server
+    mark_phase server_1_ready
     # Weekly performance samples the headline 128/128 shapes to bound runtime.
     # The benchmark defaults retain the broader 128- and 1024-token sweep.
     run_benchmark --mode performance --server-capacity 1 --performance-input-lengths 128 --output-dir "$results/single-user"
     CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/single-user/summary.json"
+    mark_phase single_user_performance_complete
     cleanup
 
     start_server 32
     wait_for_server
+    mark_phase server_32_ready
 
     pushd "$work/vllm-tt-plugin"
     # Device sampling/page growth, isolation, host sampling, mixed penalties and logprobs.
@@ -201,11 +215,15 @@
         --tt-server-url http://127.0.0.1:8000 --tt-model-name google/gemma-4-31B-it \
         --tt-max-num-seqs 32 --junitxml "$results/api.xml"
     popd
+    mark_phase api_tests_complete
 
     # Accuracy is ONLY the first 10/198 Diamond rows, one seed, at 32K output tokens.
     # This bounds weekly runtime; use the separate full-set run for published quality.
+    mark_phase gpqa_and_performance
+    echo "GPQA coverage: 10/198 Diamond questions for CI regression within the time budget."
     status=0
     run_benchmark --server-capacity 32 --performance-input-lengths 128 --output-dir "$results" || status=$?
+    mark_phase "benchmark_exit_$status"
     if [ -f "$results/summary.json" ]; then
         CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/summary.json"
     fi
@@ -214,8 +232,9 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      # Target under 15 minutes; retain headroom for setup and runner variance.
-      timeout: 18
+      # Run 36024501184 used 15m28s before GPQA; completed subsets took ~5m25s.
+      # Include the remaining performance/reporting work and ~3 minutes of headroom.
+      timeout: 25
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
