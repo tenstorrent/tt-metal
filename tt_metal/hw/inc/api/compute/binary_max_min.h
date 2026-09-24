@@ -8,12 +8,7 @@
 #include "api/compute/common_globals.h"
 #include "tensor_shape.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_QUASAR
-#include "llk_math_eltwise_binary_sfpu_max_min.h"
-#else
 #include "ckernel_sfpu_binary_max_min.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#endif
 #endif
 
 namespace ckernel {
@@ -38,22 +33,14 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_max_int32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1, odst)));
-#else
     MATH((sfpu::BinaryMaxMinInt32<true /* IS_MAX */, false /* IS_UNSIGNED */>::run(idst0, idst1, odst)));
-#endif
 }
 
 /**
  * Please refer to documentation.
  */
 ALWI void binary_max_int32_tile_init() {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
-#else
     MATH((sfpu::BinaryMaxMinInt32<true /* IS_MAX */, false /* IS_UNSIGNED */>::init()));
-#endif
 }
 
 // clang-format off
@@ -75,6 +62,7 @@ ALWI void binary_max_int32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+// Quasar has no uint32 max/min.
 #ifndef ARCH_QUASAR
 ALWI void binary_max_uint32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((sfpu::BinaryMaxMinInt32<true /* IS_MAX */, true /* IS_UNSIGNED */>::run(idst0, idst1, odst)));
@@ -112,15 +100,7 @@ ALWI void binary_max_uint32_tile_init() {
 // clang-format on
 template <TensorShape TENSOR_SHAPE = DEFAULT_TENSOR_SHAPE>
 ALWI void binary_max_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
-#if defined(ARCH_QUASAR)
-    static_assert(
-        TENSOR_SHAPE.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
-            TENSOR_SHAPE.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
-        "Quasar binary_max_tile supports only the full tile; use the VectorMode overload");
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, VectorMode::RC)));
-#else
     MATH((sfpu::BinaryMaxMin<true /* IS_MAX */>::run<TENSOR_SHAPE>(idst0, idst1, odst)));
-#endif
 }
 
 /**
@@ -129,31 +109,13 @@ ALWI void binary_max_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_
  * tensor_shape_from_tile_dims(16, 32) and tensor_shape_from_tile_dims(32, 16).
  */
 ALWI void binary_max_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode) {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
-#else
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_max_min,
-        (true /* IS_MAX */),
-        idst0,
-        idst1,
-        odst,
-        vector_mode)));
-#endif
+    MATH((sfpu::BinaryMaxMin<true /* IS_MAX */>::run_vector_mode(vector_mode, idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_tile_init() {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
-#else
-    MATH((sfpu::BinaryMaxMin<true /* IS_MAX */>::init()));
-#endif
-}
+ALWI void binary_max_tile_init() { MATH((sfpu::BinaryMaxMin<true /* IS_MAX */>::init())); }
 
 // clang-format off
 /**
@@ -175,22 +137,14 @@ ALWI void binary_max_tile_init() {
  */
 // clang-format on
 ALWI void binary_min_int32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1, odst)));
-#else
     MATH((sfpu::BinaryMaxMinInt32<false /* IS_MAX */, false /* IS_UNSIGNED */>::run(idst0, idst1, odst)));
-#endif
 }
 
 /**
  * Please refer to documentation.
  */
 ALWI void binary_min_int32_tile_init() {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
-#else
     MATH((sfpu::BinaryMaxMinInt32<false /* IS_MAX */, false /* IS_UNSIGNED */>::init()));
-#endif
 }
 
 // clang-format off
@@ -212,6 +166,7 @@ ALWI void binary_min_int32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+// Quasar has no uint32 max/min.
 #ifndef ARCH_QUASAR
 ALWI void binary_min_uint32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((sfpu::BinaryMaxMinInt32<false /* IS_MAX */, true /* IS_UNSIGNED */>::run(idst0, idst1, odst)));
@@ -249,15 +204,7 @@ ALWI void binary_min_uint32_tile_init() {
 // clang-format on
 template <TensorShape TENSOR_SHAPE = DEFAULT_TENSOR_SHAPE>
 ALWI void binary_min_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
-#if defined(ARCH_QUASAR)
-    static_assert(
-        TENSOR_SHAPE.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
-            TENSOR_SHAPE.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
-        "Quasar binary_min_tile supports only the full tile; use the VectorMode overload");
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, VectorMode::RC)));
-#else
     MATH((sfpu::BinaryMaxMin<false /* IS_MAX */>::run<TENSOR_SHAPE>(idst0, idst1, odst)));
-#endif
 }
 
 /**
@@ -266,30 +213,12 @@ ALWI void binary_min_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_
  * tensor_shape_from_tile_dims(16, 32) and tensor_shape_from_tile_dims(32, 16).
  */
 ALWI void binary_min_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode) {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
-#else
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_max_min,
-        (false /* IS_MAX */),
-        idst0,
-        idst1,
-        odst,
-        vector_mode)));
-#endif
+    MATH((sfpu::BinaryMaxMin<false /* IS_MAX */>::run_vector_mode(vector_mode, idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_tile_init() {
-#if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
-#else
-    MATH((sfpu::BinaryMaxMin<false /* IS_MAX */>::init()));
-#endif
-}
+ALWI void binary_min_tile_init() { MATH((sfpu::BinaryMaxMin<false /* IS_MAX */>::init())); }
 
 }  // namespace ckernel
