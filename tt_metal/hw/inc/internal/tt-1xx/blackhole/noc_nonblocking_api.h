@@ -448,7 +448,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc
 
 /**
  * Sets NOC_TARG_ADDR_MID to route reads through the PCIe core. This register is sticky per command buffer,
- * so every use must be paired with noc_cmd_buf_clear_targ_addr_mid once the reads have completed. A stale
+ * so every use must be paired with noc_cmd_buf_clear_targ_addr_mid once cmd_buf is ready after the last read. A stale
  * value misroutes the next unrelated read on cmd_buf to host memory.
  *
  * Return value: None

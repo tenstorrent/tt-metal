@@ -167,6 +167,7 @@ template <
     bool set_ret_mid = false>
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
+    static_assert(!set_ret_mid || wait, "set_ret_mid writes NOC_RET_ADDR_MID, which needs the ready wait first");
     if constexpr (wait) {
         WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc, cmd_buf));

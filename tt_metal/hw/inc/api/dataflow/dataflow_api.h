@@ -772,7 +772,6 @@ FORCE_INLINE void noc_async_read_with_state(
  *
  *     noc_async_read_set_pcie_state(pcie_src_noc_addr);
  *     for (...) { noc_async_read_with_state(src_lo, l1_dst, size); }
- *     noc_async_read_barrier();
  *     noc_async_read_clear_pcie_state();
  *
  * Do not issue an atomic such as \a noc_semaphore_inc between the set and the clear. Atomics program
@@ -1176,7 +1175,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
  * same size and fits one packet, \a noc_async_write_one_packet_set_state is cheaper still, because it also
  * hoists the length out of the loop.
  *
- * If dst_noc_addr is PCIe-routed, call \a noc_async_write_clear_pcie_state once the batch has been awaited.
+ * If dst_noc_addr is PCIe-routed, call \a noc_async_write_clear_pcie_state after the last write of the batch.
  * NOC_RET_ADDR_MID stays set otherwise, and would misroute the next ordinary write on write_cmd_buf.
  *
  * Return value: None
@@ -1270,7 +1269,6 @@ FORCE_INLINE void noc_async_write_with_state(
  *
  *     noc_async_write_set_pcie_state(pcie_dst_noc_addr);
  *     for (...) { noc_async_write_with_state(l1_src, dst_lo, size); }
- *     noc_async_write_barrier();
  *     noc_async_write_clear_pcie_state();
  *
  * Return value: None
