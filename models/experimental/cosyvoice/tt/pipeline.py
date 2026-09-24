@@ -494,7 +494,10 @@ class CosyVoiceTTNN:
         # an id outside it would make the embedding gather read out of range. Nothing
         # reads the audio; only the shapes matter.
         warm_tokens = [0] * synth.cfg.chunk_size()
-        with synth.session(stream_ctx, rng_for_chunk) as warm:
+        # Both sessions here pause the vocoder's prepared-weight check: the one below runs
+        # the vocoder beside the decode trace, where the check's fallback cannot run, and the
+        # warm-up must leave each geometry as that session will meet it (`StreamSession`).
+        with synth.session(stream_ctx, rng_for_chunk, pause_weight_check=True) as warm:
             for wav, _n in warm.push_all(warm_tokens):
                 ttnn.deallocate(wav)
             ttnn.deallocate(warm.finish()[0])
@@ -504,7 +507,7 @@ class CosyVoiceTTNN:
         t0 = time.perf_counter()
 
         try:
-            with synth.session(stream_ctx, rng_for_chunk) as session:
+            with synth.session(stream_ctx, rng_for_chunk, pause_weight_check=True) as session:
 
                 def emit(wav, n):
                     nonlocal first_audio_s

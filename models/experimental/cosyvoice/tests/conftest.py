@@ -1,17 +1,22 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Say loudly when the suite has nothing to test against.
+"""Suite-wide report hooks and fixtures.
 
 The device tests skip when `tests/golden` lacks the goldens (`scripts/gen_golden.py`) or the
 weight exports (`scripts/export_weights.py`), and pytest reports a run in which every one of
 them skipped as green. The header names what is absent before the run; the summary counts the
 tests it cost after it, so such a run does not read as a pass.
+
+`unchecked_prepared_weights` lists the vocoder convolutions that run a prepared weight whose
+geometry was never checked (`TtConv1d._verify_prepared`).
 """
 from __future__ import annotations
 
 import glob
 import os
+
+import pytest
 
 GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden")
 WEIGHT_EXPORTS = ("hift_weights.npz", "flow_weights.npz", "llm_weights.npz")
@@ -54,3 +59,41 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         red=True,
         bold=True,
     )
+
+
+@pytest.fixture
+def unchecked_prepared_weights(monkeypatch):
+    """`watch(hift)` returns a list that fills, from then on, with every call of one of
+    `hift`'s convolutions that ran a prepared weight its geometry never had checked.
+
+    A prepared weight can be silently wrong at some lengths (`tt/hifigan/conv.py`,
+    `prepare_weights_default`), so the vocoder checks each geometry once before trusting
+    it. This counts the calls that trusted one unchecked, which is the order a test can
+    assert on any board, not only on one where the unchecked weight happens to be wrong.
+    Skips under `COSYVOICE_CONV_PREPARE=1`, which runs prepared weights unchecked by design.
+    """
+    from models.experimental.cosyvoice.tt.hifigan.conv import TtConv1d
+
+    calls: list[str] = []
+    watched: set[int] = set()
+    call = TtConv1d.__call__
+
+    def recording(self, x, input_length: int, batch_size: int = 1):
+        out = call(self, x, input_length, batch_size)
+        if id(self) in watched:
+            key = (input_length, batch_size)
+            weight = self._prep_cache.get(key, (self.weight, None))[0]
+            if weight is not self.weight and key not in self._verified:
+                calls.append(
+                    f"Conv1d({self.in_channels}->{self.out_channels}, k={self.kernel_size}) at length {input_length}"
+                )
+        return out
+
+    def watch(hift):
+        if os.environ.get("COSYVOICE_CONV_PREPARE") == "1":
+            pytest.skip("COSYVOICE_CONV_PREPARE=1 runs prepared weights unchecked by design")
+        watched.update(id(c) for c in hift._convs())
+        return calls
+
+    monkeypatch.setattr(TtConv1d, "__call__", recording)
+    return watch

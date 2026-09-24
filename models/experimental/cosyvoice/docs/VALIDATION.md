@@ -31,7 +31,7 @@ inside, and a named lever.
 | threshold | scope stage | enforced in |
 |---|---|---|
 | `>= 30 tok/s` semantic generation | Stage 1 | `test_device_end_to_end_rtf`, `test_device_traced_throughput`, `test_device_inplace_throughput` |
-| `RTF < 0.5` | Stage 1 | `test_device_end_to_end_rtf` |
+| `RTF < 0.5` | Stage 1 | `test_device_synthesize_rtf` (per utterance, the verdict); `test_device_end_to_end_rtf` (steady state, a regression guard) |
 | `>= 60 tok/s` | Stage 3 stretch | same three as the 30 tok/s threshold |
 | `RTF < 0.2` | Stage 3 stretch | `test_device_end_to_end_rtf` |
 | token agreement `> 95 %` | Stage 1 | `test_gate1_teacher_forced_argmax_match`, `test_gate1b_teacher_forced_argmax_through_the_kv_cache` |
@@ -79,7 +79,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Valid audio, 5 languages | ✅ zero-shot and cross-lingual 5/5 · SFT and instruct not re-run on this tree | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
 | Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
 | `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
-| `RTF < 0.5` | ✅ Blackhole · ❌ n300 | checked, with the n300 shortfall held to a recorded band | *End-to-end real-time factor* |
+| `RTF < 0.5` | ❌ per utterance on both Blackhole boards, every configuration · ❌ n300 | `test_device_synthesize_rtf`, against a recorded band on Blackhole; the steady state (✅ Blackhole, ❌ n300) stays checked by `test_device_end_to_end_rtf` | *What `synthesize` costs per utterance* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
 | WER `< 3.0`, speaker similarity `> 60` | ✅ English WER, both measured modes | `scripts/eval_wer_sim.py`, reference venv; `test_scoring.py` checks its English normaliser | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
@@ -134,12 +134,20 @@ share would need the decode step under 1.5 ms. `PERF.md` *End-to-end real-time f
 has the figures. The threshold is asserted against a recorded band, so an improvement
 fails the test until the published figure moves with it.
 
-### `RTF < 0.5` on Wormhole n300
+### `RTF < 0.5`
 
-Met on both Blackhole boards and not on n300, a named target. The gap is the compute
+Unmet per utterance, the figure the requirement is judged on. `synthesize` pays the
+prompt prefill, the decode-trace capture and the flow's trace capture once per
+utterance, which puts a repeated sentence above `0.5` on both Blackhole boards in every
+configuration, and a length new to the process higher still. The in-place KV cache is the slowest there,
+because it captures a decode trace many times per utterance. Keeping the flow's trace
+across utterances safely would save only the flow's capture, and only when a length
+repeats; the larger fixed cost is the LLM's. `PERF.md` §3.5 has the figures.
+
+On the steady state, Blackhole meets it and n300 does not. The gap there is the compute
 grid: 8 × 8 = 64 cores against Blackhole's 13 × 10 = 130, on a decode step dominated by
-weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and the band are
-in `PERF.md` and in `tests/perf/gates.py`'s `WORMHOLE` table.
+weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and the bands are
+in `PERF.md` and in `tests/perf/gates.py`.
 
 ### Speculative decoding — not explored
 
@@ -219,20 +227,33 @@ for the non-streamed run of the same tokens and seed
 (https://github.com/tenstorrent/tt-metal/actions/runs/35976068834). At `a7c8416d3` the same
 test passed on n300 with RMS `0.052`, and its log shows `_verify_prepared` rejecting the
 prepared weight of `Conv1d(128->128, k=11)` at length 8321, inside the Wormhole `ttnn.conv1d`
-defect range. `TtStreamingSynthesizer` now pauses that check for the length of a stream
-(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry runs its
-prepared weight unchecked and the chunk comes out wrong; `0.21` is the figure §3.2 of PERF.md
-records for exactly that case. Blackhole is unaffected at this utterance length. Not fixed:
-the geometries a stream will use need their verification before the decode trace goes
-live (the warm-up chunk is the place), or Wormhole streams need the op's own preparation
-for the vocoder convs.
+defect range. At `e0de3009` every stream paused that check
+(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry ran its
+prepared weight unchecked and the chunk came out wrong; `0.21` is the figure §3.2 of PERF.md
+records for exactly that case. Blackhole is unaffected at this utterance length.
+
+A stream now checks the vocoder's prepared weights as it goes and runs each chunk's vocoder
+with the flow's CFM trace released (`TtStreamingSynthesizer._one`), as `synthesize` does; the
+cost is a CFM capture per chunk. With the trace kept instead, a 355-token plain stream on
+`p150a` that checked its weights stalled the board, and one with the check's fallback, the op's
+own weight preparation, forced on every geometry came out as garbage (chunk peaks 12 and 14),
+which fits the next chunk's CFM replay overwriting what the vocoder allocated beside the kept
+trace. With it released, both complete, with the same chunk peaks whether one geometry falls back or all of
+them do. This test asserts that no prepared vocoder weight runs unchecked. Not re-run on n300
+yet.
+
+Still open: the interleaved stream, `synthesize_streaming`, keeps the pause and the kept trace.
+Its vocoder runs beside the LLM's live decode trace, which cannot be released mid-generation,
+so a geometry whose prepared weight is wrong still comes out wrong there: on Wormhole at 8321,
+and on `p150a` at 3457 in some allocation states.
 
 ### A longer streamed utterance wedges the board
 
 `test_device_streaming_first_audio_latency` measures one utterance length. Run at a
 longer one — a wider trace region, and more and larger buffers live beside it — it
 wedged `p150a` for 45 minutes at 100 % CPU with the JIT cache flat, twice, on two
-boards, before the carry buffers existed; it has not been re-run since. So how first
+boards, before the carry buffers existed. With them, a 355-token zero-shot stream (RAS) still
+stalled `p150a` on 2026-09-24, the prepared-weight check paused, and needed a reset. So how first
 audio scales with utterance length is not measured. A shared cause with the L1_SMALL
 growth below is possible and unverified.
 

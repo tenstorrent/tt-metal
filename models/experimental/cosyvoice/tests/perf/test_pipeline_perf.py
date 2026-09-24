@@ -196,3 +196,78 @@ def test_device_end_to_end_rtf(device):
         ],
         "bounty gates -- end-to-end",
     )
+
+
+INPUTS_DIR = os.environ.get("COSYVOICE_INPUTS", os.path.join(GOLDEN_DIR, "inputs"))
+SYNTH_CASE = "zero_shot_zh"
+needs_inputs = pytest.mark.skipif(
+    not os.path.exists(os.path.join(INPUTS_DIR, f"{SYNTH_CASE}.npz")),
+    reason=f"no {SYNTH_CASE}.npz in {INPUTS_DIR}; run scripts/prepare_inputs.py --out-dir and set COSYVOICE_INPUTS",
+)
+
+
+@needs_all
+@needs_inputs
+@needs_l1_small
+def test_device_synthesize_rtf(device):
+    """RTF of `synthesize` per utterance, as a caller runs it.
+
+    `test_device_end_to_end_rtf` is the steady state: the decode step's time scaled by the
+    token count, and the flow's trace replayed. A `synthesize` call also pays, every time,
+    the LLM's prefill and its decode-trace capture, and the flow's capture, since the flow
+    releases its trace around each call (`TtMaskedDiffWithXvec.release_trace`). This test
+    times `synthesize`'s three stages on CosyVoice's own zero-shot example sentence, on the
+    second call of the same utterance, so no kernel compile and no first-use state -- the
+    vocoder's weight preparation per geometry -- is in the figure. A length new to the
+    process costs more than this, by an amount that depends on what the process has
+    already built, so that is measured in PERF.md rather than asserted here. The token count,
+    and with it the audio length, differs between boards and configurations: RAS from a
+    fixed seed diverges once the logits differ in their last bits. RTF is per second of
+    audio, so the figures stay comparable.
+
+    The "RTF < 0.5" requirement is judged on this figure (`gates.py`, `rtf_synthesize`).
+    """
+    import ttnn
+    from models.experimental.cosyvoice.tt.pipeline import CosyVoiceTTNN, PromptContext, RandomSources
+    from models.experimental.cosyvoice.tt.weights import WeightBag
+
+    ctx, _ = PromptContext.from_npz(os.path.join(INPUTS_DIR, f"{SYNTH_CASE}.npz"))
+    model = CosyVoiceTTNN(
+        device, WeightBag.load(LLM_WEIGHTS), WeightBag.load(FLOW_WEIGHTS), WeightBag.load(HIFT_WEIGHTS)
+    )
+
+    def utterance():
+        """`synthesize`'s three calls, each stage synchronised before its clock stops."""
+        rng = RandomSources()
+        marks = [time.perf_counter()]
+        tokens = model.text_to_tokens(ctx, sampler="ras", seed=1986, max_tokens=600)
+        ttnn.synchronize_device(device)
+        marks.append(time.perf_counter())
+        mel, mel_len2 = model.tokens_to_mel(tokens, ctx, rng)
+        ttnn.synchronize_device(device)
+        marks.append(time.perf_counter())
+        wav = model.mel_to_wav(mel, mel_len2, rng)
+        ttnn.synchronize_device(device)
+        marks.append(time.perf_counter())
+        samples = int(ttnn.to_torch(wav).numel())
+        ttnn.deallocate(mel)
+        ttnn.deallocate(wav)
+        model.llm.release_caches()
+        return len(tokens), samples / SAMPLE_RATE, [b - a for a, b in zip(marks, marks[1:])]
+
+    first_tokens, _, first_stages = utterance()  # compiles, and builds each length's state
+    n_tokens, audio_seconds, (llm_s, flow_s, voc_s) = utterance()
+    assert n_tokens == first_tokens, "the same seed gave a different utterance on the second call"
+    total_s = llm_s + flow_s + voc_s
+    rtf = total_s / audio_seconds
+
+    print(f"\n  synthesize, {SYNTH_CASE}: {n_tokens} tokens -> {audio_seconds:.2f} s of audio, second call")
+    print(f"  LLM      generate, prefill and capture included = {llm_s:6.3f} s   ({n_tokens / llm_s:.1f} tok/s)")
+    print(f"  flow     encoder, capture and 10 replays        = {flow_s:6.3f} s")
+    print(f"  vocoder                                         = {voc_s:6.3f} s")
+    print(f"  TOTAL                                           = {total_s:6.3f} s   RTF {rtf:5.3f}")
+    print(f"  first call, which built each length's state (and compiled, on a cold cache): {sum(first_stages):.3f} s")
+    report(
+        [enforce("rtf_synthesize", rtf, device, extra=f"{n_tokens} tokens, {audio_seconds:.2f} s audio")],
+        "bounty gates -- synthesize, per utterance",
+    )
