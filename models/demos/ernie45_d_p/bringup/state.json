@@ -89,6 +89,25 @@
   "rc": 0,
   "status": "PASS"
  },
+ "P1.4": {
+  "duration_s": 97.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:31:27"
+   }
+  ],
+  "last_run": "2026-09-24T19:31:27",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.4.log",
+  "metrics": {
+   "book_top5_acc_last_chunk": 0.884709358215332,
+   "cpu_seconds": 85.3,
+   "golden_chunks": 2,
+   "golden_layers": 28
+  },
+  "rc": 0,
+  "status": "PASS"
+ },
  "P2.1": {
   "duration_s": 10.9,
   "history": [
@@ -112,24 +131,6 @@
    "worker_grid": "11x10"
   },
   "rc": 0,
-  "status": "PASS"
- },
- "P2.2": {
-  "duration_s": 1.5,
-  "history": [
-   {
-    "status": "PASS",
-    "t": "2026-09-24T19:31:19"
-   }
-  ],
-  "last_run": "2026-09-24T19:31:19",
-  "log": "models/demos/ernie45_d_p/bringup/logs/P2.2.log",
-  "metrics": {
-   "per_chip_total_gb": 11.42,
-   "plan_fits_dram": 1
-  },
-  "rc": 0,
-  "started": "2026-09-24T19:31:17",
   "status": "PASS"
  }
 }
