@@ -257,11 +257,16 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // sfpu_reciprocal_iter).
 //
 // bf16 destination -- piecewise fit, same approach as the GELU backward kernel:
-//   |x| < CORE_REGION_LIMIT:  Degree-10 minimax polynomial in t = (2/9)·a² - 1 (~12 MAD ops)
-//   |x| >= CORE_REGION_LIMIT: Inline Cody-Waite exp(-2|x| + ln4) with FTZ (~16 ops)
+//   |x| < CORE_REGION_LIMIT:  Degree-10 minimax polynomial in t = (2/9)·a² - 1
+//   |x| >= CORE_REGION_LIMIT: Inline Cody-Waite exp(-2|x| + ln4) with FTZ
 //                             (zero saturation at |x| >= TAIL_REGION_LIMIT)
 //   Accuracy: Max ULP = 1 across all 65,026 valid BF16 values (hardware verified).
-//   Performance: ~14 ops (core) or ~18 ops (tail) vs ~40-50 ops (old version).
+//   Performance: 84 SFPU instructions in the loop body, 2875.5 cycles/tile
+//   (Blackhole p300a, MATH_ISOLATE, ITERATIONS=32). Note both pieces cost their
+//   instructions on every element: v_if on the SFPU is lane predication, not a
+//   branch, and the disassembled loop body contains no control flow but the back
+//   edge. The core polynomial is the expensive half -- a 32-bit constant takes two
+//   SFPLOADI, so its 11 coefficients are 22 SFPLOADI plus 11 SFPMAD on their own.
 //
 // fp32 destination -- the exact identity sech²(x) = 4e/(1 + e)², e = exp(-2|x|),
 //   over the whole range, because the piecewise fit above is only ever within
@@ -269,7 +274,13 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 //   Accuracy: max 4 fp32 ULP, 69% correctly rounded and 94% within 1 ULP over a
 //   65k-point Blackhole sweep of [-45, 45]; against 65,054 max ULP and 1.4%
 //   correctly rounded for the bf16-grade arm on the same points.
-//   Performance: ~30 ops.
+//   Performance: 58 SFPU instructions and 2203.5 cycles/tile, against 83 and
+//   2843.6 for the bf16-grade math this replaces -- 640 cycles/tile *faster*,
+//   not slower, because dropping the two-region split drops a whole region body
+//   that used to be issued for every element. The 25 instructions removed net out
+//   at 20 issue slots: the Newton reciprocal is a strictly serial 5-op dependency
+//   chain and measures 5 cycles/iteration of pipeline stall that the predicated
+//   straight-line code it replaced did not have.
 //
 // Both arms exploit even symmetry via a = |x|.
 // =============================================================================
