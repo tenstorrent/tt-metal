@@ -1038,6 +1038,32 @@ Sustained (median of iterations 5–9) with these defaults: bs1 17.8, bs8 123.8,
 (previous defaults 18.0 / 126.7 / 235 / 452.3): the bs32 changes only help the cold iteration, bs8 holds
 −2.3% sustained, bs16 ≈ −1.5%. The alternating multi-launch A/Bs for bs16 are in the negatives file §46.
 
+### SDPA writes the concatenated-heads layout directly (2026-09-24)
+
+New op flag `ttnn.transformer.scaled_dot_product_attention(..., output_heads_concat=True)`: the writer lays
+head h's output tiles at column tiles [h·d/32, (h+1)·d/32) of each row tile, i.e. the `[B, 1, S, H·d]`
+tensor `nlp_concat_heads` would produce, instead of head-major `[B, H, S, d]`. Same tiles under a
+different tile-id map (`TensorTileShape(B, 1, S, H·d/32)`, row stride H·d/32 in the block drains), so the
+concat pass before the output projection is skipped. Bit-identical to `nlp_concat_heads(sdpa(...))`
+(unit test `tests/ttnn/unit_tests/operations/sdpa/test_sdpa_output_heads_concat.py`). The strided drain
+costs the SDPA kernel 3–7% (bs8 231.8 → 239.3 µs, bs32 863.7 → 920.9) against a concat pass of ~68 /
+~350 µs per layer.
+
+Wired for batch > 1 via `QWEN_SDPA_CONCAT_OUT=1` (default): the SDPA wrapper in `tt/attention.py` requests
+the layout and registers the tensor, the concat wrapper hands it back untouched, and the guarded
+`ttnn.deallocate` skips the base forward's free of "the SDPA output" once. bs1 keeps its 4 µs model-local
+concat (the base forward reshapes the bs1 SDPA output before concat).
+
+| batch | cold, same chip | sustained (median of iterations 15–29) |
+|---|---|---|
+| 8 | 117.7 → **115.4** (−2.0%) | 126.7 → 126.8 (flat) |
+| 16 | 226.2 → **221.9** (−1.9%) | — |
+| 32 | 433.8 → **430.1** (−0.9%) | 445.8 → **440.3** (−1.2%) |
+
+STS-B through the batch-8 path 0.8123 with embeddings identical to the concat path (per-text cosine
+1.0000). Shipped-default numbers after this landing (30-iteration runs): bs1 17.6 / 18.3 sustained,
+bs8 115.3 / 121.0, bs16 221.0 / 228.2, bs32 425.5 / 451.1 ms.
+
 ## 6. Profiling
 
 ```bash
