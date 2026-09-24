@@ -130,6 +130,8 @@ public:
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
     virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
 
+    // Returns the safe upper boundary for program-local worker L1. This includes both live allocations
+    // and fixed top-of-L1 carve-outs, such as L1_SMALL, even when those carve-outs are currently empty.
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const = 0;
