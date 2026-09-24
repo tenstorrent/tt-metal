@@ -49,6 +49,10 @@ public:
     // still call it: RdmaWindow::create is collective too and would hang the ranks that passed.
     static bool agree(const bool local_ok, std::string& err);
 
+    // True only when every rank passed the SAME value. Collective, with agree()'s rule: a rank
+    // that skips it strands the peers. For geometry both sides must lay out identically.
+    static bool agree_value(uint64_t local, std::string& err);
+
 private:
     RdmaWindow();
     struct Impl;
