@@ -69,6 +69,8 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 
 
+# pytest.ini caps a test at 300 s; a cold pass pays weight conversion and JIT well past that.
+@pytest.mark.timeout(10800)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
