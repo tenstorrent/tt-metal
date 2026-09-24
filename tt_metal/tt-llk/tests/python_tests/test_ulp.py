@@ -615,7 +615,7 @@ def test_a_saturated_lane_does_not_print_a_nan_step(dtype):
 def test_within_ulp_refuses_a_golden_and_result_of_different_dtypes():
     """A rank is a position on one lattice. Uncast, an overflowed lane reads as a kernel
     overflow on the non-finite path instead, and is labelled with the golden's dtype."""
-    with _refuses("golden is torch.float32 but result is"):
+    with _refuses("dtype mismatch, golden torch.float32 vs result"):
         within_ulp(
             _t([70000.0], torch.float32), _t([float("inf")], torch.float16), max_ulp=0
         )
