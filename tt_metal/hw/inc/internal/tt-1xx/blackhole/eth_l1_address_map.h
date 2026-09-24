@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include "dev_mem_map.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 
 namespace eth_l1_mem {
 
@@ -23,6 +25,12 @@ struct address_map {
     static constexpr std::uint32_t AERISC_FABRIC_POSTCODES_SIZE = MEM_AERISC_FABRIC_POSTCODES_SIZE;
     static constexpr std::uint32_t AERISC_FABRIC_SCRATCH_BASE = MEM_AERISC_FABRIC_SCRATCH_BASE;
     static constexpr std::uint32_t AERISC_FABRIC_SCRATCH_SIZE = MEM_AERISC_FABRIC_SCRATCH_SIZE;
+
+    static_assert(sizeof(FabricTelemetry) == MEM_AERISC_FABRIC_TELEMETRY_SIZE);
+    static_assert(AERISC_FABRIC_POSTCODES_BASE == AERISC_FABRIC_TELEMETRY_ADDR + offsetof(FabricTelemetry, postcode));
+    static_assert(AERISC_FABRIC_SCRATCH_BASE == AERISC_FABRIC_TELEMETRY_ADDR + offsetof(FabricTelemetry, scratch));
+    static_assert(AERISC_FABRIC_SCRATCH_SIZE == sizeof(FabricTelemetry::scratch));
+    static_assert(AERISC_FABRIC_SCRATCH_BASE + AERISC_FABRIC_SCRATCH_SIZE == MEM_ERISC_APP_SYNC_INFO_BASE);
 
     static constexpr std::uint32_t ERISC_APP_SYNC_INFO_BASE = MEM_ERISC_APP_SYNC_INFO_BASE;
     static constexpr std::uint32_t ERISC_APP_ROUTING_INFO_BASE = MEM_ERISC_APP_ROUTING_INFO_BASE;
