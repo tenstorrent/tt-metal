@@ -148,7 +148,7 @@ def test_selu_atol(low, high, expected_Atol, device):
 @pytest.mark.parametrize(
     "scale, alpha",
     [
-        (1.0507, 1.67326),  # ttnn.selu's own defaults (unary_nanobind.cpp)
+        (1.0507, 1.67326),  # ttnn.selu's kernel defaults (unary_nanobind.cpp); closed-form path
         (3.0, 2.0),  # non-default: regression for #57116
         (0.5, 0.1),
     ],
@@ -167,3 +167,19 @@ def test_selu_scale_alpha_golden(scale, alpha, device):
     golden = golden_function(x, scale=scale, alpha=alpha)
 
     torch.testing.assert_close(golden, expected)
+
+
+def test_selu_default_golden_uses_torch():
+    # With default (canonical) scale/alpha the golden routes through torch.nn.functional.selu.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.nn.functional.selu(x)
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    torch.testing.assert_close(golden_function(x), expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        golden_function(x, scale=1.0507009873554804934193349852946, alpha=1.6732632423543772848170429916717),
+        expected,
+        rtol=0,
+        atol=0,
+    )
