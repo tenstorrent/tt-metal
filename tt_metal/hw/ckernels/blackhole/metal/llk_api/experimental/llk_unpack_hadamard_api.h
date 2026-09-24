@@ -6,6 +6,7 @@
 
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_hadamard.h"
+#include "sanitizer/api.h"
 
 // One-shot unpack init for the H128 transform. Configures the unpackers
 // for single-face (16x16) operands and preprograms context 1's srcA base
@@ -14,6 +15,7 @@
 // the program's lifetime. Operand order: operandA = h16, operandB = input.
 inline void llk_unpack_hadamard_h128_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t h16_tile_index) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);  // h16
     LLK_ASSERT(get_operand_num_faces(operandA_id) == 1, "Hadamard H128 unpack requires single-face h16 operand");
     LLK_ASSERT(
@@ -33,6 +35,7 @@ inline void llk_unpack_hadamard_h128(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);  // h16
     const std::uint32_t operandB_id = get_operand_id(operandB);  // input
 

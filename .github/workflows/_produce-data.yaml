@@ -43,15 +43,9 @@ on:
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
       - "(Single-card) Frequent model and ttnn tests"
-      - "(Single) Choose your pipeline"
-      - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 integration tests"
-      - "(T3K) T3000 perf tests"
-      - "(T3K) T3000 e2e tests"
+      - "T3K tests"
+      - "(End of Life - 31 October 2026) T3K dispatch tests"
       - "(T3K) Profiler tests"
-      - "(T3K) T3000 unit tests"
-      - "(T3K) T3000 fast tests"
-      - "(T3K) Choose your pipeline"
       - "(Tier 1) Models End-To-End Tests"
       - "(Tier 1) Models Unit Tests"
       - "(Tier 2) Models End-To-End Tests"
@@ -86,13 +80,16 @@ on:
       - "(Galaxy) DeepSeek tests"
       - "DeepSeek V3 Multi-Host Tests"
       - "(Release) Model Status for Console Deployment"
-      - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "(Profiler) Choose your pipeline"
       - "Git bisect dispatch"
       - "Custom test dispatch"
       - "Validate installation step from instructions"
       - "LLK perf"
+      - "(Runtime) Sanity Tests"
+      - "(Runtime) Unit Tests"
+      - "(Runtime) Integration Tests"
+      - "(Runtime) Performance Tests"
     types:
       - completed
 
@@ -102,9 +99,14 @@ jobs:
     # or if it's triggered by `workflow_call` or `workflow_dispatch`.
     # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
     # cause failures that spam fork owners with email notifications.
+    #
+    # Also skip when the triggering run originated from a fork
+    # (head_repository != this repo).
+    # Forks should not automatically trigger produce data jobs.
     if: >-
       ${{ (github.repository == 'tenstorrent/tt-metal' || github.repository == 'tenstorrent/tt-blaze') &&
           ((github.event_name == 'workflow_run' &&
+            github.event.workflow_run.head_repository.full_name == github.repository &&
             (github.event.workflow_run.conclusion == 'success' ||
              github.event.workflow_run.conclusion == 'failure' ||
              github.event.workflow_run.conclusion == 'cancelled')) ||
@@ -158,12 +160,6 @@ jobs:
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/${{ github.repository }}/actions/runs/${run_id}/attempts/${attempt_number}"
-      - name: Get API rate limit status
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "[Info] Grabbing API rate limit status"
-          gh api rate_limit
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
@@ -171,13 +167,62 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/${{ github.repository }}/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
+          # --include keeps the response headers. X-Ratelimit-* on a billed call is the only place
+          # the enforced GITHUB_TOKEN budget is visible: the /rate_limit endpoint reports a
+          # different counter and has read 15000 remaining seconds before this same token was
+          # rejected with "API rate limit exceeded for installation ... (HTTP 403)". This request
+          # is made anyway, so sampling it costs no extra calls.
+          gh api --include /repos/${{ github.repository }}/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > api_response.txt
+          sed -n '1,/^[[:space:]]*$/p' api_response.txt | tr -d '\r' > api_response_headers.txt
+          sed '1,/^[[:space:]]*$/d' api_response.txt > workflow.json
+          jq -e . workflow.json > /dev/null || {
+            echo "::error title=bad-api-response::Could not split the response headers from the JSON body"
+            cat api_response.txt
+            exit 1
+          }
+          # The body has no trailing newline, so without the echo the next log line runs onto
+          # the end of the JSON and the [rate-limit] prefix stops being greppable.
+          cat workflow.json
+          echo
+
+          # One greppable line per execution. produce-data runs on nearly every workflow_run
+          # completion, so at peak this samples the budget every few seconds.
+          rl() { awk -v k="$1:" 'tolower($1)==k {print $2; exit}' api_response_headers.txt; }
+          used=$(rl x-ratelimit-used)
+          remaining=$(rl x-ratelimit-remaining)
+          limit=$(rl x-ratelimit-limit)
+          reset=$(rl x-ratelimit-reset)
+          if [ -n "$remaining" ] && [ -n "$reset" ]; then
+            window_left=$(( reset - $(date +%s) ))
+            echo "[rate-limit] repo=${{ github.repository }} used=${used} remaining=${remaining} limit=${limit} reset=${reset} window_left_s=${window_left}"
+            # window_left_s stays raw above: a negative value marks a sample taken after the
+            # reset it reports, which burn-rate analysis should discard rather than read as a
+            # budget about to refill. The summary line is for people, so say that plainly.
+            if [ "$window_left" -gt 0 ]; then
+              echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, window resets in $(( window_left / 60 )) min" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, reported window already rolled over" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "[rate-limit] no X-Ratelimit headers on this response"
+          fi
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # A workflow run name is repository-controlled text and MUST NOT be interpolated into
+          # the run: script (a name with $(...) / backticks would execute here). Pass it as an
+          # environment variable so the shell sees it as data, never as code.
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
         run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo ${{ github.repository }} --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          # Target workflow name for the [api-usage] label: use the workflow_run event name when
+          # present, else read it from the analysed run's workflow.json (written by the step
+          # above) so workflow_dispatch / workflow_call runs get the real name, not "unknown".
+          wf_name="$WORKFLOW_RUN_NAME"
+          if [[ -z "$wf_name" && -f workflow.json ]]; then
+            wf_name="$(jq -r '.name // ""' workflow.json 2>/dev/null || echo "")"
+          fi
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo "${{ github.repository }}" --workflow-run-id "${{ steps.get-run-id-and-attempt.outputs.run-id }}" --attempt-number "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" --workflow-name "$wf_name"
           find generated/cicd/ -type f
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -192,26 +237,41 @@ jobs:
         run: python3 .github/scripts/data_analysis/create_pipeline_json.py
       - name: Show directory to see output files
         run: ls -hal
+      - name: Check whether there is pipeline data to upload
+        id: check-pipeline-json
+        shell: bash
+        run: |
+          # create_pipeline_json.py writes no JSON when the analysed run had no jobs that
+          # started, e.g. its concurrency group cancelled it before any job ran. There is no
+          # data for that run, and the sftp batchfile would fail on the unmatched put glob.
+          if compgen -G "pipeline_*.json" > /dev/null; then
+            echo "has-data=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=no-pipeline-data::The analysed run produced no pipeline data, skipping the upload"
+            echo "has-data=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
+        if: ${{ steps.check-pipeline-json.outputs.has-data == 'true' && (github.event_name == 'workflow_run' || inputs.upload_data) }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
           username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
-        if: ${{ !cancelled() }}
+        # has-data is 'false' only when the analysis positively found nothing to upload. When an
+        # earlier step fails, check-pipeline-json never runs and the output is empty -- that is the
+        # case this step exists for, so compare against 'false' rather than 'true'.
+        if: ${{ !cancelled() && steps.check-pipeline-json.outputs.has-data != 'false' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: workflow-run-data
+          if-no-files-found: warn
           path: |
-            if-no-files-found: warn
-            path: |
-              pipelinecopy_*.json
-              workflow.json
-              workflow_jobs.json
+            pipelinecopy_*.json
+            workflow.json
+            workflow_jobs.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -222,9 +282,12 @@ jobs:
     # or if it's triggered by `workflow_call` or `workflow_dispatch`.
     # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
     # cause failures that spam fork owners with email notifications.
+    #
+    # Also skip fork-originated triggering runs (see produce-cicd-data above).
     if: >-
       ${{ github.repository == 'tenstorrent/tt-metal' &&
           ((github.event_name == 'workflow_run' &&
+            github.event.workflow_run.head_repository.full_name == github.repository &&
             (github.event.workflow_run.conclusion == 'success' ||
              github.event.workflow_run.conclusion == 'failure' ||
              github.event.workflow_run.conclusion == 'cancelled')) ||

@@ -38,7 +38,7 @@ import torch
 
 import ttnn
 
-from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, Snake, _AlignedOutConv1d
+from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, Snake, _AlignedOutConv1d, _all_gather_t
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
@@ -46,6 +46,40 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import local_device_to_torch
 from ..vocoder_ltx import DilatedConv1d
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
+
+
+def _zero_tail(
+    x_BTC: ttnn.Tensor,
+    tail_rows: int,
+    *,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config,
+    cache: dict,
+) -> ttnn.Tensor:
+    """Zero the trailing ``tail_rows`` global rows of a T-sharded ``(B, T_local, C)`` tensor.
+
+    The mask is built on host and uploaded pre-sharded, since downsampled levels are not tile-aligned.
+    """
+    if tail_rows <= 0 or parallel_config is None or parallel_config.factor <= 1:
+        return x_BTC
+    local_T = x_BTC.shape[1]
+    global_T = local_T * parallel_config.factor
+    key = (global_T, tail_rows, x_BTC.get_dtype())
+    mask = cache.get(key)
+    if mask is None:
+        m = torch.ones(1, global_T, 1, dtype=torch.float32)
+        m[:, global_T - tail_rows :, :] = 0.0
+        dims = [None, None]
+        dims[parallel_config.mesh_axis] = 1
+        mask = ttnn.from_torch(
+            m,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=x_BTC.get_dtype(),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims)),
+        )
+        cache[key] = mask
+    return ttnn.multiply(x_BTC, mask)
 
 
 def _snake_row_major(snake: Snake, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -72,12 +106,11 @@ class MiniMaxH3AudioResidualUnit(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
         # Conv-only levers: Snake takes neither, so they ride a separate dict from `shared`.
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
         self.block = ModuleList(
             [
                 Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
@@ -111,13 +144,15 @@ class MiniMaxH3AudioEncoderBlock(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
         inner = dim // 2
         self.stride = stride
+        self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self._tail_mask_cache: dict = {}
         self.block = ModuleList(
             [
                 MiniMaxH3AudioResidualUnit(inner, 1, **shared, **levers),
@@ -138,10 +173,24 @@ class MiniMaxH3AudioEncoderBlock(Module):
             ]
         )
 
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTC: ttnn.Tensor, *, tail_rows: int = 0) -> ttnn.Tensor:
+        """``tail_rows`` > 0 marks trailing T-shard alignment pad rows, re-zeroed after each conv."""
         expected_out = x_BTC.shape[1] // self.stride
         for layer in self.block:
-            x_BTC = _snake_row_major(layer, x_BTC) if isinstance(layer, Snake) else layer(x_BTC)
+            if isinstance(layer, Snake):
+                x_BTC = _snake_row_major(layer, x_BTC)
+            else:
+                x_BTC = layer(x_BTC)
+                if tail_rows:
+                    if getattr(layer, "stride", (1,))[0] > 1:
+                        tail_rows //= self.stride
+                    x_BTC = _zero_tail(
+                        x_BTC,
+                        tail_rows,
+                        mesh_device=self.mesh_device,
+                        parallel_config=self.parallel_config,
+                        cache=self._tail_mask_cache,
+                    )
         assert (
             x_BTC.shape[1] == expected_out
         ), f"strided conv produced T={x_BTC.shape[1]}, expected {expected_out} -- check the padding override"
@@ -162,12 +211,11 @@ class MiniMaxH3AudioDACEncoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
         no_ccl = {k: v for k, v in shared.items() if k != "ccl_manager"}
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
 
         layers: list[Module] = [_AlignedOutConv1d(1, encoder_dim, kernel_size=7, **shared, **levers)]
         dim = encoder_dim
@@ -178,10 +226,28 @@ class MiniMaxH3AudioDACEncoder(Module):
         layers.append(_AlignedOutConv1d(dim, latent_dim, kernel_size=3, **shared, **levers))
         self.block = ModuleList(layers)
         self.hop_length = math.prod(encoder_rates)
+        self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self._tail_mask_cache: dict = {}
 
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTC: ttnn.Tensor, *, tail_rows: int = 0) -> ttnn.Tensor:
+        """``tail_rows`` marks trailing T-shard alignment pad; see the block forward's docstring."""
         for layer in self.block:
-            x_BTC = _snake_row_major(layer, x_BTC) if isinstance(layer, Snake) else layer(x_BTC)
+            if isinstance(layer, Snake):
+                x_BTC = _snake_row_major(layer, x_BTC)
+            elif isinstance(layer, MiniMaxH3AudioEncoderBlock):
+                x_BTC = layer(x_BTC, tail_rows=tail_rows)
+                tail_rows //= layer.stride
+            else:
+                x_BTC = layer(x_BTC)
+                if tail_rows:
+                    x_BTC = _zero_tail(
+                        x_BTC,
+                        tail_rows,
+                        mesh_device=self.mesh_device,
+                        parallel_config=self.parallel_config,
+                        cache=self._tail_mask_cache,
+                    )
         return x_BTC
 
 
@@ -330,24 +396,28 @@ class MiniMaxH3AudioEncoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
-        tap_matmul: bool = True,
-        prefer_mac: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        stereo_split_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.latent_channels = latent_channels
         self.hop_length = math.prod(encoder_rates)
+        self.stereo_split_axis = stereo_split_axis
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+        if parallel_config is not None and parallel_config.factor > 1:
+            assert ccl_manager is not None, "a T-sharded audio encoder needs a ccl_manager for halos and the gather"
+            assert (
+                stereo_split_axis is None or stereo_split_axis != parallel_config.mesh_axis
+            ), "stereo split and T-shard must use different mesh axes"
 
         # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
         # constructs the same conv classes with its own fast defaults. Kept as attributes so the
         # pipeline's device-weight cache key (`weights_variant`) reads the exact values this module
-        # was built with. `prefer_mac` is accepted for symmetry with the decoder; the DAC trunk has
-        # no depthwise resamplers, so nothing here consumes it.
+        # was built with.
         self.split_mode = split_mode
-        self.tap_matmul = tap_matmul
-        self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
 
         # Every H3 audio conv shape misses _FP32_BLOCKINGS; seed stubs before any conv is built.
@@ -362,7 +432,6 @@ class MiniMaxH3AudioEncoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.pre_block = MiniMaxH3AudioAttnProjection(
             latent_dim, latent_channels, num_attention_heads, mesh_device=mesh_device, dtype=dtype
@@ -374,7 +443,6 @@ class MiniMaxH3AudioEncoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.logs_proj = _AlignedOutConv1d(
             latent_channels,
@@ -383,21 +451,52 @@ class MiniMaxH3AudioEncoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def forward(self, waveform_BCT: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """``(B, 1, samples)`` torch in, ``(mean, logs)`` each ``(B, 32, samples/800)`` torch."""
+        """``(B, 1, samples)`` torch in, ``(mean, logs)`` each ``(B, 32, samples/800)`` torch.
+
+        With a ``parallel_config`` the DAC trunk runs T-sharded and is gathered to full T for ``pre_block``.
+        """
         _, channels, num_samples = waveform_BCT.shape
         assert channels == 1, f"the audio VAE is mono; stereo is batch 2. Got {channels} channels"
         assert (
             num_samples % self.hop_length == 0
         ), f"{num_samples} samples is not a whole number of {self.hop_length}-sample hops"
+        num_latents = num_samples // self.hop_length
 
+        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
+        tail_samples = 0
+        if sharded:
+            align = self.hop_length * self.parallel_config.factor
+            tail_samples = (-num_samples) % align
+
+        batch = waveform_BCT.shape[0]
+        split = self.stereo_split_axis is not None and batch > 1 and not ttnn.using_distributed_env()
         x = waveform_BCT.transpose(1, 2).float().contiguous()  # (B, T, 1)
-        x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        if tail_samples:
+            x = torch.nn.functional.pad(x, (0, 0, 0, tail_samples))
+        dims: list = [None, None]
+        if split:
+            axis_len = tuple(self.mesh_device.shape)[self.stereo_split_axis]
+            assert batch <= axis_len, f"batch {batch} exceeds mesh axis {self.stereo_split_axis} ({axis_len})"
+            x = x[[i % batch for i in range(axis_len)]]
+            dims[self.stereo_split_axis] = 0
+        if sharded:
+            dims[self.parallel_config.mesh_axis] = 1
+        mapper = None
+        if split or sharded:
+            mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=tuple(dims)
+            )
+        x_device = ttnn.from_torch(
+            x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
+        )
 
-        trunk = self.encoder(x_device)
+        trunk = self.encoder(x_device, tail_rows=tail_samples)
+        if sharded:
+            trunk = ttnn.to_layout(trunk, ttnn.TILE_LAYOUT)
+            trunk = _all_gather_t(self.ccl_manager, trunk, self.parallel_config)
         # pre_block is a transformer block, so it wants TILE; the convs want ROW_MAJOR.
         projected = self.pre_block(ttnn.to_layout(trunk, ttnn.TILE_LAYOUT))
         projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
@@ -409,8 +508,14 @@ class MiniMaxH3AudioEncoder(Module):
             # See `MiniMaxH3AudioDecoder.__call__`: a storage slice keeps the parent's distribution
             # metadata and the converter rejects it on a multi-host mesh. The helper reads a shard this
             # host owns instead, which for a replicated tensor is the whole answer.
-            return local_device_to_torch(tensor).float()
+            if not split:
+                return local_device_to_torch(tensor).float()
+            shards = ttnn.get_device_tensors(tensor)
+            num_cols = tuple(self.mesh_device.shape)[1]
+            stride = num_cols if self.stereo_split_axis == 0 else 1
+            return torch.cat([ttnn.to_torch(shards[r * stride]).float() for r in range(batch)], dim=0)
 
         mean = read(self.mean_proj(projected))
         logs = read(self.logs_proj(projected))
+        mean, logs = mean[:, :num_latents], logs[:, :num_latents]
         return mean.transpose(1, 2).contiguous(), logs.transpose(1, 2).contiguous()

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -67,6 +68,11 @@ namespace tt::tt_metal::experimental {
 
 // A name identifying a KernelSpec within a ProgramSpec.
 using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
+
+// Maximum length of a resource binding's accessor_name (DFB, semaphore, scratchpad, tensor).
+//
+// MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
+inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
 
 //------------------------------------------------
 // KernelSpec

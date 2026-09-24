@@ -6,14 +6,14 @@
 
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils_sfpu.hpp (SFPU preprocess).
 //
-// Mechanically identical to the CircularBuffer helper, with the CB->DFB swap. SFPU variant: no
-// unpacker srca reconfigure here (the downstream binary SFPU op selects each operand before its
-// copy_tile loop). LLK operand ids come from DFBBindingToken's `operator uint32_t()`.
+// The same SrcA switch/restore contract as the descriptor helper, using named DFB bindings.
+// LLK operand ids come from DFBBindingToken's `operator uint32_t()`.
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "eltwise_format_reference_dfb.hpp"
 
 template <typename ActivationFn>
 ALWI void preprocess_sfpu_impl_dfb(
@@ -27,6 +27,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     DataflowBuffer dfb_pre(dfb_pre_id);
     DataflowBuffer dfb_post(dfb_post_id);
 
+    reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_DFB, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
 #ifdef ARCH_QUASAR
     // On Quasar pack_reconfig_data_format only reprograms the packer format gasket, not the packer
@@ -40,7 +41,7 @@ ALWI void preprocess_sfpu_impl_dfb(
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_tile_to_dst_init_short(dfb_pre_id);
+        copy_init(dfb_pre_id);
         copy_tile(dfb_pre_id, i, i);
         process_activations(i);
     }
@@ -55,6 +56,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ QSR_BINARY_SRCA_FORMAT_DFB);
     pack_reconfig_data_format(/*old*/ dfb_post_id, /*new*/ dfb_out_id);
 #ifdef ARCH_QUASAR
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)

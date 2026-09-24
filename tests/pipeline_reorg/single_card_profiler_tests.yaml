@@ -23,7 +23,8 @@
     bh_p150b_civ2_viommu:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn
+  team: runtime
+  budget_type: profiler
 
 - name: Device profiler regressions
   cmd: run_device_profiler_test
@@ -37,7 +38,8 @@
     bh_p150b_civ2_viommu:
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn
+  team: runtime
+  budget_type: profiler
 
 - name: Perf op report
   cmd: run_perf_op_report_test
@@ -52,6 +54,7 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
+  budget_type: profiler
 
 - name: Realtime profiler suite
   cmd: run_realtime_profiler_test
@@ -65,7 +68,8 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn
+  team: runtime
+  budget_type: profiler
 
 - name: L1 accumulate profiler
   cmd: run_accumulate_profiler_test
@@ -79,4 +83,30 @@
     bh_p150b_civ2_viommu:
       timeout: 6
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn
+  team: runtime
+  budget_type: profiler
+
+- name: Streaming profiler sanity
+  cmd: run_streaming_profiler_test
+  skus:
+    # Blackhole only: the streaming profiler needs programmable DRAM (DRISC) cores for its relay, so there
+    # is nothing to run on wh_n150/wh_n300.
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: Sync events profiler
+  cmd: run_sync_events_test
+  skus:
+    # Blackhole only: sync events use the streaming profiler.
+    bh_p100a_civ2_viommu:
+      timeout: 3
+    bh_p150b_civ2_viommu:
+      timeout: 3
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler

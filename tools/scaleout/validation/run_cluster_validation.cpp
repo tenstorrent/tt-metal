@@ -50,6 +50,7 @@ struct InputArgs {
     uint32_t data_size = 0;
     uint32_t packet_size_bytes = 64;
     uint32_t num_iterations = 50;
+    uint32_t max_retrains = 5;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
     std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
@@ -101,6 +102,9 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<bool>()->default_value("false"))(
         "send-traffic", "Send traffic across detected links", cxxopts::value<bool>()->default_value("false"))(
         "num-iterations", "Number of iterations to send traffic", cxxopts::value<uint32_t>()->default_value("50"))(
+        "max-retrains",
+        "Number of times a missing link is retrained before it is reported as unretrainable",
+        cxxopts::value<uint32_t>()->default_value("5"))(
         "data-size", "Data size (bytes) sent across each link per iteration", cxxopts::value<uint32_t>())(
         "packet-size-bytes",
         "Packet size (bytes) sent across each link",
@@ -204,6 +208,10 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
 
         // Parse num iterations
         input_args.num_iterations = result["num-iterations"].as<uint32_t>();
+
+        // Parse retrain budget
+        input_args.max_retrains = result["max-retrains"].as<uint32_t>();
+        TT_FATAL(input_args.max_retrains > 0, "Maximum retrains must be a positive integer.");
 
         // Parse data size
         if (result.contains("data-size")) {
@@ -376,11 +384,9 @@ int main(int argc, char* argv[]) {
     bool links_reset = false;
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const bool link_retrain_supported = cluster.supports_ethernet_link_retraining();
-    constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
-        5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
-    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < input_args.max_retrains) {
         auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
         for (const auto& link_id : retrained_links) {
             link_retrain_counts[link_id]++;
@@ -396,7 +402,7 @@ int main(int argc, char* argv[]) {
         // re-discovery below. run_physical_system_discovery() derives its entire ethernet topology from
         // cluster_desc.get_ethernet_connections(), which is only rebuilt by rediscover_ethernet_links().
         // Without this, re-discovery returns the stale (pre-reset) topology, missing_asic_topology never
-        // shrinks, and the loop always exhausts MAX_RETRAINS_BEFORE_FAILURE even when the retrain succeeded.
+        // shrinks, and the loop always exhausts the retrain budget even when the retrain succeeded.
         cluster.rediscover_ethernet_links();
         // Re-run discovery
         auto& context_ref = tt::tt_metal::MetalContext::instance();
@@ -412,7 +418,7 @@ int main(int argc, char* argv[]) {
     }
 
     distributed_context.barrier();
-    if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
+    if (num_retrains >= input_args.max_retrains && !missing_asic_topology.empty()) {
         log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
         log_unretrainable_channels(
             missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);

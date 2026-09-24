@@ -69,7 +69,7 @@ metal_infra:
 
 ttnn:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
@@ -78,9 +78,9 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 545
+    wh_n300_civ2: 580  # +5 each for core and both fused groups (45-minute per-group budget).
     bh_p100: 545
-    bh_p150b_civ2: 545
+    bh_p150b_civ2: 565
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
@@ -88,15 +88,18 @@ ttnn:
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 120
+    wh_galaxy: 125
     bh_galaxy: 40
-    bh_p100: 805
-    bh_p150b_civ2: 1045
-    wh_n150_civ2: 1205
-    wh_n300_civ2: 1180
-    bh_p150b_civ2_viommu: 115
+    bh_p100: 815
+    bh_p150b_civ2: 850
+    wh_n150_civ2: 1040
+    wh_n300_civ2: 1190
+    bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
     wh_galaxy: 0
@@ -116,8 +119,8 @@ ttnn:
   unit_tier3:
     wh_n150: 4
   device_perf:
-    bh_p150b_civ2: 7
-    wh_n150: 5
+    bh_p150b_civ2: 9
+    wh_n150: 10
     wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
@@ -126,14 +129,13 @@ ttnn:
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
   profiler:
-    wh_llmbox: 90
-    wh_galaxy: 50
-    wh_n150_civ2: 60
-    wh_n300_civ2: 60
-    bh_p100a_civ2_viommu: 60
-    bh_p150b_civ2_viommu: 60
+    wh_llmbox: 30
+    wh_n150_civ2: 8
+    wh_n300_civ2: 8
+    bh_p100a_civ2_viommu: 8
+    bh_p150b_civ2_viommu: 8
   demo:
-    bh_sc1_high_power: 10
+    bh_sc1_high_power: 20
   sweep:
     wh_galaxy: 640
     wh_n150_civ2: 1100
@@ -150,22 +152,26 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 30
+    bh_p150b_civ2: 45
   unit:
-    bh_p100: 90
+    bh_p100: 105
     bh_p150b_civ2: 90
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1_high_power: 140
 
 ttsim:
+  merge_gate:
+    sim_quasar: 15
   unit:
     sim_wh_n150: 15
     sim_bh_p150: 15
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
   e2e_tier2:
@@ -173,32 +179,42 @@ shield:
     wh_n300: 30
     bh_p150b_civ2: 120
   e2e_tier3:
-    bh_p150b_civ2: 18
+    bh_p150b_civ2: 36
   unit_tier2:
     wh_n150: 220
-    wh_n300: 216
+    wh_n300: 220
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 50
     bh_p150: 2
   device_perf:
     wh_n150: 100
+    wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 15
+    # Sums over the team's disaggregated-prefill legs on each SKU, not per-leg caps.
+    # bh_sc4: Kimi-K2.7 100 + GLM-5.2 60 + Kimi-K3 200. Kimi-K3 is 93 layers against the others'
+    # depths and its bringup is dominated by streaming a 1.5 TB TTNN cache off the models share on
+    # four ranks at once -- 42.6 and 65.9 min to all ranks serving on runs 34648535999 and
+    # 34659612357, and run 34831600450 was killed at 106 min under a 100 min cap.
+    # Kimi-K2.7 carries the DFlash drafter KV legs, 60 on bh_sc4 and 120 on bh_sc1 on top of the
+    # verifier entries. Both size a cold TTNN weight cache, which the SC1 leg pays in full.
+    # bh_sc1: Kimi-K2.7 190 + GLM-5.2 80 + Kimi-K3 60.
+    bh_sc4: 360
+    bh_sc1: 330
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 235
+    cpu_medium: 280
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
-    bh_loudbox: 195
+    bh_loudbox: 240
     bh_p300: 195
     bh_quietbox_2: 195
   stress:
@@ -219,7 +235,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 60
+    bh_galaxy: 125
     bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
@@ -235,23 +251,27 @@ scaleout:
 
 runtime:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
+    github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
+    github_hosted_cpu: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
+    wh_n150: 10
+    bh_p150: 10
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
     sim_bh_galaxy: 10
   unit:
     wh_n150_civ2: 232
-    wh_n300_civ2: 99
+    wh_n300_civ2: 139
     wh_llmbox: 20
     bh_p150b_civ2: 214
     bh_p300: 69
@@ -265,12 +285,21 @@ runtime:
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15
+  profiler:
+    wh_llmbox: 60
+    wh_galaxy: 50
+    wh_n150_civ2: 52
+    wh_n300_civ2: 52
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
+    bh_p150b_civ2_viommu: 10
   perf_profiler:
     wh_n300_civ2: 5
-    bh_p150_perf: 5
+    wh_n300_perf: 20
+    bh_p150_perf: 25
 
 triage:
   merge_gate:
@@ -282,6 +311,9 @@ triage:
 
 llk:
   pr_gate:
+    wh_n150_civ2: 40
+    bh_p150b_civ2_viommu: 40
+  sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 40
   unit:
@@ -299,37 +331,45 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  ttnop:
+    wh_n150_civ2: 21600
+    bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
+  weekly:
+    sim_wh_n150_xl: 75
+    sim_bh_p150_xl: 240
+    sim_quasar_xl: 180
 
 models:
+  # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
+  agentic_research_tier3:
+    bh_quietbox_2: 12
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
-    wh_n300_civ2: 5
+    wh_galaxy_perf: 8
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 193
+    bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 120
+    wh_galaxy_perf: 215
     bh_p150: 27
-    bh_quietbox_2: 255
+    bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 140
-    bh_sc4: 120
+    bh_sc1: 335
+    bh_sc4: 160
   e2e_tier2:
-    wh_llmbox_perf: 266
+    wh_llmbox_perf: 270
     wh_n150: 45
     wh_n300: 6
     bh_p150: 26
@@ -338,29 +378,27 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 105
+    wh_n150: 108
     wh_n300: 60
     bh_p150: 33
-    bh_p300: 8
-    bh_quietbox_2: 42
-  unit:
-    wh_llmbox: 80
-    wh_galaxy_perf: 10
+    bh_p300: 13
+    bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 61
-    wh_n150: 110
-    wh_galaxy: 235
-    wh_galaxy_perf: 45
+    wh_llmbox: 155
+    wh_n150: 133
+    wh_galaxy: 260
+    wh_galaxy_perf: 65
     bh_p150: 20
-    bh_quietbox_2: 390
+    bh_quietbox_2: 502  # +15 for test_decode_bucketing's own 1800 s budget (#55790)
     bh_galaxy: 75
-    bh_sc1: 75
+    bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 172
-    wh_n150: 82
+    wh_llmbox_perf: 191
+    wh_n150: 87
     wh_n300: 30
+    wh_galaxy_perf: 80
     bh_p150: 20
     bh_quietbox_2: 60
   unit_tier3:
@@ -369,24 +407,22 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 33
+    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
     bh_p150: 30
     bh_p300: 30
-    bh_quietbox_2: 21
+    bh_quietbox_2: 25
   integration:
-    wh_llmbox: 30
-  perf:
-    wh_galaxy_perf: 55
+    wh_llmbox: 0
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 70
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_galaxy_perf: 125
     bh_galaxy: 470
-    bh_sc1: 488
-    bh_sc1_high_power: 166
+    bh_sc1: 1533
+    bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -399,8 +435,10 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
   sweep_tier1:
+    wh_llmbox: 131
     wh_n150: 30
     wh_galaxy: 40
+    wh_galaxy_perf: 55
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30
@@ -410,8 +448,9 @@ models:
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
-    wh_llmbox: 297
-    bh_loudbox: 75
+    wh_llmbox: 342
+    bh_loudbox: 245
+    bh_galaxy: 65
     wh_n150: 65
 umd:
   unit:

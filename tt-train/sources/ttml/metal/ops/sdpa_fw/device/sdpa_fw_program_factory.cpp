@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cmath>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -290,8 +291,14 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
-    const uint32_t scaler =
-        std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(qEmbd)));  // calculate scale factor
+    const float scale = 1.0F / std::sqrt(static_cast<float>(qEmbd));
+    const uint32_t scaler = std::bit_cast<uint32_t>(scale);
+    // BF16 copy of the scale for the WH fused scale+exp path (SFPU multiplies P by a BF16
+    // immediate there, while the LSE and the backward pass use the full FP32 scale). RNE
+    // instead of `>> 16` truncation halves the worst-case rounding gap so it stays noise
+    // rather than a systematic fw/bw mismatch. The conversion runs on host because the
+    // kernel TU cannot see the host bfloat16 implementation.
+    const uint32_t scaler_bf16 = fp32_to_bf16_bits_round_to_nearest_even(scale);
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
@@ -595,6 +602,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
             Sk_chunk_t,          // multi-tile K/V chunking factor
             pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
+            scaler_bf16,         // BF16 (RNE) scale for the WH fused scale+exp path
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -623,6 +631,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
             Sk_chunk_t,                 // multi-tile K/V chunking factor
             pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
+            scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -650,6 +659,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
                 Sk_chunk_t,                 // multi-tile K/V chunking factor
                 pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
+                scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
             };
 
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(

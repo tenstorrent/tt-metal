@@ -60,8 +60,15 @@ def run_ring_attention_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     pcc_threshold=0.99,
+    check_semaphore_realloc_cache_hit=False,
 ):
     torch.manual_seed(0)
+
+    if check_semaphore_realloc_cache_hit and enable_trace:
+        # The cache-hit freeze regression must re-apply the hash-excluded GlobalSemaphore addresses on
+        # every dispatch via override_runtime_arguments. A captured trace bakes the addresses at capture
+        # time and would never exercise the per-dispatch re-apply path, so it must run un-traced.
+        pytest.fail("check_semaphore_realloc_cache_hit requires enable_trace=False")
 
     sequence_index = 2
     head_index = 1
@@ -171,7 +178,22 @@ def run_ring_attention_all_gather_impl(
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensors)
         logger.info(f"Done executing trace")
     else:
+        # Cache-hit freeze regression bookkeeping: every iteration gets its own freshly-allocated
+        # semaphore set (all kept alive above so the allocator never reuses an address). We assert the
+        # addresses are actually distinct across iterations, otherwise a cache HIT could reuse iter 0's
+        # stale address without the test noticing — the exact bug override_runtime_arguments must prevent.
+        seen_sem_addrs = []
         for i in range(num_iters):
+            if check_semaphore_realloc_cache_hit:
+                iter_sem_addrs = [ttnn.get_global_semaphore_address(sem) for sem in ccl_semaphore_handles[i]]
+                for addr in iter_sem_addrs:
+                    assert addr not in seen_sem_addrs, (
+                        f"Iteration {i}: fresh global semaphore reused a prior address ({addr}); "
+                        "cannot prove the cache-hit path re-applied a NEW semaphore address."
+                    )
+                seen_sem_addrs.extend(iter_sem_addrs)
+                logger.info(f"[cache-hit iter {i}] semaphore addresses: {iter_sem_addrs}")
+
             tt_all_gather_out_tensors = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensors)
 
@@ -407,4 +429,112 @@ def test_ring_attention_all_gather_program_cache(
         pcc_threshold=pcc_threshold,
     )
 
+    assert submesh_device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+    ],
+    ids=[
+        "tile_bfloat16",
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
+    [
+        ([1, 5, 4096, 64], 2, 1, 4, 1),
+    ],
+    ids=[
+        "shape2_2input_rp4",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    ids=[
+        "line",
+    ],
+    indirect=["device_params"],
+)
+def test_ring_attention_all_gather_semaphore_realloc_cache_hit(
+    mesh_device,
+    ag_output_shape,
+    ag_num_inputs,
+    rp_axis,
+    rp_factor,
+    up_factor,
+    num_links,
+    ag_input_dtype,
+    layout,
+    pcc_threshold,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    num_iters,
+    all_gather_topology,
+):
+    """
+    Cache-hit freeze regression for the hash-excluded out_ready GlobalSemaphore addresses.
+
+    ring_attention_all_gather_async excludes the per-link out_ready GlobalSemaphore L1 addresses from
+    its program-cache hash, so calls that differ only in which semaphores they pass still cache-HIT.
+    That makes the addresses DYNAMIC: the factory bakes them on the cache-miss build, and
+    RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments() must re-apply them on every
+    dispatch. If an address froze on the cache-hit fast path, a later dispatch reusing the cached
+    program with a freshly-allocated semaphore set would sync on iteration 0's stale semaphore and
+    either hang or produce a wrong result.
+
+    This dispatches the SAME cached program num_iters times un-traced (so the cache-hit re-apply path
+    runs per dispatch), each with a fresh (distinct address, all kept alive) global-semaphore set, and
+    asserts:
+      - the semaphore addresses are distinct across iterations (the freeze scenario is real), and
+      - exactly one program-cache entry is created total (iterations 1+ genuinely cache-HIT — the
+        semaphore addresses are hash-excluded), and
+      - every iteration matches the reference output.
+    A frozen semaphore address fails one or both device checks.
+    """
+    submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
+
+    run_ring_attention_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        ag_num_inputs,
+        rp_axis,
+        rp_factor,
+        up_factor,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
+        check_semaphore_realloc_cache_hit=True,
+    )
+
+    # Exactly one cache entry created across all dispatches → iterations 1+ were genuine cache HITs.
     assert submesh_device.cache_entries_counter.total == 1

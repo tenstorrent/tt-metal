@@ -205,8 +205,9 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        # Unpack-to-SrcS cannot convert fp16 to TF32 (Tensix Formats conversion table).
         if input_format in (DataFormat.Float16, DataFormat.Float16_b):
-            return DataFormat.Tf32
+            return input_format
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -246,6 +247,10 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
+        if unpacking_to_srcs:
+            # PACK1 reads SrcS; dest_acc does not widen pack_in.
+            return unpack_out
+
         if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.

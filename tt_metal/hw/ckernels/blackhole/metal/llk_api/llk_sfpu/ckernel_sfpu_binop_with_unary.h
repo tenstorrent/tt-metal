@@ -24,7 +24,7 @@ enum {
     RSUB = 4,
 };  // BINOP_MODE
 
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
@@ -47,7 +47,7 @@ void calculate_binop_with_scalar(std::uint32_t param) {
             // This correction is added for logit(x) = log(x/(1-x)) since bf16 dest stores
             // truncate fp32->bf16 by default, but torch computes rsub result in bf16 with IEEE
             // round-to-nearest-even. The resulting small error is amplified by the log operation.
-            if constexpr (!DST_ACCUM_MODE) {
+            if constexpr (!is_fp32_dest_acc_en) {
                 result = float32_to_bf16_rne(result);
             }
         }
@@ -57,29 +57,29 @@ void calculate_binop_with_scalar(std::uint32_t param) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_add(std::uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS, is_fp32_dest_acc_en>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_sub(std::uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS, is_fp32_dest_acc_en>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_mul(std::uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS, is_fp32_dest_acc_en>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_div(std::uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS, is_fp32_dest_acc_en>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_rsub(std::uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS, is_fp32_dest_acc_en>(param);
     return;
 }
 

@@ -25,15 +25,15 @@ in the same file, sharing its module-level parametrize constants:
 
 ```
 tests/models/minimax_h3/
-├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
+├── test_transformer_minimax_h3.py    # attention, one block, token refiner, whole DiT, Tracy block device-perf
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
 ├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced
-├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
+├── test_performance_minimax_h3.py    # t2va pipeline wall-clock (`BenchmarkProfiler`)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
 ├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
 ├── test_references_minimax_h3.py     # ref2va host parity (prep/layout/presentation) + device encode gate
-├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each (perf + quality), one process each
+├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e quality gate each (t2va wall-clock is in test_performance_minimax_h3.py; fl2va/ref2va still log stage times)
 └── tools/                            # not tests: perf projection, Tracy harnesses, VBench runner
 ```
 
@@ -95,7 +95,8 @@ Two conditioner facts that break naive assumptions:
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
   A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
-  `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
+  `mrope_position_ids()` cover that; the gate is the `get_rope_index` comparison in
+  `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
 FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
 encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
@@ -287,7 +288,7 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 
 ### Meshes
 
-Measured warm (the MEASUREMENT block in `test_pipeline_minimax_h3.py`), 768P/15s, 362 frames,
+Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
 
 | | 4x8 Galaxy | 4x32 quad (traced) | speedup |
@@ -302,7 +303,7 @@ measured denoise 85.3 s / total 118.0 s. One run does not establish a direction.
 
 The audio row is **not** a like-for-like comparison and the total inherits that. The 4x8 column was
 taken with the audio precision levers off, which was their default when it was measured; they are now
-on by default (`split_mode="full"`, `tap_matmul=True`, `prefer_mac=True` on `MiniMaxH3AudioDecoder`),
+on by default (`split_mode="full"` on `MiniMaxH3AudioDecoder`),
 which is an accuracy choice, not a regression -- the same levers cost the same on a single Galaxy.
 Denoise, the row the mesh actually changes, is 2.7-3.0x.
 
@@ -386,7 +387,7 @@ repeating.
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
 the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; for t2va the hazard is
+`run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
 masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
@@ -411,37 +412,27 @@ conditioner fidelity rather than output quality.
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
-`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`
-(and `max_c_in_block=128`) as constructor defaults, and register the H3 conv blockings themselves.
-That takes the decode from 10.5 % to **0.45 %** relative RMSE against the diffusers reference, for
-~3x the stage time. The three constructor levers are independent and each targets a different one of
-the three error sources the 10.5 % is made of. They are strongly complementary — the chain error is
-set by whichever source is worst, so enabling one moves the total far less than enabling all three:
+`MiniMaxH3AudioEncoder` take `split_mode="full"` (and `max_c_in_block=128`) as constructor
+defaults, and register the H3 conv blockings themselves. The one remaining lever answers a
+hardware fact: an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
+takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is the ceiling), so the error is
+*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help.
 
-| `split_mode` | `prefer_mac` | `tap_matmul` | rel RMSE | PCC | PSNR | warm |
-|---|---|---|---|---|---|---|
-| `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
-| `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
-| `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
-| `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
-| `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
-| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** (default) |
-
-Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
-keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
-the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
-fidelity can help. Elementwise fp32 ops, by contrast, are exact.
-
-- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
-  residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
+- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits a conv3d operand into `bf16 hi` plus its
+  exact residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`prefer_mac`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
-  it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
-  exact — 1.5e-03 → 5.3e-08.
-- **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
-  splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
-  conv.
+
+The retired `tap_matmul` lever reformulated stride-1 convs as per-tap matmuls to dodge conv3d's
+partial-sum and output-path roundings; those are now fixed in the conv3d kernel itself (fp32
+partials reduced on the SFPU, bias/untilize reading `UnpackToDestFp32` CBs — see
+`conv3d/device/kernels/compute.cpp`), so conv3d+split matches the old tap+split accuracy in one
+op with none of the per-tap weights or layout traffic.
+
+The depthwise resample filters (`depthwise_tap_filter`) need no lever: their `ttnn.conv1d` kernel
+accumulates on the SFPU for fp32 operands (`compute_depthwise_conv1d.cpp`) and measures bit-equal to
+the exact shift-multiply-add form at every production shape, 2.1–4.1x faster. The retired
+`prefer_mac` lever selected that MAC form as a precision workaround; MAC survives only as the
+fallback for shapes conv1d cannot configure.
 
 Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
 **not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot

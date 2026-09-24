@@ -36,11 +36,14 @@ permissions:
 
 jobs:
   notify:
-    runs-on: ubuntu-slim
-    # Several unbounded network calls (Slack pagination, GitHub API) below --
-    # bound the whole job well under GitHub's long default so a stalled
-    # request can't occupy the runner indefinitely.
-    timeout-minutes: 10
+    # ubuntu-latest, not ubuntu-slim: slim runners hard-cap execution at 15
+    # minutes, and the culprits step below may legitimately wait hours for the
+    # parent commit's retry cycle to settle.
+    runs-on: ubuntu-latest
+    # Must cover the culprits step's parent-settling wait budget (270 min,
+    # DEFAULT_MAX_WAIT_MS in .github/scripts/sanity-notify/culprits.js) plus
+    # the remaining steps, while staying under GitHub's 6h hosted-runner cap.
+    timeout-minutes: 300
     #
     # ============================ FINALITY GATE =============================
     # _auto-retry-post-commit.yaml only re-runs a "Sanity tests" push run when
@@ -174,135 +177,67 @@ jobs:
             });
             core.setOutput('already_notified', 'false');
 
+      # Provides the decision module for the culprits step below and the
+      # composite action used after it.
+      - name: Checkout notify scripts and resolve-slack-mentions action
+        if: steps.claim.outputs.already_notified != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          sparse-checkout: |
+            .github/scripts/sanity-notify
+            .github/actions/resolve-slack-mentions
+          sparse-checkout-cone-mode: true
+
       - name: Find culprit PRs since last green run
         id: culprits
         if: steps.claim.outputs.already_notified != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          CURRENT_RUN_NUMBER: ${{ steps.context.outputs.run_number }}
           CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         with:
+          # One-commit-back edge detection. The decision logic (parent
+          # resolution, per-run finality, settle-polling, culprit building)
+          # lives in .github/scripts/sanity-notify/culprits.js -- the single
+          # source of truth shared by this step, its unit tests
+          # (culprits.test.js, run with `node --test`), and the historical
+          # backtest (backtest.js). See the module for the invariants.
           script: |
+            const { findBaseline, buildCulpritEntries } = require('./.github/scripts/sanity-notify/culprits.js');
+
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const currentRunNumber = Number(process.env.CURRENT_RUN_NUMBER);
             const currentHeadSha = process.env.CURRENT_HEAD_SHA;
 
-            const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
+            const result = await findBaseline({
+              github,
               owner,
               repo,
-              workflow_id: 'sanity-tests.yaml',
-              branch: 'main',
-              event: 'push',
-              per_page: 100,
+              headSha: currentHeadSha,
+              log: core.info,
+              warn: core.warning,
             });
 
-            // Walk backwards (by run_number, not necessarily run_number - 1, since
-            // schedule/dispatch runs of the same workflow interleave and also
-            // consume run_numbers) to find the most recent MEANINGFUL prior state:
-            //  - a still-in-progress run (e.g. mid auto-retry-attempt) makes the
-            //    true completion order ambiguous -- abstain rather than silently
-            //    skip past it and risk misattributing to the wrong set of authors.
-            //  - cancelled/skipped runs carry no real red/green signal -- skip over
-            //    them and keep looking, so they can't permanently swallow a break.
-            //  - success -> this is a fresh green->red transition; use it as baseline.
-            //  - failure (or any other bad terminal conclusion) -> main was already
-            //    red before us; stay silent to avoid re-notifying / re-blaming.
-            const candidates = runsResp.workflow_runs
-              .filter(r => r.run_number < currentRunNumber)
-              .sort((a, b) => b.run_number - a.run_number);
-
-            let prevGood = null;
-            for (const run of candidates) {
-              if (run.status !== 'completed') {
-                core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
-                core.setOutput('should_notify', 'false');
-                return;
-              }
-              if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
-                core.info(`Push run #${run.run_number} was ${run.conclusion} (no real signal); looking further back.`);
-                continue;
-              }
-              if (run.conclusion === 'success') {
-                prevGood = run;
-              } else {
-                core.info(`Push run #${run.run_number} also did not succeed (${run.conclusion}); ` +
-                  `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
-              }
-              break;
-            }
-
-            if (!prevGood) {
-              core.warning('No usable previous "Sanity tests" push run found on main (either none within the last 100 runs, or main is still red from an earlier break); skipping.');
+            if (result.decision !== 'notify') {
               core.setOutput('should_notify', 'false');
               return;
             }
 
             core.setOutput('should_notify', 'true');
-            core.setOutput('prev_run_url', prevGood.html_url);
-            core.setOutput('prev_run_number', String(prevGood.run_number));
+            core.setOutput('prev_run_url', result.baselineRun.html_url);
+            core.setOutput('prev_run_number', String(result.baselineRun.run_number));
 
-            const { data: cmp } = await github.rest.repos.compareCommits({
+            const { entries, logins } = await buildCulpritEntries({
+              github,
               owner,
               repo,
-              base: prevGood.head_sha,
-              head: currentHeadSha,
+              baseSha: result.parentSha,
+              headSha: currentHeadSha,
             });
 
-            // PR titles and commit subjects are attacker-controlled (anyone who can
-            // open a PR) and end up inside Slack `<url|label>` mrkdwn links below --
-            // must be entity-escaped the same way notify-slack-on-mention.yaml
-            // escapes user-supplied text, or a crafted title could break out of the
-            // link syntax or smuggle in a broadcast mention like <!subteam^...>.
-            const escapeSlack = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-            const entries = [];
-            const seenPrNumbers = new Set();
-
-            for (const commit of cmp.commits) {
-              const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner,
-                repo,
-                commit_sha: commit.sha,
-              });
-
-              if (pulls.length > 0) {
-                for (const pr of pulls) {
-                  if (seenPrNumbers.has(pr.number)) continue;
-                  seenPrNumbers.add(pr.number);
-                  entries.push({
-                    type: 'pr',
-                    number: pr.number,
-                    url: pr.html_url,
-                    title: escapeSlack(pr.title),
-                    authorLogin: pr.user ? pr.user.login : null,
-                  });
-                }
-              } else {
-                // No associated PR (direct push, or API lag right after merge) --
-                // fall back to the commit's own author so a culprit is never silently dropped.
-                entries.push({
-                  type: 'commit',
-                  sha: commit.sha,
-                  url: commit.html_url,
-                  title: escapeSlack(commit.commit.message.split('\n')[0]),
-                  authorLogin: commit.author ? commit.author.login : null,
-                });
-              }
-            }
-
-            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
+            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} for ${currentHeadSha} (parent baseline run #${result.baselineRun.run_number})`);
             core.setOutput('entries', JSON.stringify(entries));
-            core.setOutput('logins_json',
-              JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
-
-      - name: Checkout resolve-slack-mentions action
-        if: steps.culprits.outputs.should_notify == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 5
-        with:
-          sparse-checkout: .github/actions/resolve-slack-mentions
-          sparse-checkout-cone-mode: true
+            core.setOutput('logins_json', JSON.stringify(logins));
 
       - name: Resolve Slack mentions for culprits
         id: mentions
