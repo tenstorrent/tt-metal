@@ -94,8 +94,12 @@ UNMEASURABLE = -1
 
 
 @dataclass(frozen=True)
-class _UlpDtype:
-    """What the bit arithmetic needs to know about one torch float dtype."""
+class DataTypeDescriptor:
+    """The bit layout of one torch float dtype: what any bit-level arithmetic on it needs.
+
+    Nothing here is specific to ULP. It lives in this module because the ULP metric is
+    its only user so far.
+    """
 
     bits_dtype: torch.dtype  # same-width signed int, for .view()
     wide_dtype: torch.dtype  # wider signed int, room for the signed rank
@@ -104,22 +108,22 @@ class _UlpDtype:
     mantissa_bits: int
 
 
-_ULP_DTYPES: Dict[torch.dtype, _UlpDtype] = {
-    torch.bfloat16: _UlpDtype(
+_ULP_DTYPES: Dict[torch.dtype, DataTypeDescriptor] = {
+    torch.bfloat16: DataTypeDescriptor(
         bits_dtype=torch.int16,
         wide_dtype=torch.int32,
         sign_mask=0x8000,
         all_mask=0xFFFF,
         mantissa_bits=7,
     ),
-    torch.float16: _UlpDtype(
+    torch.float16: DataTypeDescriptor(
         bits_dtype=torch.int16,
         wide_dtype=torch.int32,
         sign_mask=0x8000,
         all_mask=0xFFFF,
         mantissa_bits=10,
     ),
-    torch.float32: _UlpDtype(
+    torch.float32: DataTypeDescriptor(
         bits_dtype=torch.int32,
         wide_dtype=torch.int64,
         sign_mask=0x80000000,
@@ -164,6 +168,32 @@ def _unsupported_dtype_error(
         f"{caller}: unsupported dtype {dtype}; supported: "
         f"{', '.join(str(d) for d in supported)}"
     )
+
+
+def _require_same_dtype(
+    caller: str, golden: torch.Tensor, result: torch.Tensor
+) -> None:
+    """Raise unless both sides are on one lattice: a ULP distance is a rank in one dtype's
+    ordered value set, so there is nothing to measure across two."""
+    if golden.dtype != result.dtype:
+        raise ValueError(
+            f"{caller}: dtype mismatch, golden {golden.dtype} vs result {result.dtype}; a "
+            "ULP distance is a rank on one lattice, so cast both to the output format's "
+            "dtype first"
+        )
+
+
+def _shape_mismatch(
+    reference: torch.Tensor, other: torch.Tensor, what: str = "shape"
+) -> Optional[str]:
+    """Why *other* is not lane-for-lane with *reference*, or ``None`` if it is.
+
+    Checked, never broadcast: a ``(1,)`` tensor would judge every lane or none. Returned
+    rather than raised, because :func:`within_ulp` reports it as a failed verdict.
+    """
+    if other.shape == reference.shape:
+        return None
+    return f"{what} mismatch {tuple(reference.shape)} vs {tuple(other.shape)}"
 
 
 def ulp_dtype(fmt: DataFormat) -> torch.dtype:
@@ -212,7 +242,7 @@ def flushes_subnormals(dtype: torch.dtype) -> bool:
 
 
 def _value_order_index(
-    t: torch.Tensor, spec: _UlpDtype, *, flush_subnormals: bool
+    t: torch.Tensor, spec: DataTypeDescriptor, *, flush_subnormals: bool
 ) -> torch.Tensor:
     """Signed rank of each element in *spec*'s ordered list of representable values.
 
@@ -248,18 +278,13 @@ def ulp_distance(
     NaN come back as :data:`UNMEASURABLE`. *flush_subnormals* defaults per dtype, and
     ``True`` forces the collapse for a caller that knows the producing Dest flushed.
     """
-    if golden.dtype != result.dtype:
-        raise ValueError(
-            f"ulp_distance: dtype mismatch {golden.dtype} vs {result.dtype}; cast both to "
-            "the output format's dtype first"
-        )
+    _require_same_dtype("ulp_distance", golden, result)
     spec = _ULP_DTYPES.get(golden.dtype)
     if spec is None:
         raise _unsupported_dtype_error("ulp_distance", golden.dtype, _ULP_DTYPES)
-    if golden.shape != result.shape:
-        raise ValueError(
-            f"ulp_distance: shape mismatch {tuple(golden.shape)} vs {tuple(result.shape)}"
-        )
+    mismatch = _shape_mismatch(golden, result)
+    if mismatch:
+        raise ValueError(f"ulp_distance: {mismatch}")
 
     if flush_subnormals is None:
         flush_subnormals = flushes_subnormals(golden.dtype)
@@ -293,18 +318,16 @@ def _selection(
 ) -> torch.Tensor:
     """*mask* as a boolean selection over *reference*'s lanes, or all of them.
 
-    Shape is checked, not broadcast: ``(1,)`` would judge every lane or none. dtype is
-    checked because the selection is combined with ``&`` -- on an integer mask that is
+    Shape is checked, not broadcast -- see :func:`_shape_mismatch`. dtype is checked
+    because the selection is combined with ``&`` -- on an integer mask that is
     bitwise arithmetic, where a truthy ``2`` becomes ``2 & 1 == 0`` and silently drops
     the lane it was meant to select, from the failure scan and from every statistic.
     """
     if mask is None:
         return torch.ones_like(reference, dtype=torch.bool)
-    if mask.shape != reference.shape:
-        raise ValueError(
-            f"{caller}: mask shape {tuple(mask.shape)} does not match "
-            f"{tuple(reference.shape)}"
-        )
+    mismatch = _shape_mismatch(reference, mask, "mask shape")
+    if mismatch:
+        raise ValueError(f"{caller}: {mismatch}")
     if mask.dtype is not torch.bool:
         raise ValueError(f"{caller}: mask must be bool, got {mask.dtype}")
     return mask
@@ -669,11 +692,9 @@ def within_ulp(
     Returns ``(ok, message)``, worth logging on a pass too: it turns a functional test
     into an accuracy datapoint without changing its verdict.
     """
-    if golden.shape != result.shape:
-        return False, (
-            f"shape mismatch: golden {tuple(golden.shape)} vs result "
-            f"{tuple(result.shape)}"
-        )
+    mismatch = _shape_mismatch(golden, result)
+    if mismatch:
+        return False, mismatch
     if fmt is not None:
         # The label and the lattice have to be the same claim -- see the docstring.
         expected = ulp_dtype(fmt)
@@ -682,13 +703,9 @@ def within_ulp(
                 f"within_ulp: {fmt.name} is measured in {expected}, but the tensors are "
                 f"{golden.dtype}; cast both to the output format's dtype first"
             )
-    if golden.dtype != result.dtype:
-        # Before the non-finite short-circuit: an uncast golden reads there as a kernel
-        # overflow, and labels it with the wrong dtype.
-        raise ValueError(
-            f"within_ulp: golden is {golden.dtype} but result is {result.dtype}; a ULP "
-            "distance is a rank on one lattice, so cast both to the same dtype first"
-        )
+    # Before the non-finite short-circuit: an uncast golden reads there as a kernel
+    # overflow, and labels it with the wrong dtype.
+    _require_same_dtype("within_ulp", golden, result)
     warn_if_threshold_unmeaningful(max_ulp, golden.dtype)
 
     selected = _selection(mask, golden, "within_ulp")
