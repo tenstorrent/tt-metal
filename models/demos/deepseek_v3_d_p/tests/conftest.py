@@ -48,11 +48,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapte
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
 
-# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
-# linear-attention layers with no TT implementation, so only its MLA layer is testable.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
-
-TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     download_infinitebench_subset,
@@ -701,7 +696,9 @@ def _resolve_config_only(variant_name: str):
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Same hub-cache descent get_or_download_model does: *_HF_MODEL may point at the
+        # repo root, whose config.json lives one level down in snapshots/<sha>/.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -751,7 +748,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     for candidate in candidates:
         if candidate is None:
             continue
-        p = Path(candidate)
+        p = _resolve_hf_snapshot_dir(Path(candidate))
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)

@@ -159,6 +159,64 @@
   team: models
   budget_type: vllm
 
+- name: "Gemma4-31B dFlash tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  # conc-1 AT THE CLIENT, ON PURPOSE. The adaptive engine speculates only when
+  # decoding ALONE, so at the default --num-prompts 32 with no
+  # --max-concurrency the benchmark measured the plain batched baseline and
+  # never exercised speculation, while the single-request coherence guard did --
+  # a broken spec path passed perf and failed coherence. Driving one request at
+  # a time makes every decode solo, so both the benchmark and the guard take the
+  # spec path. Batched perf and batched coherency are tracked by
+  # "Gemma4-31B tp=8" instead.
+  #
+  # max_num_seqs stays 32: what selects speculation is how many requests are
+  # RESIDENT, not this cap. Setting it to 1 is not needed and hangs the device --
+  # requests 1 and 2 served, then request 3 died in the drafter read with
+  # "TT_THROW system_memory_manager ... TIMEOUT: device timeout ... the device is
+  # unrecoverable". Same failure at max_num_seqs=1 on a BH Galaxy.
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+- name: "Gemma4-12B MTP tp=8"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  # conc-1 at the CLIENT -- see the dFlash leg above, including why
+  # max_num_seqs stays 32. Batched perf and batched coherency are tracked by
+  # "Gemma4-12B tp=8".
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
   coherence-test: true

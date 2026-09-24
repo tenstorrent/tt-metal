@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/reduce_affine_transforms_program_factory.hpp"
 
 #include <vector>
@@ -19,10 +21,11 @@
 
 namespace ttnn::experimental::prim {
 
-ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::create_program_artifacts(
+ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFactory::create_mesh_workload_artifacts(
     const ReduceAffineTransformsParams& attrs,
     const ReduceAffineTransformsInputs& in,
-    std::vector<ttnn::Tensor>& outputs) {
+    std::vector<ttnn::Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
     const auto& output_a = outputs[0].mesh_tensor();
@@ -208,7 +211,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "reduce_affine_transforms",
-        .kernels = {std::move(dataflow), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores =
             {
@@ -244,10 +246,18 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         {output_b_tensor_name, output_b},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_args),
-    };
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, dataflow, compute);
+    spec.kernels = {std::move(dataflow), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows,
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

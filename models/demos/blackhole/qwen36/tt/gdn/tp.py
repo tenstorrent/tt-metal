@@ -28,10 +28,14 @@ def _softplus_add(a, bias):
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
 
 
-def _silu_mul(x, z, memory_config):
+def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
-    overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs)."""
-    return ttnn.multiply(x, ttnn.silu(z, memory_config=memory_config), memory_config=memory_config)
+    overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
+    dtype: optional output dtype (bf16 for the column-parallel prefill out-proj; default = x's)."""
+    s = ttnn.silu(z, memory_config=memory_config)
+    if dtype is None:
+        return ttnn.multiply(x, s, memory_config=memory_config)
+    return ttnn.multiply(x, s, memory_config=memory_config, dtype=dtype)
 
 
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
@@ -139,6 +143,17 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
+    if getattr(args, "num_devices", 1) > 1:
+        # COLUMN-parallel copy of the out-proj for prefill.
+        # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
+        tw["out_colpar"] = tpc.shard_w(
+            sd[P + "out_proj.weight"],
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("out.colpar"),
+            dtype=ttnn.bfloat8_b,
+        )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
     A_log = tpc.shard_small(sd[P + "A_log"].float(), mesh, c("A_log"))
@@ -211,6 +226,9 @@ class TPGatedDeltaNet:
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
         self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
+        # col-sharded weight was loaded).
+        self._out_colpar_prefill = "out_colpar" in tw
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -648,6 +666,27 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
+        if self._out_colpar_prefill:
+            # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
+            # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
+            # matmul, as every other projection in the model already does).
+            gated = _silu_mul(out_f, z, _L1, dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_f)
+            ttnn.deallocate(z)
+            # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
+            out = tpc.all_gather_matmul_prefill(
+                gated,
+                tw["out_colpar"],
+                self.tt_ccl,
+                self.cfg,
+                self.args.ccl_topology(),
+                out_memory_config=_L1,
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
+            )
+            ttnn.deallocate(gated)
+            if return_state:
+                return out, captured[0], captured[1]
+            return out
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)

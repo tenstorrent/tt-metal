@@ -663,12 +663,12 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
                            // override_runtime_arguments patches this common arg (index 7) on every cache hit
     });
 
-    // Per-core runtime args. The input/cache buffers are passed as Buffer* bindings (not raw
-    // addresses) so cache hits take the fast path that patches addresses and skips create_descriptor.
-    // The metadata buffers' raw addresses are common args patched by override_runtime_arguments (the
-    // fast path does not refresh raw-address common args), so no per-core scalar goes stale.
+    // Bind each shared buffer once per kernel. Cache hits refresh these common bindings and the
+    // metadata controls above; per-core work assignments depend only on the hashed tensor specs.
     auto* src_buffer = input.buffer();
     auto* dst_buffer = cache.buffer();
+    reader_kernel.emplace_common_runtime_args({src_buffer});
+    writer_kernel.emplace_common_runtime_args({dst_buffer});
     const uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
@@ -680,13 +680,13 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         const CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
-        // Reader: (src_addr, num_pages, core_blocks_written) -- it derives its source rows from the common
+        // Reader: (num_pages, core_blocks_written) -- it derives its source rows from the common
         // args, since a TP-sharded chip's rows depend on the chunk start, not just its mesh position.
-        reader_kernel.emplace_runtime_args(core, {src_buffer, num_blocks_per_core * Wt, num_blocks_written});
+        reader_kernel.emplace_runtime_args(core, {num_blocks_per_core * Wt, num_blocks_written});
 
-        // Writer: (dst_addr, num_pages, core_blocks_written) — kernel derives update_idxt + head
+        // Writer: (num_pages, core_blocks_written) — kernel derives update_idxt + head
         // offset from the slot_idx/kv_actual_global it reads (metadata tensors or common-arg scalars).
-        writer_kernel.emplace_runtime_args(core, {dst_buffer, num_blocks_per_core * Wt, num_blocks_written});
+        writer_kernel.emplace_runtime_args(core, {num_blocks_per_core * Wt, num_blocks_written});
 
         num_blocks_written += num_blocks_per_core;
     }

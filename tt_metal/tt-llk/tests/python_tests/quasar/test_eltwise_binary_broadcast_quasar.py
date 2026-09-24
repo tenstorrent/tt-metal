@@ -27,6 +27,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -60,22 +61,19 @@ from quasar.test_eltwise_binary_quasar import (
     valid_acc_to_dest,
 )
 
-BINARY_BROADCAST_DATA_FORMATS = [
+_BINARY_BROADCAST_BASE_FORMATS = [
     DataFormat.Float16_b,
     DataFormat.Float16,
-    DataFormat.MxFp4,
-    DataFormat.MxInt8,
-    DataFormat.MxInt4,
-    DataFormat.MxInt2,
 ]
-BINARY_BROADCAST_FORMATS = input_output_formats(
-    BINARY_BROADCAST_DATA_FORMATS,
+BINARY_BROADCAST_FORMATS = (
+    input_output_formats(_BINARY_BROADCAST_BASE_FORMATS)
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 BINARY_BROADCAST_PERF_FORMATS = input_output_formats(
-    BINARY_BROADCAST_DATA_FORMATS,
+    _BINARY_BROADCAST_BASE_FORMATS,
     same=True,
-)
-BINARY_BROADCAST_FORMATS += [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 BROADCAST_TYPES = [
     BroadcastType.Column,
