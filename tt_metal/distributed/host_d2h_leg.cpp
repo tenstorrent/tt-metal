@@ -165,6 +165,20 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
         im.core[c].cfg_addr = d.config_buffer_address;
         im.core[c].acked_dev_off = d.bytes_acked_device_offset;
     }
+
+    // Zeroed here so the kernel's g_posted=0 and this leg's credited=0 name the same epoch.
+    // L1 keeps the previous run's count, and tt_uva_sync() would clear against that instead.
+    if (cfg.consumed_addr != 0) {
+        const uint32_t zero = 0;
+        for (uint32_t c = 0; c < n; ++c) {
+            const auto& v = im.core[c].virt;
+            im.cluster->write_core_immediate(
+                &zero,
+                sizeof(uint32_t),
+                tt_cxy_pair(im.device_id, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)),
+                cfg.consumed_addr);
+        }
+    }
     return leg;
 }
 
