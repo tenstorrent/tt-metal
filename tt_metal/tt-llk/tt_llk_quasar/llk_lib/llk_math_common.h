@@ -125,7 +125,7 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
  * @brief Configures math hardware by setting ALU formats
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
  * from SrcA reg format
- * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode
+ * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode (Float32/Int32)
  * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
