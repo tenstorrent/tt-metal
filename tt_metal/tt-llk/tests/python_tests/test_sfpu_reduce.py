@@ -1041,7 +1041,7 @@ def test_uint32_reduce_column_average_bit31(band):
     if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
         pytest.skip(
             reason="Blackhole has the same unsigned-average defect; fixed separately in "
-            "tenstorrent/tt-metal#57661 (#57509 item 2)"
+            "https://github.com/tenstorrent/tt-metal/pull/57661"
         )
 
     column_sums, golden, res = _run_uint32_column_average(_UINT32_AVERAGE_BANDS[band])
