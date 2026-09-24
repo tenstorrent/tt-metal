@@ -262,30 +262,50 @@ struct HwRound {
     }
     bool usable() const { return tx.n != 0 && peer_ok; }
 };
-// The queue's own keepalives are kept out of the armed window: a keepalive is generated only after the keepalive
-// timeout without a packet sent (documented; measured 8002 cycles), so a pilot frame sent just before arming leaves
-// the queue no keepalive to generate for many times a burst's length. Without it a keepalive generated while armed
-// went ahead of a frame or merged into one, one burst in ~1000. arm_burst waits for the pilot's two WORD_CNT units
-// (a keepalive that left just before it is one and cannot pass for it), then arms and anchors the counters; false,
-// the burst counted lost, if the pilot did not go. The pilot goes under the queue's boot header row, so the peer's
-// classifier does not stamp it: a burst's ingress stamps stay its frames'.
+// The queue's own keepalives are kept out of the armed window. A keepalive is the queue's TT-link sequence update,
+// carrying its acks for the other direction, and the MAC stamps whatever the queue hands off while armed: a keepalive
+// stamped at byte 82 of a far shorter packet reaches the peer corrupt, which forces resends and, now and then, a
+// spurious ack that leaves the peer's queue re-sending a window the peer never accepts. A keepalive is generated only
+// after the keepalive timeout without a packet sent (documented; measured 8002 cycles), so a pilot frame sent just
+// before arming leaves the queue none to generate while armed, provided the armed window has no idle stretch: the
+// sender's frames go out back to back, and the receiver arms per echo since the frames it answers can come
+// microseconds apart. arm_burst waits for the pilot's two WORD_CNT units (a keepalive that left just before it is
+// one and cannot pass for it), then arms and anchors the counters; false, the frames counted lost, if the pilot did
+// not go. The pilot goes under the queue's boot header row, so the peer's classifier does not stamp it: ingress
+// stamps stay the frames'.
 struct Anchor {
     uint32_t start = 0, word = 0;
 };
-// No context switch while the queue is busy: the core's owner may be a router, whose switches to base firmware
+// A frame goes only onto a free queue, and the queue is given kBurstStampSpins polls to free up: under fabric load
+// a link-level resend on it can keep it busy for good, and a router waiting on it stops serving the fabric, which
+// then deadlocks. No context switch while waiting: the core's owner may be a router, whose switches to base firmware
 // are coordinated with the tile's other RISC.
-__attribute__((always_inline)) inline void issue(volatile eth_channel_sync_t* s) {
+__attribute__((always_inline)) inline bool txq_free() {
+    for (uint32_t spin = 0; internal_::eth_txq_is_busy(kLinkTxq); spin++) {
+        if (spin == kBurstStampSpins) {
+            return false;
+        }
+    }
+    return true;
+}
+__attribute__((always_inline)) inline bool issue(volatile eth_channel_sync_t* s) {
+    if (!txq_free()) {
+        return false;
+    }
     const uint32_t addr = reinterpret_cast<uint32_t>(s);
-    internal_::eth_send_packet<false>(kLinkTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
+    internal_::eth_send_packet_unsafe(kLinkTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
+    return true;
 }
 template <typename Session>
 __attribute__((noinline)) inline bool arm_burst(const Session& s, uint32_t base, Anchor& at, StopDiag& diag) {
     const uint32_t units0 = raw::txq_word_cnt(Session::kTxq);
     tx_header_row_select(s, true);
-    issue(pilot(base));
-    while (internal_::eth_txq_is_busy(Session::kTxq)) {
-    }
+    const bool went = issue(pilot(base)) && txq_free();
     tx_header_row_select(s, false);
+    if (!went) {
+        diag.drop[2]++;
+        return false;
+    }
     for (uint32_t spin = 0; raw::txq_word_cnt(Session::kTxq) - units0 < 2; spin++) {
         if (spin == kBurstStampSpins) {
             diag.drop[2]++;
@@ -297,20 +317,21 @@ __attribute__((noinline)) inline bool arm_burst(const Session& s, uint32_t base,
     at.word = raw::txq_word_cnt(Session::kTxq);
     return true;
 }
-// Disarms once the burst's frames have all started: ts_cmd is sticky and is sampled as the queue latches each frame's
+// Disarms once the armed frames have all started: ts_cmd is sticky and is sampled as the queue latches each frame's
 // command, so a frame still queued when the polls run out goes without its egress stamp. WORD_CNT trails the starts
 // while the MAC is busy with the fabric's queue, so it is read after them; units beyond two per frame are a keepalive
 // or a link-level resend that went while armed.
 template <typename Session>
-__attribute__((noinline)) inline void finish_burst(const Session& s, const Anchor& at, StopDiag& diag) {
-    for (uint32_t spin = 0; raw::txq_pkt_start_cnt(Session::kTxq) - at.start < kBurstFrames; spin++) {
+__attribute__((noinline)) inline void finish_burst(
+    const Session& s, const Anchor& at, uint32_t frames, StopDiag& diag) {
+    for (uint32_t spin = 0; raw::txq_pkt_start_cnt(Session::kTxq) - at.start < frames; spin++) {
         if (spin == kBurstStampSpins) {
             diag.drop[2]++;
             break;
         }
     }
     stamps_disarm(s);
-    diag.drop[1] += raw::txq_word_cnt(Session::kTxq) - at.word > 2 * kBurstFrames;
+    diag.drop[1] += raw::txq_word_cnt(Session::kTxq) - at.word > 2 * frames;
 }
 
 // The records: one per stamp average, this core's refclk-domain reading against its wall clock with the round's
@@ -516,9 +537,11 @@ private:
                 pacer.until(w0 + i * spacing + frame_phase_cycles(j, c16) - phase0);
                 s->reserved_2 = round;
                 s->bytes_sent = frame_key(round, j);
-                issue(s);
+                if (!issue(s)) {
+                    break;
+                }
             }
-            finish_burst(sess, at, diag);
+            finish_burst(sess, at, kBurstFrames, diag);
             sent = true;
             sent_round = round;
             sent_j0 = j0;
@@ -536,8 +559,7 @@ struct ReceiverLink {
     uint32_t slot_base = 0, diag_addr = 0;
     uint32_t round = 0, expect = 0;
     link::Ring<Bracket> ring;
-    bool started = false, mid_burst = false, armed = false;
-    Anchor at;
+    bool started = false, mid_burst = false;
     Instant start_at{};
     StopDiag diag;
     HwRound rnd;
@@ -638,10 +660,9 @@ private:
         write_diag();
     }
     // A frame: its egress stamp from the frame itself, its ingress stamp, and its echo from the same slot, which
-    // carries its key back and this end's egress stamp. The round's number is the sender's, read from the frame; a
-    // new one closes the previous. An echo waits for the previous one's hand-off, so the queue never holds two of
-    // ours: four issued back to back left the last unfinished for microseconds, one burst in ~1000. True while the
-    // burst has frames to come.
+    // carries its key back and this end's egress stamp, armed on its own behind a pilot and handed off before the next
+    // echo is issued. The round's number is the sender's, read from the frame; a new one closes the previous. True
+    // while the burst has frames to come.
     __attribute__((noinline)) bool frame(volatile eth_channel_sync_t* s, uint32_t key) {
         const Instant now = read_instant();
         const uint32_t j = (key & kTripMask) - 1;
@@ -662,26 +683,16 @@ private:
         }
         btx[bn++] = rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(s));
         drain_burst();
-        if (i == 0) {
-            armed = arm_burst(sess, slot_base, at, diag);
-        } else if (armed) {
-            for (uint32_t spin = 0; raw::txq_pkt_start_cnt(LinkSession::kTxq) - at.start < i; spin++) {
-                if (spin == kBurstStampSpins) {
-                    armed = false;
-                    diag.drop[2]++;
-                    stamps_disarm(sess);
-                    break;
-                }
-            }
-        }
         carry_offset(s, sess);
         s->receiver_ack = key;
         s->bytes_sent = 0;
+        Anchor at;
+        const bool armed = arm_burst(sess, slot_base, at, diag);
         issue(s);
+        if (armed) {
+            finish_burst(sess, at, 1, diag);
+        }
         if (i == kBurstFrames - 1) {
-            if (armed) {
-                finish_burst(sess, at, diag);
-            }
             settle_burst();
         }
         expect = j + 1;

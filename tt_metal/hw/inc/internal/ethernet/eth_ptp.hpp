@@ -456,11 +456,12 @@ inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, 
     }
     return n;
 }
+// At most one FIFO's worth per call, so a stream of stamped packets cannot hold a router's core here.
 template <typename Session, typename Sink>
 inline __attribute__((always_inline)) uint32_t rx_stamps_drain(const Session&, Sink&& sink) {
     raw::RxStamp s;
     uint32_t n = 0;
-    while (raw::rx_th_pop(s)) {
+    for (uint32_t i = 0; i <= kRxThStatusEntriesMask && raw::rx_th_pop(s); i++) {
         if (s.valid && s.label == Session::kLabel) {
             sink(s.rx_ts);
             n++;
