@@ -247,13 +247,25 @@ constexpr std::uint32_t HIFI4_COL_CUTOFF = 4;
 constexpr std::uint32_t HIFI4_SCALAR_CUTOFF = 4;
 
 std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardware) {
-    // Do not transfer Blackhole measurements to architectures not covered by the sweep.
-    if (hardware.arch != tt::ARCH::BLACKHOLE) {
-        return dim == ReduceOpDim::W ? 4U : 8U;
-    }
     const auto for_dim = [dim](std::uint32_t row, std::uint32_t col, std::uint32_t scalar) {
         return dim == ReduceOpDim::W ? row : (dim == ReduceOpDim::H ? col : scalar);
     };
+    if (hardware.arch == tt::ARCH::WORMHOLE_B0) {
+        // Wormhole B0 library-add/native measurements, 2026-09-24: BF16 input,
+        // FP32 output, both DEST modes. Conservative sustained >1% wins across
+        // repeated sweeps. See reduce_accumulate/README.md for provenance.
+        switch (hardware.math_fidelity) {
+            case tt::tt_metal::MathFidelity::LoFi: return for_dim(14, 52, 14);
+            case tt::tt_metal::MathFidelity::HiFi2: return for_dim(14, 52, 8);
+            case tt::tt_metal::MathFidelity::HiFi3: return for_dim(14, 12, 6);
+            case tt::tt_metal::MathFidelity::HiFi4: return for_dim(14, 7, 5);
+            default: TT_THROW("Reduce planner: unsupported math fidelity");
+        }
+    }
+    // Preserve the existing policy on architectures not covered by either sweep.
+    if (hardware.arch != tt::ARCH::BLACKHOLE) {
+        return dim == ReduceOpDim::W ? 4U : 8U;
+    }
     switch (hardware.math_fidelity) {
         case tt::tt_metal::MathFidelity::LoFi: return for_dim(LOFI_ROW_CUTOFF, LOFI_COL_CUTOFF, LOFI_SCALAR_CUTOFF);
         case tt::tt_metal::MathFidelity::HiFi2: return for_dim(HIFI2_ROW_CUTOFF, HIFI2_COL_CUTOFF, HIFI2_SCALAR_CUTOFF);
