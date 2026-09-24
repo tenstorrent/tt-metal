@@ -20,7 +20,8 @@ constexpr uint64_t kFrameMagic = 0x5556ull;  // 'UV'
 constexpr uint32_t kFrameVersion = 2;
 constexpr uint32_t kFrameGuardMagicShift = 16;
 
-// Non-zero only while a frame is armed; the consumer zeroes it after snapshotting.
+// Armed by the sender in stage(), checked before the trailer is trusted. A consumer that
+// reuses it as an arrival flag clears it; the D2H ring gates slot reuse on credits instead.
 constexpr uint64_t tt_uva_frame_guard(uint32_t version) {
     return (kFrameMagic << kFrameGuardMagicShift) | static_cast<uint64_t>(version);
 }
