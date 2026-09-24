@@ -85,6 +85,9 @@ public:
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
      *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Only the rank owning recv_core maps host memory and may write or export the socket.
+     *
      * If `recv_core` is a claimed service core, the device-side buffers are allocated
      * from that core's service-core L1 region instead of the worker-grid BankManager.
      *

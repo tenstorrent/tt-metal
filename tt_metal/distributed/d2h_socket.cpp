@@ -206,8 +206,10 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* sender_device = mesh_device->get_device(sender_core_.device_coord);
-    if (svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
+    auto* sender_device = mesh_device->is_local(sender_core_.device_coord)
+                              ? mesh_device->get_device(sender_core_.device_coord)
+                              : nullptr;
+    if (sender_device && svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
     }
@@ -351,6 +353,11 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
+
+    // Co-owners reserve the config buffer together; only the sender owner maps host memory.
+    if (!mesh_device->is_local(sender_core_.device_coord)) {
+        return;
+    }
 
     // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
     auto& ctx = mesh_device->impl().metal_context();
@@ -695,6 +702,9 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    if (mesh_device_ && !mesh_device_->is_local(sender_core_.device_coord)) {
+        return;
+    }
     // A connector process drains the FIFO: it advances read_ptr and bytes_acked in
     // the shared connector state (and notify_sender PCIe-writes bytes_acked to the
     // device's config buffer), leaving the owner's in-process bytes_acked_/read_ptr_

@@ -91,6 +91,9 @@ public:
      * Creates a configuration buffer on the device that the kernel uses to access
      * socket metadata and downstream (host) buffer addresses.
      *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Only the rank owning sender_core maps host memory and may read or export the socket.
+     *
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.

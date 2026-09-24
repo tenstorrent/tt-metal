@@ -170,8 +170,10 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
-    if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
+    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
+                            ? mesh_device->get_device(recv_core_.device_coord)
+                            : nullptr;
+    if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
     }
@@ -189,8 +191,10 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     }
 
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
-    if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
+    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
+                            ? mesh_device->get_device(recv_core_.device_coord)
+                            : nullptr;
+    if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
         svc_data_l1_addr_ = raw_addr;
@@ -247,6 +251,9 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+    if (!mesh_device->is_local(recv_core_.device_coord)) {
+        return;
+    }
     // Per-core buffers have a real address only via the per-core API;
     // address() is not valid for them (host would push to a bogus L1 spot).
     const DeviceAddr data_buf_base = per_core
@@ -413,6 +420,14 @@ H2DSocket::H2DSocket(
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
     TT_FATAL(buffer_type_ == BufferType::L1, "H2D sockets currently only support data buffers in SRAM.");
 
+    // Preserve collective L1 allocation order on all co-owners before owner-local PCIe setup.
+    init_config_buffer(mesh_device);
+    init_data_buffer(mesh_device, pcie_alignment);
+    config_buffer_address_ = config_buffer_->address();
+    if (!mesh_device->is_local(recv_core_.device_coord)) {
+        return;
+    }
+
     std::string shm_name = generate_shm_name("h2d");
 
     PinnedBufferInfo bytes_acked_info = {};
@@ -433,12 +448,8 @@ H2DSocket::H2DSocket(
     }
     enable_mock_flow_control(*mesh_device);
 
-    init_config_buffer(mesh_device);
-    init_data_buffer(mesh_device, pcie_alignment);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
-
-    config_buffer_address_ = config_buffer_->address();
 
     // Initialize the persistent connector-state struct living in SHM.
     // NamedShm::create zero-initialized the region; we stamp the version and
@@ -810,6 +821,9 @@ void H2DSocket::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    if (mesh_device_ && !mesh_device_->is_local(recv_core_.device_coord)) {
+        return;
+    }
     // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
     auto refresh_connector_write_state = [this]() {
         if (connector_state_) {
