@@ -296,7 +296,7 @@ FORCE_INLINE void cq_noc_async_write_init_state(
 }
 
 // Same as cq_noc_async_write_init_state, but for a destination routed through the PCIe core. The with_state
-// issuers no longer program NOC_RET_ADDR_MID, so the routing bit is set once here and stays for the whole
+// issuers do not program NOC_RET_ADDR_MID, so the routing bit is set once here and stays for the whole
 // batch. Pair every call with noc_async_write_clear_pcie_state on the same command buffer.
 template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state_pcie(uint64_t dst_noc_addr, uint8_t noc = noc_index) {
@@ -315,8 +315,8 @@ FORCE_INLINE void cq_noc_async_write_init_state_pcie(uint64_t dst_noc_addr, uint
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 #else
-    // Only Blackhole splits PCIe routing into a separate MID register, and only Blackhole dropped the
-    // per-transaction MID write, so everywhere else the ordinary init_state already programs the routing.
+    // Only Blackhole keeps PCIe routing in a MID register that the with_state issuers leave alone, so
+    // everywhere else the ordinary init_state already programs the routing.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, cmd_buf>(0, dst_noc_addr, 0, 1, noc);
 #endif
 }

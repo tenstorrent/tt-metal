@@ -516,7 +516,7 @@ FORCE_INLINE void noc_async_read_one_packet(
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
 #ifdef ARCH_BLACKHOLE
-    // A PCIe-routed src_noc_addr would be sent on-chip, since this no longer writes NOC_TARG_ADDR_MID.
+    // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
     // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
     ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
 #endif
@@ -579,7 +579,7 @@ inline void noc_async_read(
         noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
 #ifdef ARCH_BLACKHOLE
-        // A PCIe-routed src_noc_addr would be sent on-chip, since this no longer writes NOC_TARG_ADDR_MID.
+        // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
         // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
         ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
 #endif
@@ -896,7 +896,7 @@ FORCE_INLINE void noc_async_write_one_packet(
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
 #ifdef ARCH_BLACKHOLE
-    // A PCIe-routed dst_noc_addr would be sent on-chip, since this no longer writes NOC_RET_ADDR_MID.
+    // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
     // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
     ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
 #endif
@@ -963,7 +963,7 @@ inline void noc_async_write(
         noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
     } else {
 #ifdef ARCH_BLACKHOLE
-        // A PCIe-routed dst_noc_addr would be sent on-chip, since this no longer writes NOC_RET_ADDR_MID.
+        // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
         // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
         ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
 #endif
