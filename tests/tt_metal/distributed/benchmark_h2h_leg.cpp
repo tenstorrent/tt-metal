@@ -296,11 +296,18 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
                     ++posted;
                 }
 
-                // Local completion only: it frees the origin buffer and turns the engine.
+                // Local completion frees the origin buffers; it does NOT land them.
                 for (uint32_t s = 0; s < window_; ++s) {
                     if (ops[s].valid()) {
                         (void)win_->test(ops[s]);
                     }
+                }
+                // The peer's own flush completes ITS outbound credits, never our puts, so
+                // without this the credit we then wait on is for frames that never arrived.
+                if (const std::string e = win_->flush(peer_); !e.empty()) {
+                    err = "rank 0: " + e;
+                    ok = false;
+                    break;
                 }
 
                 const uint64_t seen = __atomic_load_n(credit, __ATOMIC_ACQUIRE);

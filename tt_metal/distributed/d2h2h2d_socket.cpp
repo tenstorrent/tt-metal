@@ -4,6 +4,7 @@
 #include "tt_metal/distributed/d2h2h2d_socket.hpp"
 
 #include <chrono>
+#include <deque>
 #include <vector>
 
 #include <fmt/format.h>
@@ -21,9 +22,9 @@ struct D2H2H2DSocket::Impl {
     L1MapNew l1{};
     Counters counters{};
     Timing timing{};
-    // Stamped at publish, read when the device reports the page drained. Per core, because
-    // drained() reports per core and frames interleave across them.
-    std::vector<std::chrono::steady_clock::time_point> published;
+    // Stamped at publish, popped when the device reports that page drained. A DEQUE per core,
+    // not one stamp: at ring_pages > 1 several are outstanding and drained() reports in order.
+    std::vector<std::deque<std::chrono::steady_clock::time_point>> published;
     HostRegion* region = nullptr;
 
     // Declaration order is teardown order and is load-bearing: the window must go before
@@ -62,7 +63,11 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
 
     // Steps 1 and 2 are local and can fail on ONE host (pin limits, shm, a device throw), so
     // they run to a verdict rather than returning: every rank must reach the agreement below.
-    const bool local_ok = [&]() -> bool {
+    // The call is wrapped, not the body: reserved_base() and the socket ctors throw, and an
+    // exception escaping here leaves every peer blocked in the agreement below forever.
+    bool local_ok = false;
+    try {
+        local_ok = [&]() -> bool {
         if (mesh == nullptr || device == nullptr || cfg.cores == 0 || cfg.payload_bytes == 0) {
             err = "D2H2H2DSocket::create: mesh, device, cores and payload_bytes are all required";
             return false;
@@ -127,7 +132,11 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
             return false;
         }
         return true;
-    }();
+        }();
+    } catch (const std::exception& ex) {
+        err = std::string("D2H2H2DSocket::create: ") + ex.what();
+        local_ok = false;
+    }
 
     if (!RdmaWindow::agree(local_ok, err)) {
         return nullptr;
@@ -183,7 +192,7 @@ uint32_t D2H2H2DSocket::poll() {
             }
             ++im.counters.received;
             if (im.cfg.collect_timing && t.core < im.published.size()) {
-                im.published[t.core] = std::chrono::steady_clock::now();
+                im.published[t.core].push_back(std::chrono::steady_clock::now());
             }
             return true;
         });
@@ -194,11 +203,15 @@ uint32_t D2H2H2DSocket::poll() {
             im.h2h->consumed(c, pages);
             im.counters.drained += pages;
             ++progress;
-            if (im.cfg.collect_timing && im.published[c].time_since_epoch().count() != 0) {
-                const auto d = std::chrono::steady_clock::now() - im.published[c];
-                im.timing.h2d_publish_to_drained_ns.push_back(
-                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
-                im.published[c] = {};
+            if (im.cfg.collect_timing) {
+                // One sample per drained page, oldest first: drained() can report several.
+                const auto now = std::chrono::steady_clock::now();
+                for (uint32_t k = 0; k < pages && !im.published[c].empty(); ++k) {
+                    const auto d = now - im.published[c].front();
+                    im.published[c].pop_front();
+                    im.timing.h2d_publish_to_drained_ns.push_back(
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
+                }
             }
         }
         // Publish the inbound credit to our own sender, so tt_uva_sync() can see it.

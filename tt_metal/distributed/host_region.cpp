@@ -15,6 +15,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -282,6 +283,12 @@ void HostRegion::provision(
             "provision asks for {} cores but the region was sized for {}", cores_in_use, reserved_cores_));
     }
     validate_shape(chip, cores_in_use, topology, grid);
+    // Bounded by what is actually here, not only by the topology: chips_per_host is the wire
+    // contract both hosts agree on, num_devices() is this host's reality, and the pin needs both.
+    if (chip >= mesh_device->num_devices()) {
+        throw std::runtime_error(
+            fmt::format("provision: chip {} but this mesh has {} device(s)", chip, mesh_device->num_devices()));
+    }
 
     const uint64_t want = pinned_bytes_for(cores_in_use);
 
@@ -333,7 +340,14 @@ void HostRegion::provision(
     auto borrowed = std::shared_ptr<uint32_t[]>(reinterpret_cast<uint32_t*>(base), [](uint32_t*) {});
     HostBuffer view(ttsl::Span<uint32_t>(borrowed.get(), want / sizeof(uint32_t)), MemoryPin(borrowed));
 
-    const auto coord = tt::tt_metal::distributed::MeshCoordinate(0, 0);
+    // The requested chip, not always the first: the range enumerates the shape in linear
+    // order, so advancing `chip` times names the device the caller asked to pin against.
+    const tt::tt_metal::distributed::MeshCoordinateRange all(mesh_device->shape());
+    auto it = all.begin();
+    for (uint32_t i = 0; i < chip; ++i) {
+        ++it;
+    }
+    const auto coord = *it;
     tt::tt_metal::distributed::MeshCoordinateRangeSet range;
     range.merge(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));
 
@@ -341,13 +355,14 @@ void HostRegion::provision(
     if (!pinned) {
         throw std::runtime_error("PinnedMemory::Create returned null (is vIOMMU enabled?)");
     }
-    const auto ids = mesh_device->get_device_ids();
-    if (ids.empty()) {
-        throw std::runtime_error("mesh device reports no device ids");
+    // That same coordinate's device, so the NOC address belongs to the chip just pinned.
+    const IDevice* const dev = mesh_device->get_device(coord);
+    if (dev == nullptr) {
+        throw std::runtime_error(fmt::format("provision: chip {} names no device in this mesh", chip));
     }
     // get_noc_addr(), not usable_from_noc(): on Blackhole the latter is false by
     // construction while the former still returns the address the device uses.
-    const auto noc = pinned->get_noc_addr(ids.front());
+    const auto noc = pinned->get_noc_addr(dev->id());
     if (!noc.has_value()) {
         throw std::runtime_error("PinnedMemory has no NOC address -- the device cannot reach the region");
     }

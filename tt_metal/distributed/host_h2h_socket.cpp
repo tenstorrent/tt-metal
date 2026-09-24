@@ -398,9 +398,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         // The selector carries a chip this layout cannot express, so it is checked rather
         // than dropped: chip 1 core N would otherwise land in chip 0 core N's arena.
         const uint32_t dest_chip = tt_uva_t6_chip(t.dst, im.cfg.topo.chips_per_host);
+        // A kRegionHost address also yields a host, but its selector IS the host id -- decoding
+        // a core out of it would name a real ring. Only a T6 selector addresses a core.
+        const bool t6 = tt_uva_selector_is_t6(t.dst);
         // dest_core indexes our own per-peer arrays as well as the target's ring, and it
         // comes out of a UVA, so it is bounded here and not trusted to be one of ours.
-        if (host == kHostNone || host >= im.cfg.topo.num || host == im.cfg.topo.ident ||
+        if (!t6 || host == kHostNone || host >= im.cfg.topo.num || host == im.cfg.topo.ident ||
             dest_core >= im.cfg.cores || dest_chip != im.cfg.chip) {
             im.fail(fmt::format(
                 "h2h: core {} addressed host {} chip {} core {}, which is not a peer of this symmetric socket",
