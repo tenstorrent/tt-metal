@@ -1250,6 +1250,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
         const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
             mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
