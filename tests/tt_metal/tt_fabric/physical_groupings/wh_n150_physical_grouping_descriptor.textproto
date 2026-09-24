@@ -1,0 +1,16 @@
+# Single-card (N150) physical grouping descriptor.
+#
+# A single N150 host exposes exactly one ASIC, so the only physically valid
+# grouping is a 1x1 mesh. This dedicated config makes single-card placement
+# explicit instead of relying on the generic default_physical_grouping_descriptor,
+# which also carries multi-card presets that can never map onto one chip.
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 1]
+  }
+}

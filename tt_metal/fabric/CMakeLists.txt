@@ -10,6 +10,19 @@ if(TT_METAL_USE_EMULE)
     target_compile_definitions(fabric PRIVATE TT_METAL_USE_EMULE=1)
 endif()
 
+# find_and_load() for physical grouping descriptors also searches the installed SDK datadir (where the
+# textprotos in tests/tt_metal/tt_fabric/physical_groupings/ are shipped by tools/scaleout/CMakeLists.txt),
+# not just ${TT_METAL_HOME}. The .deb relocates everything under /usr (CPack's default DEB prefix), regardless
+# of the build-tree CMAKE_INSTALL_PREFIX, so bake the /usr-rooted datadir here — mirroring how llrt bakes
+# TT_METAL_DEFAULT_INSTALL_ROOT = "/usr/${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium". Using CMAKE_INSTALL_FULL_DATADIR
+# (which embeds the build prefix, e.g. /work/build/share) pointed at a path that does not exist post-install.
+include(GNUInstallDirs)
+target_compile_definitions(
+    fabric
+    PRIVATE
+        "TT_METAL_INSTALLED_PGD_DIR=\"/usr/${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings\""
+)
+
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(fabric)
 

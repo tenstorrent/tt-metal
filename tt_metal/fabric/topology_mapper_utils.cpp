@@ -7,11 +7,11 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <exception>
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -92,16 +92,14 @@ namespace {
 // Apply many-to-many pinning groups as a single required constraint per group. Each group is applied
 // independently, filtered down to what exists here: fabric nodes belonging to another logical mesh are
 // dropped, as are ASIC positions absent from this physical mesh. A group left with nothing to say is
-// skipped, so a group naming positions that only exist on some meshes constrains just those meshes. When
-// `require_present_positions` is true (map_mesh_to_physical), a group whose positions are ALL absent is an
-// error rather than a silent skip. A mesh that declares pins must end up with at least one of them applied,
-// otherwise it would map unpinned without anyone noticing.
+// skipped, so a group naming positions that only exist on some meshes constrains just those meshes. A
+// mesh that declares pins must end up with at least one of them applied, otherwise it would map
+// unpinned without anyone noticing.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
-    const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
-    bool require_present_positions) {
+    const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids) {
     bool any_group_for_mesh = false;
     bool any_group_applied = false;
     for (const auto& group : pinning_groups) {
@@ -132,12 +130,6 @@ std::optional<std::string> apply_pinning_groups(
         }
 
         if (asic_ids.empty()) {
-            if (require_present_positions) {
-                return fmt::format(
-                    "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
-                    "mesh {}",
-                    logical_mesh_id.get());
-            }
             continue;
         }
 
@@ -158,156 +150,6 @@ std::optional<std::string> apply_pinning_groups(
 
     return std::nullopt;
 }
-
-}  // namespace
-
-TopologyMappingResult map_mesh_to_physical(
-    MeshId mesh_id,
-    const LogicalAdjacencyMap& logical_adjacency,
-    const PhysicalAdjacencyMap& physical_adjacency,
-    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
-    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
-    const TopologyMappingConfig& config) {
-    TopologyMappingResult result;
-
-    using namespace ::tt::tt_fabric;
-
-    // Convert maps to AdjacencyGraph format
-    const AdjacencyGraph<FabricNodeId> target_graph(logical_adjacency);
-    const AdjacencyGraph<tt::tt_metal::AsicID> global_graph(physical_adjacency);
-
-    // Build constraints
-    MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
-
-    // Add mesh host rank constraints (trait-based constraint)
-    if (!constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank)) {
-        result.success = false;
-        result.error_message = "Failed to add required trait constraint for mesh host rank";
-        return result;
-    }
-
-    // Add many-to-many pinning groups if any
-    if (!config.pinnings.empty()) {
-        std::unordered_set<tt::tt_metal::AsicID> physical_node_set;
-        for (const auto& [asic_id, _] : physical_adjacency) {
-            physical_node_set.insert(asic_id);
-        }
-
-        std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
-        for (const auto& [asic_id, pos] : config.asic_positions) {
-            if (physical_node_set.contains(asic_id)) {
-                asic_positions_to_asic_ids[pos].insert(asic_id);
-            }
-        }
-
-        for (const auto& group : config.pinnings) {
-            for (const auto& fabric_node : group.fabric_nodes) {
-                if (fabric_node.mesh_id != mesh_id) {
-                    continue;
-                }
-                if (!logical_adjacency.contains(fabric_node)) {
-                    result.success = false;
-                    result.error_message =
-                        fmt::format("Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
-                    return result;
-                }
-            }
-        }
-
-        if (auto pinning_error =
-                apply_pinning_groups(constraints, config.pinnings, mesh_id, asic_positions_to_asic_ids, true)) {
-            result.success = false;
-            result.error_message = *pinning_error;
-            return result;
-        }
-
-        std::size_t pinned_node_count = 0;
-        for (const auto& group : config.pinnings) {
-            for (const auto& fabric_node : group.fabric_nodes) {
-                if (fabric_node.mesh_id == mesh_id) {
-                    ++pinned_node_count;
-                }
-            }
-        }
-        if (pinned_node_count > 0) {
-            log_info(
-                tt::LogFabric,
-                "TopologyMapper: Using {} pinning group(s) covering {} fabric node(s) for mesh {}",
-                config.pinnings.size(),
-                pinned_node_count,
-                mesh_id.get());
-        }
-    }
-
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
-    auto mode_it = config.mesh_validation_modes.find(mesh_id);
-    if (mode_it != config.mesh_validation_modes.end()) {
-        validation_mode = mode_it->second;
-    }
-
-    // Solve using topology solver
-    // Catch exceptions from constraint validation and convert to failure result
-    MappingResult<FabricNodeId, tt::tt_metal::AsicID> solver_result;
-    try {
-        solver_result = solve_topology_mapping(target_graph, global_graph, constraints, validation_mode);
-    } catch (const std::exception& e) {
-        result.success = false;
-        result.error_message = e.what();
-        return result;
-    }
-
-    // Convert result
-    result.success = solver_result.success;
-    result.error_message = solver_result.error_message;
-
-    if (solver_result.success) {
-        // Convert bidirectional mappings
-        for (const auto& [target, global] : solver_result.target_to_global) {
-            result.fabric_node_to_asic[target] = global;
-            result.asic_to_fabric_node.emplace(global, target);
-        }
-    }
-
-    return result;
-}
-
-std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
-    // Build adjacency graphs using topology solver
-    auto adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
-
-    // Convert from AdjacencyGraph format to map format
-    std::map<MeshId, LogicalAdjacencyMap> result;
-    for (const auto& [mesh_id, graph] : adjacency_graphs) {
-        LogicalAdjacencyMap logical_map;
-        for (const auto& node : graph.get_nodes()) {
-            logical_map[node] = graph.get_neighbors(node);
-        }
-        result[mesh_id] = logical_map;
-    }
-    return result;
-}
-
-std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-    tt::tt_metal::ClusterType cluster_type,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    // Build adjacency graphs using topology solver
-    auto adjacency_graphs =
-        ::tt::tt_fabric::build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
-
-    // Convert from AdjacencyGraph format to map format
-    std::map<MeshId, PhysicalAdjacencyMap> result;
-    for (const auto& [mesh_id, graph] : adjacency_graphs) {
-        PhysicalAdjacencyMap physical_map;
-        for (const auto& node : graph.get_nodes()) {
-            physical_map[node] = graph.get_neighbors(node);
-        }
-        result[mesh_id] = physical_map;
-    }
-    return result;
-}
-
-namespace {
 
 // Extract requested inter-mesh connections and ports from MeshGraphDescriptor (same logic as
 // MeshGraph::initialize_from_mgd).
@@ -342,54 +184,6 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
         }
     }
     return {requested_intermesh_connections, requested_intermesh_ports};
-}
-
-// Mesh-level FABRIC edges (same extraction as get_requested_intermesh_from_mgd) restricted to instances sharing
-// one mesh descriptor name. Nodes are MeshId(instance.local_id) for those instances only.
-AdjacencyGraph<MeshId> build_mgd_mesh_level_subgraph_for_mesh_descriptor_name(
-    const ::tt::tt_fabric::MeshGraphDescriptor& mgd,
-    const std::string& mesh_descriptor_name,
-    const ::tt::tt_fabric::RequestedIntermeshConnections& intermesh_mesh_level_edges) {
-    using namespace ::tt::tt_fabric;
-
-    std::unordered_set<uint32_t> mesh_id_in_descriptor;
-    for (GlobalNodeId global_id : mgd.instances_by_name(mesh_descriptor_name)) {
-        const auto& inst = mgd.get_instance(global_id);
-        if (inst.kind != NodeKind::Mesh) {
-            continue;
-        }
-        mesh_id_in_descriptor.insert(inst.local_id);
-    }
-
-    AdjacencyGraph<MeshId>::AdjacencyMap adj;
-    for (uint32_t mid : mesh_id_in_descriptor) {
-        adj[MeshId(mid)] = {};
-    }
-
-    std::set<std::pair<uint32_t, uint32_t>> undirected_seen;
-    for (const auto& [src_u32, dst_map] : intermesh_mesh_level_edges) {
-        if (!mesh_id_in_descriptor.contains(src_u32)) {
-            continue;
-        }
-        for (const auto& [dst_u32, edge_count] : dst_map) {
-            (void)edge_count;
-            if (!mesh_id_in_descriptor.contains(dst_u32)) {
-                continue;
-            }
-            if (src_u32 == dst_u32) {
-                continue;
-            }
-            const auto ends = std::minmax(src_u32, dst_u32);
-            if (!undirected_seen.insert(ends).second) {
-                continue;
-            }
-            MeshId src(src_u32);
-            MeshId dst(dst_u32);
-            adj[src].push_back(dst);
-            adj[dst].push_back(src);
-        }
-    }
-    return AdjacencyGraph<MeshId>(adj);
 }
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
@@ -528,202 +322,93 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
 
 namespace {
 
-void collect_mesh_ids_from_logical_multi_mesh_graph(const LogicalMultiMeshGraph& g, std::set<MeshId>& out) {
-    for (const auto& [mesh_id, fab_adj] : g.mesh_adjacency_graphs_) {
-        out.insert(mesh_id);
-        for (const auto& [node, neighbors] : fab_adj.get_adjacency_map()) {
-            out.insert(node.mesh_id);
-            for (const auto& nb : neighbors) {
-                out.insert(nb.mesh_id);
-            }
-        }
+MeshId remap_local_mesh_id(const std::map<MeshId, MeshId>& local_to_global, MeshId local) {
+    const auto it = local_to_global.find(local);
+    return (it != local_to_global.end()) ? it->second : local;
+}
+
+std::vector<TopologyMappingResult> split_mapping_to_local_parts(
+    const TopologyMappingResult& global, const std::vector<std::map<MeshId, MeshId>>& local_to_global) {
+    if (local_to_global.empty()) {
+        return {global};
     }
-    for (const auto& [_, exit_graph] : g.mesh_exit_node_graphs_) {
-        for (const auto& [exit_node, neighbors] : exit_graph.get_adjacency_map()) {
-            out.insert(exit_node.mesh_id);
-            if (exit_node.fabric_node_id.has_value()) {
-                out.insert(exit_node.fabric_node_id->mesh_id);
-            }
-            for (const auto& nb : neighbors) {
-                out.insert(nb.mesh_id);
-                if (nb.fabric_node_id.has_value()) {
-                    out.insert(nb.fabric_node_id->mesh_id);
+    std::vector<TopologyMappingResult> parts(local_to_global.size());
+    for (auto& part : parts) {
+        part.success = global.success;
+        part.error_message = global.error_message;
+        part.stats = global.stats;
+    }
+    for (const auto& [fabric_node, asic] : global.fabric_node_to_asic) {
+        for (std::size_t part_index = 0; part_index < local_to_global.size(); ++part_index) {
+            for (const auto& [local, global_mesh] : local_to_global[part_index]) {
+                if (global_mesh != fabric_node.mesh_id) {
+                    continue;
                 }
+                const FabricNodeId local_node(local, fabric_node.chip_id);
+                parts[part_index].fabric_node_to_asic.insert({local_node, asic});
+                parts[part_index].asic_to_fabric_node.insert({asic, local_node});
             }
         }
     }
-    for (const auto& node : g.mesh_level_graph_.get_nodes()) {
-        out.insert(node);
-        for (const auto& nbr : g.mesh_level_graph_.get_neighbors(node)) {
-            out.insert(nbr);
-        }
-    }
+    return parts;
 }
 
-struct MergeMeshIdRenumbering {
-    std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_id;
-};
-
-MergeMeshIdRenumbering compute_merge_mesh_id_renumbering(
-    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs) {
-    MergeMeshIdRenumbering r;
-    if (logical_multi_mesh_graphs.empty()) {
-        return r;
-    }
-    if (logical_multi_mesh_graphs.size() == 1) {
-        std::set<MeshId> meshes;
-        collect_mesh_ids_from_logical_multi_mesh_graph(logical_multi_mesh_graphs[0], meshes);
-        r.per_part_local_to_global_mesh_id.resize(1);
-        for (MeshId m : meshes) {
-            r.per_part_local_to_global_mesh_id[0][m] = m;
-        }
-        return r;
-    }
-    std::uint32_t next_base = 0;
-    for (const auto& g : logical_multi_mesh_graphs) {
-        std::set<MeshId> meshes;
-        collect_mesh_ids_from_logical_multi_mesh_graph(g, meshes);
-        std::map<MeshId, MeshId> local_to_global;
-        std::uint32_t j = 0;
-        for (MeshId m : meshes) {
-            const MeshId global_mesh = MeshId{next_base + j};
-            local_to_global[m] = global_mesh;
-            ++j;
-        }
-        next_base += static_cast<std::uint32_t>(meshes.size());
-        r.per_part_local_to_global_mesh_id.push_back(std::move(local_to_global));
-    }
-    return r;
-}
-
-::tt::tt_fabric::FabricNodeId remap_fabric_node_mesh(
-    const ::tt::tt_fabric::FabricNodeId& n, const std::map<MeshId, MeshId>& local_to_global) {
-    auto it = local_to_global.find(n.mesh_id);
-    TT_FATAL(it != local_to_global.end(), "remap: missing local mesh id {} in merge remap", n.mesh_id.get());
-    return ::tt::tt_fabric::FabricNodeId(it->second, n.chip_id);
-}
-
-LogicalExitNode remap_logical_exit(const LogicalExitNode& e, const std::map<MeshId, MeshId>& local_to_global) {
-    LogicalExitNode o;
-    o.mesh_id = local_to_global.at(e.mesh_id);
-    if (e.fabric_node_id.has_value()) {
-        o.fabric_node_id = remap_fabric_node_mesh(e.fabric_node_id.value(), local_to_global);
-    }
-    return o;
-}
-
-::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId> remap_fabric_node_adjacency(
-    const ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>& g,
+void remap_fabric_node_ranks_to_global(
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& dest,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& local_ranks,
     const std::map<MeshId, MeshId>& local_to_global) {
-    using AdjacencyMap = ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>::AdjacencyMap;
-    AdjacencyMap out;
-    for (const auto& [k, nbrs] : g.get_adjacency_map()) {
-        auto nk = remap_fabric_node_mesh(k, local_to_global);
-        auto& slot = out[nk];
-        for (const auto& n : nbrs) {
-            slot.push_back(remap_fabric_node_mesh(n, local_to_global));
+    for (const auto& [local_mesh, node_ranks] : local_ranks) {
+        const MeshId global_mesh = remap_local_mesh_id(local_to_global, local_mesh);
+        for (const auto& [fabric_node, rank] : node_ranks) {
+            dest[global_mesh][FabricNodeId(global_mesh, fabric_node.chip_id)] = rank;
         }
     }
-    return ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>(out);
 }
 
-::tt::tt_fabric::AdjacencyGraph<MeshId> remap_mesh_id_adjacency(
-    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& g, const std::map<MeshId, MeshId>& local_to_global) {
-    using AdjacencyMap = ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap;
-    AdjacencyMap out;
-    for (const auto& [k, nbrs] : g.get_adjacency_map()) {
-        MeshId nk = local_to_global.at(k);
-        auto& slot = out[nk];
-        for (const auto& n : nbrs) {
-            slot.push_back(local_to_global.at(n));
+void remap_asic_ranks_to_global(
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& dest,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& local_ranks,
+    const std::map<MeshId, MeshId>& local_to_global) {
+    for (const auto& [local_mesh, asic_ranks] : local_ranks) {
+        dest[remap_local_mesh_id(local_to_global, local_mesh)].insert(asic_ranks.begin(), asic_ranks.end());
+    }
+}
+
+void validate_shared_inter_mesh_policy(
+    const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors) {
+    std::optional<bool> shared_relaxed;
+    std::size_t shared_index = 0;
+    for (std::size_t index = 0; index < mesh_graph_descriptors.size(); ++index) {
+        TT_FATAL(mesh_graph_descriptors[index] != nullptr, "Mesh graph descriptor {} is null", index);
+        if (!mesh_graph_descriptors[index]->is_inter_mesh_policy_specified()) {
+            continue;
         }
-    }
-    return ::tt::tt_fabric::AdjacencyGraph<MeshId>(out);
-}
-
-::tt::tt_fabric::AdjacencyGraph<LogicalExitNode> remap_exit_node_adjacency(
-    const ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>& g, const std::map<MeshId, MeshId>& local_to_global) {
-    using AdjacencyMap = ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>::AdjacencyMap;
-    AdjacencyMap out;
-    for (const auto& [k, nbrs] : g.get_adjacency_map()) {
-        auto nk = remap_logical_exit(k, local_to_global);
-        auto& slot = out[nk];
-        for (const auto& n : nbrs) {
-            slot.push_back(remap_logical_exit(n, local_to_global));
+        const bool relaxed = mesh_graph_descriptors[index]->is_inter_mesh_policy_relaxed();
+        if (!shared_relaxed.has_value()) {
+            shared_relaxed = relaxed;
+            shared_index = index;
+            continue;
         }
+        TT_FATAL(
+            relaxed == *shared_relaxed,
+            "Mesh graph descriptors merged into one topology must agree on the inter-mesh channel policy, but "
+            "descriptor {} is {} while descriptor {} is {}. Mixed policies are not supported yet: the merged solve "
+            "applies one policy to every seam, so one descriptor's policy would be applied to the other's. "
+            "See https://github.com/tenstorrent/tt-metal/issues/49960",
+            shared_index,
+            *shared_relaxed ? "RELAXED" : "STRICT",
+            index,
+            relaxed ? "RELAXED" : "STRICT");
     }
-    return ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>(out);
-}
-
-LogicalMultiMeshGraph remap_logical_multi_mesh_for_merge(
-    const LogicalMultiMeshGraph& g, const std::map<MeshId, MeshId>& local_to_global) {
-    LogicalMultiMeshGraph o;
-    for (const auto& [mid, adj] : g.mesh_adjacency_graphs_) {
-        o.mesh_adjacency_graphs_[local_to_global.at(mid)] = remap_fabric_node_adjacency(adj, local_to_global);
-    }
-    o.mesh_level_graph_ = remap_mesh_id_adjacency(g.mesh_level_graph_, local_to_global);
-    for (const auto& [mid, eadj] : g.mesh_exit_node_graphs_) {
-        o.mesh_exit_node_graphs_[local_to_global.at(mid)] = remap_exit_node_adjacency(eadj, local_to_global);
-    }
-    return o;
 }
 
 }  // namespace
-
-LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
-    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
-    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids) {
-    const MergeMeshIdRenumbering renum = compute_merge_mesh_id_renumbering(logical_multi_mesh_graphs);
-    if (per_part_local_to_global_mesh_ids) {
-        *per_part_local_to_global_mesh_ids = renum.per_part_local_to_global_mesh_id;
-    }
-
-    if (logical_multi_mesh_graphs.empty()) {
-        return {};
-    }
-    if (logical_multi_mesh_graphs.size() == 1) {
-        return logical_multi_mesh_graphs[0];
-    }
-
-    LogicalMultiMeshGraph merged;
-    ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap merged_mesh_level;
-
-    for (std::size_t i = 0; i < logical_multi_mesh_graphs.size(); ++i) {
-        const auto& g = logical_multi_mesh_graphs[i];
-        const auto& local_to_global = renum.per_part_local_to_global_mesh_id[i];
-
-        LogicalMultiMeshGraph part = remap_logical_multi_mesh_for_merge(g, local_to_global);
-        for (auto& [mesh_id, adj] : part.mesh_adjacency_graphs_) {
-            merged.mesh_adjacency_graphs_[mesh_id] = std::move(adj);
-        }
-        for (const auto& [node, nbrs] : part.mesh_level_graph_.get_adjacency_map()) {
-            auto& slot = merged_mesh_level[node];
-            slot.insert(slot.end(), nbrs.begin(), nbrs.end());
-        }
-        for (auto& [mesh_id, exit_adj] : part.mesh_exit_node_graphs_) {
-            merged.mesh_exit_node_graphs_[mesh_id] = std::move(exit_adj);
-        }
-    }
-    merged.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(merged_mesh_level);
-    return merged;
-}
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph_descriptor);
     auto [requested_intermesh_connections, requested_intermesh_ports] =
         get_requested_intermesh_from_mgd(mesh_graph_descriptor);
-    return build_logical_multi_mesh_adjacency_graph_impl(
-        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
-}
-
-LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
-    // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
-    // (requested_intermesh_connections) intermesh connections - see build_logical_multi_mesh_adjacency_graph_impl.
-    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
-    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
-
     return build_logical_multi_mesh_adjacency_graph_impl(
         mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }
@@ -745,6 +430,12 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     std::size_t local_links = 0;
     std::size_t global_links = 0;
     std::set<std::pair<tt::tt_metal::AsicID, tt::tt_metal::AsicID>> cross_host_pairs;
+
+    // Isolated ASICs (no eth links) must still appear so 1x1 / single-chip systems can be seated.
+    for (const auto& [asic_id, unused_desc] : physical_system_descriptor.get_asic_descriptors()) {
+        (void)unused_desc;
+        flat_adj[asic_id];
+    }
 
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
@@ -785,1474 +476,25 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     return flat_adj;
 }
 
-// ============================================================================
-// build_physical_multi_mesh_adjacency_graph
-//
-// Given a description of the logical mesh topology (MGD) and the real hardware
-// layout (PSD), figure out which physical chips should be assigned to each
-// logical mesh and return the result as a PhysicalMultiMeshGraph.
-//
-// OVERVIEW (when there are multiple different mesh shapes):
-//
-//   For each distinct mesh shape (e.g. "prefill", "decode"):
-//     1. Ask the grouping descriptor (PGD) where that shape actually fits on
-//        the real hardware — this gives a list of candidate chip placements.
-//     2. Build a graph showing how those candidate placements connect to each
-//        other at the mesh level.
-//     3. Set up a solver that can lazily enumerate valid ways to assign logical
-//        meshes to physical placements, one solution at a time.
-//
-//   Round-by-round search for a conflict-free assignment:
-//     Round k (k = 1, 2, ...):
-//       a. Ask each mesh's solver for one more candidate placement (so each
-//          mesh now has k options cached).
-//       b. Walk every combination of one option per mesh and check that no two
-//          options claim the same physical chip. Chips are tracked with
-//          compact 64-bit bitmasks so the check is very fast.
-//          Only combinations that use at least one option that is new this
-//          round are tested — combinations made entirely of older options were
-//          already checked in a previous round.
-//       c. If a fully conflict-free assignment is found, build and return the
-//          final graph.
-//     Stops when a solution is found or all solvers run out of options.
-//
-//   FAST PATH: if all meshes have the same shape (e.g. every galaxy is a
-//   4×8 tile), the PGD result is returned directly with no solver needed.
-// ============================================================================
 namespace {
 
-std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
-    const std::vector<::tt::tt_fabric::PsdPlacement>& placements) {
+struct MeshPhysicalLayout {
+    std::unordered_set<tt::tt_metal::AsicID> asics;
+    std::map<LogicalChipId, AsicPosition> mesh_node_to_asic_position;
+};
+
+std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_assigned_meshes(
+    const std::vector<::tt::tt_fabric::PlacedMesh>& assigned_meshes) {
     std::map<MeshId, MeshPhysicalLayout> layouts;
-    for (std::size_t i = 0; i < placements.size(); ++i) {
-        const MeshId mesh_id{static_cast<std::uint32_t>(i)};
-        MeshPhysicalLayout& layout = layouts[mesh_id];
-        layout.asics = placements[i].asics;
-        layout.mesh_node_to_asic_position = placements[i].mesh_node_to_asic_position;
+    for (const auto& placed : assigned_meshes) {
+        if (placed.placement.asics.empty()) {
+            continue;
+        }
+        MeshPhysicalLayout& layout = layouts[placed.mesh_id];
+        layout.asics = placed.placement.asics;
+        layout.mesh_node_to_asic_position = placed.placement.mesh_node_to_asic_position;
     }
     return layouts;
-}
-
-// -----------------------------------------------------------------------------
-// Shared round-robin mesh-packing machinery used by both
-// build_physical_multi_mesh_adjacency_graph overloads (single-MGD and
-// multi-MGD).
-//
-// MeshEnumState bundles everything needed to drive one shape's solver and
-// remember what it has found so far:
-//   logical_graph   — the pattern we want to place: either the mesh
-//                     instances from the logical descriptor, or the full
-//                     physical coarse topology when only one shape exists
-//                     and all placements need to be assigned.
-//   physical_graph  — the hardware mesh-level connectivity for this shape.
-//   session         — the incremental solver; it keeps prior constraints in
-//                     memory so each call only adds new work.
-//   excluded        — solutions already returned; fed back to the solver so
-//                     it doesn't repeat them.
-//   solutions       — all solutions found so far, in the order returned.
-//   solution_bits   — a chip bitmask for each solution; used for fast
-//                     overlap checks in the packing search below.
-//   embedding_sizes — how many meshes each solution places; used to try
-//                     larger placements first (better pruning).
-//   exhausted       — set to true once the solver finds no more options.
-// -----------------------------------------------------------------------------
-struct MeshEnumState {
-    AdjacencyGraph<MeshId> logical_graph;
-    AdjacencyGraph<MeshId> physical_graph;
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> constraints;
-    ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session;
-    std::vector<std::map<MeshId, MeshId>> excluded;
-    std::vector<::tt::tt_fabric::MappingResult<MeshId, MeshId>> solutions;
-    std::vector<std::vector<std::uint64_t>> solution_bits;
-    std::vector<std::size_t> embedding_sizes;
-    bool exhausted = false;
-};
-
-// -----------------------------------------------------------------------------
-// BITMASK HELPERS
-// Each cached solution carries a bitmask with one bit per chip in the
-// cluster. Three helpers operate on these bitmasks word by word
-// (asic_word_count = number of 64-bit words per bitmask, passed explicitly by
-// the callers):
-//
-//   bitset_disjoint(a, b) — true if a and b share no chip (no bit set in
-//                           both), i.e. the two placements don't overlap.
-//   mark_used(dst, src)   — dst |= src  (mark src's chips as taken).
-//   unmark(dst, src)      — dst &= ~src (release src's chips on backtrack).
-//
-// These are tight 64-bit word loops that the compiler can auto-vectorise.
-// The cost per combination is proportional to cluster size in words, not
-// to the number of chips per mesh.
-// -----------------------------------------------------------------------------
-bool bitset_disjoint(
-    const std::vector<std::uint64_t>& cand, const std::vector<std::uint64_t>& occupied, std::size_t asic_word_count) {
-    for (std::size_t i = 0; i < asic_word_count; ++i) {
-        if (cand[i] & occupied[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-void mark_used(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::size_t asic_word_count) {
-    for (std::size_t i = 0; i < asic_word_count; ++i) {
-        dst[i] |= src[i];
-    }
-}
-void unmark(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::size_t asic_word_count) {
-    for (std::size_t i = 0; i < asic_word_count; ++i) {
-        dst[i] &= ~src[i];
-    }
-}
-
-// -----------------------------------------------------------------------------
-// DisjointPackingSearch — depth-first search over all combinations of one
-// placement per mesh shape.
-//
-// At each level of the recursion we try every cached placement for one
-// shape (largest first), skip any that overlap chips already claimed by
-// earlier levels, and recurse deeper if it fits.
-//
-// "Test each combination only once" rule: in round k we only check
-// combinations that include at least one placement that is new this round
-// (cache index k-1). Any combination made entirely of older placements was
-// already checked in a previous round. This is enforced by carrying a
-// flag (frontier_satisfied) through the recursion; at the leaf level we
-// only accept a candidate if the flag is already set or the candidate
-// itself is the new one.
-// -----------------------------------------------------------------------------
-struct DisjointPackingSearch {
-    const std::vector<MeshEnumState*>& states;
-    const std::vector<std::vector<std::size_t>>& try_order_per_depth;
-    std::vector<std::size_t>& chosen_index;
-    std::vector<std::uint64_t>& occupied_asics;
-    std::size_t round;       // current round number (1-based)
-    std::size_t target_idx;  // = round - 1; the "new" cache index this round
-    std::size_t n_meshes;
-    std::size_t& combinations_tested;
-    std::size_t& timer_check_mask;
-    std::chrono::steady_clock::time_point& last_progress_log_time;
-    const std::chrono::steady_clock::time_point& search_start_time;
-    std::size_t asic_word_count;
-    // frontier_reachable_from[d] = true if any depth >= d has a solution
-    // with index target_idx (i.e., can still satisfy the new-this-round
-    // rule). Computed once before each search call and used to prune
-    // interior subtrees that can never satisfy the frontier.
-    std::vector<bool> frontier_reachable_from;
-    std::chrono::seconds progress_interval{10};
-
-    // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
-    // a conflict-free assignment that satisfies the new-this-round rule.
-    bool run(std::size_t depth, bool frontier_satisfied) {
-        // Interior pruning: if no depth from here to the leaf can provide
-        // the required new-this-round solution, skip this whole subtree.
-        if (!frontier_satisfied && !frontier_reachable_from[depth]) {
-            return false;
-        }
-
-        const MeshEnumState& s = *states[depth];
-        const std::vector<std::size_t>& order = try_order_per_depth[depth];
-        const bool is_leaf = (depth + 1 == n_meshes);
-
-        if (is_leaf) {
-            for (std::size_t si : order) {
-                if (si >= round) {
-                    continue;
-                }
-                // Only accept this leaf if the "new this round" rule is
-                // already satisfied, or if this candidate is itself new.
-                if (!frontier_satisfied && si != target_idx) {
-                    continue;
-                }
-                ++combinations_tested;
-                // Log progress periodically so a long search isn't silent.
-                if ((combinations_tested & timer_check_mask) == 0) {
-                    const auto now = std::chrono::steady_clock::now();
-                    if (now - last_progress_log_time >= progress_interval) {
-                        const auto elapsed_sec =
-                            std::chrono::duration_cast<std::chrono::seconds>(now - search_start_time).count();
-                        log_info(
-                            tt::LogFabric,
-                            "Topology mapper round-robin: tested {} mesh-level combinations in {}s (round {})",
-                            combinations_tested,
-                            elapsed_sec,
-                            round);
-                        last_progress_log_time = now;
-                    }
-                }
-                if (!bitset_disjoint(s.solution_bits[si], occupied_asics, asic_word_count)) {
-                    continue;
-                }
-                chosen_index[depth] = si;
-                return true;
-            }
-            return false;
-        }
-
-        // Interior level: try each candidate, claim its chips, recurse
-        // into the next level, and release the chips if we backtrack.
-        for (std::size_t si : order) {
-            if (si >= round) {
-                continue;
-            }
-            if (!bitset_disjoint(s.solution_bits[si], occupied_asics, asic_word_count)) {
-                continue;
-            }
-            mark_used(occupied_asics, s.solution_bits[si], asic_word_count);
-            chosen_index[depth] = si;
-            const bool child_frontier = frontier_satisfied || (si == target_idx);
-            if (run(depth + 1, child_frontier)) {
-                return true;
-            }
-            unmark(occupied_asics, s.solution_bits[si], asic_word_count);
-        }
-        return false;
-    }
-};
-
-}  // namespace
-
-PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<PinningsByMesh>& pinnings) {
-    using namespace ::tt::tt_fabric;
-
-    // -------------------------------------------------------------------------
-    // Phase 1: Build a complete chip-level connection graph and assign each
-    // chip a compact integer ID.
-    //
-    // The connection graph lists every Ethernet link between chips across the
-    // whole cluster. It is built once here and reused in three later steps:
-    //   - Finding which chip groups can satisfy a requested mesh shape
-    //   - Converting chip sets to bitmasks for fast overlap detection
-    //   - Assembling the final result graph
-    //
-    // The compact integer IDs let us represent any set of chips as a small
-    // array of 64-bit words (one bit per chip). Checking whether two chip sets
-    // overlap then becomes a fast word-by-word AND loop instead of a slower
-    // hash-set intersection.
-    // -------------------------------------------------------------------------
-    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
-
-    std::unordered_map<tt::tt_metal::AsicID, std::uint32_t> asic_to_dense_index;
-    {
-        const auto& flat_nodes = flat_graph.get_nodes();
-        asic_to_dense_index.reserve(flat_nodes.size());
-        for (std::uint32_t i = 0; i < flat_nodes.size(); ++i) {
-            asic_to_dense_index.emplace(flat_nodes[i], i);
-        }
-    }
-    const std::uint32_t cluster_asic_count = static_cast<std::uint32_t>(flat_graph.get_nodes().size());
-    // How many 64-bit words are needed so we have one bit per chip.
-    const std::size_t asic_word_count = (static_cast<std::size_t>(cluster_asic_count) + 63u) / 64u;
-
-    // -------------------------------------------------------------------------
-    // Phase 2: Ask the grouping descriptor (PGD) which chip groups on the real
-    // hardware can satisfy each mesh shape requested by the logical descriptor.
-    //
-    // The result is a nested map. We only look at the "MESH" granularity here:
-    // for each mesh shape name (e.g. "prefill"), we get a list of candidate
-    // chip groups that have the right topology to host that shape.
-    // -------------------------------------------------------------------------
-    auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings);
-
-    TT_FATAL(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
-    TT_FATAL(
-        !valid_groupings_map.at("MESH").empty(),
-        "Internal error: Physical grouping descriptor was not able to find mesh groupings");
-
-    // -------------------------------------------------------------------------
-    // Phase 3: For each mesh shape, locate every valid placement on the real
-    // hardware and build a connection graph for those placements.
-    //
-    // placements_by_shape[name][i]  = i-th PSD placement: ASIC footprint plus grouping (with
-    //                                 mesh_node_to_asic_position from PGD<->MGD match).
-    // mesh_physical_graphs        = shape name → connection graph built from all candidate placements.
-    // -------------------------------------------------------------------------
-    std::unordered_map<std::string, PhysicalMultiMeshGraph> mesh_physical_graphs;
-    std::unordered_map<std::string, std::vector<::tt::tt_fabric::PsdPlacement>> placements_by_shape;
-    // Pre-computed chip bitmask for every placement group, keyed by mesh shape
-    // name. group_bits_by_name[name][i] = the asic_word_count-word bitset for
-    // the i-th candidate placement for that shape. Built once here so that
-    // compute_solution_bitset (called once per SAT solution) is a simple
-    // word-OR loop instead of a per-chip hash lookup.
-    std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
-
-    for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
-        // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
-        std::vector<std::string> find_all_errors;
-        const auto placements = physical_grouping_descriptor.find_all_in_psd(
-            groupings, physical_system_descriptor, flat_graph, &find_all_errors);
-        if (placements.empty()) {
-            for (const auto& error : find_all_errors) {
-                log_error(
-                    tt::LogFabric,
-                    "Physical groupings adjacency: '{}' found no PSD placements from {} committed grouping(s): {}",
-                    mesh_name,
-                    groupings.size(),
-                    error);
-            }
-        }
-        // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
-        const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
-        mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
-
-        // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
-        auto& gbits = group_bits_by_name[mesh_name];
-        gbits.reserve(placements.size());
-        for (const auto& placement : placements) {
-            std::vector<std::uint64_t> word_vec(asic_word_count, 0);
-            for (const auto& asic : placement.asics) {
-                auto di = asic_to_dense_index.find(asic);
-                TT_FATAL(
-                    di != asic_to_dense_index.end(),
-                    "ASIC from placement not found in PSD flat graph (dense index)");
-                const std::uint32_t idx = di->second;
-                TT_FATAL(
-                    (idx >> 6) < asic_word_count,
-                    "Dense ASIC index {} out of range for bitset of {} words ({} ASICs total)",
-                    idx,
-                    asic_word_count,
-                    cluster_asic_count);
-                word_vec[idx >> 6] |= (std::uint64_t{1} << (idx & 63));
-            }
-            gbits.push_back(std::move(word_vec));
-        }
-
-        // Record the placements for this shape so later phases can look them up by shape name. The mapping to
-        // logical MeshIds is decided by the solver later, so no logical MeshId is needed here.
-        placements_by_shape[mesh_name] = placements;
-    }
-
-    // -------------------------------------------------------------------------
-    // Phase 4: Fast path — only one mesh shape used.
-    //
-    // If the whole logical descriptor uses a single mesh shape (e.g. every
-    // galaxy is the same 4×8 tile), the grouping descriptor's placements
-    // already cover the entire system. We can skip the solver entirely and
-    // return the pre-built graph right away.
-    // -------------------------------------------------------------------------
-    const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
-    if (mesh_shape_entries.size() == 1) {
-        const std::string& sole_mesh_name = mesh_shape_entries.begin()->first;
-        const auto sole_it = mesh_physical_graphs.find(sole_mesh_name);
-        TT_FATAL(
-            sole_it != mesh_physical_graphs.end(),
-            "Single mesh shape '{}' missing PSD-derived PhysicalMultiMeshGraph",
-            sole_mesh_name);
-        return sole_it->second;
-    }
-
-    // -------------------------------------------------------------------------
-    // Phase 5: Set up the incremental solver state for each mesh shape (see
-    // MeshEnumState at the top of this file).
-    // -------------------------------------------------------------------------
-
-    // Read the inter-mesh connections from the logical descriptor once here;
-    // they are reused when building the pattern graph for each mesh shape.
-    const auto [mgd_intermesh_mesh_level, mgd_intermesh_ports] =
-        get_requested_intermesh_from_mgd(mesh_graph_descriptor);
-    (void)mgd_intermesh_ports;
-
-    // Count how many mesh shapes actually have a hardware-derived placement
-    // graph. Used below to decide whether to expand the pattern to cover the
-    // full physical topology.
-    std::size_t descriptor_names_with_psd = 0;
-    for (const auto& mn : mesh_graph_descriptor.get_all_mesh_names()) {
-        if (mesh_physical_graphs.contains(mn)) {
-            ++descriptor_names_with_psd;
-        }
-    }
-
-    std::unordered_map<std::string, MeshEnumState> mesh_enum_states;
-
-    for (const auto& mesh_name : mesh_graph_descriptor.get_all_mesh_names()) {
-        const auto physical_it = mesh_physical_graphs.find(mesh_name);
-        if (physical_it == mesh_physical_graphs.end()) {
-            log_warning(
-                tt::LogFabric,
-                "No PSD-derived PhysicalMultiMeshGraph for mesh descriptor '{}'; skipping mesh-level topology solve",
-                mesh_name);
-            continue;
-        }
-        const AdjacencyGraph<MeshId>& physical_mesh_level = physical_it->second.mesh_level_graph_;
-
-        // Build the subset of the logical descriptor's mesh-level graph that
-        // belongs to this shape: nodes are the logical mesh IDs for this
-        // shape name, edges are FABRIC inter-mesh connections among them.
-        AdjacencyGraph<MeshId> mgd_mesh_level_graph = build_mgd_mesh_level_subgraph_for_mesh_descriptor_name(
-            mesh_graph_descriptor, mesh_name, mgd_intermesh_mesh_level);
-
-        // Pattern expansion: when the logical descriptor declares fewer
-        // instances than the hardware has placements (e.g. one "galaxy" entry
-        // but 16 physical galaxies), widen the pattern to match the hardware
-        // topology so the solver can assign every physical placement.
-        // This widening is only safe when there is a single shape; with
-        // multiple shapes each shape's chip set would cover the whole system,
-        // making conflict-free assignment impossible.
-        const bool expand_to_psd_coarse =
-            descriptor_names_with_psd == 1 &&
-            mgd_mesh_level_graph.get_nodes().size() < physical_mesh_level.get_nodes().size();
-        AdjacencyGraph<MeshId> logical_mesh_level_graph =
-            expand_to_psd_coarse ? physical_mesh_level : mgd_mesh_level_graph;
-
-        // Register the solver state for this shape. No solver work runs yet;
-        // the first solution is pulled lazily when round 1 starts in Phase 6.
-        MeshEnumState state;
-        state.logical_graph = std::move(logical_mesh_level_graph);
-        state.physical_graph = physical_mesh_level;
-        mesh_enum_states.emplace(mesh_name, std::move(state));
-    }
-
-    // Order shapes so the most constrained (fewest available placements) is
-    // tried first. This fail-first heuristic prunes dead-end branches earlier
-    // in the DFS and typically reduces combinations tested significantly.
-    // Ties are broken lexicographically for determinism.
-    std::vector<std::string> mesh_order;
-    mesh_order.reserve(mesh_enum_states.size());
-    for (const auto& [name, _state] : mesh_enum_states) {
-        mesh_order.push_back(name);
-    }
-    std::sort(mesh_order.begin(), mesh_order.end(), [&](const std::string& a, const std::string& b) {
-        const auto a_it = mesh_physical_graphs.find(a);
-        const auto b_it = mesh_physical_graphs.find(b);
-        const std::size_t a_count =
-            (a_it != mesh_physical_graphs.end()) ? a_it->second.mesh_level_graph_.get_nodes().size() : 0;
-        const std::size_t b_count =
-            (b_it != mesh_physical_graphs.end()) ? b_it->second.mesh_level_graph_.get_nodes().size() : 0;
-        if (a_count != b_count) {
-            return a_count < b_count;  // fewer placements = more constrained = first
-        }
-        return a < b;
-    });
-
-    const std::size_t n_meshes = mesh_order.size();
-
-    // -------------------------------------------------------------------------
-    // Phase 6: Round-by-round search for a conflict-free chip assignment.
-    // Bitmask helpers bitset_disjoint / mark_used / unmark are defined at the
-    // top of this file.
-    // -------------------------------------------------------------------------
-    std::vector<std::uint64_t> occupied_asics(asic_word_count, 0);
-
-    // Build the chip bitmask for one solver solution by OR-ing together the
-    // pre-computed per-group bitsets. No hash lookups in this hot path.
-    auto compute_solution_bitset = [&](const std::string& mesh_name,
-                                       const MappingResult<MeshId, MeshId>& solution) {
-        std::vector<std::uint64_t> bits(asic_word_count, 0);
-        const auto& group_bits = group_bits_by_name.at(mesh_name);
-        for (const auto& [logical_mesh_id, physical_mesh_id] : solution.target_to_global) {
-            TT_FATAL(
-                physical_mesh_id.get() < group_bits.size(),
-                "Physical mesh index {} out of range for group_bits (logical MeshId {})",
-                physical_mesh_id.get(),
-                logical_mesh_id.get());
-            const auto& gbits = group_bits[physical_mesh_id.get()];
-            for (std::size_t w = 0; w < asic_word_count; ++w) {
-                bits[w] |= gbits[w];
-            }
-        }
-        return bits;
-    };
-
-    // Ask a shape's solver for the next distinct placement, cache the result,
-    // and return true. Returns false (and marks the shape exhausted) when the
-    // solver has no more options. Logs a note if a single solver call takes
-    // more than 2 s so slow calls are visible in the logs.
-    constexpr std::chrono::milliseconds kSlowSatThreshold{2000};
-    auto pull_next_solution = [&](const std::string& mesh_name) -> bool {
-        MeshEnumState& s = mesh_enum_states.at(mesh_name);
-        if (s.exhausted) {
-            return false;
-        }
-        const auto t_begin = std::chrono::steady_clock::now();
-        MappingResult<MeshId, MeshId> result = s.session.next(
-            s.logical_graph,
-            s.physical_graph,
-            s.constraints,
-            s.excluded,
-            ConnectionValidationMode::STRICT,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Sat,
-            /*unique_shapes=*/true);
-        const auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_begin);
-        if (elapsed >= kSlowSatThreshold) {
-            log_info(
-                tt::LogFabric,
-                "Topology mapper: SAT next() for mesh '{}' took {}ms (success={}, cache size now {})",
-                mesh_name,
-                elapsed.count(),
-                result.success,
-                s.solutions.size() + (result.success ? 1 : 0));
-        }
-        if (!result.success) {
-            log_info(
-                tt::LogFabric,
-                "Topology mapper: mesh '{}' enumeration exhausted at {} solutions",
-                mesh_name,
-                s.solutions.size());
-            s.exhausted = true;
-            return false;
-        }
-        std::vector<std::uint64_t> bits = compute_solution_bitset(mesh_name, result);
-        s.excluded.push_back(result.target_to_global);
-        s.solution_bits.push_back(std::move(bits));
-        s.embedding_sizes.push_back(result.target_to_global.size());
-        s.solutions.push_back(std::move(result));
-        return true;
-    };
-
-    // Per-depth state for DisjointPackingSearch (defined at the top of this
-    // file).
-    std::vector<MeshEnumState*> mesh_state_ptrs(n_meshes, nullptr);
-    for (std::size_t d = 0; d < n_meshes; ++d) {
-        mesh_state_ptrs[d] = &mesh_enum_states.at(mesh_order[d]);
-    }
-    std::vector<std::vector<std::size_t>> try_order_per_depth(n_meshes);
-    std::vector<std::size_t> chosen_index(n_meshes, 0);
-
-    // -----------------------------------------------------------------------
-    // Main loop: keep growing each shape's solution cache by one per round,
-    // then search for a conflict-free assignment among all cached options.
-    // -----------------------------------------------------------------------
-    bool found_disjoint_combination = false;
-    constexpr std::size_t kProgressCheckMask = 4095;  // sample timer every 4096 leaf tests
-    std::size_t combinations_tested = 0;
-    std::size_t timer_check_mask_ref = kProgressCheckMask;
-    const auto search_start_time = std::chrono::steady_clock::now();
-    auto last_progress_log_time = search_start_time;
-    auto last_round_log_time = search_start_time;
-    constexpr std::chrono::seconds kRoundLogInterval{10};
-
-    for (std::size_t round = 1; n_meshes != 0 && !found_disjoint_combination; ++round) {
-        // -- Pull phase: ask each shape's solver for one more placement -------
-        // Each shape that still has options advances by one step. Timing is
-        // logged separately so solver time is visible apart from search time.
-        const auto t_pull = std::chrono::steady_clock::now();
-        bool any_progress = false;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (pull_next_solution(mesh_order[d])) {
-                any_progress = true;
-            }
-        }
-        const auto pull_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_pull).count();
-
-        const auto now = std::chrono::steady_clock::now();
-        if (round == 1 || (now - last_round_log_time) >= kRoundLogInterval || pull_ms >= 1000) {
-            std::string cache_summary;
-            cache_summary.reserve(n_meshes * 24);
-            for (std::size_t d = 0; d < n_meshes; ++d) {
-                if (d) {
-                    cache_summary += ", ";
-                }
-                const MeshEnumState& s = *mesh_state_ptrs[d];
-                cache_summary +=
-                    fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
-            }
-            log_info(
-                tt::LogFabric,
-                "Topology mapper round-robin round {}: pulled in {}ms, caches=[{}], combinations tested so far={}",
-                round,
-                pull_ms,
-                cache_summary,
-                combinations_tested);
-            last_round_log_time = now;
-        }
-
-        // -- Termination check ------------------------------------------------
-        // If no shape's cache grew to size `round` this iteration, every
-        // possible combination was already covered by an earlier round.
-        // There is nothing new to try, so we can stop.
-        bool any_can_hit_frontier = false;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (mesh_state_ptrs[d]->solutions.size() >= round) {
-                any_can_hit_frontier = true;
-                break;
-            }
-        }
-        if (!any_can_hit_frontier) {
-            (void)any_progress;
-            break;
-        }
-
-        // -- Build the per-shape candidate order for this round ---------------
-        // Candidates are ordered by descending embedding size (more meshes
-        // placed first), ties broken by ascending arrival index. Instead of
-        // a full re-sort each round, we insert the single new element (if any)
-        // into its correct position in the already-sorted vector — O(k) scan
-        // rather than O(k log k) sort over the same data.
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            const MeshEnumState& s = *mesh_state_ptrs[d];
-            const std::size_t hi = std::min<std::size_t>(s.solutions.size(), round);
-            std::vector<std::size_t>& order = try_order_per_depth[d];
-
-            if (hi <= order.size()) {
-                continue;  // no new solution this round for this shape
-            }
-            // Exactly one new solution was added: index `hi - 1`.
-            const std::size_t new_idx = hi - 1;
-            const std::size_t new_size = s.embedding_sizes[new_idx];
-
-            // Find insertion point: after all candidates with a strictly
-            // larger embedding size. Among equals, new_idx is largest so it
-            // goes last (preserving ascending-index tie-breaking).
-            auto pos = order.begin();
-            while (pos != order.end() && s.embedding_sizes[*pos] > new_size) {
-                ++pos;
-            }
-            order.insert(pos, new_idx);
-        }
-
-        // -- Packing search ---------------------------------------------------
-        // Pre-compute frontier_reachable_from[d]: true if any depth >= d has
-        // at least one solution with index target_idx (= round - 1). This
-        // suffix array lets DisjointPackingSearch prune entire subtrees that
-        // can never satisfy the new-this-round frontier rule.
-        std::vector<bool> frontier_reachable(n_meshes + 1, false);
-        for (std::size_t d = n_meshes; d-- > 0;) {
-            const bool this_depth_can_hit = (mesh_state_ptrs[d]->solutions.size() > round - 1);
-            frontier_reachable[d] = this_depth_can_hit || frontier_reachable[d + 1];
-        }
-
-        std::fill(occupied_asics.begin(), occupied_asics.end(), 0);
-        const std::size_t combos_before = combinations_tested;
-        DisjointPackingSearch search{
-            mesh_state_ptrs,
-            try_order_per_depth,
-            chosen_index,
-            occupied_asics,
-            round,
-            round - 1,
-            n_meshes,
-            combinations_tested,
-            timer_check_mask_ref,
-            last_progress_log_time,
-            search_start_time,
-            asic_word_count,
-            std::move(frontier_reachable)};
-        found_disjoint_combination = search.run(0, /*frontier_satisfied=*/false);
-        log_debug(
-            tt::LogFabric,
-            "Topology mapper round-robin round {} complete: +{} combinations (total {}), found={}",
-            round,
-            combinations_tested - combos_before,
-            combinations_tested,
-            found_disjoint_combination);
-    }
-
-    log_info(
-        tt::LogFabric,
-        "Topology mapper round-robin finished: {} mesh-level combinations tested in {}s, success={}",
-        combinations_tested,
-        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - search_start_time).count(),
-        found_disjoint_combination);
-
-    // -------------------------------------------------------------------------
-    // Phase 7: Build the final result graph from the winning placements.
-    //
-    // For each shape, chosen_index[d] identifies which cached solution won.
-    // That solution maps logical mesh IDs to physical mesh IDs. We look up the
-    // chip set for each physical placement and store it at the logical mesh
-    // index in combined_mesh_groupings.
-    //
-    // It is safe if two shapes use the same logical MeshId because the bitmask
-    // check above already guarantees their chip sets are disjoint. The union
-    // written at that index is therefore correct.
-    // -------------------------------------------------------------------------
-    if (!found_disjoint_combination) {
-        std::string solution_counts;
-        std::string mesh_names_str;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (d) {
-                solution_counts += ", ";
-                mesh_names_str += ", ";
-            }
-            const MeshEnumState& s = *mesh_state_ptrs[d];
-            solution_counts +=
-                fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
-            mesh_names_str += mesh_order[d];
-        }
-        TT_THROW(
-            "Topology mapper failed to find disjoint placements for mesh descriptors [{}] on a system with {} ASICs. "
-            "Solution counts per mesh: [{}]",
-            mesh_names_str,
-            cluster_asic_count,
-            solution_counts);
-    }
-
-    // Find the highest logical mesh ID across all winning solutions so we know
-    // how large to make the combined groupings vector.
-    MeshId max_logical{0};
-    for (std::size_t j = 0; j < n_meshes; ++j) {
-        for (const auto& [logical_mesh_id, _phys] :
-             mesh_state_ptrs[j]->solutions[chosen_index[j]].target_to_global) {
-            if (logical_mesh_id.get() > max_logical.get()) {
-                max_logical = logical_mesh_id;
-            }
-        }
-    }
-
-    // Re-key each shape's chosen placements under the logical MeshId the solver assigned them, so
-    // combined_placements[logical] carries that mesh's ASIC footprint and PGD pinning.
-    std::vector<::tt::tt_fabric::PsdPlacement> combined_placements(max_logical.get() + 1);
-    for (std::size_t j = 0; j < n_meshes; ++j) {
-        const std::string& mesh_name = mesh_order[j];
-        const MappingResult<MeshId, MeshId>& picked = mesh_state_ptrs[j]->solutions[chosen_index[j]];
-        TT_FATAL(!picked.target_to_global.empty(), "Empty mesh-level mapping for mesh descriptor '{}'", mesh_name);
-        const auto& placements = placements_by_shape.at(mesh_name);
-        for (const auto& [logical_mesh_id, physical_mesh_id] : picked.target_to_global) {
-            TT_FATAL(
-                physical_mesh_id.get() < placements.size(),
-                "Physical mesh index {} out of range for placements (logical MeshId {})",
-                physical_mesh_id.get(),
-                logical_mesh_id.get());
-            const auto& placement = placements[physical_mesh_id.get()];
-            auto& combined = combined_placements[logical_mesh_id.get()];
-            combined.asics.insert(placement.asics.begin(), placement.asics.end());
-            for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
-                combined.mesh_node_to_asic_position[chip_id] = asic_position;
-            }
-        }
-    }
-
-    return build_hierarchical_from_flat_graph(flat_graph, combined_placements);
-}
-
-namespace {
-
-// Map logical MeshId (MGD local_id) -> mesh/switch definition name used as the MESH key in
-// get_valid_groupings_for_mgd (e.g. MeshId{0} -> "M0").
-std::unordered_map<MeshId, std::string> logical_mesh_id_to_mgd_instance_name(
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
-    std::unordered_map<MeshId, std::string> mesh_id_to_name;
-    for (const auto global_id : mesh_graph_descriptor.all_meshes()) {
-        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
-        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
-    }
-    for (const auto global_id : mesh_graph_descriptor.all_switches()) {
-        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
-        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
-    }
-    return mesh_id_to_name;
-}
-
-// Attach PGD preferred pinnings onto an already-built rank-bound physical graph. For each mesh already
-// present on the graph, look up its MGD type name and copy the committed MESH grouping's
-// mesh_node_to_asic_position onto mesh_pgd_pinnings_ (no footprint rediscovery).
-void assign_pgd_pinnings_to_rank_bound_physical_graph(
-    PhysicalMultiMeshGraph& physical_multi_mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<PinningsByMesh>& pinnings) {
-    using namespace ::tt::tt_fabric;
-
-    if (physical_multi_mesh_graph.mesh_adjacency_graphs_.empty()) {
-        return;
-    }
-
-    const auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings);
-    if (!valid_groupings_map.contains("MESH") || valid_groupings_map.at("MESH").empty()) {
-        log_debug(
-            tt::LogFabric,
-            "Rank-bound PGD pinning enrichment: no MESH groupings from get_valid_groupings_for_mgd; leaving "
-            "mesh_pgd_pinnings_ empty");
-        return;
-    }
-
-    const auto& mesh_groupings_by_name = valid_groupings_map.at("MESH");
-    const auto mesh_id_to_instance_name = logical_mesh_id_to_mgd_instance_name(mesh_graph_descriptor);
-
-    std::size_t assigned = 0;
-    for (const auto& [logical_mesh_id, _] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        const auto name_it = mesh_id_to_instance_name.find(logical_mesh_id);
-        if (name_it == mesh_id_to_instance_name.end()) {
-            log_debug(
-                tt::LogFabric,
-                "Rank-bound PGD pinning enrichment: logical mesh {} has no MGD mesh/switch instance; skipping",
-                logical_mesh_id.get());
-            continue;
-        }
-
-        const auto groupings_it = mesh_groupings_by_name.find(name_it->second);
-        if (groupings_it == mesh_groupings_by_name.end() || groupings_it->second.empty()) {
-            log_debug(
-                tt::LogFabric,
-                "Rank-bound PGD pinning enrichment: no committed MESH groupings for MGD type '{}' "
-                "(logical mesh {}); skipping",
-                name_it->second,
-                logical_mesh_id.get());
-            continue;
-        }
-
-        bool matched = false;
-        for (const auto& grouping : groupings_it->second) {
-            if (grouping.mesh_node_to_asic_position.empty()) {
-                continue;
-            }
-            physical_multi_mesh_graph.mesh_pgd_pinnings_[logical_mesh_id] = grouping.mesh_node_to_asic_position;
-            ++assigned;
-            matched = true;
-            log_debug(
-                tt::LogFabric,
-                "Rank-bound PGD pinning enrichment: assigned pinning ({} chips) for logical mesh {} "
-                "(MGD type '{}')",
-                grouping.mesh_node_to_asic_position.size(),
-                logical_mesh_id.get(),
-                name_it->second);
-            break;
-        }
-        if (!matched) {
-            log_debug(
-                tt::LogFabric,
-                "Rank-bound PGD pinning enrichment: committed MESH groupings for MGD type '{}' "
-                "(logical mesh {}) have empty mesh_node_to_asic_position; skipping",
-                name_it->second,
-                logical_mesh_id.get());
-        }
-    }
-
-    log_info(
-        tt::LogFabric,
-        "Rank-bound PGD pinning enrichment: assigned pinnings to {}/{} logical mesh(es)",
-        assigned,
-        physical_multi_mesh_graph.mesh_adjacency_graphs_.size());
-}
-
-}  // namespace
-
-// Multi-MGD overload: pack heterogeneous meshes from several MGDs onto one physical system in a single joint
-// solve. Groupings from all MGDs are merged (get_valid_groupings_for_mgds prefixes each descriptor's shape names
-// with "mgd{i}_"), and each MGD's local mesh ids are renumbered to globally-unique ids (per_mgd_local_to_global,
-// matching merge_logical_multi_mesh_adjacency_graphs) so the solver, the per-shape logical graphs, and the final
-// combined placements all agree. Phases 1/3/4/6/7 are identical to the single-MGD builder.
-PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings) {
-    using namespace ::tt::tt_fabric;
-
-    // -------------------------------------------------------------------------
-    // Phase 1: Build a complete chip-level connection graph and assign each
-    // chip a compact integer ID.
-    //
-    // The connection graph lists every Ethernet link between chips across the
-    // whole cluster. It is built once here and reused in three later steps:
-    //   - Finding which chip groups can satisfy a requested mesh shape
-    //   - Converting chip sets to bitmasks for fast overlap detection
-    //   - Assembling the final result graph
-    //
-    // The compact integer IDs let us represent any set of chips as a small
-    // array of 64-bit words (one bit per chip). Checking whether two chip sets
-    // overlap then becomes a fast word-by-word AND loop instead of a slower
-    // hash-set intersection.
-    // -------------------------------------------------------------------------
-    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
-
-    std::unordered_map<tt::tt_metal::AsicID, std::uint32_t> asic_to_dense_index;
-    {
-        const auto& flat_nodes = flat_graph.get_nodes();
-        asic_to_dense_index.reserve(flat_nodes.size());
-        for (std::uint32_t i = 0; i < flat_nodes.size(); ++i) {
-            asic_to_dense_index.emplace(flat_nodes[i], i);
-        }
-    }
-    const std::uint32_t cluster_asic_count = static_cast<std::uint32_t>(flat_graph.get_nodes().size());
-    // How many 64-bit words are needed so we have one bit per chip.
-    const std::size_t asic_word_count = (static_cast<std::size_t>(cluster_asic_count) + 63u) / 64u;
-
-    // -------------------------------------------------------------------------
-    // Phase 2: Ask the grouping descriptor (PGD) which chip groups on the real
-    // hardware can satisfy each mesh shape requested by the logical descriptor.
-    //
-    // The result is a nested map. We only look at the "MESH" granularity here:
-    // for each mesh shape name (e.g. "prefill"), we get a list of candidate
-    // chip groups that have the right topology to host that shape.
-    // -------------------------------------------------------------------------
-    auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgds(
-        mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
-    log_info(tt::LogFabric, "Got {} valid groupings map from MGD and PGD", valid_groupings_map.size());
-
-    TT_FATAL(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
-    TT_FATAL(
-        !valid_groupings_map.at("MESH").empty(),
-        "Internal error: Physical grouping descriptor was not able to find mesh groupings");
-
-    // Multi-MGD globalization. With several MGDs (split sub-contexts) different descriptors reuse instance names
-    // ("M0") and local mesh ids (0). get_valid_groupings_for_mgds prefixes the merged keys with "mgd{i}_"; here we
-    // mirror the logical side's compute_merge_mesh_id_renumbering (sequential offset across MGDs, per-MGD meshes
-    // sorted by local id) so the physical mesh nodes use the SAME global mesh ids. Single-MGD is left untouched.
-    const bool multi_mgd = mesh_graph_descriptors.size() > 1;
-    std::vector<std::map<MeshId, MeshId>> per_mgd_local_to_global(mesh_graph_descriptors.size());
-    {
-        std::uint32_t next_base = 0;
-        for (std::size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
-            std::set<MeshId> mesh_local_ids;
-            for (const auto& mn : mesh_graph_descriptors[i].get_all_mesh_names()) {
-                for (::tt::tt_fabric::GlobalNodeId gid : mesh_graph_descriptors[i].instances_by_name(mn)) {
-                    const auto& inst = mesh_graph_descriptors[i].get_instance(gid);
-                    if (inst.kind == ::tt::tt_fabric::NodeKind::Mesh) {
-                        mesh_local_ids.insert(MeshId{inst.local_id});
-                    }
-                }
-            }
-            std::uint32_t j = 0;
-            for (MeshId lid : mesh_local_ids) {
-                // size==1 keeps identity (lid->lid) to match compute_merge_mesh_id_renumbering and leave the
-                // single-MGD path unchanged; multi-MGD renumbers sequentially.
-                per_mgd_local_to_global[i][lid] = multi_mgd ? MeshId{next_base + j} : lid;
-                ++j;
-            }
-            next_base += static_cast<std::uint32_t>(mesh_local_ids.size());
-        }
-    }
-    // Build the valid-groupings key for (mgd index, original mesh name). get_valid_groupings_for_mgds prefixes
-    // keys with "mgd{i}_" only in the multi-MGD case.
-    auto mesh_key_for = [&](std::size_t mgd_index, const std::string& name) -> std::string {
-        return multi_mgd ? fmt::format("mgd{}_{}", mgd_index, name) : name;
-    };
-
-    // -------------------------------------------------------------------------
-    // Phase 3: For each mesh shape, locate every valid placement on the real
-    // hardware and build a connection graph for those placements.
-    //
-    // placements_by_shape[name][i]  = i-th PSD placement: ASIC footprint plus grouping (with
-    //                                 mesh_node_to_asic_position from PGD<->MGD match).
-    // mesh_physical_graphs        = shape name → connection graph built from all candidate placements.
-    // -------------------------------------------------------------------------
-    std::unordered_map<std::string, PhysicalMultiMeshGraph> mesh_physical_graphs;
-    std::unordered_map<std::string, std::vector<::tt::tt_fabric::PsdPlacement>> placements_by_shape;
-    // Pre-computed chip bitmask for every placement group, keyed by mesh shape
-    // name. group_bits_by_name[name][i] = the asic_word_count-word bitset for
-    // the i-th candidate placement for that shape. Built once here so that
-    // compute_solution_bitset (called once per SAT solution) is a simple
-    // word-OR loop instead of a per-chip hash lookup.
-    std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
-
-    for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
-        // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
-        std::vector<std::string> find_all_errors;
-        const auto placements = physical_grouping_descriptor.find_all_in_psd(
-            groupings, physical_system_descriptor, flat_graph, &find_all_errors);
-        if (placements.empty()) {
-            for (const auto& error : find_all_errors) {
-                log_error(
-                    tt::LogFabric,
-                    "Physical groupings adjacency: '{}' found no PSD placements from {} committed grouping(s): {}",
-                    mesh_name,
-                    groupings.size(),
-                    error);
-            }
-        }
-        // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
-        const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
-        mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
-
-        // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
-        auto& gbits = group_bits_by_name[mesh_name];
-        gbits.reserve(placements.size());
-        for (const auto& placement : placements) {
-            std::vector<std::uint64_t> word_vec(asic_word_count, 0);
-            for (const auto& asic : placement.asics) {
-                auto di = asic_to_dense_index.find(asic);
-                TT_FATAL(
-                    di != asic_to_dense_index.end(),
-                    "ASIC from placement not found in PSD flat graph (dense index)");
-                const std::uint32_t idx = di->second;
-                TT_FATAL(
-                    (idx >> 6) < asic_word_count,
-                    "Dense ASIC index {} out of range for bitset of {} words ({} ASICs total)",
-                    idx,
-                    asic_word_count,
-                    cluster_asic_count);
-                word_vec[idx >> 6] |= (std::uint64_t{1} << (idx & 63));
-            }
-            gbits.push_back(std::move(word_vec));
-        }
-
-        // Record the placements for this shape so later phases can look them up by shape name. The mapping to
-        // logical MeshIds is decided by the solver later, so no logical MeshId is needed here.
-        placements_by_shape[mesh_name] = placements;
-    }
-
-    // -------------------------------------------------------------------------
-    // Phase 4: Fast path — only one mesh shape used.
-    //
-    // If the whole logical descriptor uses a single mesh shape (e.g. every
-    // galaxy is the same 4×8 tile), the grouping descriptor's placements
-    // already cover the entire system. We can skip the solver entirely and
-    // return the pre-built graph right away.
-    // -------------------------------------------------------------------------
-    const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
-    if (mesh_shape_entries.size() == 1) {
-        const std::string& sole_mesh_name = mesh_shape_entries.begin()->first;
-        const auto sole_it = mesh_physical_graphs.find(sole_mesh_name);
-        TT_FATAL(
-            sole_it != mesh_physical_graphs.end(),
-            "Single mesh shape '{}' missing PSD-derived PhysicalMultiMeshGraph",
-            sole_mesh_name);
-        return sole_it->second;
-    }
-
-    // -------------------------------------------------------------------------
-    // Phase 5: Set up the incremental solver state for each mesh shape (see
-    // MeshEnumState at the top of this file).
-    // -------------------------------------------------------------------------
-
-    // Count how many mesh shapes actually have a hardware-derived placement
-    // graph. Used below to decide whether to expand the pattern to cover the
-    // full physical topology. Keys are the (possibly "mgd{i}_"-prefixed) shape names.
-    std::size_t descriptor_names_with_psd = 0;
-    for (std::size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
-        for (const auto& mn : mesh_graph_descriptors[i].get_all_mesh_names()) {
-            if (mesh_physical_graphs.contains(mesh_key_for(i, mn))) {
-                ++descriptor_names_with_psd;
-            }
-        }
-    }
-
-    std::unordered_map<std::string, MeshEnumState> mesh_enum_states;
-
-    for (std::size_t mgd_idx = 0; mgd_idx < mesh_graph_descriptors.size(); ++mgd_idx) {
-        const auto& mesh_graph_descriptor = mesh_graph_descriptors[mgd_idx];
-
-        // Read the inter-mesh connections from this descriptor once; reused for each of its mesh shapes.
-        const auto [mgd_intermesh_mesh_level, mgd_intermesh_ports] =
-            get_requested_intermesh_from_mgd(mesh_graph_descriptor);
-        (void)mgd_intermesh_ports;
-
-        for (const auto& mesh_name : mesh_graph_descriptor.get_all_mesh_names()) {
-            // Globally-unique shape key so two MGDs reusing "M0" don't dedup onto each other.
-            const std::string mesh_key = mesh_key_for(mgd_idx, mesh_name);
-            if (mesh_enum_states.contains(mesh_key)) {
-                continue;  // Already set up from an earlier mesh name in this MGD.
-            }
-            const auto physical_it = mesh_physical_graphs.find(mesh_key);
-            if (physical_it == mesh_physical_graphs.end()) {
-                log_warning(
-                    tt::LogFabric,
-                    "No PSD-derived PhysicalMultiMeshGraph for mesh descriptor '{}'; skipping mesh-level topology "
-                    "solve",
-                    mesh_key);
-                continue;
-            }
-            const AdjacencyGraph<MeshId>& physical_mesh_level = physical_it->second.mesh_level_graph_;
-
-            // Build the subset of the logical descriptor's mesh-level graph that
-            // belongs to this shape: nodes are the logical mesh IDs for this
-            // shape name, edges are FABRIC inter-mesh connections among them.
-            AdjacencyGraph<MeshId> mgd_mesh_level_graph = build_mgd_mesh_level_subgraph_for_mesh_descriptor_name(
-                mesh_graph_descriptor, mesh_name, mgd_intermesh_mesh_level);
-            // Renumber this MGD's local mesh ids to GLOBAL ids (matching the logical merge) so the per-shape
-            // logical graph, the solver's target ids, and combined_placements below all agree across MGDs.
-            if (multi_mgd) {
-                mgd_mesh_level_graph = remap_mesh_id_adjacency(mgd_mesh_level_graph, per_mgd_local_to_global[mgd_idx]);
-            }
-
-            // Pattern expansion: when the logical descriptor declares fewer
-            // instances than the hardware has placements (e.g. one "galaxy" entry
-            // but 16 physical galaxies), widen the pattern to match the hardware
-            // topology so the solver can assign every physical placement.
-            // This widening is only safe when there is a single shape; with
-            // multiple shapes each shape's chip set would cover the whole system,
-            // making conflict-free assignment impossible.
-            const bool expand_to_psd_coarse =
-                descriptor_names_with_psd == 1 &&
-                mgd_mesh_level_graph.get_nodes().size() < physical_mesh_level.get_nodes().size();
-            AdjacencyGraph<MeshId> logical_mesh_level_graph =
-                expand_to_psd_coarse ? physical_mesh_level : mgd_mesh_level_graph;
-
-            // Register the solver state for this shape. No solver work runs yet;
-            // the first solution is pulled lazily when round 1 starts in Phase 6.
-            MeshEnumState state;
-            state.logical_graph = std::move(logical_mesh_level_graph);
-            state.physical_graph = physical_mesh_level;
-            mesh_enum_states.emplace(mesh_key, std::move(state));
-        }
-    }
-
-    // Order shapes so the most constrained (fewest available placements) is
-    // tried first. This fail-first heuristic prunes dead-end branches earlier
-    // in the DFS and typically reduces combinations tested significantly.
-    // Ties are broken lexicographically for determinism.
-    std::vector<std::string> mesh_order;
-    mesh_order.reserve(mesh_enum_states.size());
-    for (const auto& [name, _state] : mesh_enum_states) {
-        mesh_order.push_back(name);
-    }
-    std::sort(mesh_order.begin(), mesh_order.end(), [&](const std::string& a, const std::string& b) {
-        const auto a_it = mesh_physical_graphs.find(a);
-        const auto b_it = mesh_physical_graphs.find(b);
-        const std::size_t a_count =
-            (a_it != mesh_physical_graphs.end()) ? a_it->second.mesh_level_graph_.get_nodes().size() : 0;
-        const std::size_t b_count =
-            (b_it != mesh_physical_graphs.end()) ? b_it->second.mesh_level_graph_.get_nodes().size() : 0;
-        if (a_count != b_count) {
-            return a_count < b_count;  // fewer placements = more constrained = first
-        }
-        return a < b;
-    });
-
-    const std::size_t n_meshes = mesh_order.size();
-
-    // -------------------------------------------------------------------------
-    // Phase 6: Round-by-round search for a conflict-free chip assignment.
-    // Bitmask helpers bitset_disjoint / mark_used / unmark are defined at the
-    // top of this file.
-    // -------------------------------------------------------------------------
-    std::vector<std::uint64_t> occupied_asics(asic_word_count, 0);
-
-    // Build the chip bitmask for one solver solution by OR-ing together the
-    // pre-computed per-group bitsets. No hash lookups in this hot path.
-    auto compute_solution_bitset = [&](const std::string& mesh_name,
-                                       const MappingResult<MeshId, MeshId>& solution) {
-        std::vector<std::uint64_t> bits(asic_word_count, 0);
-        const auto& group_bits = group_bits_by_name.at(mesh_name);
-        for (const auto& [logical_mesh_id, physical_mesh_id] : solution.target_to_global) {
-            TT_FATAL(
-                physical_mesh_id.get() < group_bits.size(),
-                "Physical mesh index {} out of range for group_bits (logical MeshId {})",
-                physical_mesh_id.get(),
-                logical_mesh_id.get());
-            const auto& gbits = group_bits[physical_mesh_id.get()];
-            for (std::size_t w = 0; w < asic_word_count; ++w) {
-                bits[w] |= gbits[w];
-            }
-        }
-        return bits;
-    };
-
-    // Ask a shape's solver for the next distinct placement, cache the result,
-    // and return true. Returns false (and marks the shape exhausted) when the
-    // solver has no more options. Logs a note if a single solver call takes
-    // more than 2 s so slow calls are visible in the logs.
-    constexpr std::chrono::milliseconds kSlowSatThreshold{2000};
-    auto pull_next_solution = [&](const std::string& mesh_name) -> bool {
-        MeshEnumState& s = mesh_enum_states.at(mesh_name);
-        if (s.exhausted) {
-            return false;
-        }
-        const auto t_begin = std::chrono::steady_clock::now();
-        MappingResult<MeshId, MeshId> result = s.session.next(
-            s.logical_graph,
-            s.physical_graph,
-            s.constraints,
-            s.excluded,
-            ConnectionValidationMode::STRICT,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Sat,
-            /*unique_shapes=*/true);
-        const auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_begin);
-        if (elapsed >= kSlowSatThreshold) {
-            log_info(
-                tt::LogFabric,
-                "Topology mapper: SAT next() for mesh '{}' took {}ms (success={}, cache size now {})",
-                mesh_name,
-                elapsed.count(),
-                result.success,
-                s.solutions.size() + (result.success ? 1 : 0));
-        }
-        if (!result.success) {
-            log_info(
-                tt::LogFabric,
-                "Topology mapper: mesh '{}' enumeration exhausted at {} solutions",
-                mesh_name,
-                s.solutions.size());
-            s.exhausted = true;
-            return false;
-        }
-        std::vector<std::uint64_t> bits = compute_solution_bitset(mesh_name, result);
-        s.excluded.push_back(result.target_to_global);
-        s.solution_bits.push_back(std::move(bits));
-        s.embedding_sizes.push_back(result.target_to_global.size());
-        s.solutions.push_back(std::move(result));
-        return true;
-    };
-
-    // Per-depth state for DisjointPackingSearch (defined at the top of this
-    // file).
-    std::vector<MeshEnumState*> mesh_state_ptrs(n_meshes, nullptr);
-    for (std::size_t d = 0; d < n_meshes; ++d) {
-        mesh_state_ptrs[d] = &mesh_enum_states.at(mesh_order[d]);
-    }
-    std::vector<std::vector<std::size_t>> try_order_per_depth(n_meshes);
-    std::vector<std::size_t> chosen_index(n_meshes, 0);
-
-    // -----------------------------------------------------------------------
-    // Main loop: keep growing each shape's solution cache by one per round,
-    // then search for a conflict-free assignment among all cached options.
-    // -----------------------------------------------------------------------
-    bool found_disjoint_combination = false;
-    constexpr std::size_t kProgressCheckMask = 4095;  // sample timer every 4096 leaf tests
-    std::size_t combinations_tested = 0;
-    std::size_t timer_check_mask_ref = kProgressCheckMask;
-    const auto search_start_time = std::chrono::steady_clock::now();
-    auto last_progress_log_time = search_start_time;
-    auto last_round_log_time = search_start_time;
-    constexpr std::chrono::seconds kRoundLogInterval{10};
-
-    for (std::size_t round = 1; n_meshes != 0 && !found_disjoint_combination; ++round) {
-        // -- Pull phase: ask each shape's solver for one more placement -------
-        // Each shape that still has options advances by one step. Timing is
-        // logged separately so solver time is visible apart from search time.
-        const auto t_pull = std::chrono::steady_clock::now();
-        bool any_progress = false;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (pull_next_solution(mesh_order[d])) {
-                any_progress = true;
-            }
-        }
-        const auto pull_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_pull).count();
-
-        const auto now = std::chrono::steady_clock::now();
-        if (round == 1 || (now - last_round_log_time) >= kRoundLogInterval || pull_ms >= 1000) {
-            std::string cache_summary;
-            cache_summary.reserve(n_meshes * 24);
-            for (std::size_t d = 0; d < n_meshes; ++d) {
-                if (d) {
-                    cache_summary += ", ";
-                }
-                const MeshEnumState& s = *mesh_state_ptrs[d];
-                cache_summary +=
-                    fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
-            }
-            log_info(
-                tt::LogFabric,
-                "Topology mapper round-robin round {}: pulled in {}ms, caches=[{}], combinations tested so far={}",
-                round,
-                pull_ms,
-                cache_summary,
-                combinations_tested);
-            last_round_log_time = now;
-        }
-
-        // -- Termination check ------------------------------------------------
-        // If no shape's cache grew to size `round` this iteration, every
-        // possible combination was already covered by an earlier round.
-        // There is nothing new to try, so we can stop.
-        bool any_can_hit_frontier = false;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (mesh_state_ptrs[d]->solutions.size() >= round) {
-                any_can_hit_frontier = true;
-                break;
-            }
-        }
-        if (!any_can_hit_frontier) {
-            (void)any_progress;
-            break;
-        }
-
-        // -- Build the per-shape candidate order for this round ---------------
-        // Candidates are ordered by descending embedding size (more meshes
-        // placed first), ties broken by ascending arrival index. Instead of
-        // a full re-sort each round, we insert the single new element (if any)
-        // into its correct position in the already-sorted vector — O(k) scan
-        // rather than O(k log k) sort over the same data.
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            const MeshEnumState& s = *mesh_state_ptrs[d];
-            const std::size_t hi = std::min<std::size_t>(s.solutions.size(), round);
-            std::vector<std::size_t>& order = try_order_per_depth[d];
-
-            if (hi <= order.size()) {
-                continue;  // no new solution this round for this shape
-            }
-            // Exactly one new solution was added: index `hi - 1`.
-            const std::size_t new_idx = hi - 1;
-            const std::size_t new_size = s.embedding_sizes[new_idx];
-
-            // Find insertion point: after all candidates with a strictly
-            // larger embedding size. Among equals, new_idx is largest so it
-            // goes last (preserving ascending-index tie-breaking).
-            auto pos = order.begin();
-            while (pos != order.end() && s.embedding_sizes[*pos] > new_size) {
-                ++pos;
-            }
-            order.insert(pos, new_idx);
-        }
-
-        // -- Packing search ---------------------------------------------------
-        // Pre-compute frontier_reachable_from[d]: true if any depth >= d has
-        // at least one solution with index target_idx (= round - 1). This
-        // suffix array lets DisjointPackingSearch prune entire subtrees that
-        // can never satisfy the new-this-round frontier rule.
-        std::vector<bool> frontier_reachable(n_meshes + 1, false);
-        for (std::size_t d = n_meshes; d-- > 0;) {
-            const bool this_depth_can_hit = (mesh_state_ptrs[d]->solutions.size() > round - 1);
-            frontier_reachable[d] = this_depth_can_hit || frontier_reachable[d + 1];
-        }
-
-        std::fill(occupied_asics.begin(), occupied_asics.end(), 0);
-        const std::size_t combos_before = combinations_tested;
-        DisjointPackingSearch search{
-            mesh_state_ptrs,
-            try_order_per_depth,
-            chosen_index,
-            occupied_asics,
-            round,
-            round - 1,
-            n_meshes,
-            combinations_tested,
-            timer_check_mask_ref,
-            last_progress_log_time,
-            search_start_time,
-            asic_word_count,
-            std::move(frontier_reachable)};
-        found_disjoint_combination = search.run(0, /*frontier_satisfied=*/false);
-        log_debug(
-            tt::LogFabric,
-            "Topology mapper round-robin round {} complete: +{} combinations (total {}), found={}",
-            round,
-            combinations_tested - combos_before,
-            combinations_tested,
-            found_disjoint_combination);
-    }
-
-    log_info(
-        tt::LogFabric,
-        "Topology mapper round-robin finished: {} mesh-level combinations tested in {}s, success={}",
-        combinations_tested,
-        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - search_start_time).count(),
-        found_disjoint_combination);
-
-    // -------------------------------------------------------------------------
-    // Phase 7: Build the final result graph from the winning placements.
-    //
-    // For each shape, chosen_index[d] identifies which cached solution won.
-    // That solution maps logical mesh IDs to physical mesh IDs. We look up the
-    // chip set for each physical placement and store it at the logical mesh
-    // index in combined_mesh_groupings.
-    //
-    // It is safe if two shapes use the same logical MeshId because the bitmask
-    // check above already guarantees their chip sets are disjoint. The union
-    // written at that index is therefore correct.
-    // -------------------------------------------------------------------------
-    if (!found_disjoint_combination) {
-        std::string solution_counts;
-        std::string mesh_names_str;
-        for (std::size_t d = 0; d < n_meshes; ++d) {
-            if (d) {
-                solution_counts += ", ";
-                mesh_names_str += ", ";
-            }
-            const MeshEnumState& s = *mesh_state_ptrs[d];
-            solution_counts +=
-                fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
-            mesh_names_str += mesh_order[d];
-        }
-        TT_THROW(
-            "Topology mapper failed to find disjoint placements for mesh descriptors [{}] on a system with {} ASICs. "
-            "Solution counts per mesh: [{}]",
-            mesh_names_str,
-            cluster_asic_count,
-            solution_counts);
-    }
-
-    // Find the highest logical mesh ID across all winning solutions so we know
-    // how large to make the combined groupings vector.
-    MeshId max_logical{0};
-    for (std::size_t j = 0; j < n_meshes; ++j) {
-        for (const auto& [logical_mesh_id, _phys] :
-             mesh_state_ptrs[j]->solutions[chosen_index[j]].target_to_global) {
-            if (logical_mesh_id.get() > max_logical.get()) {
-                max_logical = logical_mesh_id;
-            }
-        }
-    }
-
-    // Re-key each shape's chosen placements under the logical MeshId the solver assigned them, so
-    // combined_placements[logical] carries that mesh's ASIC footprint and PGD pinning.
-    std::vector<::tt::tt_fabric::PsdPlacement> combined_placements(max_logical.get() + 1);
-    for (std::size_t j = 0; j < n_meshes; ++j) {
-        const std::string& mesh_name = mesh_order[j];
-        const MappingResult<MeshId, MeshId>& picked = mesh_state_ptrs[j]->solutions[chosen_index[j]];
-        TT_FATAL(!picked.target_to_global.empty(), "Empty mesh-level mapping for mesh descriptor '{}'", mesh_name);
-        const auto& placements = placements_by_shape.at(mesh_name);
-        for (const auto& [logical_mesh_id, physical_mesh_id] : picked.target_to_global) {
-            TT_FATAL(
-                physical_mesh_id.get() < placements.size(),
-                "Physical mesh index {} out of range for placements (logical MeshId {})",
-                physical_mesh_id.get(),
-                logical_mesh_id.get());
-            const auto& placement = placements[physical_mesh_id.get()];
-            auto& combined = combined_placements[logical_mesh_id.get()];
-            combined.asics.insert(placement.asics.begin(), placement.asics.end());
-            for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
-                combined.mesh_node_to_asic_position[chip_id] = asic_position;
-            }
-        }
-    }
-
-    return build_hierarchical_from_flat_graph(flat_graph, combined_placements);
-}
-
-PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<PinningsByMesh>& pinnings) {
-    auto physical_multi_mesh_graph =
-        build_physical_multi_mesh_adjacency_graph(physical_system_descriptor, asic_id_to_mesh_rank);
-    assign_pgd_pinnings_to_rank_bound_physical_graph(
-        physical_multi_mesh_graph,
-        physical_system_descriptor,
-        physical_grouping_descriptor,
-        mesh_graph_descriptor,
-        pinnings);
-    return physical_multi_mesh_graph;
-}
-
-PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    // Build flat adjacency map from PhysicalSystemDescriptor
-    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
-
-    // Convert asic_id_to_mesh_rank to an explicit MeshId -> ASIC-set map (same MeshIds preserved).
-    if (asic_id_to_mesh_rank.empty()) {
-        return PhysicalMultiMeshGraph{};
-    }
-    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-        for (const auto& [asic_id, _] : asic_map) {
-            mesh_groupings[mesh_id].insert(asic_id);
-        }
-    }
-
-    // Convert to AdjacencyGraph and use the common algorithm
-    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    PhysicalMultiMeshGraph result = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
-
-    return result;
-}
-
-PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
-    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::vector<::tt::tt_fabric::PsdPlacement>& placements) {
-    return build_hierarchical_from_flat_graph(
-        flat_adjacency_graph, mesh_physical_layouts_from_psd_placements(placements));
-}
-
-PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
-    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings,
-    const std::map<MeshId, std::map<LogicalChipId, tt::tt_metal::ASICPosition>>& mesh_pgd_pinnings) {
-    std::map<MeshId, MeshPhysicalLayout> mesh_layouts;
-    for (const auto& [mesh_id, asics] : mesh_groupings) {
-        mesh_layouts[mesh_id].asics = asics;
-    }
-    for (const auto& [mesh_id, pinning] : mesh_pgd_pinnings) {
-        mesh_layouts[mesh_id].mesh_node_to_asic_position = pinning;
-    }
-    return build_hierarchical_from_flat_graph(flat_adjacency_graph, mesh_layouts);
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
@@ -2363,121 +605,11 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     return physical_multi_mesh_graph;
 }
 
-namespace {
-
-std::optional<std::string> hostname_for_asic_from_hostname_map(
-    tt::tt_metal::AsicID asic_id, const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
-    for (const auto& [hostname, asics] : hostname_to_asics) {
-        if (asics.contains(asic_id)) {
-            return hostname;
-        }
-    }
-    return std::nullopt;
-}
-
-// Minimal host cover for inter-mesh mapping: partition physical meshes by host and cap the number of hosts the
-// mapping may occupy, so unbound logical meshes pack onto the fewest hosts.
-// Only called when the physical graph is not already identity-bound via asic_id_to_mesh_rank (Phase 1).
-// TODO: This can be removed and replaced with cost heuristics when using a SAT solver because preferred
-// constraints aren't very effective here
-// https://github.com/tenstorrent/tt-metal/issues/40640
-void add_inter_mesh_minimal_host_cover_from_hostname_map(
-    const TopologyMappingConfig& config,
-    const PhysicalMultiMeshGraph& physical_graph,
-    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
-    if (config.hostname_to_asics.empty()) {
-        return;
-    }
-
-    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
-    std::set<MeshId> logical_target_set(
-        mesh_logical_level_graph.get_nodes().begin(), mesh_logical_level_graph.get_nodes().end());
-    if (logical_target_set.size() <= 1) {
-        return;
-    }
-
-    // Total LOGICAL chips the MGD occupies (fabric nodes summed across all logical meshes). Taken from the logical
-    // multi-mesh graph, NOT the physical mesh regions, which can over-provision (a small logical mesh placed inside a
-    // larger physical region) and would inflate the host count.
-    std::size_t total_chips_used = 0;
-    for (const auto& [mesh_id, logical_mesh_adj] : logical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        total_chips_used += logical_mesh_adj.get_nodes().size();
-    }
-
-    // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
-    std::vector<std::set<MeshId>> global_mesh_groups;
-    global_mesh_groups.reserve(physical_graph.mesh_adjacency_graphs_.size());
-    std::map<std::string, std::size_t> host_group_index;
-    for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
-        if (adj.get_nodes().empty()) {
-            continue;
-        }
-        std::set<std::string> hosts_for_mesh;
-        for (const auto& asic_id : adj.get_nodes()) {
-            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
-            if (hostname.has_value()) {
-                hosts_for_mesh.insert(*hostname);
-            }
-        }
-        if (hosts_for_mesh.size() == 1) {
-            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
-            if (inserted) {
-                global_mesh_groups.emplace_back();
-            }
-            global_mesh_groups[it->second].insert(phys_mesh_id);
-        } else {
-            global_mesh_groups.push_back({phys_mesh_id});
-        }
-    }
-    if (global_mesh_groups.empty()) {
-        return;
-    }
-
-    const bool single_group_fits =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(logical_target_set, global_mesh_groups)
-            .first;
-    if (single_group_fits) {
-        std::vector<std::set<MeshId>> target_groups;
-        target_groups.push_back(logical_target_set);
-        if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
-            return;
-        }
-        log_warning(
-            tt::LogFabric,
-            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
-    }
-
-    // 1. DECLARE the host-partition groups. With no target groups this imposes no hard co-location; it only exposes
-    //    per-mesh host membership so the solver can reason about how many hosts a mapping occupies. Everything below
-    //    needs this partition registered.
-    if (!inter_mesh_constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, global_mesh_groups)) {
-        log_warning(
-            tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
-    } else {
-        // 2. HARD CAP: fit the mapping within k_min = ceil(chips used / chips per host) hosts. The solver
-        //    encodes this as a hard at-most-k occupancy constraint (not an optional/guarded clause). If that
-        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap, sets
-        //    set_minimize_same_rank_groups_used (SOFT occupancy packing), and restarts the session.
-        std::size_t chips_per_host = 0;
-        for (const auto& [hostname, asics] : config.hostname_to_asics) {
-            chips_per_host = std::max(chips_per_host, asics.size());
-        }
-        if (total_chips_used > 0 && chips_per_host > 0) {
-            const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
-            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);
-
-            log_debug(
-                tt::LogFabric,
-                "Inter-mesh host alignment: capping host-group usage at k_min={} (chips_used={}, chips_per_host={})",
-                k_min,
-                total_chips_used,
-                chips_per_host);
-        }
-    }
-    // No per-mesh preferred host cover: the same-rank partition plus the hard at-most-k_min cap already make the
-    // solver use the fewest hosts, and the SAT solver picks which ones. Preferring one guessed cover on top of the
-    // cap only asked the solver to prove that guess infeasible before settling on a valid packing.
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::vector<::tt::tt_fabric::PlacedMesh>& assigned_meshes) {
+    return build_hierarchical_from_flat_graph(
+        flat_adjacency_graph, mesh_physical_layouts_from_assigned_meshes(assigned_meshes));
 }
 
 // Helper function to build ASIC positions to ASIC IDs map
@@ -2493,51 +625,6 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
     return asic_positions_to_asic_ids;
-}
-
-// Helper function to build inter-mesh constraints.
-// Phase 2 (non-empty asic_id_to_mesh_rank): physical MeshIds match logical MeshIds, so each rank-bound
-// logical mesh is hard-pinned to itself and host-cover bias is skipped.
-// Phase 1 (empty asic_id_to_mesh_rank): pinnings + host-cover drive the inter-mesh mapping.
-::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
-    const TopologyMappingConfig& config,
-    const PhysicalMultiMeshGraph& physical_graph,
-    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
-    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
-
-    std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
-    for (const auto& group : config.pinnings) {
-        for (const auto& fabric_node : group.fabric_nodes) {
-            for (const auto& pos : group.asic_positions) {
-                for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
-                    auto asic_position_map = build_asic_positions_map(physical_mesh_graph, config);
-                    if (asic_position_map.contains(pos)) {
-                        mesh_level_pinnings[fabric_node.mesh_id].insert(physical_mesh_id);
-                    }
-                }
-            }
-        }
-    }
-    // Make sure to restrict so that MGD and other pinnings can be respected always, and shrinks search space
-    for (const auto& [mesh_id, physical_meshes] : mesh_level_pinnings) {
-        if (!physical_meshes.empty()) {
-            inter_mesh_constraints.add_required_constraint(mesh_id, physical_meshes);
-        }
-    }
-
-    if (!config.disable_rank_bindings && !asic_id_to_mesh_rank.empty()) {
-        for (const auto& mesh_id : mesh_logical_level_graph.get_nodes()) {
-            if (asic_id_to_mesh_rank.contains(mesh_id)) {
-                inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
-            }
-        }
-    }
-
-    add_inter_mesh_minimal_host_cover_from_hostname_map(
-        config, physical_graph, logical_multi_mesh_graph, inter_mesh_constraints);
-    return inter_mesh_constraints;
 }
 
 // Helper function to determine inter-mesh validation mode
@@ -2765,8 +852,7 @@ std::optional<std::string> add_pinning_constraints(
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     const TopologyMappingConfig& config,
     MeshId logical_mesh_id) {
-    return apply_pinning_groups(
-        intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids, false);
+    return apply_pinning_groups(intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids);
 }
 
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard
@@ -2840,9 +926,9 @@ uint32_t total_physical_exit_edges_toward_mesh(
 // Helper function to add exit node constraints
 // Constrains certain exit node ASICs on the physical graph to be mappable to exit node fabric nodes in the logical
 // graph
-// Returns true if constraints were successfully added, false if constraints cannot be satisfied
+// Returns nullopt on success, or a reason string if constraints cannot be satisfied
 // (e.g., no valid physical exit nodes or over-constrained)
-bool add_exit_node_constraints(
+std::optional<std::string> add_exit_node_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
@@ -2908,14 +994,34 @@ bool add_exit_node_constraints(
                 const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
                 auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
                 if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                    return false;
+                    return fmt::format(
+                        "no physical exit ASICs toward physical mesh {} (logical destination mesh {}) for "
+                        "fabric node (mesh {}, chip {})",
+                        mapped_physical_dst_mesh_id.get(),
+                        dst_logical_mesh.get(),
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id);
                 }
                 const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
                 if (num_logical_exit_nodes_assigned > valid_physical_exit_nodes.size()) {
-                    return false;
+                    return fmt::format(
+                        "fabric node (mesh {}, chip {}) has {} logical exit(s) toward logical mesh {} but only "
+                        "{} physical exit ASIC(s) toward mapped physical mesh {}",
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id,
+                        num_logical_exit_nodes_assigned,
+                        dst_logical_mesh.get(),
+                        valid_physical_exit_nodes.size(),
+                        mapped_physical_dst_mesh_id.get());
                 }
                 if (!intra_mesh_constraints.add_required_constraint(fabric_node_id, valid_physical_exit_nodes)) {
-                    return false;
+                    return fmt::format(
+                        "required exit-node constraint infeasible for fabric node (mesh {}, chip {}) toward "
+                        "logical mesh {} ({} candidate physical exit ASIC(s))",
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id,
+                        dst_logical_mesh.get(),
+                        valid_physical_exit_nodes.size());
                 }
             }
             continue;
@@ -2941,7 +1047,10 @@ bool add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                return false;
+                return fmt::format(
+                    "no physical exit ASICs toward physical mesh {} (logical destination mesh {})",
+                    mapped_physical_dst_mesh_id.get(),
+                    dst_logical_mesh.get());
             }
             const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
 
@@ -2983,219 +1092,146 @@ bool add_exit_node_constraints(
                         max_mappable_exit_pairs);
                 }
             } else if (required_exit_pair_count > max_mappable_exit_pairs) {
-                return false;
+                return fmt::format(
+                    "mesh-level exit toward logical mesh {} needs {} (fabric_node, exit-ASIC) pair(s) but only "
+                    "{} pair(s) are mappable ({} logical exit node(s), {} physical exit ASIC(s), {} physical "
+                    "link(s), {} link(s)/exit ASIC)",
+                    dst_logical_mesh.get(),
+                    required_exit_pair_count,
+                    max_mappable_exit_pairs,
+                    valid_logical_exit_nodes.size(),
+                    valid_physical_exit_nodes.size(),
+                    total_physical_links_toward_dst,
+                    physical_links_per_exit_asic);
             }
 
             if (effective_exit_pair_min_count == 0) {
-                return false;
+                return fmt::format(
+                    "mesh-level exit toward logical mesh {} has zero effective exit pairs ({} logical "
+                    "channel(s), {} physical link(s))",
+                    dst_logical_mesh.get(),
+                    num_logical_exit_nodes_assigned,
+                    total_physical_links_toward_dst);
             }
 
             if (!intra_mesh_constraints.add_cardinality_constraint(
                     valid_logical_exit_nodes, valid_physical_exit_nodes, effective_exit_pair_min_count)) {
-                return false;
+                return fmt::format(
+                    "exit-node cardinality constraint infeasible toward logical mesh {} (min_count={}, {} "
+                    "logical exit node(s), {} physical exit ASIC(s))",
+                    dst_logical_mesh.get(),
+                    effective_exit_pair_min_count,
+                    valid_logical_exit_nodes.size(),
+                    valid_physical_exit_nodes.size());
             }
         }
     }
 
-    return true;
-}
-
-// Helper function to build detailed inter-mesh mapping error message
-std::string build_inter_mesh_mapping_error_message(
-    unsigned int retry_attempt,
-    const std::vector<MeshId>& logical_meshes,
-    const std::vector<MeshId>& physical_meshes,
-    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode,
-    const std::string& solver_error_message,
-    const std::vector<std::pair<MeshId, MeshId>>& failed_mesh_pairs) {
-    // Build logical meshes string
-    std::string logical_meshes_str;
-    bool first = true;
-    for (const auto& mesh_id : logical_meshes) {
-        if (!first) {
-            logical_meshes_str += ", ";
-        }
-        first = false;
-        logical_meshes_str += std::to_string(mesh_id.get());
-    }
-
-    // Build physical meshes string
-    std::string physical_meshes_str;
-    first = true;
-    for (const auto& mesh_id : physical_meshes) {
-        if (!first) {
-            physical_meshes_str += ", ";
-        }
-        first = false;
-        physical_meshes_str += std::to_string(mesh_id.get());
-    }
-
-    // Build failed pairs string
-    std::string failed_pairs_str;
-    if (!failed_mesh_pairs.empty()) {
-        failed_pairs_str = " Failed mesh pairs from previous attempts: [";
-        first = true;
-        for (const auto& [logical_id, physical_id] : failed_mesh_pairs) {
-            if (!first) {
-                failed_pairs_str += ", ";
-            }
-            first = false;
-            failed_pairs_str += fmt::format("(logical={}, physical={})", logical_id.get(), physical_id.get());
-        }
-        failed_pairs_str += "].";
-    }
-
-    // Convert validation mode to string
-    std::string validation_mode_str;
-    switch (inter_mesh_validation_mode) {
-        case ::tt::tt_fabric::ConnectionValidationMode::STRICT: validation_mode_str = "STRICT"; break;
-        case ::tt::tt_fabric::ConnectionValidationMode::RELAXED: validation_mode_str = "RELAXED"; break;
-    }
-
-    return fmt::format(
-        "Inter-mesh mapping failed after {} attempt(s). "
-        "Logical meshes being mapped: [{}] ({} total). "
-        "Physical meshes available: [{}] ({} total). "
-        "Failed mesh pair configurations tried: {} out of {} possible combinations. "
-        "Inter-mesh validation mode: {}. "
-        "Solver error: {}.{}",
-        retry_attempt,
-        logical_meshes_str,
-        logical_meshes.size(),
-        physical_meshes_str,
-        physical_meshes.size(),
-        failed_mesh_pairs.size(),
-        logical_meshes.size() * physical_meshes.size(),
-        validation_mode_str,
-        solver_error_message,
-        failed_pairs_str);
-}
-
-// Helper function to handle adding forbidden constraint and check if mapping should continue
-// Returns false if mapping should return early (overconstrained), true if should continue
-bool handle_forbidden_constraint(
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
-    MeshId logical_mesh_id,
-    MeshId physical_mesh_id,
-    std::vector<std::pair<MeshId, MeshId>>& failed_mesh_pairs,
-    std::vector<std::pair<MeshId, MeshId>>& current_attempt_failed_pairs,
-    unsigned int retry_attempt,
-    const std::vector<MeshId>& logical_meshes,
-    const std::vector<MeshId>& physical_meshes,
-    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode,
-    TopologyMappingResult& result,
-    const std::string& error_context) {
-    if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
-        // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
-        // this means we've exhausted all possibilities for this logical mesh.
-        // Treat this as a failure and return with an appropriate error message.
-        // Update failed pairs to include the current one that caused the failure
-        failed_mesh_pairs.insert(
-            failed_mesh_pairs.end(), current_attempt_failed_pairs.begin(), current_attempt_failed_pairs.end());
-        failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-
-        // Count how many times this logical mesh failed to map
-        size_t failed_count_for_this_mesh = 0;
-        for (const auto& [log_id, phys_id] : failed_mesh_pairs) {
-            if (log_id == logical_mesh_id) {
-                failed_count_for_this_mesh++;
-            }
-        }
-
-        log_info(
-            tt::LogFabric,
-            "Multi-mesh mapping failed after {} attempt(s): Tried {} different mesh configurations. "
-            "Logical mesh {} failed to map to {} out of {} physical meshes. "
-            "Total failed mesh pair combinations: {}",
-            retry_attempt,
-            failed_mesh_pairs.size(),
-            logical_mesh_id.get(),
-            failed_count_for_this_mesh,
-            physical_meshes.size(),
-            failed_mesh_pairs.size());
-
-        std::string solver_error_message = fmt::format(
-            "All mapping possibilities exhausted for logical mesh {} after trying {} different mesh "
-            "configurations. "
-            "{}: failed to add forbidden constraint",
-            logical_mesh_id.get(),
-            failed_mesh_pairs.size(),
-            error_context);
-
-        result.success = false;
-        result.error_message = build_inter_mesh_mapping_error_message(
-            retry_attempt,
-            logical_meshes,
-            physical_meshes,
-            inter_mesh_validation_mode,
-            solver_error_message,
-            failed_mesh_pairs);
-        return false;  // Indicate that mapping should return early
-    }
-    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-    return true;  // Indicate that mapping should continue
+    return std::nullopt;
 }
 
 }  // anonymous namespace
 
 namespace {
 
-template <typename NodeId>
-std::string format_adjacency_degree_histogram(const AdjacencyGraph<NodeId>& graph) {
-    std::map<std::size_t, std::size_t> degree_hist;
-    for (const auto& node : graph.get_nodes()) {
-        const auto& neighbors = graph.get_neighbors(node);
-        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
-        degree_hist[unique_neighbors.size()]++;
+void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
     }
-
-    std::string hist_str = "{";
-    bool first = true;
-    for (const auto& [degree, count] : degree_hist) {
-        if (!first) {
-            hist_str += ", ";
-        }
-        first = false;
-        hist_str += fmt::format("{}:{}", degree, count);
-    }
-    hist_str += "}";
-    return hist_str;
 }
 
-template <typename NodeId>
-std::string format_intra_mesh_degree_histograms(const std::map<MeshId, AdjacencyGraph<NodeId>>& mesh_graphs) {
-    if (mesh_graphs.empty()) {
-        return "(none)";
+void print_physical_adjacency_map(const PhysicalMultiMeshGraph& multi_mesh_graph) {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
     }
+}
 
-    std::string hist_str;
-    bool first = true;
-    for (const auto& [mesh_id, graph] : mesh_graphs) {
-        if (!first) {
-            hist_str += ", ";
-        }
-        first = false;
-        hist_str += fmt::format("mesh{} {}", mesh_id.get(), format_adjacency_degree_histogram(graph));
+void record_failing_meshes(TopologyMappingResult& result, MeshId logical_mesh_id, MeshId physical_mesh_id) {
+    result.stats.failing_logical_mesh = logical_mesh_id.get();
+    result.stats.failing_physical_mesh = physical_mesh_id.get();
+}
+
+void apply_placement_stats(TopologyMappingStats& stats, const ::tt::tt_fabric::PlacementSolveStats& placement) {
+    stats.placement_attempted = placement.master_solve_attempted;
+    stats.placement_success = placement.master_solve_success;
+    stats.candidate_lists_complete = placement.candidate_lists_complete;
+    stats.meshes_total = placement.meshes_total;
+    stats.meshes_placed = placement.meshes_placed;
+    stats.placement_candidates = placement.master_candidates_enumerated;
+    stats.placement_growth_rounds = placement.master_growth_rounds;
+    stats.placement_sat_attempts = placement.master_sat_attempts;
+    stats.placement_sat_vars = placement.master_sat_vars;
+    stats.placement_sat_clauses = placement.master_sat_clauses;
+    stats.inner_solver_calls = placement.inner_solver_calls;
+    stats.candidates_generated = placement.candidates_generated;
+}
+
+std::string format_sat_placement_failure(const ::tt::tt_fabric::PlacementSolveStats& stats) {
+    if (!stats.master_solve_attempted) {
+        return "SAT joint placement did not start: no MESH groupings or empty logical graph";
     }
-    return hist_str;
+    if (stats.master_sat_attempts == 0 && !stats.master_solve_success) {
+        return fmt::format(
+            "SAT joint placement session was not ready (a mesh has no grouping variants); meshes_total={}",
+            stats.meshes_total);
+    }
+    return fmt::format(
+        "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} "
+        "candidate(s); candidate lists {} -- the UNSAT verdict is {}",
+        stats.master_sat_attempts,
+        stats.master_growth_rounds,
+        stats.master_candidates_enumerated,
+        stats.candidate_lists_complete ? "COMPLETE" : "TRUNCATED",
+        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy");
+}
+
+void set_mapping_failure(TopologyMappingResult& result, std::string failure_stage, std::string error_message) {
+    result.success = false;
+    result.stats.failure_stage = std::move(failure_stage);
+    result.error_message = std::move(error_message);
+    result.stats.warnings.push_back(result.error_message);
+    log_warning(tt::LogFabric, "{}", result.error_message);
 }
 
 }  // namespace
 
-void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(
-        tt::LogFabric,
-        "Logical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
-        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
-        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
-}
-
-void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(
-        tt::LogFabric,
-        "Physical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
-        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
-        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
+std::string TopologyMappingStats::to_string() const {
+    return fmt::format(
+        "TopologyMappingStats:\n"
+        "  failure_stage: {}  failing meshes: logical={} physical={}\n"
+        "  seated grouping: '{}' type '{}'\n"
+        "  intra: {} n_target={} n_global={} required={} preferred={}/{} dfs_calls={} sat_solves={}\n"
+        "  placement: attempted={} success={} lists_complete={} meshes={}/{} candidates={} "
+        "growth={} sat_attempts={} vars={} clauses={}\n"
+        "  inner_solver_calls={} candidates_generated={} warnings={}",
+        failure_stage.empty() ? "-" : failure_stage,
+        failing_logical_mesh.has_value() ? std::to_string(*failing_logical_mesh) : "-",
+        failing_physical_mesh.has_value() ? std::to_string(*failing_physical_mesh) : "-",
+        seated_grouping_name,
+        seated_grouping_type,
+        intra_used_sat ? "SAT" : "DFS",
+        intra_n_target,
+        intra_n_global,
+        intra_required_satisfied,
+        intra_preferred_satisfied,
+        intra_preferred_total,
+        intra_dfs_calls,
+        intra_sat_solve_calls,
+        placement_attempted,
+        placement_success,
+        candidate_lists_complete,
+        meshes_placed,
+        meshes_total,
+        placement_candidates,
+        placement_growth_rounds,
+        placement_sat_attempts,
+        placement_sat_vars,
+        placement_sat_clauses,
+        inner_solver_calls,
+        candidates_generated,
+        warnings.size());
 }
 
 std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
@@ -3247,11 +1283,9 @@ std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_col
     return hops;
 }
 
-namespace {
-
 // Complete the intra-mesh (fabric-node -> ASIC) mapping for one fixed inter-mesh placement.
 //
-// Shared by MultiMeshSolutionEnumerator (and therefore both map_multi_mesh_to_physical wrappers).
+// Complete the intra-mesh (fabric-node -> ASIC) mapping for one fixed identity placement.
 // If any mesh pair's intra-mesh mapping is infeasible, the whole placement is rejected
 // (returned result has success == false). The enumerator forbids/retries rejected placements.
 TopologyMappingResult complete_intra_mesh_for_placement(
@@ -3300,15 +1334,23 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
-            const bool exit_node_constraints_success = add_exit_node_constraints(
+            auto exit_node_constraints_failure = add_exit_node_constraints(
                 intra_mesh_constraints,
                 mesh_mappings,
                 logical_graph,
                 logical_exit_node_graph,
                 physical_exit_node_graph,
                 inter_mesh_validation_mode);
-            if (!exit_node_constraints_success) {
-                result.success = false;
+            if (exit_node_constraints_failure.has_value()) {
+                record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+                set_mapping_failure(
+                    result,
+                    "exit_node_constraints",
+                    fmt::format(
+                        "intra-mesh mapping failed: exit-node constraints for logical mesh {} -> physical mesh {}: {}",
+                        logical_mesh_id.get(),
+                        physical_mesh_id.get(),
+                        *exit_node_constraints_failure));
                 if (failing_pair_out) {
                     *failing_pair_out = {logical_mesh_id, physical_mesh_id};
                 }
@@ -3320,7 +1362,15 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto pinning_constraint_failure =
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
         if (pinning_constraint_failure.has_value()) {
-            result.success = false;
+            record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+            set_mapping_failure(
+                result,
+                "mgd_pinning",
+                fmt::format(
+                    "intra-mesh mapping failed: MGD pinning constraints for logical mesh {} -> physical mesh {}: {}",
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get(),
+                    *pinning_constraint_failure));
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
@@ -3348,7 +1398,40 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
         if (!sub_mapping.success) {
-            result.success = false;
+            record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+            result.stats.intra_used_sat = sub_mapping.stats.used_sat;
+            result.stats.intra_n_target = sub_mapping.stats.n_target;
+            result.stats.intra_n_global = sub_mapping.stats.n_global;
+            result.stats.intra_required_satisfied = sub_mapping.constraint_stats.required_satisfied;
+            result.stats.intra_preferred_satisfied = sub_mapping.constraint_stats.preferred_satisfied;
+            result.stats.intra_preferred_total = sub_mapping.constraint_stats.preferred_total;
+            result.stats.intra_dfs_calls = sub_mapping.stats.dfs_calls;
+            result.stats.intra_sat_solve_calls = sub_mapping.stats.sat_solve_calls;
+            result.stats.warnings.insert(
+                result.stats.warnings.end(), sub_mapping.warnings.begin(), sub_mapping.warnings.end());
+            const std::string solver_error =
+                sub_mapping.error_message.empty() ? "intra-mesh solver returned no mapping" : sub_mapping.error_message;
+            set_mapping_failure(
+                result,
+                "intra_mesh_solve",
+                fmt::format(
+                    "intra-mesh mapping failed: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)): {} "
+                    "[{} required={} preferred={}/{} n_target={} n_global={}]",
+                    logical_mesh_id.get(),
+                    logical_graph.get_nodes().size(),
+                    physical_mesh_id.get(),
+                    physical_graph.get_nodes().size(),
+                    solver_error,
+                    sub_mapping.stats.used_sat ? "SAT" : "DFS",
+                    sub_mapping.constraint_stats.required_satisfied,
+                    sub_mapping.constraint_stats.preferred_satisfied,
+                    sub_mapping.constraint_stats.preferred_total,
+                    sub_mapping.stats.n_target,
+                    sub_mapping.stats.n_global));
+            for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
+                result.fabric_node_to_asic.insert({fabric_node, asic});
+                result.asic_to_fabric_node.insert({asic, fabric_node});
+            }
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
@@ -3364,195 +1447,383 @@ TopologyMappingResult complete_intra_mesh_for_placement(
     return result;
 }
 
-}  // namespace
-
-TopologyMappingResult map_multi_mesh_to_physical(
-    const LogicalMultiMeshGraph& adjacency_map_logical,
-    const PhysicalMultiMeshGraph& adjacency_map_physical,
-    const TopologyMappingConfig& config,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
-    if (config.strict_mode) {
-        log_warning(
-            tt::LogFabric,
-            "TopologyMappingConfig::strict_mode is deprecated and has no effect. "
-            "Set mesh_validation_modes and/or inter_mesh_validation_mode explicitly.");
+// ─────────────────────── MultiMeshSolutionEnumerator (SAT seating + identity intra) ───────────────────────
+void MultiMeshSolutionEnumerator::fill_host_and_asic_positions_from_psd() {
+    if (physical_system_descriptor_ == nullptr) {
+        return;
     }
-
-    // Single-solution mapping is the first solution of the multi-solution enumeration. Construct the enumerator
-    // and return its first result: it drives the same inter-mesh solve, per-mesh intra-mesh completion,
-    // minimal-host cap relaxation, and (logical -> physical) forbid/retry this function used to run inline.
-    // unique_shapes is irrelevant for a single solution (the first is taken regardless).
-    MultiMeshSolutionEnumerator enumerator(
-        adjacency_map_logical,
-        adjacency_map_physical,
-        config,
-        /*unique_shapes=*/false,
-        asic_id_to_mesh_rank,
-        fabric_node_id_to_mesh_rank);
-    if (auto solution = enumerator.next(); solution.has_value()) {
-        return std::move(*solution);
+    const bool fill_hosts = config_.hostname_to_asics.empty();
+    const bool fill_positions = config_.asic_positions.empty();
+    if (!fill_hosts && !fill_positions) {
+        return;
     }
-    TopologyMappingResult result;
-    result.success = false;
-    result.error_message = "map_multi_mesh_to_physical: no valid multi-mesh mapping found";
-    return result;
-}
-
-std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
-    const LogicalMultiMeshGraph& adjacency_map_logical,
-    const PhysicalMultiMeshGraph& adjacency_map_physical,
-    const TopologyMappingConfig& config,
-    std::size_t max_solutions,
-    bool unique_shapes,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
-    // Batch wrapper over the streaming enumerator: pull up to max_solutions distinct full solutions (0 = all,
-    // bounded by the enumerator's exhaustion and a safety cap). next() only returns solutions whose intra-mesh
-    // mapping completed -- an enumerated inter-mesh placement that fails intra completion is forbidden/retried
-    // inside next(), never silently dropped -- so the count is against COMPLETED solutions.
-    constexpr std::size_t kEnumerationSafetyCap = 500000;
-    MultiMeshSolutionEnumerator enumerator(
-        adjacency_map_logical,
-        adjacency_map_physical,
-        config,
-        unique_shapes,
-        asic_id_to_mesh_rank,
-        fabric_node_id_to_mesh_rank);
-    std::vector<TopologyMappingResult> solutions;
-    const std::size_t cap = max_solutions != 0 ? max_solutions : kEnumerationSafetyCap;
-    while (solutions.size() < cap) {
-        std::optional<TopologyMappingResult> solution = enumerator.next();
-        if (!solution.has_value()) {
-            break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
+    for (const auto& [asic_id, desc] : physical_system_descriptor_->get_asic_descriptors()) {
+        if (fill_hosts) {
+            config_.hostname_to_asics[desc.host_name].insert(asic_id);
         }
-        solutions.push_back(std::move(*solution));
+        if (fill_positions) {
+            config_.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
+        }
     }
-    return solutions;
 }
 
-// ─────────────────────── MultiMeshSolutionEnumerator (streaming) ───────────────────────
-// Lazy multi-solution enumerator: same session, constraints, and unique_shapes, but each next()
-// yields one solution as soon as it is found rather than collecting them all before returning.
-// See the header for the pull contract.
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
-    const LogicalMultiMeshGraph& adjacency_map_logical,
-    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const TopologyMappingConfig& config,
     bool unique_shapes,
+    const std::optional<PinningsByMesh>& pinnings,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
-    adjacency_map_logical_(adjacency_map_logical),
-    adjacency_map_physical_(adjacency_map_physical),
-    config_(config),
-    asic_id_to_mesh_rank_(asic_id_to_mesh_rank),
-    fabric_node_id_to_mesh_rank_(fabric_node_id_to_mesh_rank),
-    unique_shapes_(unique_shapes),
-    inter_mesh_constraints_(
-        build_inter_mesh_constraints(config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank)),
-    inter_mesh_validation_mode_(determine_inter_mesh_validation_mode(config)) {}
+    MultiMeshSolutionEnumerator(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        std::vector<MultiMeshMappingPart>{
+            MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}},
+        config,
+        unique_shapes) {}
 
-std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
+::tt::tt_fabric::MeshGraphDescriptor MultiMeshSolutionEnumerator::init_from_parts(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    std::optional<PinningsByMesh>& session_pinnings) {
     using namespace ::tt::tt_fabric;
-    const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
-    const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
-    while (true) {
-        // One incremental session for the first solve and every later one. A failed first solve with a hard
-        // host-group cap means the cap is infeasible for this instance -> drop the cap, enable SOFT
-        // minimize_same_rank_groups_used, and restart the session. Later exhaustion with emitted_ > 0 is
-        // genuine "no more capped solutions" and must not start emitting over-cap placements.
-        MappingResult<MeshId, MeshId> placement = session_.next(
-            mesh_logical_graph,
-            mesh_physical_graph,
-            inter_mesh_constraints_,
-            excluded_,
-            inter_mesh_validation_mode_,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Auto,
-            unique_shapes_);
-        if (!placement.success) {
-            if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
-                log_warning(
-                    tt::LogFabric,
-                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
-                    "capped solutions ({}); dropping the cap and falling back to SOFT minimize, then "
-                    "restarting the session -- returned placements may occupy more than k host groups",
-                    inter_mesh_constraints_.max_same_rank_groups_used(),
-                    placement.error_message);
-                inter_mesh_constraints_.set_max_same_rank_groups_used(0);
-                inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
-                session_ = {};
-                host_cap_relaxed_ = true;
+
+    std::vector<const MeshGraphDescriptor*> mesh_graph_descriptors;
+    mesh_graph_descriptors.reserve(parts.size());
+    for (const auto& part : parts) {
+        TT_FATAL(part.mesh_graph_descriptor != nullptr, "MultiMeshMappingPart is missing a mesh graph descriptor");
+        mesh_graph_descriptors.push_back(part.mesh_graph_descriptor);
+    }
+    TT_FATAL(
+        !mesh_graph_descriptors.empty(), "MultiMeshSolutionEnumerator requires at least one mesh graph descriptor");
+
+    validate_shared_inter_mesh_policy(mesh_graph_descriptors);
+
+    MeshGraphDescriptor merged =
+        MeshGraphDescriptor::merge(mesh_graph_descriptors, &per_part_local_to_global_mesh_ids_);
+    logical_ = build_logical_multi_mesh_adjacency_graph(merged);
+
+    if (config_.mesh_validation_modes.empty()) {
+        for (std::size_t mgd_index = 0; mgd_index < per_part_local_to_global_mesh_ids_.size(); ++mgd_index) {
+            const MeshGraphDescriptor& mgd = *mesh_graph_descriptors[mgd_index];
+            for (const auto& [local_mesh_id, global_mesh_id] : per_part_local_to_global_mesh_ids_[mgd_index]) {
+                config_.mesh_validation_modes[global_mesh_id] = mgd.is_intra_mesh_policy_relaxed(local_mesh_id)
+                                                                    ? ConnectionValidationMode::RELAXED
+                                                                    : ConnectionValidationMode::STRICT;
+            }
+        }
+    }
+    // Local pinnings and host ranks from each part are remapped with the merge maps.
+    if (config_.pinnings.empty()) {
+        for (std::size_t mgd_index = 0;
+             mgd_index < parts.size() && mgd_index < per_part_local_to_global_mesh_ids_.size();
+             ++mgd_index) {
+            if (!parts[mgd_index].pinnings.has_value()) {
                 continue;
             }
-            log_info(
-                tt::LogFabric,
-                "Multi-solution enumeration exhausted after {} solution(s) (cap_relaxed={}): {}",
-                emitted_,
-                host_cap_relaxed_,
-                placement.error_message);
-            return std::nullopt;  // genuinely exhausted (real UNSAT) or a hard-encode failure
+            const auto& local_to_global = per_part_local_to_global_mesh_ids_[mgd_index];
+            for (const auto& [_, groups] : *parts[mgd_index].pinnings) {
+                for (const auto& group : groups) {
+                    ::tt::tt_fabric::AsicPinningGroup remapped;
+                    remapped.asic_positions = group.asic_positions;
+                    remapped.board_revision = group.board_revision;
+                    remapped.fabric_nodes.reserve(group.fabric_nodes.size());
+                    for (const auto& fabric_node : group.fabric_nodes) {
+                        remapped.fabric_nodes.emplace_back(
+                            remap_local_mesh_id(local_to_global, fabric_node.mesh_id), fabric_node.chip_id);
+                    }
+                    config_.pinnings.push_back(std::move(remapped));
+                }
+            }
+        }
+    }
+    for (std::size_t mgd_index = 0; mgd_index < parts.size() && mgd_index < per_part_local_to_global_mesh_ids_.size();
+         ++mgd_index) {
+        remap_fabric_node_ranks_to_global(
+            fabric_node_id_to_mesh_rank_,
+            parts[mgd_index].fabric_node_id_to_mesh_rank,
+            per_part_local_to_global_mesh_ids_[mgd_index]);
+        remap_asic_ranks_to_global(
+            asic_id_to_mesh_rank_,
+            parts[mgd_index].asic_id_to_mesh_rank,
+            per_part_local_to_global_mesh_ids_[mgd_index]);
+    }
+    if (!config_.inter_mesh_validation_mode.has_value()) {
+        std::optional<ConnectionValidationMode> specified_mode;
+        for (const auto* mgd : mesh_graph_descriptors) {
+            if (!mgd->is_inter_mesh_policy_specified()) {
+                continue;
+            }
+            specified_mode = mgd->is_inter_mesh_policy_relaxed() ? ConnectionValidationMode::RELAXED
+                                                                 : ConnectionValidationMode::STRICT;
+            break;
+        }
+        config_.inter_mesh_validation_mode = specified_mode.value_or(ConnectionValidationMode::STRICT);
+    }
+    inter_mesh_validation_mode_ = determine_inter_mesh_validation_mode(config_);
+    fill_host_and_asic_positions_from_psd();
+    flat_graph_ = AdjacencyGraph<tt::tt_metal::AsicID>(build_flat_adjacency_map_from_psd(physical_system_descriptor));
+
+    // Session keys pinnings by merged/global MeshId (remapped above).
+    PinningsByMesh by_mesh = merged.get_pinnings();
+    drop_inactive_revision_pinnings(by_mesh, physical_system_descriptor);
+    if (!config_.pinnings.empty()) {
+        merge_pinnings_by_mesh(by_mesh, config_.pinnings);
+        drop_inactive_revision_pinnings(by_mesh, physical_system_descriptor);
+    }
+    if (!by_mesh.empty()) {
+        session_pinnings = std::move(by_mesh);
+    }
+    return merged;
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
+    placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
+        physical_grouping_descriptor,
+        merged,
+        physical_system_descriptor,
+        placement_stats_.get(),
+        session_pinnings,
+        asic_id_to_mesh_rank_,
+        unique_shapes,
+        fabric_node_id_to_mesh_rank_);
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::optional<PinningsByMesh>& pinnings,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    const std::vector<MultiMeshMappingPart> parts{
+        MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}};
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
+    placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
+        merged,
+        physical_system_descriptor,
+        placement_stats_.get(),
+        session_pinnings,
+        asic_id_to_mesh_rank_,
+        unique_shapes);
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
+    placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
+        merged,
+        physical_system_descriptor,
+        placement_stats_.get(),
+        session_pinnings,
+        asic_id_to_mesh_rank_,
+        unique_shapes);
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;
+MultiMeshSolutionEnumerator& MultiMeshSolutionEnumerator::operator=(MultiMeshSolutionEnumerator&&) noexcept = default;
+MultiMeshSolutionEnumerator::~MultiMeshSolutionEnumerator() = default;
+
+std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::unsuccessful_parts() const {
+    TopologyMappingResult result;
+    if (last_failed_.has_value()) {
+        result = *last_failed_;
+    }
+    result.success = false;
+    if (placement_stats_ != nullptr) {
+        apply_placement_stats(result.stats, *placement_stats_);
+        const std::string sat_status = format_sat_placement_failure(*placement_stats_);
+        result.stats.warnings.push_back(sat_status);
+        result.stats.warnings.push_back(placement_stats_->to_string());
+        result.stats.warnings.push_back(result.stats.to_string());
+        if (result.error_message.empty()) {
+            result.stats.failure_stage = "sat_placement";
+            result.error_message =
+                fmt::format("map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found: {}", sat_status);
+        }
+    }
+    if (result.error_message.empty()) {
+        result.stats.failure_stage = "sat_placement";
+        result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+    }
+    log_warning(tt::LogFabric, "{}", result.error_message);
+    return split_mapping_to_local_parts(result, per_part_local_to_global_mesh_ids_);
+}
+
+std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
+    using namespace ::tt::tt_fabric;
+    if (placement_session_ == nullptr || physical_system_descriptor_ == nullptr) {
+        if (emitted_ == 0 && !yielded_failure_) {
+            yielded_failure_ = true;
+            return unsuccessful_parts();
+        }
+        return {};
+    }
+
+    auto give_up = [&]() -> std::vector<TopologyMappingResult> {
+        if (emitted_ == 0 && !yielded_failure_) {
+            yielded_failure_ = true;
+            return unsuccessful_parts();
+        }
+        return {};
+    };
+
+    while (true) {
+        AssignedMeshes seating = placement_session_->next();
+        if (seating.empty()) {
+            return give_up();
         }
 
-        // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
-        // The host-group cap is enforced IN the solve now (SAT at-most-k CNF clause, DFS in-search check), so every
-        // returned placement already respects it -- an infeasible cap surfaces as the session finding no placement,
-        // handled by the relax on the !placement.success path above. No post-hoc cap filter is needed here.
-        excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+        PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph_, seating);
+        print_logical_adjacency_map(logical_);
+        print_physical_adjacency_map(physical);
+        std::unordered_map<MeshId, MeshId> identity;
+        identity.reserve(seating.size());
+        for (const PlacedMesh& placed : seating) {
+            identity.emplace(placed.mesh_id, placed.mesh_id);
+        }
 
-        std::unordered_map<MeshId, MeshId> mesh_mappings(
-            placement.target_to_global.begin(), placement.target_to_global.end());
         std::optional<std::pair<MeshId, MeshId>> intra_failing_pair;
         TopologyMappingResult full = complete_intra_mesh_for_placement(
-            mesh_mappings,
-            adjacency_map_logical_,
-            adjacency_map_physical_,
+            identity,
+            logical_,
+            physical,
             config_,
             inter_mesh_validation_mode_,
             asic_id_to_mesh_rank_,
             fabric_node_id_to_mesh_rank_,
             &intra_failing_pair);
-        if (!full.success) {
-            // Mirror the single-solve retry loop (map_multi_mesh_to_physical): a failed intra-mesh completion is an
-            // orientation problem, not proof the footprint is unusable. Forbid the exact (logical -> physical) pair
-            // that could not complete -- via the same handle_forbidden_constraint used by the single solve -- and
-            // re-encode the session so the next warm solve returns a different orientation, instead of only
-            // shape-blocking the whole placement (which, under unique_shapes, strands every orientation sharing this
-            // footprint -- a full-coverage ring has exactly one).
-            if (intra_failing_pair.has_value()) {
-                std::vector<MeshId> logical_meshes(
-                    mesh_logical_graph.get_nodes().begin(), mesh_logical_graph.get_nodes().end());
-                std::vector<MeshId> physical_meshes(
-                    mesh_physical_graph.get_nodes().begin(), mesh_physical_graph.get_nodes().end());
-                std::vector<std::pair<MeshId, MeshId>> current_attempt_failed_pairs;
-                TopologyMappingResult forbid_result;
-                const bool can_retry = handle_forbidden_constraint(
-                    inter_mesh_constraints_,
-                    intra_failing_pair->first,
-                    intra_failing_pair->second,
-                    intra_failed_mesh_pairs_,
-                    current_attempt_failed_pairs,
-                    static_cast<unsigned int>(excluded_.size()),
-                    logical_meshes,
-                    physical_meshes,
-                    inter_mesh_validation_mode_,
-                    forbid_result,
-                    "intra-mesh completion failed");
-                // Re-encode with the new forbidden constraint; excluded_ is re-applied so already-returned
-                // placements cannot re-emerge. The forbidden pair makes the just-tried orientation unreachable.
-                session_ = {};
-                if (!can_retry) {
-                    // add_forbidden_constraint over-constrained this logical mesh: no remaining physical
-                    // target, so SAT would keep re-emitting a pairing that cannot complete.
-                    return std::nullopt;
-                }
-                continue;
-            }
-            continue;  // no identifiable failing pair: skip this placement and try the next warm solve
+        if (placement_stats_ != nullptr) {
+            apply_placement_stats(full.stats, *placement_stats_);
         }
-        ++emitted_;
-        return full;
+        if (full.success) {
+            ++emitted_;
+            return split_mapping_to_local_parts(full, per_part_local_to_global_mesh_ids_);
+        }
+
+        const PlacedMesh* failed_placed = nullptr;
+        if (intra_failing_pair.has_value()) {
+            for (const PlacedMesh& placed : seating) {
+                if (placed.mesh_id == intra_failing_pair->first) {
+                    failed_placed = &placed;
+                    break;
+                }
+            }
+        }
+        if (failed_placed != nullptr) {
+            full.stats.seated_grouping_name = failed_placed->grouping_name;
+            full.stats.seated_grouping_type = failed_placed->grouping_type;
+            full.error_message = fmt::format(
+                "{} (seated as grouping '{}' type '{}' with {} asic(s))",
+                full.error_message,
+                failed_placed->grouping_name,
+                failed_placed->grouping_type,
+                failed_placed->placement.asics.size());
+            full.stats.warnings.push_back(full.error_message);
+            log_warning(tt::LogFabric, "{}", full.error_message);
+        }
+        last_failed_ = full;
+
+        if (failed_placed == nullptr || failed_placed->placement.asics.empty()) {
+            continue;
+        }
+
+        if (!placement_session_->add_forbidden_constraint(*failed_placed)) {
+            return give_up();
+        }
     }
+}
+
+TopologyMappingResult map_multi_mesh_to_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    const std::optional<PinningsByMesh>& pinnings,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    const auto local_parts = map_multi_mesh_to_physical(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        std::vector<MultiMeshMappingPart>{
+            MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}},
+        config);
+    if (local_parts.empty()) {
+        TopologyMappingResult result;
+        result.success = false;
+        result.stats.failure_stage = "sat_placement";
+        result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+        result.stats.warnings.push_back(result.error_message);
+        log_warning(tt::LogFabric, "{}", result.error_message);
+        return result;
+    }
+    return local_parts.front();
+}
+
+TopologyMappingResult map_multi_mesh_to_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    const std::optional<PinningsByMesh>& pinnings,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    MultiMeshSolutionEnumerator enumerator(
+        physical_system_descriptor,
+        mesh_graph_descriptor,
+        config,
+        /*unique_shapes=*/false,
+        pinnings,
+        asic_id_to_mesh_rank,
+        fabric_node_id_to_mesh_rank);
+    const auto local_parts = enumerator.next();
+    if (local_parts.empty()) {
+        TopologyMappingResult result;
+        result.success = false;
+        result.stats.failure_stage = "sat_placement";
+        result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+        result.stats.warnings.push_back(result.error_message);
+        log_warning(tt::LogFabric, "{}", result.error_message);
+        return result;
+    }
+    return local_parts.front();
+}
+
+std::vector<TopologyMappingResult> map_multi_mesh_to_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config) {
+    MultiMeshSolutionEnumerator enumerator(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        parts,
+        config,
+        /*unique_shapes=*/false);
+    return enumerator.next();
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

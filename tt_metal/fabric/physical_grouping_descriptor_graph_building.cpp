@@ -7,6 +7,7 @@
 #include <sstream>
 #include <ostream>
 #include <filesystem>
+#include <limits>
 #include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
@@ -22,7 +23,6 @@
 #include <fmt/format.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
-#include "protobuf/mesh_graph_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -68,6 +68,103 @@ void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callba
     }
 }
 
+AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
+    const std::vector<GroupingChipId>& instance_ids,
+    const std::vector<int32_t>& dims,
+    const std::string& grouping_name,
+    uint32_t connections_per_edge,
+    const std::vector<bool>& ring_dims) {
+    std::map<GroupingChipId, std::vector<GroupingChipId>> adj_map;
+
+    if (instance_ids.empty() || dims.empty()) {
+        return AdjacencyGraph<GroupingChipId>(adj_map);
+    }
+
+    int64_t total_size = 1;
+    for (int32_t dim : dims) {
+        if (dim <= 0) {
+            total_size = -1;
+            break;
+        }
+        total_size *= dim;
+        if (total_size > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            total_size = -1;
+            break;
+        }
+    }
+
+    if (total_size < 0 || static_cast<size_t>(total_size) != instance_ids.size()) {
+        std::string dims_str = "[";
+        for (size_t i = 0; i < dims.size(); ++i) {
+            if (i > 0) {
+                dims_str += ", ";
+            }
+            dims_str += std::to_string(dims[i]);
+        }
+        dims_str += "]";
+
+        TT_THROW(
+            "Invalid row_major_mesh configuration in grouping '{}': "
+            "dimensions {} multiply to {} (expected {} instances), but grouping has {} instance(s). "
+            "The product of row_major_mesh dimensions must equal the number of instances in the grouping. "
+            "If this is a mistake in the Physical Grouping Descriptor file, please file an error with the scaleout "
+            "team.",
+            grouping_name.empty() ? "<unknown>" : grouping_name,
+            dims_str,
+            total_size,
+            total_size,
+            instance_ids.size());
+    }
+
+    // Register every node up front so isolated nodes survive. A 1x1 mesh (a single chip, e.g. an n150)
+    // has no edges, so without this the AdjacencyGraph would have zero nodes and the MGD-fallback
+    // placement would have nothing to embed ("a mesh has no grouping variants").
+    for (const GroupingChipId id : instance_ids) {
+        adj_map[id];
+    }
+
+    // One-sided +direction walk so each undirected edge is inserted once (STRICT matching
+    // treats multiplicity as channel count). processed_edges is a backstop if wrap and LINE
+    // ever name the same pair.
+    std::set<std::pair<GroupingChipId, GroupingChipId>> processed_edges;
+
+    for (uint32_t idx = 0; idx < instance_ids.size(); ++idx) {
+        const std::vector<int32_t> coords = row_major_coords_from_linear_index(idx, dims);
+
+        for (size_t dim_idx = 0; dim_idx < dims.size(); ++dim_idx) {
+            const int32_t dim_size = dims[dim_idx];
+            const int32_t coord_val = coords[dim_idx];
+            const bool is_ring = dim_idx < ring_dims.size() && ring_dims[dim_idx];
+
+            auto add_neighbor_at_coord = [&](int32_t neighbor_coord_val) {
+                std::vector<int32_t> neighbor_coords = coords;
+                neighbor_coords[dim_idx] = neighbor_coord_val;
+                const uint32_t neighbor_idx = row_major_linear_index_from_coords(neighbor_coords, dims);
+                if (neighbor_idx >= instance_ids.size()) {
+                    return;
+                }
+                const auto edge_pair = std::minmax(instance_ids[idx], instance_ids[neighbor_idx]);
+                if (processed_edges.insert(edge_pair).second) {
+                    for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
+                        adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
+                        adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
+                    }
+                }
+            };
+
+            if (coord_val < dim_size - 1) {
+                add_neighbor_at_coord(coord_val + 1);
+            }
+
+            if (is_ring && is_genuine_torus_axis(dim_size) && coord_val == 0) {
+                add_neighbor_at_coord(dim_size - 1);
+            }
+        }
+    }
+
+    return AdjacencyGraph<GroupingChipId>(adj_map);
+}
+
 namespace {
 
 using tt::tt_fabric::AdjacencyGraph;
@@ -83,116 +180,6 @@ AdjacencyGraph<GroupingChipId> build_all_to_all_graph(const std::vector<Grouping
             // Add bidirectional edge (each edge processed once)
             adj_map[instance_ids[i]].push_back(instance_ids[j]);
             adj_map[instance_ids[j]].push_back(instance_ids[i]);
-        }
-    }
-
-    return AdjacencyGraph<GroupingChipId>(adj_map);
-}
-
-// Helper function to build adjacency graph from row-major mesh connection.
-// LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
-// Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
-AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
-    const std::vector<GroupingChipId>& instance_ids,
-    const std::vector<int32_t>& dims,
-    const std::string& grouping_name = "",
-    uint32_t connections_per_edge = 1,
-    const std::vector<bool>& ring_dims = {}) {
-    std::map<GroupingChipId, std::vector<GroupingChipId>> adj_map;
-
-    if (instance_ids.empty() || dims.empty()) {
-        return AdjacencyGraph<GroupingChipId>(adj_map);
-    }
-
-    // Calculate total size
-    int32_t total_size = 1;
-    for (int32_t dim : dims) {
-        total_size *= dim;
-    }
-
-    if (static_cast<size_t>(total_size) != instance_ids.size()) {
-        std::string dims_str = "[";
-        for (size_t i = 0; i < dims.size(); ++i) {
-            if (i > 0) {
-                dims_str += ", ";
-            }
-            dims_str += std::to_string(dims[i]);
-        }
-        dims_str += "]";
-
-        std::string error_msg = fmt::format(
-            "Invalid row_major_mesh configuration in grouping '{}': "
-            "dimensions {} multiply to {} (expected {} instances), but grouping has {} instance(s). "
-            "The product of row_major_mesh dimensions must equal the number of instances in the grouping. "
-            "If this is a mistake in the Physical Grouping Descriptor file, please file an error with the scaleout "
-            "team.",
-            grouping_name.empty() ? "<unknown>" : grouping_name,
-            dims_str,
-            total_size,
-            total_size,
-            instance_ids.size());
-        TT_THROW("{}", error_msg);
-    }
-
-    // Build coordinate system helpers
-    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
-        std::vector<int32_t> coords(dims.size());
-        int32_t remaining = static_cast<int32_t>(idx);
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            coords[i] = remaining % dims[i];
-            remaining /= dims[i];
-        }
-        return coords;
-    };
-
-    auto coords_to_idx = [&](const std::vector<int32_t>& coords) -> int32_t {
-        int32_t idx = 0;
-        int32_t multiplier = 1;
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            idx += coords[i] * multiplier;
-            multiplier *= dims[i];
-        }
-        return idx;
-    };
-
-    // Build adjacency: for each dimension, connect neighbors
-    // Use a set to track processed edges to avoid double-counting
-    std::set<std::pair<GroupingChipId, GroupingChipId>> processed_edges;
-
-    for (uint32_t idx = 0; idx < instance_ids.size(); ++idx) {
-        std::vector<int32_t> coords = get_coords(idx);
-
-        // For each dimension
-        for (size_t dim_idx = 0; dim_idx < dims.size(); ++dim_idx) {
-            const int32_t dim_size = dims[dim_idx];
-            const int32_t coord_val = coords[dim_idx];
-            const bool is_ring = dim_idx < ring_dims.size() && ring_dims[dim_idx];
-
-            auto add_neighbor_at_coord = [&](int32_t neighbor_coord_val) {
-                std::vector<int32_t> neighbor_coords = coords;
-                neighbor_coords[dim_idx] = neighbor_coord_val;
-                const int32_t neighbor_idx = coords_to_idx(neighbor_coords);
-                if (neighbor_idx < 0 || neighbor_idx >= static_cast<int32_t>(instance_ids.size())) {
-                    return;
-                }
-                const auto edge_pair = std::minmax(instance_ids[idx], instance_ids[neighbor_idx]);
-                if (processed_edges.insert(edge_pair).second) {
-                    for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
-                        adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
-                        adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
-                    }
-                }
-            };
-
-            // +direction LINE neighbor
-            if (coord_val < dim_size - 1) {
-                add_neighbor_at_coord(coord_val + 1);
-            }
-
-            // RING wrap: connect coord 0 to dim-1 (skip dim < 3)
-            if (is_ring && dim_size >= 3 && coord_val == 0) {
-                add_neighbor_at_coord(dim_size - 1);
-            }
         }
     }
 
@@ -455,6 +442,17 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         const auto& custom = grouping.custom();
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
     } else {
+        // A host is a tile, not a bag of chips: meshes are composed by referencing HOSTS, so how a
+        // host's own instances are arranged is what a mesh built out of hosts inherits. Left off, the
+        // grouping would carry an empty adjacency graph and describe a host with no internal
+        // connectivity at all, which is never true of a real machine. Any of the connection types may
+        // say it -- row_major_mesh for a grid, custom for anything that is not one.
+        TT_FATAL(
+            grouping.preset_type() != proto::HOSTS,
+            "Physical groupings: HOSTS grouping '{}' declares no connection. A host must declare its own "
+            "topology (row_major_mesh, custom, or all_to_all) so that meshes composed from it inherit the "
+            "right layout.",
+            info.name);
         // No connection specified - empty adjacency graph (instances are not connected)
         info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<GroupingChipId>();
     }
@@ -470,11 +468,6 @@ using tt::tt_fabric::GroupingChipId;
 
 enum class CardinalDirection { North, South, East, West };
 enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B };
-
-// Keep PGD's signed-dimension check aligned with has_genuine_torus_axis.
-bool is_genuine_torus_dimension(int32_t dim) {
-    return dim >= 0 && tt::tt_fabric::is_genuine_torus_dim(static_cast<uint32_t>(dim));
-}
 
 // Metadata for flattened mesh nodes
 struct NodeMetadata {
@@ -618,10 +611,10 @@ tt::tt_fabric::AdjacencyGraph<GroupingChipId> add_torus_wrap_edges(
     };
 
     if (mesh.node_grid_dims.size() >= 2) {
-        if (!ring_dims.empty() && ring_dims[0] && is_genuine_torus_dimension(mesh.node_grid_dims[0])) {
+        if (!ring_dims.empty() && ring_dims[0] && tt::tt_fabric::is_genuine_torus_axis(mesh.node_grid_dims[0])) {
             connect_opposite_edges(CardinalDirection::North, CardinalDirection::South);
         }
-        if (ring_dims.size() > 1 && ring_dims[1] && is_genuine_torus_dimension(mesh.node_grid_dims[1])) {
+        if (ring_dims.size() > 1 && ring_dims[1] && tt::tt_fabric::is_genuine_torus_axis(mesh.node_grid_dims[1])) {
             connect_opposite_edges(CardinalDirection::West, CardinalDirection::East);
         }
     }
@@ -1042,42 +1035,50 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
     // name_suffix gives each topology variant a distinct grouping name (in addition to the GroupingInfo::type
     // field) so logs and committed groupings make clear which variant matched/placed. The MESH variant keeps
     // the plain "_flat" name; torus variants append "_torus_x/_y/_xy".
-    static const std::array<std::tuple<const char*, const char*, std::array<bool, 2>>, 4> k_variants = {{
-        {"MESH", "", {false, false}},
-        {"TORUSX", "_torus_x", {true, false}},
-        {"TORUSY", "_torus_y", {false, true}},
-        {"TORUSXY", "_torus_xy", {true, true}},
-    }};
-
-    std::vector<tt::tt_fabric::GroupingInfo> result;
-    result.reserve(k_variants.size());
+    struct TopologyVariantSpec {
+        const char* type;
+        const char* name_suffix;
+        std::array<bool, 2> ring_dims;
+    };
 
     const auto& node_grid_dims = mesh.node_grid_dims;
     const size_t expected_node_count = node_grid_dims.size() >= 2
                                            ? static_cast<size_t>(node_grid_dims[0] * node_grid_dims[1])
                                            : mesh.graph.get_nodes().size();
     const bool can_add_torus_wrap = node_grid_dims.size() >= 2 && mesh.graph.get_nodes().size() == expected_node_count;
+    // Size-1 and size-2 axes are ordinary mesh links; only dims > 2 can carry a distinct torus wrap.
+    const bool wrap_x = can_add_torus_wrap && tt::tt_fabric::is_genuine_torus_axis(node_grid_dims[0]);
+    const bool wrap_y =
+        can_add_torus_wrap && node_grid_dims.size() > 1 && tt::tt_fabric::is_genuine_torus_axis(node_grid_dims[1]);
 
-    for (const auto& [topo_type, name_suffix, ring_dims_template] : k_variants) {
+    std::vector<TopologyVariantSpec> variant_specs;
+    variant_specs.reserve(4);
+    variant_specs.push_back({"MESH", "", {false, false}});
+    if (wrap_x) {
+        variant_specs.push_back({"TORUSX", "_torus_x", {true, false}});
+    }
+    if (wrap_y) {
+        variant_specs.push_back({"TORUSY", "_torus_y", {false, true}});
+    }
+    if (wrap_x && wrap_y) {
+        variant_specs.push_back({"TORUSXY", "_torus_xy", {true, true}});
+    }
+
+    std::vector<tt::tt_fabric::GroupingInfo> result;
+    result.reserve(variant_specs.size());
+
+    for (const auto& spec : variant_specs) {
         tt::tt_fabric::GroupingInfo info = grouping;
-        info.name = grouping.name + "_flat" + name_suffix;
-        info.type = topo_type;
+        info.name = grouping.name + "_flat" + spec.name_suffix;
+        info.type = spec.type;
         rebuild_items_from_flattened_mesh(info, mesh);
 
-        const bool is_mesh = std::strcmp(topo_type, "MESH") == 0;
+        const bool is_mesh = std::strcmp(spec.type, "MESH") == 0;
         if (is_mesh) {
             info.adjacency_graph = mesh.graph;
-        } else if (can_add_torus_wrap) {
-            std::vector<bool> ring_dims(ring_dims_template.begin(), ring_dims_template.end());
-            if (ring_dims[0] && !is_genuine_torus_dimension(node_grid_dims[0])) {
-                continue;
-            }
-            if (ring_dims.size() > 1 && ring_dims[1] && !is_genuine_torus_dimension(node_grid_dims[1])) {
-                continue;
-            }
-            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         } else {
-            continue;
+            std::vector<bool> ring_dims(spec.ring_dims.begin(), spec.ring_dims.end());
+            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         }
 
         info.flattened_node_grid_dims = node_grid_dims;
@@ -1089,6 +1090,69 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 }  // namespace
 
 namespace tt::tt_fabric {
+
+void PhysicalGroupingDescriptor::assign_pgd_host_groups(
+    GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
+    flattened_mesh.mesh_node_to_pgd_host_group.clear();
+
+    // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
+    // so it is dropped: there is nothing there to attribute to a host.
+    auto named_slots_of = [](const GroupingInfo& grouping) {
+        std::vector<std::pair<GroupingChipId, tt::tt_metal::ASICPosition>> named_slots;
+        std::vector<GroupingChipId> node_ids = grouping.adjacency_graph.get_nodes();
+        std::sort(node_ids.begin(), node_ids.end());
+        for (GroupingChipId node_id : node_ids) {
+            if (node_id >= grouping.items.size()) {
+                continue;
+            }
+            const GroupingItemInfo& item = grouping.items[node_id];
+            if (*item.tray_id == 0 || *item.asic_location == 0) {
+                continue;
+            }
+            named_slots.emplace_back(node_id, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+        }
+        return named_slots;
+    };
+
+    // Topology variants of one declared host hold the same chips, differing only in how they are wired,
+    // so the distinct slot sets are the hosts.
+    std::vector<std::set<tt::tt_metal::ASICPosition>> host_slots;
+    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+        std::set<tt::tt_metal::ASICPosition> slots;
+        for (const auto& [_, slot] : named_slots_of(declared_host)) {
+            slots.insert(slot);
+        }
+        if (!slots.empty() && std::find(host_slots.begin(), host_slots.end(), slots) == host_slots.end()) {
+            host_slots.push_back(std::move(slots));
+        }
+    }
+    if (host_slots.empty()) {
+        return;
+    }
+
+    // Two hosts of one machine carry the same tray labels, since a descriptor describes a host once and the
+    // machine repeats it, so the slots alone cannot tell them apart. What does tell them apart is repetition:
+    // a host holds each of its slots once, so the nth time a slot comes round it belongs to that host's nth
+    // copy. Counting rounds is what separates a mesh spanning two hosts into two groups.
+    std::map<std::pair<std::size_t, tt::tt_metal::ASICPosition>, std::size_t> rounds_seen;
+    std::map<std::pair<std::size_t, std::size_t>, uint32_t> group_of_host_round;
+    for (const auto& [node_id, slot] : named_slots_of(flattened_mesh)) {
+        std::vector<std::size_t> holders;
+        for (std::size_t host = 0; host < host_slots.size(); ++host) {
+            if (host_slots[host].contains(slot)) {
+                holders.push_back(host);
+            }
+        }
+        // A slot no declared host holds, or one several of them claim, cannot be attributed to a host.
+        if (holders.size() != 1) {
+            continue;
+        }
+        const std::size_t round = rounds_seen[{holders.front(), slot}]++;
+        flattened_mesh.mesh_node_to_pgd_host_group[node_id] =
+            group_of_host_round.try_emplace({holders.front(), round}, static_cast<uint32_t>(group_of_host_round.size()))
+                .first->second;
+    }
+}
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
@@ -1124,8 +1188,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         for (auto& meshe : meshes) {
             for (auto& variant : flattened_mesh_to_topology_variants(grouping, meshe)) {
-                if (physical_system_descriptor != nullptr &&
-                    !can_map_to_psd(variant, *physical_system_descriptor)) {
+                if (physical_system_descriptor != nullptr && !can_map_to_psd(variant, *physical_system_descriptor)) {
                     continue;
                 }
                 result.push_back(std::move(variant));

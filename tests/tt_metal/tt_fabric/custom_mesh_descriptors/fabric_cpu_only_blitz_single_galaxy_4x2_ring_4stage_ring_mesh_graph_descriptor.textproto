@@ -1,14 +1,13 @@
 # --- Meshes ---------------------------------------------------------------
 # CPU-only test copy: single-galaxy Blitz decode pipeline (4-stage ring).
-# - Each mesh id is one 4x2 LINE+LINE stage (8 ASICs) on a single host.
+# - Each mesh id is one 4x2 RING+LINE stage (8 ASICs) on a single host.
 # - Four stages tile one 32-ASIC galaxy; inter-stage links form a closed ring.
-# - LINE+LINE has no wrap, so this is valid on non-subtorus galaxies (one tray
-#   per stage via 4x2_Mesh_vertical).
+# - RING on the 4-device axis needs subtorus wrap (issue #47718).
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2

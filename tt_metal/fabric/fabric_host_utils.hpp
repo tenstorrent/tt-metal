@@ -96,32 +96,6 @@ void serialize_mesh_coordinates_to_file(
 void serialize_asic_to_fabric_node_mapping_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled);
 
-/**
- * @brief Find and load a Physical Grouping Descriptor with the standard search order.
- *
- * If pgd_path is provided, use that path directly.
- * Otherwise, if TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set, use that path.
- * Otherwise search:
- * 1. /data/scaleout_configs/<TT_CLUSTER_NAME>/<name>_physical_grouping_descriptor.textproto
- * 2. TT_METAL_HOME/tests/.../physical_groupings/<name>_physical_grouping_descriptor.textproto
- * 3. Arch/cluster-type default under TT_METAL_HOME/tests/.../physical_groupings/
- *
- * Throws if an explicit path/env is set but missing, or if no descriptor is found in the search paths.
- * When psd is provided, Blackhole Galaxy revision selects rev_ab vs rev_c PGD.
- */
-PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
-    const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
-
-/**
- * @brief Best-effort variant of find_and_load_physical_grouping_descriptor.
- *
- * Same search order; returns nullopt instead of throwing when no descriptor is found
- * (ControlPlane / TopologyMapper soft-skip).
- */
-std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
-    const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
 // Serialize the resolved inter-mesh port assignment to a YAML file (golden-comparable, debug-logged).
 // Builds per-boundary entries "D<chip>ch<chan>(<DIR>)>M<peer_mesh>D<peer_chip>ch<peer_chan>" from the
 // control-plane maps, fully sorted so the output is deterministic and independent of the physical host.

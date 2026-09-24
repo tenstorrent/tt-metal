@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -64,7 +65,8 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
 uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
-        case proto::Architecture::BLACKHOLE: return 3;
+        case proto::Architecture::BLACKHOLE:
+        case proto::Architecture::QUASAR: return 3;  // QUASAR is blackhole-like (SIMULATOR_QUASAR -> p150 descriptor)
         case proto::Architecture::INVALID_ARCHITECTURE:
         default: return 0;
     }
@@ -163,29 +165,16 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+MeshGraphDescriptor::MeshGraphDescriptor(
+    std::shared_ptr<proto::MeshGraphDescriptor> proto, const bool backwards_compatible) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
-    proto::MeshGraphDescriptor temp_proto;
-    google::protobuf::TextFormat::Parser parser;
-
-    // Allowing for back and forward compatibility for fields not currently in the proto file
-    parser.AllowUnknownField(true);
-    parser.AllowUnknownExtension(true);
-
-    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
-
-    // Set defaults for missing fields
-    set_defaults(temp_proto);
-
-    // Validate the proto
-    const auto errors = static_validate(temp_proto, backwards_compatible);
+    TT_FATAL(proto != nullptr, "MeshGraphDescriptor proto is null");
+    set_defaults(*proto);
+    const auto errors = static_validate(*proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
-
-    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
-
+    proto_ = std::move(proto);
     populate();
 
-    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
     if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
         const std::string prefix = "mgd" + std::to_string(*sid) + "_";
         instances_by_name_.clear();
@@ -198,11 +187,315 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     }
 }
 
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    MeshGraphDescriptor(
+        [&] {
+            auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
+            google::protobuf::TextFormat::Parser parser;
+            parser.AllowUnknownField(true);
+            parser.AllowUnknownExtension(true);
+            TT_FATAL(
+                parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
+            return temp_proto;
+        }(),
+        backwards_compatible) {}
+
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
+
+namespace {
+
+proto::Architecture proto_arch_from_arch(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return proto::Architecture::WORMHOLE_B0;
+        case tt::ARCH::BLACKHOLE: return proto::Architecture::BLACKHOLE;
+        // QUASAR (blackhole-like) is generated the same way as the others; main handled it via the arch-tolerant
+        // MeshGraph::generate_mesh_graph_of_shape, so keep it representable here to avoid a regression on the
+        // QUASAR CPU tests that reach this through init_control_plane_auto_discovery.
+        case tt::ARCH::QUASAR: return proto::Architecture::QUASAR;
+        default: TT_THROW("Unsupported architecture for generated MeshGraphDescriptor: {}", enchantum::to_string(arch));
+    }
+}
+
+}  // namespace
+
+MeshGraphDescriptor MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+    tt::tt_metal::distributed::MeshShape mesh_shape,
+    FabricType fabric_type,
+    FabricReliabilityMode reliability_mode,
+    tt::ARCH arch,
+    std::uint32_t num_connections_per_direction) {
+    TT_FATAL(
+        mesh_shape[0] > 0 && mesh_shape[1] > 0,
+        "MeshGraphDescriptor: Mesh shape dimensions must be positive, got {}x{}",
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    auto proto = std::make_shared<proto::MeshGraphDescriptor>();
+    auto* mesh = proto->add_mesh_descriptors();
+    mesh->set_name("M0");
+    mesh->set_arch(proto_arch_from_arch(arch));
+
+    auto* device_topology = mesh->mutable_device_topology();
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[0]));
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[1]));
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(0)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(1)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+
+    auto* host_topology = mesh->mutable_host_topology();
+    host_topology->add_dims(1);
+    host_topology->add_dims(1);
+
+    auto* channels = mesh->mutable_channels();
+    channels->set_count(num_connections_per_direction);
+    channels->set_policy(
+        reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE ? proto::Policy::RELAXED
+                                                                                    : proto::Policy::STRICT);
+
+    auto* top_level_mesh = proto->mutable_top_level_instance()->mutable_mesh();
+    top_level_mesh->set_mesh_descriptor("M0");
+    top_level_mesh->set_mesh_id(0);
+
+    return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
+}
+
+namespace {
+
+void remap_node_ref_for_merge(
+    proto::NodeRef& ref, const std::string& name_prefix, const std::map<uint32_t, uint32_t>& local_to_global) {
+    if (ref.has_mesh()) {
+        auto* mesh = ref.mutable_mesh();
+        mesh->set_mesh_descriptor(name_prefix + mesh->mesh_descriptor());
+        const auto it = local_to_global.find(static_cast<uint32_t>(mesh->mesh_id()));
+        TT_FATAL(
+            it != local_to_global.end(),
+            "MeshGraphDescriptor::merge: no global mesh id for local mesh_id {}",
+            mesh->mesh_id());
+        mesh->set_mesh_id(static_cast<int32_t>(it->second));
+    } else if (ref.has_switch_()) {
+        auto* sw = ref.mutable_switch_();
+        sw->set_switch_descriptor(name_prefix + sw->switch_descriptor());
+        const auto it = local_to_global.find(static_cast<uint32_t>(sw->switch_id()));
+        if (it != local_to_global.end()) {
+            sw->set_switch_id(static_cast<int32_t>(it->second));
+        }
+    } else if (ref.has_graph()) {
+        auto* graph = ref.mutable_graph();
+        graph->set_graph_descriptor(name_prefix + graph->graph_descriptor());
+        if (graph->has_sub_ref()) {
+            remap_node_ref_for_merge(*graph->mutable_sub_ref(), name_prefix, local_to_global);
+        }
+    }
+}
+
+void prefix_and_remap_mgd_proto(
+    proto::MeshGraphDescriptor& proto,
+    const std::string& name_prefix,
+    const std::map<uint32_t, uint32_t>& local_to_global) {
+    for (auto& mesh : *proto.mutable_mesh_descriptors()) {
+        mesh.set_name(name_prefix + mesh.name());
+    }
+    for (auto& sw : *proto.mutable_switch_descriptors()) {
+        sw.set_name(name_prefix + sw.name());
+    }
+    for (auto& graph : *proto.mutable_graph_descriptors()) {
+        graph.set_name(name_prefix + graph.name());
+        for (auto& inst : *graph.mutable_instances()) {
+            remap_node_ref_for_merge(inst, name_prefix, local_to_global);
+        }
+        for (auto& conn : *graph.mutable_connections()) {
+            for (auto& node : *conn.mutable_nodes()) {
+                remap_node_ref_for_merge(node, name_prefix, local_to_global);
+            }
+        }
+    }
+    if (proto.has_top_level_instance()) {
+        remap_node_ref_for_merge(*proto.mutable_top_level_instance(), name_prefix, local_to_global);
+    }
+    for (auto& pin : *proto.mutable_pinnings()) {
+        for (auto& node : *pin.mutable_logical_fabric_node_id()) {
+            if (!node.has_mesh_id()) {
+                continue;
+            }
+            const auto it = local_to_global.find(node.mesh_id());
+            if (it != local_to_global.end()) {
+                node.set_mesh_id(it->second);
+            }
+        }
+    }
+}
+
+std::vector<std::map<MeshId, MeshId>> compute_mgd_merge_local_to_global(
+    const std::vector<const MeshGraphDescriptor*>& descriptors) {
+    std::vector<std::map<MeshId, MeshId>> maps;
+    maps.reserve(descriptors.size());
+    if (descriptors.size() == 1) {
+        std::map<MeshId, MeshId> identity;
+        for (const auto& [local, unused_name] : descriptors.front()->mesh_id_to_instance_name()) {
+            (void)unused_name;
+            identity[local] = local;
+        }
+        maps.push_back(std::move(identity));
+        return maps;
+    }
+    std::uint32_t next_base = 0;
+    for (const MeshGraphDescriptor* descriptor : descriptors) {
+        std::set<MeshId> locals;
+        for (const auto& [local, unused_name] : descriptor->mesh_id_to_instance_name()) {
+            (void)unused_name;
+            locals.insert(local);
+        }
+        std::map<MeshId, MeshId> local_to_global;
+        std::uint32_t index = 0;
+        for (MeshId local : locals) {
+            local_to_global[local] = MeshId{next_base + index};
+            ++index;
+        }
+        next_base += static_cast<std::uint32_t>(locals.size());
+        maps.push_back(std::move(local_to_global));
+    }
+    return maps;
+}
+
+}  // namespace
+
+MeshGraphDescriptor MeshGraphDescriptor::merge(
+    const std::vector<const MeshGraphDescriptor*>& descriptors,
+    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids) {
+    TT_FATAL(!descriptors.empty(), "MeshGraphDescriptor::merge requires at least one descriptor");
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        TT_FATAL(descriptors[i] != nullptr, "MeshGraphDescriptor::merge: descriptor {} is null", i);
+        TT_FATAL(descriptors[i]->proto_ != nullptr, "MeshGraphDescriptor::merge: descriptor {} has no proto", i);
+    }
+
+    auto maps = compute_mgd_merge_local_to_global(descriptors);
+    if (per_part_local_to_global_mesh_ids != nullptr) {
+        *per_part_local_to_global_mesh_ids = maps;
+    }
+
+    std::optional<bool> shared_inter_mesh_relaxed;
+    std::size_t shared_index = 0;
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        if (!descriptors[i]->inter_mesh_policy_specified_) {
+            continue;
+        }
+        const bool relaxed = descriptors[i]->is_inter_mesh_policy_relaxed();
+        if (!shared_inter_mesh_relaxed.has_value()) {
+            shared_inter_mesh_relaxed = relaxed;
+            shared_index = i;
+            continue;
+        }
+        TT_FATAL(
+            relaxed == *shared_inter_mesh_relaxed,
+            "MeshGraphDescriptor::merge: inter-mesh channel policy must be consistent, but descriptor {} is {} "
+            "while descriptor {} is {}",
+            shared_index,
+            *shared_inter_mesh_relaxed ? "RELAXED" : "STRICT",
+            i,
+            relaxed ? "RELAXED" : "STRICT");
+    }
+
+    if (descriptors.size() == 1) {
+        auto proto = std::make_shared<proto::MeshGraphDescriptor>();
+        proto->CopyFrom(*descriptors.front()->proto_);
+        return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
+    }
+
+    auto merged = std::make_shared<proto::MeshGraphDescriptor>();
+    auto* fabric = merged->add_graph_descriptors();
+    fabric->set_name("G0");
+    fabric->set_type("FABRIC");
+    std::optional<proto::Policy> shared_connection_policy;
+
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        const std::string prefix = "mgd" + std::to_string(i) + "_";
+        std::map<uint32_t, uint32_t> local_to_global;
+        for (const auto& [local, global] : maps[i]) {
+            local_to_global[*local] = *global;
+        }
+
+        proto::MeshGraphDescriptor part;
+        part.CopyFrom(*descriptors[i]->proto_);
+        prefix_and_remap_mgd_proto(part, prefix, local_to_global);
+
+        for (const auto& mesh : part.mesh_descriptors()) {
+            *merged->add_mesh_descriptors() = mesh;
+        }
+        for (const auto& sw : part.switch_descriptors()) {
+            *merged->add_switch_descriptors() = sw;
+        }
+        for (const auto& pin : part.pinnings()) {
+            *merged->add_pinnings() = pin;
+        }
+
+        const proto::NodeRef& top = part.top_level_instance();
+        if (top.has_mesh() || top.has_switch_()) {
+            *fabric->add_instances() = top;
+            continue;
+        }
+        TT_FATAL(
+            top.has_graph(), "MeshGraphDescriptor::merge: descriptor {} has no top-level mesh, switch, or graph", i);
+        const std::string& top_graph_name = top.graph().graph_descriptor();
+        const proto::GraphDescriptor* source_fabric = nullptr;
+        for (const auto& graph : part.graph_descriptors()) {
+            if (graph.name() == top_graph_name) {
+                source_fabric = &graph;
+                break;
+            }
+        }
+        TT_FATAL(
+            source_fabric != nullptr,
+            "MeshGraphDescriptor::merge: descriptor {} top-level graph '{}' was not found after remap",
+            i,
+            top_graph_name);
+        TT_FATAL(
+            source_fabric->type() == "FABRIC",
+            "MeshGraphDescriptor::merge: only a flat FABRIC top-level can be merged (MGD 1.0); descriptor {} "
+            "top-level graph '{}' has type '{}'",
+            i,
+            top_graph_name,
+            source_fabric->type());
+        TT_FATAL(
+            !source_fabric->has_graph_topology(),
+            "MeshGraphDescriptor::merge: descriptor {} FABRIC graph '{}' uses graph_topology; merging would "
+            "change the inter-mesh adjacency (ALL_TO_ALL/RING would span every merged mesh). Use explicit "
+            "connections so each part's seams stay local to that part.",
+            i,
+            top_graph_name);
+
+        for (const auto& inst : source_fabric->instances()) {
+            *fabric->add_instances() = inst;
+        }
+        for (const auto& conn : source_fabric->connections()) {
+            proto::Policy policy = proto::Policy::STRICT;
+            if (conn.has_channels() && conn.channels().has_policy()) {
+                policy = conn.channels().policy();
+            }
+            if (!shared_connection_policy.has_value()) {
+                shared_connection_policy = policy;
+            } else {
+                TT_FATAL(
+                    policy == *shared_connection_policy,
+                    "MeshGraphDescriptor::merge: inter-mesh adjacency is not consistent; mixed {} and {} "
+                    "connection policies across the merged FABRIC graph",
+                    *shared_connection_policy == proto::Policy::RELAXED ? "RELAXED" : "STRICT",
+                    policy == proto::Policy::RELAXED ? "RELAXED" : "STRICT");
+            }
+            *fabric->add_connections() = conn;
+        }
+    }
+
+    auto* top_ref = merged->mutable_top_level_instance()->mutable_graph();
+    top_ref->set_graph_descriptor("G0");
+    top_ref->set_graph_id(0);
+
+    return MeshGraphDescriptor(std::move(merged), /*backwards_compatible=*/true);
+}
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
     // All meshes must have the same arch
@@ -222,6 +515,76 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     std::vector<std::string> out(names.begin(), names.end());
     std::sort(out.begin(), out.end());
     return out;
+}
+
+bool MeshGraphDescriptor::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
+    const auto it = intra_mesh_relaxed_policy_.find(mesh_id);
+    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No intra-mesh policy for mesh_id {}", *mesh_id);
+    return it->second;
+}
+
+bool MeshGraphDescriptor::is_inter_mesh_policy_relaxed() const { return inter_mesh_relaxed_policy_; }
+
+bool MeshGraphDescriptor::is_inter_mesh_policy_specified() const { return inter_mesh_policy_specified_; }
+
+std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance_name() const {
+    std::unordered_map<MeshId, std::string> mesh_id_to_name;
+    for (const auto global_id : all_meshes()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    for (const auto global_id : all_switches()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    return mesh_id_to_name;
+}
+
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(GlobalNodeId instance_id) const {
+    return get_declared_topology(get_instance(instance_id));
+}
+
+std::optional<DeclaredTopology> MeshGraphDescriptor::try_get_declared_topology(const std::string& instance_name) const {
+    const auto& instance_ids = instances_by_name(instance_name);
+    if (instance_ids.empty()) {
+        return std::nullopt;
+    }
+    DeclaredTopology declared = get_declared_topology(instance_ids[0]);
+    if (declared.dims.empty()) {
+        return std::nullopt;
+    }
+    return declared;
+}
+
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(const InstanceData& instance) const {
+    const proto::TorusTopology* device_topology = nullptr;
+    const proto::MeshTopology* host_topology = nullptr;
+    if (is_mesh(instance)) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        if (mesh_desc != nullptr) {
+            device_topology = &mesh_desc->device_topology();
+            host_topology = &mesh_desc->host_topology();
+        }
+    } else if (is_switch(instance)) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        if (switch_desc != nullptr) {
+            device_topology = &switch_desc->device_topology();
+        }
+    }
+
+    DeclaredTopology topology;
+    if (device_topology == nullptr) {
+        return topology;
+    }
+    topology.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    topology.ring_dims.reserve(device_topology->dim_types_size());
+    for (int dim = 0; dim < device_topology->dim_types_size(); ++dim) {
+        topology.ring_dims.push_back(device_topology->dim_types(dim) == proto::TorusTopology::RING);
+    }
+    if (host_topology != nullptr) {
+        topology.host_dims.assign(host_topology->dims().begin(), host_topology->dims().end());
+    }
+    return topology;
 }
 
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
@@ -415,7 +778,32 @@ void MeshGraphDescriptor::populate() {
 
     populate_connections();
 
+    populate_inter_mesh_policy();
+
     populate_pinnings();
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_policy() {
+    inter_mesh_relaxed_policy_ = false;
+    inter_mesh_policy_specified_ = false;
+
+    if (has_connections_of_type("FABRIC")) {
+        const auto& fabric_connections = connections_by_type("FABRIC");
+        if (!fabric_connections.empty()) {
+            inter_mesh_relaxed_policy_ = get_connection(fabric_connections[0]).policy == proto::Policy::RELAXED;
+            inter_mesh_policy_specified_ = true;
+            return;
+        }
+    }
+
+    const auto& top_level_instance = top_level();
+    if (top_level_instance.kind == NodeKind::Graph) {
+        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+        if (graph_desc != nullptr && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+            inter_mesh_relaxed_policy_ = graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED;
+            inter_mesh_policy_specified_ = true;
+        }
+    }
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -804,6 +1192,11 @@ void MeshGraphDescriptor::validate_legacy_requirements(
         }
     }
 
+    // Mixed policies are unsupported downstream: the solver applies one inter_mesh_validation_mode to
+    // every seam, and control plane fatals when both intermesh maps are non-empty. Both production
+    // entry points (MeshGraph, generate_rank_bindings) pass backwards_compatible so they hit this check.
+    // https://github.com/tenstorrent/tt-metal/issues/49960
+    //
     // Check that connections in the same graph don't mix STRICT and RELAXED policies
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.connections_size() == 0) {
@@ -1084,10 +1477,24 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
 
     // Add to kind-specific lookups
     switch (instance.kind) {
-        case NodeKind::Mesh: mesh_instances_.push_back(instance.global_id); break;
+        case NodeKind::Mesh: {
+            mesh_instances_.push_back(instance.global_id);
+            const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for mesh instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                mesh_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
         case NodeKind::Graph: graph_instances_.push_back(instance.global_id); break;
         case NodeKind::Device: device_instances_.push_back(instance.global_id); break;
-        case NodeKind::Switch: switch_instances_.push_back(instance.global_id); break;
+        case NodeKind::Switch: {
+            switch_instances_.push_back(instance.global_id);
+            const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+            TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for switch instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                switch_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
     }
 }
 
@@ -1848,6 +2255,19 @@ void MeshGraphDescriptor::populate_pinnings() {
         all_mesh_ids.push_back(m);
     }
 
+    auto board_revision_of = [](const proto::AsicPinning& pinning) -> std::optional<BoardRevision> {
+        if (!pinning.has_board_revision()) {
+            return std::nullopt;
+        }
+        switch (pinning.board_revision()) {
+            case proto::BoardRevision::BH_REV_AB: return BoardRevision::BhRevAb;
+            case proto::BoardRevision::BH_REV_C: return BoardRevision::BhRevC;
+            case proto::BoardRevision::WH: return BoardRevision::Wh;
+            case proto::BoardRevision::BOARD_REVISION_UNSPECIFIED:
+            default: return std::nullopt;
+        }
+    };
+
     // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
     //
     // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
@@ -1876,6 +2296,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                     group.fabric_nodes.emplace_back(MeshId{m}, c);
                 }
                 group.asic_positions = positions;
+                group.board_revision = board_revision_of(pinning);
                 pinnings_[MeshId{m}].push_back(std::move(group));
             }
             continue;
@@ -1932,6 +2353,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                 group.fabric_nodes.emplace_back(MeshId{m}, c);
             }
             group.asic_positions = positions;
+            group.board_revision = board_revision_of(pinning);
             pinnings_[MeshId{m}].push_back(std::move(group));
         }
     }

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -19,6 +20,7 @@
 #include "tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include "mock_psd_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -319,17 +321,9 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
-    // Load PSD from pre-written test file
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path psd_file_path =
-        std::filesystem::path(tt_metal_home) / "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
-
-    // Verify the file exists
-    ASSERT_TRUE(std::filesystem::exists(psd_file_path)) << "PSD test file not found: " << psd_file_path.string();
-
-    // Load PhysicalSystemDescriptor from file
-    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
+    // Two disconnected 1x2 meshes: ASICs 100-101 and 102-103.
+    auto physical_system_descriptor = tt::tt_fabric::test::build_mock_psd(
+        std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     // Hand-craft the asic_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)
@@ -5727,43 +5721,30 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
         const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
 
         using clock = std::chrono::steady_clock;
-        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
-        std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
-        excluded.reserve(kMaxSolutions);
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/false);
 
         std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
         results.reserve(kMaxSolutions);
 
         const auto t_first_begin = clock::now();
-        auto first_result = enum_session.next(
-            target_graph,
-            global_graph,
-            constraints,
-            excluded,
-            ConnectionValidationMode::RELAXED,
-            /*quiet_mode=*/true,
-            engine,
-            /*unique_shapes=*/false);
+        auto first_result = enum_session.next();
         const auto first_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
 
         ASSERT_TRUE(first_result.success) << engine_label << " first next()";
         results.push_back(std::move(first_result));
-        excluded.push_back(results.back().target_to_global);
 
         const auto t_incremental_begin = clock::now();
         for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
-            auto next_result = enum_session.next(
-                target_graph,
-                global_graph,
-                constraints,
-                excluded,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                engine,
-                /*unique_shapes=*/false);
+            auto next_result = enum_session.next();
             ASSERT_TRUE(next_result.success) << engine_label << " incremental next() index " << extra;
-            excluded.push_back(next_result.target_to_global);
             results.push_back(std::move(next_result));
         }
         const auto incremental_total_ms =
@@ -5871,45 +5852,32 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
 
         for (bool unique_shapes_flag : {false, true}) {
             using clock = std::chrono::steady_clock;
-            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
-            std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
-            excluded.reserve(kMaxSolutions);
+            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session(
+                target_graph,
+                global_graph,
+                constraints,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                unique_shapes_flag);
 
             std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
             results.reserve(kMaxSolutions);
 
             const auto t_first_begin = clock::now();
-            auto first_result = enum_session.next(
-                target_graph,
-                global_graph,
-                constraints,
-                excluded,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                engine,
-                unique_shapes_flag);
+            auto first_result = enum_session.next();
             const auto first_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
 
             ASSERT_TRUE(first_result.success) << engine_label << " first next() unique_shapes=" << unique_shapes_flag;
             results.push_back(std::move(first_result));
-            excluded.push_back(results.back().target_to_global);
 
             const auto t_incremental_begin = clock::now();
             for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
-                auto next_result = enum_session.next(
-                    target_graph,
-                    global_graph,
-                    constraints,
-                    excluded,
-                    ConnectionValidationMode::RELAXED,
-                    /*quiet_mode=*/true,
-                    engine,
-                    unique_shapes_flag);
+                auto next_result = enum_session.next();
                 if (!next_result.success) {
                     break;
                 }
-                excluded.push_back(next_result.target_to_global);
                 results.push_back(std::move(next_result));
             }
             const auto incremental_total_ms =
@@ -6210,17 +6178,16 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         const auto first = solve_topology_mapping<int, int>(
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
-        std::vector<std::map<int, int>> excluded{first.target_to_global};
-        TopologyMappingEnumerationSession<int, int> enumeration_session;
-        const auto second = enumeration_session.next(
+        TopologyMappingEnumerationSession<int, int> enumeration_session(
             target,
             global,
             constraints,
-            excluded,
             ConnectionValidationMode::RELAXED,
             /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Auto,
             false);
+        ASSERT_TRUE(enumeration_session.exclude_mapping(first.target_to_global));
+        const auto second = enumeration_session.next();
         EXPECT_TRUE(second.success);
         EXPECT_NE(first.target_to_global, second.target_to_global);
     }
@@ -6232,17 +6199,16 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         const auto first = solve_topology_mapping<int, int>(
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
-        std::vector<std::map<int, int>> excluded{first.target_to_global};
-        TopologyMappingEnumerationSession<int, int> enumeration_session;
-        const auto next = enumeration_session.next(
+        TopologyMappingEnumerationSession<int, int> enumeration_session(
             target,
             global,
             constraints,
-            excluded,
             ConnectionValidationMode::RELAXED,
             /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Auto,
             false);
+        ASSERT_TRUE(enumeration_session.exclude_mapping(first.target_to_global));
+        const auto next = enumeration_session.next();
         EXPECT_FALSE(next.success);
     }
 
@@ -6268,56 +6234,39 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     std::vector<std::map<int, int>> expected_prefix;
     expected_prefix.reserve(kRounds);
     {
-        TopologyMappingEnumerationSession<int, int> probe;
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
-        for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = probe.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                TopologyMappingSolverEngine::Sat,
-                false);
-            ASSERT_TRUE(r.success) << "probe round " << i;
-            expected_prefix.push_back(r.target_to_global);
-            ex.push_back(r.target_to_global);
-        }
-    }
-
-    TopologyMappingEnumerationSession<int, int> check_calls;
-    std::vector<std::map<int, int>> ex_acc;
-    ex_acc.reserve(kRounds);
-    std::set<std::map<int, int>> session_maps;
-    for (size_t i = 0; i < kRounds; ++i) {
-        const size_t excluded_at_call = ex_acc.size();
-        const bool reused_graph_context = (i > 0);
-        const auto r = check_calls.next(
+        TopologyMappingEnumerationSession<int, int> probe(
             target,
             global,
             constraints,
-            ex_acc,
             ConnectionValidationMode::RELAXED,
-            true,
+            /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Sat,
             false);
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = probe.next();
+            ASSERT_TRUE(r.success) << "probe round " << i;
+            expected_prefix.push_back(r.target_to_global);
+        }
+    }
+
+    TopologyMappingEnumerationSession<int, int> check_calls(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Sat, false);
+    std::set<std::map<int, int>> session_maps;
+    for (size_t i = 0; i < kRounds; ++i) {
+        const bool reused_graph_context = (i > 0);
+        const auto r = check_calls.next();
         ASSERT_TRUE(r.success);
         log_info(
             tt::LogFabric,
             "TopologySolver_SolveNextAndIncrementalSatSession: SAT stats reused_graph_context={} solve_out={} "
-            "solve_calls={} hard_constraint_encodes={} excluded_mappings={} blocking_clauses_encoded={}",
+            "solve_calls={} hard_constraint_encodes={}",
             reused_graph_context,
             "SAT",
             check_calls.sat_solve_calls(),
-            check_calls.sat_hard_constraint_encode_calls(),
-            excluded_at_call,
-            excluded_at_call);
+            check_calls.sat_hard_constraint_encode_calls());
         ASSERT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
         ASSERT_TRUE(session_maps.insert(r.target_to_global).second);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
-        ex_acc.push_back(r.target_to_global);
     }
     EXPECT_EQ(check_calls.sat_solve_calls(), kRounds);
     EXPECT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
@@ -6340,42 +6289,38 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     EXPECT_EQ(session_maps, batch_maps);
 
     {
-        TopologyMappingEnumerationSession<int, int> warmup;
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
+        TopologyMappingEnumerationSession<int, int> warmup(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
         for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = warmup.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                true,
-                TopologyMappingSolverEngine::Sat,
-                false);
+            const auto r = warmup.next();
             ASSERT_TRUE(r.success);
-            ex.push_back(r.target_to_global);
         }
     }
 
     using clock = std::chrono::steady_clock;
     const auto t_fresh_start = clock::now();
     for (size_t i = 0; i < kRounds; ++i) {
-        TopologyMappingEnumerationSession<int, int> fresh;
+        TopologyMappingEnumerationSession<int, int> fresh(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
         std::vector<std::map<int, int>> ex;
         ex.reserve(i);
         for (size_t j = 0; j < i; ++j) {
             ex.push_back(expected_prefix[j]);
         }
-        const auto r = fresh.next(
-            target,
-            global,
-            constraints,
-            ex,
-            ConnectionValidationMode::RELAXED,
-            true,
-            TopologyMappingSolverEngine::Sat,
-            false);
+        ASSERT_TRUE(fresh.exclude_mappings(ex));
+        const auto r = fresh.next();
         ASSERT_TRUE(r.success);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
         EXPECT_EQ(fresh.sat_hard_constraint_encode_calls(), 1u);
@@ -6384,22 +6329,12 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     const auto fresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_fresh_start).count();
 
     const auto t_reuse_start = clock::now();
-    TopologyMappingEnumerationSession<int, int> reuse_session;
+    TopologyMappingEnumerationSession<int, int> reuse_session(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Sat, false);
     {
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = reuse_session.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                true,
-                TopologyMappingSolverEngine::Sat,
-                false);
+            const auto r = reuse_session.next();
             ASSERT_TRUE(r.success);
-            ex.push_back(r.target_to_global);
         }
     }
     EXPECT_EQ(reuse_session.sat_hard_constraint_encode_calls(), 1u);
@@ -6417,8 +6352,162 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
 }
 
 // ---------------------------------------------------------------------------
-// MappingConstraints::merge
+// MappingConstraints add_forbidden / add_required: reject before mutate
 // ---------------------------------------------------------------------------
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintRejectedLeavesStateUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+
+    EXPECT_TRUE(constraints.add_forbidden_constraint(1u, TestGlobalNode{10}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{11}));
+    const auto forbidden_after_ok = constraints.get_forbidden_pairs();
+
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1u, TestGlobalNode{11}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{11}));
+    EXPECT_EQ(constraints.get_forbidden_pairs(), forbidden_after_ok);
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintSetOverloadIsAtomic) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{20}));
+
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(2u), (std::set<TestGlobalNode>{20}));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty());
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintCartesianIsAtomic) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{20}));
+
+    EXPECT_FALSE(
+        constraints.add_forbidden_constraint(std::set<TestTargetNode>{1u, 2u}, std::set<TestGlobalNode>{10, 20}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(2u), (std::set<TestGlobalNode>{20}));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty());
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintEmptyCartesianRejected) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1u}, std::set<TestGlobalNode>{}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10}));
+}
+
+TEST_F(TopologySolverTest, AddRequiredConstraintRejectedLeavesStateUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_required_constraint(1u, TestGlobalNode{20}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10}));
+}
+
+TEST_F(TopologySolverTest, SessionAddForbiddenOverconstrainedDoesNotChangeSolve) {
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{50, {}}, {51, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{50, 51}));
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+
+        ASSERT_TRUE(session.add_forbidden_constraint(0, 50));
+        ASSERT_FALSE(session.add_forbidden_constraint(0, 51));
+
+        const auto result = session.next();
+        ASSERT_TRUE(result.success);
+        ASSERT_EQ(result.target_to_global.at(0), 51);
+    }
+}
+
+TEST_F(TopologySolverTest, SessionAddRequiredRestrictsBothEngines) {
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{50, {}}, {51, {}}});
+    IntConstraints constraints;
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+        ASSERT_TRUE(session.add_required_constraint(0, std::set<int>{51}));
+
+        const auto result = session.next();
+        ASSERT_TRUE(result.success);
+        ASSERT_EQ(result.target_to_global.at(0), 51);
+    }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintOverlappingSeatsAreDisjoint) {
+    // Two targets, three seats. Seat 1 overlaps both chips, so the only disjoint seating is 0+2.
+    IntAdj target(IntAdjMap{{0, {}}, {1, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}, {2, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_required_constraint(1, std::set<int>{1, 2}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({
+        {0, {0u}},
+        {1, {0u, 1u}},
+        {2, {1u}},
+    }));
+    EXPECT_EQ(constraints.resource_count(), 2u);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+        const auto result = session.next();
+        ASSERT_TRUE(result.success) << (engine == TopologyMappingSolverEngine::Sat ? "sat" : "dfs");
+        EXPECT_EQ(result.target_to_global.at(0), 0);
+        EXPECT_EQ(result.target_to_global.at(1), 2);
+        EXPECT_FALSE(session.next().success);
+    }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintDisablesBijectionCompleteness) {
+    // One target and two unused-capable seats: bijection completeness would force both seats and go UNSAT.
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({{0, {0u}}, {1, {1u}}}));
+
+    TopologyMappingEnumerationSession<int, int> session(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        false);
+    ASSERT_TRUE(session.started());
+    const auto result = session.next();
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.target_to_global.at(0) == 0 || result.target_to_global.at(0) == 1);
+}
 
 TEST_F(TopologySolverTest, MergeIntersectsRequiredAndKeepsOneSidedTargets) {
     MappingConstraints<TestTargetNode, TestGlobalNode> base;
