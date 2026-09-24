@@ -1,0 +1,49 @@
+{
+ "P1.1": {
+  "duration_s": 5.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:24:25"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:24:35"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:25:20"
+   }
+  ],
+  "last_run": "2026-09-24T19:25:20",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.1.log",
+  "metrics": {
+   "missing_weights": 0,
+   "num_weights": 5465,
+   "unused_tensors": 12
+  },
+  "rc": 0,
+  "status": "PASS"
+ },
+ "P2.1": {
+  "duration_s": 25.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:25:04"
+   }
+  ],
+  "last_run": "2026-09-24T19:25:04",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.1.log",
+  "metrics": {
+   "dram_banks": 8,
+   "num_devices": 4,
+   "pcc_all_gather": 0.9999986187717766,
+   "pcc_all_reduce": 0.9999965425816046,
+   "pcc_reduce_scatter": 0.9999965425816046,
+   "worker_grid": "11x10"
+  },
+  "rc": 0,
+  "status": "PASS"
+ }
+}
