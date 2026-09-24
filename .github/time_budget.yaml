@@ -410,7 +410,7 @@ models:
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30
-    bh_quietbox_2: 70  # +45 for the Command-R 35B validation entry (cold 70 GB load)
+    bh_quietbox_2: 115  # +90 for the Command-R 35B validation entry (in-job fp32 reference capture + cold 70 GB load)
   integration:
     wh_llmbox: 0
   device_perf:

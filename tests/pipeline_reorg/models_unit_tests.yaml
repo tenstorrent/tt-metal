@@ -258,25 +258,46 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
     export HF_MODEL=CohereLabs/c4ai-command-r-v01 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r-v01 MESH_DEVICE=P150x4
     export COHERE_REF_DIR=/mnt/MLPerf/tt_dnn-models/CohereLabs/c4ai-command-r-v01-reference
-    # The PCC harnesses pytest.skip() when the fp32 CPU reference dump is absent, which
-    # would report a green job that validated nothing. Fail loudly instead.
-    if [ ! -f "$COHERE_REF_DIR/prompt00.npz" ]; then
-      echo "::error::Missing $COHERE_REF_DIR/prompt00.npz - generate with models/experimental/cohere/reference/cpu_reference_capture.py on a ~140 GB-RAM CPU host and stage it on /mnt/MLPerf."
+    free -g || true
+    SNAPSHOT=$(ls -d /mnt/MLPerf/huggingface/hub/models--CohereLabs--c4ai-command-r-v01/snapshots/*/ 2>/dev/null | head -1)
+    if [ -z "$SNAPSHOT" ]; then
+      echo "::error::Command-R snapshot not found under /mnt/MLPerf/huggingface/hub/models--CohereLabs--c4ai-command-r-v01/snapshots/. Stage it with: HF_HOME=/mnt/MLPerf/huggingface huggingface-cli download CohereLabs/c4ai-command-r-v01 --revision 760ddb6c203d87ebdbe3c9785b49570e1bf95585"
       exit 1
     fi
+    # The PCC harnesses pytest.skip() when the fp32 CPU reference dump is absent, which
+    # would report a green job that validated nothing. Capture it here instead: this host
+    # has 249 GB (qb2-120-p02t09), which is what cpu_reference_capture.py documents as
+    # validated for the fp32 reference. Prefer the shared path so later runs reuse it;
+    # /mnt/MLPerf is read-only unless the workflow was dispatched with mlperf-read-only
+    # unchecked, so fall back to job-local scratch and recapture.
+    if [ ! -f "$COHERE_REF_DIR/prompt00.npz" ]; then
+      if [ "${MLPERF_READ_ONLY:-true}" = "false" ] && mkdir -p "$COHERE_REF_DIR" 2>/dev/null; then
+        CAPTURE_OUT="$COHERE_REF_DIR"
+      else
+        CAPTURE_OUT="$(pwd)/generated/cohere_reference"
+        mkdir -p "$CAPTURE_OUT"
+        echo "/mnt/MLPerf not writable - capturing to $CAPTURE_OUT for this run only"
+      fi
+      echo "Capturing fp32 CPU reference from $SNAPSHOT -> $CAPTURE_OUT"
+      python3 models/experimental/cohere/reference/cpu_reference_capture.py \
+        --snapshot "$SNAPSHOT" --out "$CAPTURE_OUT" --dtype float32
+      export COHERE_REF_DIR="$CAPTURE_OUT"
+    fi
+    test -f "$COHERE_REF_DIR/prompt00.npz" || { echo "::error::capture produced no prompt00.npz"; exit 1; }
     # test_cohere_vllm_e2e.py is deliberately NOT here: it imports generator_vllm, which
     # imports vllm at module scope, and vllm is only installed in the vllm-model-tests
     # pipeline. It belongs in tests/pipeline_reorg/vllm_model_tests.yaml.
-    pytest --timeout 900 models/experimental/cohere/tests/test_cohere_pcc.py
-    pytest --timeout 1500 models/experimental/cohere/tests/test_cohere_fullmodel_pcc.py
+    # -v -s so the actual PCC numbers land in the log, not just pass/fail.
+    pytest --timeout 900 -v -s models/experimental/cohere/tests/test_cohere_pcc.py
+    pytest --timeout 1500 -v -s models/experimental/cohere/tests/test_cohere_fullmodel_pcc.py
   model: command-r-35b
   model_family: Cohere
   skus:
     bh_quietbox_2:
-      # First run is cold: 70 GB checkpoint off the NAS plus tt_cache generation for a
-      # 35B model, then a chained 40-layer sweep. Author's QB2 reference numbers:
-      # chained min PCC 0.995873 / mean 0.999017, logits 0.997250 (VALIDATION.md).
-      timeout: 45
+      # Cold first run: 70 GB checkpoint off the NAS, an fp32 HF capture on the host CPU,
+      # then tt_cache generation for a 35B model and a chained 40-layer sweep. Once the
+      # dumps land on /mnt/MLPerf the capture drops out and this should fall back to ~45.
+      timeout: 90
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
