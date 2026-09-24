@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t d_tiles = get_compile_time_arg_val(4);
-    static_assert(d_tiles == 2 || d_tiles == 4, "Named recipes support D64/D128");
+    static_assert(d_tiles == 2 || d_tiles == 4 || d_tiles == 8, "Named recipes support D64/D128/D256");
     // PV subblocks are at most four tiles wide and must divide the head dim.
     constexpr uint32_t pv_subblock_w = d_tiles < 4 ? d_tiles : 4;
     static_assert(k_tiles == 8 || k_tiles == 12 || k_tiles == 16, "Named recipes support K256/K384/K512");

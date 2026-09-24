@@ -888,7 +888,7 @@ void salad_correct_fused(
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row * sdpa_sum_stride);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
-    static_assert((sbh_t == 1 || sbh_t == 2) && (sbw_t == 2 || sbw_t == 4) && dst_size == 8);
+    static_assert((sbh_t == 1 || sbh_t == 2) && (sbw_t == 2 || sbw_t == 4 || sbw_t == 8) && dst_size == 8);
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -1068,7 +1068,7 @@ static void sdpa_inner_loop_step(
 #else
     // Row groups pair two query tile rows; an odd Q chunk ends with a single-row group.
     static_assert(
-        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && (vDHt == 2 || vDHt == 4) &&
+        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && (vDHt == 2 || vDHt == 4 || vDHt == 8) &&
         qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
@@ -1350,7 +1350,7 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_RECIPE_FP32
         static_assert(
             Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> &&
-            (vDHt == 2 || vDHt == 4) && qktv_h == 1);
+            (vDHt == 2 || vDHt == 4 || vDHt == 8) && qktv_h == 1);
         // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
@@ -1886,7 +1886,7 @@ template <
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
         Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        (DHt == 2 || DHt == 4));
+        (DHt == 2 || DHt == 4 || DHt == 8));
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;

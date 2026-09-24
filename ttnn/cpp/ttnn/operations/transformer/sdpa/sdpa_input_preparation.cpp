@@ -22,9 +22,10 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
         "SDPA preparation requires original tiled BF16 inputs");
     TT_FATAL(input.memory_config() == DRAM_MEMORY_CONFIG, "SDPA preparation requires interleaved DRAM inputs");
     TT_FATAL(
-        input.logical_shape().rank() == 4 && (input.logical_shape()[3] == 64 || input.logical_shape()[3] == 128) &&
+        input.logical_shape().rank() == 4 &&
+            (input.logical_shape()[3] == 64 || input.logical_shape()[3] == 128 || input.logical_shape()[3] == 256) &&
             input.logical_volume() > 0,
-        "SDPA preparation currently requires nonempty rank-four D64 or D128 inputs");
+        "SDPA preparation currently requires nonempty rank-four D64, D128 or D256 inputs");
     const auto& shape = input.logical_shape();
     const auto& padded = input.padded_shape();
     TT_FATAL(

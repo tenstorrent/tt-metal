@@ -62,7 +62,7 @@ ProgramDescriptor recipe_compute_program(
     uint32_t q_tiles,
     uint32_t k_tiles,
     uint32_t d_tiles) {
-    TT_FATAL(d_tiles == 2 || d_tiles == 4, "SDPA recipes support head dims 64 and 128");
+    TT_FATAL(d_tiles == 2 || d_tiles == 4 || d_tiles == 8, "SDPA recipes support head dims 64, 128 and 256");
     const bool fp32 = policy.fp32_destination;
     const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
     const uint32_t stride = compensated ? 2 : 1;
@@ -254,7 +254,8 @@ static std::vector<Tensor> run_recipe_segments(
     const uint32_t q_chunk = q_tiles * 32;
     const uint32_t k_tiles = recipe_k_tiles(program_config);
     const uint32_t k_chunk = k_tiles * 32;
-    TT_FATAL(qs[3] == 64 || qs[3] == 128, "SDPA recipes support head dims 64 and 128, got {}", qs[3]);
+    TT_FATAL(
+        qs[3] == 64 || qs[3] == 128 || qs[3] == 256, "SDPA recipes support head dims 64, 128 and 256, got {}", qs[3]);
     const uint32_t d_tiles = qs[3] / 32;
     if (program_config) {
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");

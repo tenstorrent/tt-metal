@@ -94,9 +94,39 @@ def test_recipe_d64_accuracy(
         assert observed["l2_pct"] <= d128["l2_pct"] * 1.5 + 0.05, (observed["l2_pct"], d128["l2_pct"])
 
 
+@pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize("q_chunk,k_chunk", [(128, 256), (256, 256)], ids=lambda x: str(x))
+@pytest.mark.parametrize(
+    "q_length,k_length,heads,grid,distribution",
+    [(768, 3072, 2, (4, 1), "normal"), (768, 3072, 1, (2, 1), "changed_max")],
+    ids=["ideogram_like", "changed_max"],
+)
+def test_recipe_d256_accuracy(
+    device, variant, q_chunk, k_chunk, q_length, k_length, heads, grid, distribution, record_property
+):
+    """Ideogram4-style D256 (L1-limited, so smaller K chunks), gated against the D128 recipe."""
+    if not is_blackhole():
+        pytest.skip("Named recipes initially target Blackhole")
+    half = make_inputs(k_length, distribution, q_length=q_length, heads=heads)
+    other = make_inputs(k_length, distribution, q_length=q_length, heads=heads, seed=20261123)
+    host = [torch.cat([a, b], dim=-1) for a, b in zip(half, other)]  # D256 from two D128 draws
+    try:
+        actual = run([upload(device, host, variant)], variant, grid, q_chunk, k_chunk)
+    except RuntimeError as error:
+        assert "bytes of L1" in str(error), error
+        pytest.skip(f"{variant} D256 Q{q_chunk}/K{k_chunk} exceeds Blackhole L1")
+    assert digest(run([upload(device, host, variant)], variant, grid, q_chunk, k_chunk)) == digest(actual)
+    observed = metrics(actual, reference(*host))
+    d128 = metrics(run([upload(device, half, variant)], variant, grid, q_chunk, k_chunk), reference(*half))
+    for key, value in observed.items():
+        record_property(key, value)
+    record_property("d128_l2_pct", d128["l2_pct"])
+    assert observed["l2_pct"] <= d128["l2_pct"] * 1.5 + 0.05, (observed["l2_pct"], d128["l2_pct"])
+
+
 def test_recipe_rejects_unsupported_head_dim(device):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     host = [x[..., :96].contiguous() for x in make_inputs(512, "normal", q_length=256)]
-    with pytest.raises(RuntimeError, match="head dims 64 and 128"):
+    with pytest.raises(RuntimeError, match="head dims 64, 128 and 256"):
         run([upload(device, host)], "D", (1, 1), 256, 512)
