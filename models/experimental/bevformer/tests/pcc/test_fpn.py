@@ -17,12 +17,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 NUM_CAMS = 6
 BACKBONE_CHANNELS = [512, 1024, 2048]
 
-# (height, width) of each camera image, and the pyramid levels whose convs keep their
-# activations in DRAM because they do not fit in L1. The FPN reads the backbone's C3-C5,
-# at 1/8, 1/16 and 1/32 of the image; 928x1600's C3 alone is 6 x 116 x 200 x 512 bf16
-# = 142 MB.
-INPUT_SIZES = [(640, 360, ()), (928, 1600, (0, 1))]
-INPUT_SIZE_IDS = ["640x360", "928x1600"]
+# BEVFormer-base's camera images are 1600x900, padded to 1600x928 so the height is a
+# multiple of 32 before the backbone.
+IMAGE_HEIGHT = 928
+IMAGE_WIDTH = 1600
+
+# Pyramid levels whose convs keep their activations in DRAM because they do not fit in
+# L1. The FPN reads the backbone's C3-C5, at 1/8, 1/16 and 1/32 of the image; C3 alone
+# is 6 x 116 x 200 x 512 bf16 = 142 MB.
+DRAM_ACTIVATION_LEVELS = (0, 1)
 
 
 def _backbone_output_shapes(height, width):
@@ -48,8 +51,7 @@ def _to_ttnn_nhwc(tensor, device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_levels", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_fpn(device, reset_seeds, height, width, dram_activation_levels):
+def test_fpn(device, reset_seeds):
     torch_model = FPN(
         in_channels=[512, 1024, 2048],
         out_channels=256,
@@ -62,7 +64,7 @@ def test_fpn(device, reset_seeds, height, width, dram_activation_levels):
 
     input_tensors = [
         torch.randn(NUM_CAMS, channels, h, w)
-        for channels, (h, w) in zip(BACKBONE_CHANNELS, _backbone_output_shapes(height, width))
+        for channels, (h, w) in zip(BACKBONE_CHANNELS, _backbone_output_shapes(IMAGE_HEIGHT, IMAGE_WIDTH))
     ]
     parameters = create_fpn_parameters(torch_model, input_tensors)
     torch_outputs = torch_model(input_tensors)
@@ -71,7 +73,7 @@ def test_fpn(device, reset_seeds, height, width, dram_activation_levels):
         conv_args=parameters.model_args,
         conv_pth=parameters,
         device=device,
-        dram_activation_levels=dram_activation_levels,
+        dram_activation_levels=DRAM_ACTIVATION_LEVELS,
     )
     tt_outputs = tt_model([_to_ttnn_nhwc(tensor, device) for tensor in input_tensors])
 
