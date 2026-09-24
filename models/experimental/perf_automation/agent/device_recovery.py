@@ -46,7 +46,19 @@ from .probes import tt_smi_bin as _tt_smi_bin
 # agent.probes.tt_smi_bin for why a bare "tt-smi" is not safe from a non-interactive launch.
 TT_SMI = _tt_smi_bin()
 
-DEAD_BOARD_SIGS = ("0xffffffff", "board should be reset", "pcie link", "device hang", "hang detected")
+DEAD_BOARD_SIGS = (
+    "0xffffffff",
+    "board should be reset",
+    "pcie link",
+    "device hang",
+    "hang detected",
+    # UMD's generic device-init failure (tt_device_error.cpp): "Firmware startup error on device N
+    # at core X over NOC0: scratch_status=..., postcode=...". The card did not come up at all, which
+    # is as definitive as an all-ones read -- and it is what a wedged Wormhole board on this host
+    # actually printed, while matching none of the signatures above. Arch-independent: the same UMD
+    # template serves every device.
+    "firmware startup error",
+)
 
 # THE KERNEL'S VERDICT that a reset cannot help. `tt-smi -r` talks to the card OVER PCIe and asks its
 # board-management firmware to cycle power; when that firmware is the thing refusing, the request has

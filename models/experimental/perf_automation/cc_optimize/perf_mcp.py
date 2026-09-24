@@ -458,6 +458,30 @@ def _is_dead_board(text) -> bool:
     return _dr().is_dead_board(text)
 
 
+# Label the recovery logs against, so all three baseline exits report one origin.
+_BASELINE_WHERE = "full-pipeline baseline"
+
+
+def _recover_if_board_is_dead(evidence, where: str) -> bool:
+    """Hand a failure's OWN TEXT to device recovery before giving up on it.
+
+    The per-op loop is wedge-aware: a wedge there is recorded and the board is reset between
+    attempts, which is why an optimize table can show `·wedge` on one knob and a win on the next.
+    The baseline measurement that runs BEFORE that loop was not: its failure exits returned the
+    error upward without ever asking whether the board had died, so a wedge surfaced as "the
+    workload printed no timing marker". Nothing called is_dead_board, nothing counted a crash, and
+    the reset that already exists was never issued -- a dead board then failed every retry
+    identically for as long as the run lasted.
+
+    Returns True only when the board was recognised as dead AND the reset reported success, so the
+    caller can tell "recovered, worth retrying" from "not a device problem".
+    """
+    text = str(evidence or "")
+    if not text or not _is_dead_board(text):
+        return False
+    return _recover_device(where, error_text=text)
+
+
 def _dead_chip_from_error(text):
     return _dr().dead_chip_from_error(text)
 
@@ -3475,6 +3499,9 @@ def _run_full_pipeline_ms():
     # prices the same non-advancing step. Failing the measurement is the honest outcome -- the gate
     # then reports no reading rather than a fast one.
     if decode_stuck:
+        # A wedged board makes the step stop advancing, which is indistinguishable from a workload
+        # that genuinely stalls -- so ask the recovery, which knows the difference.
+        _recover_if_board_is_dead(decode_stuck, _BASELINE_WHERE)
         return None, None, "decode did not advance between iterations: %s" % decode_stuck, None
     dec = statistics.median(per_tokens) if per_tokens else None
     pf = statistics.median(prefills) if prefills else None
@@ -3598,11 +3625,15 @@ def _run_full_pipeline_ms():
     if walls:
         return statistics.median(walls), "eager", None, None
     if last_err:
+        _recover_if_board_is_dead(last_err, _BASELINE_WHERE)
         return None, None, last_err, None
     # ATTACH THE EVIDENCE. `out` holds the workload's full stdout+stderr and was being discarded, so
     # this gate could only ever say "no markers" -- the actual reason (a TT_FATAL, an import error, a
     # crash before the first print) was written nowhere. Every full-pipeline failure was therefore
     # undiagnosable without patching the tool, which cost several wrong diagnoses on 2026-07-25/26.
+    # The same `out` that is attached as evidence below is the only place a dead board announces
+    # itself on this path, so give it to the recovery before reporting "no markers".
+    _recover_if_board_is_dead(locals().get("out") or "", _BASELINE_WHERE)
     return (
         None,
         None,
