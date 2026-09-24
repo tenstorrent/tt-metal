@@ -40,7 +40,7 @@ struct D2HLeg::Impl {
     // the alias; the counters are bytes, the watermarks are frames.
     struct Core {
         std::unique_ptr<dist::D2HSocket> socket;
-        CoreCoord virt{};
+        CoreCoord virt;
         uint32_t cfg_addr = 0;
         uint32_t acked_dev_off = 0;
         uint32_t data_off = 0;  // the ring's offset inside the arena; 0 for today's layouts
