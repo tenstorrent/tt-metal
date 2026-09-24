@@ -791,8 +791,8 @@ def _read_optional_image_path(label: str) -> str | None:
 
 def _read_user_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
-) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
-    """Host stdin: prompt (`q` quits), aspect, duration, steps, seed and optional fl2va keyframes."""
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
+    """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -802,15 +802,32 @@ def _read_user_spec(
             return None
         if prompt:
             break
-    while True:
-        try:
-            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
-            aspect = _parse_aspect(raw, default_aspect_ratio)
-            break
-        except EOFError:
-            return None
-        except ValueError:
-            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+    try:
+        first_image = _read_optional_image_path("First image path (blank for none): ")
+        last_image = _read_optional_image_path("Last image path (blank for none): ")
+    except EOFError:
+        return None
+    width = height = None
+    aspect = default_aspect_ratio
+    if first_image is None and last_image is None:
+        while True:
+            try:
+                raw = _prompt_line("Width:Height (blank for none): ")
+                width, height = _parse_aspect(raw, (None, None))
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 1280:720)", file=sys.stderr)
+        while True:
+            try:
+                raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+                aspect = _parse_aspect(raw, default_aspect_ratio)
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 16:9)", file=sys.stderr)
     while True:
         try:
             raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
@@ -838,35 +855,32 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected an integer", file=sys.stderr)
-    try:
-        first_image = _read_optional_image_path("First image path (blank for none): ")
-        last_image = _read_optional_image_path("Last image path (blank for none): ")
-    except EOFError:
-        return None
-    return prompt, aspect, duration_s, num_steps, seed, first_image, last_image
+    return prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None,
-) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
+    spec: tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None,
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s, num_steps, seed, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed = spec
         _append_journal(
             seq,
             json.dumps(
                 {
                     "prompt": prompt,
+                    "first_image": first_image,
+                    "last_image": last_image,
+                    "width": width,
+                    "height": height,
                     "aspect": [int(aspect[0]), int(aspect[1])],
                     "duration_s": float(duration_s),
                     "num_steps": int(num_steps),
                     "seed": int(seed),
-                    "first_image": first_image,
-                    "last_image": last_image,
                 }
             ),
         )
@@ -877,12 +891,14 @@ def _broadcast_user_spec(
         payload = json.loads(_wait_journal(seq))
         spec = (
             payload["prompt"],
+            payload["first_image"],
+            payload["last_image"],
+            payload["width"],
+            payload["height"],
             (int(payload["aspect"][0]), int(payload["aspect"][1])),
             float(payload["duration_s"]),
             int(payload["num_steps"]),
             int(payload["seed"]),
-            payload["first_image"],
-            payload["last_image"],
         )
     ttnn.distributed_context_barrier()
     return spec
@@ -1026,7 +1042,7 @@ def run_user_generations(
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
 ) -> None:
-    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
+    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1040,12 +1056,11 @@ def run_user_generations(
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s, num_steps, seed, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect_ratio, duration_s, num_steps, seed = spec
         image = Image.open(first_image).convert("RGB") if first_image else None
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
-            height, width = resolve_canvas_size(*aspect_ratio) if image is None else (None, None)
             num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
             with profiler("run", iteration=0):
                 output = pipeline(
@@ -1069,24 +1084,26 @@ def run_user_generations(
         ttnn.synchronize_device(pipeline.mesh_device)
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
-        log_pipeline_perf(
-            profiler,
-            label=label,
-            pipeline=pipeline,
-            num_forwards=num_steps - 1,
-            width=width,
-            height=height,
-            num_frames=output.num_frames,
-            fps=MINIMAX_H3_FPS,
-            aspect_ratio=aspect_ratio,
-            num_inference_steps=num_steps,
-        )
         if is_host():
-            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
-            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
-            write_artifacts(
-                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            frames = frames_for_export(output)
+            canvas_height, canvas_width = (
+                (frames.shape[1] * 2 // 3, frames.shape[2]) if frames.ndim == 3 else (frames.shape[1], frames.shape[2])
             )
+            log_pipeline_perf(
+                profiler,
+                label=label,
+                pipeline=pipeline,
+                num_forwards=num_steps - 1,
+                width=canvas_width,
+                height=canvas_height,
+                num_frames=output.num_frames,
+                fps=MINIMAX_H3_FPS,
+                aspect_ratio=aspect_ratio,
+                num_inference_steps=num_steps,
+            )
+            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{canvas_width}x{canvas_height}_{duration_tag}s_{index}"
+            write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
         index += 1
 
 
