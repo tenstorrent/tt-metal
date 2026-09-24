@@ -474,24 +474,43 @@ def test_ltx_video_text_cross_attention_recipes_1x1(mesh_device, prompt_seq_len,
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-def test_ltx_recipe_rejects_non_key_length_mask(mesh_device) -> None:
-    """A recipe plus a mask it can't turn into a K/V slice is rejected (no attn_kv_len; any cross mask).
-    The D64 audio attentions (incl. the padded audio self-attn key-length slice) are covered by
+def test_ltx_recipe_accepts_general_mask(mesh_device) -> None:
+    """Recipes accept masks they cannot turn into a K/V slice (no attn_kv_len; any cross mask).
+    An all-zero additive mask adds exactly 0 to every score, so masked outputs match the
+    unmasked recipe run. The D64 audio attentions are covered by
     test_sdpa_recipe_model_smoke_ltx_audio.py."""
     from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
 
     ccl_manager, parallel_config, _ = _parallel(mesh_device, 0, 1)
-    heads, head_dim, seq_len = 2, 128, 256
+    heads, head_dim = 2, 128
     dim = heads * head_dim
-    tt_model = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, True, P.FAST)
-    tt_model.load_torch_state_dict(
-        _convert_ltx_state(LTX2Attention(query_dim=dim, heads=heads, kv_heads=heads, dim_head=head_dim).state_dict(), heads, head_dim)
+    B, (F, H, W) = 1, (1, 16, 16)
+    seq_len = F * H * W  # 256
+    torch.manual_seed(7)
+    state = _convert_ltx_state(
+        bf16_weights(
+            LTX2Attention(query_dim=dim, heads=heads, kv_heads=heads, dim_head=head_dim, rope_type="interleaved")
+        ).state_dict(),
+        heads,
+        head_dim,
     )
-    tt_x = bf16_tensor(torch.randn(1, 1, seq_len, dim), device=mesh_device)
+    x = randn_bf16(B, seq_len, dim)
+    cos_freq, sin_freq = _ltx_video_rope(dim, heads, head_dim, F, H, W)
+    tt_x = bf16_tensor(x.unsqueeze(0), device=mesh_device)
+    tt_cos = bf16_tensor(cos_freq.reshape(B, seq_len, heads, head_dim).permute(0, 2, 1, 3), device=mesh_device)
+    tt_sin = bf16_tensor(sin_freq.reshape(B, seq_len, heads, head_dim).permute(0, 2, 1, 3), device=mesh_device)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
     tt_mask = bf16_tensor(torch.zeros(1, 1, seq_len, seq_len), device=mesh_device)
-    with pytest.raises(ValueError, match="unmasked"):
-        tt_model(spatial_1BND=tt_x, N=seq_len, attn_mask=tt_mask)
+
+    tt_model = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, True, P.FAST)
+    tt_model.load_torch_state_dict(dict(state))
+    rope = dict(rope_cos=tt_cos, rope_sin=tt_sin, trans_mat=tt_trans_mat)
+    masked = _gather(mesh_device, tt_model(spatial_1BND=tt_x, N=seq_len, attn_mask=tt_mask, **rope), 0, 1)
+    unmasked = _gather(mesh_device, tt_model(spatial_1BND=tt_x, N=seq_len, **rope), 0, 1)
+    assert torch.isfinite(masked.float()).all()
+    assert rel_l2(masked.float(), unmasked.float()) < 1e-3
 
     tt_cross = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, False, P.FAST)
-    with pytest.raises(ValueError, match="unmasked"):
-        tt_cross(spatial_1BND=tt_x, N=seq_len, prompt_1BLP=tt_x, attn_mask=tt_mask, attn_kv_len=128)
+    tt_cross.load_torch_state_dict(dict(state))
+    out = tt_cross(spatial_1BND=tt_x, N=seq_len, prompt_1BLP=tt_x, attn_mask=tt_mask, attn_kv_len=128)
+    assert torch.isfinite(_gather(mesh_device, out, 0, 1).float()).all()
