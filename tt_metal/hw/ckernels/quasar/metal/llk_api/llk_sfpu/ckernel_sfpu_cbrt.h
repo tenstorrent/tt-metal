@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -76,5 +77,19 @@ inline void cube_root_init() {
     sfpi::vConstFloatPrgm1 = -0x1.403e6cp0f;
     sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;
 }
+
+// Op class for the cube root.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Cbrt : SfpuUnaryOp<Cbrt<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { cube_root_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

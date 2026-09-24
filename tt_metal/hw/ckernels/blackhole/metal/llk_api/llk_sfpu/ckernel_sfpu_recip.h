@@ -12,6 +12,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "lltt.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -417,6 +418,17 @@ void recip_init() {
         _init_reciprocal_fast_8b_3c_();
     }
 }
+
+// Op class for the reciprocal. On Blackhole its init programs ADDR_MOD_6.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Reciprocal : SfpuUnaryOp<Reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

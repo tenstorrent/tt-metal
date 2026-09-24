@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_rdiv.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
+ALWI void rdiv_tile_init() { MATH((sfpu::Rdiv<APPROX>::init())); }
 
 // clang-format off
 /**
@@ -33,15 +33,18 @@ ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APP
  */
 // clang-format on
 template <RoundingMode rounding_mode = RoundingMode::None, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_rdiv,
-        (APPROX, is_fp32_dest_acc_en, rounding_mode, 8 /* ITERATIONS */),
-        dst_index,
-        vector_mode,
-        value));
+ALWI void rdiv_tile(std::uint32_t dst_index, std::uint32_t value) {
+    MATH((sfpu::Rdiv<APPROX, is_fp32_dest_acc_en, rounding_mode, 8 /* ITERATIONS */>::run(dst_index, value)));
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the overload above, which
+ * processes the full tile.
+ */
+template <RoundingMode rounding_mode = RoundingMode::None, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rdiv_tile(std::uint32_t dst_index, std::uint32_t value, VectorMode vector_mode) {
+    MATH((sfpu::Rdiv<APPROX, is_fp32_dest_acc_en, rounding_mode, 8 /* ITERATIONS */>::run_vector_mode(
+        vector_mode, dst_index, value)));
 }
 
 }  // namespace ckernel

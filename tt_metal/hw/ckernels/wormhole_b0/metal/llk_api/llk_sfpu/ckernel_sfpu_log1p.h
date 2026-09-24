@@ -36,6 +36,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -172,6 +173,17 @@ inline void log1p_init() {
         sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
+
+// Op class for log(1 + x).
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Log1p : SfpuUnaryOp<Log1p<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_log1p<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        log1p_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

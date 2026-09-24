@@ -12,6 +12,7 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -79,5 +80,13 @@ void erf_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
+
+// Op class for erf(x).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Erf : SfpuUnaryOp<Erf<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_erf<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { erf_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

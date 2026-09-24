@@ -10,6 +10,9 @@
 #include "ckernel_sfpu_polyval.h"
 #include "cmath_common.h"
 
+#include "llk_math_eltwise_binary_sfpu.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
@@ -172,5 +175,50 @@ void lgamma_stirling_init() {
     // init for _sfpu_reciprocal_<2> for Blackhole
     sfpi::vConstFloatPrgm0 = 2.0f;
 }
+
+// Op class for the Stirling approximation of lgamma(x).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct LgammaStirling : SfpuUnaryOp<LgammaStirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_lgamma_stirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for the fp32 Stirling approximation of lgamma(x), with a scratch tile in Dest.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct LgammaStirlingFp32 : SfpuBinaryOp<LgammaStirlingFp32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_lgamma_stirling_fp32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for the reflection and integer adjustments of lgamma(x).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct LgammaAdjusted : SfpuTernaryOp<LgammaAdjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out) {
+        calculate_lgamma_adjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+};
 
 }  // namespace ckernel::sfpu

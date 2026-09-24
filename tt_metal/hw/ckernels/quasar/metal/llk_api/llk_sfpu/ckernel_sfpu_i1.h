@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
 
@@ -149,5 +150,13 @@ void i1_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
+
+// Op class for the modified Bessel function I1(x).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct I1 : SfpuUnaryOp<I1<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_i1<APPROXIMATION_MODE, ITERATIONS>(); }
+    static inline __attribute__((always_inline)) void init_op() { i1_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

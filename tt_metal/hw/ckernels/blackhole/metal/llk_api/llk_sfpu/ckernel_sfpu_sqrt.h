@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -151,6 +152,15 @@ void sqrt_init() {
         sfpi::vConstFloatPrgm2 = 2.2533049f;
     }
 }
+
+// Op class for the square root.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en = false, bool FAST_APPROX = false>
+struct Sqrt : SfpuUnaryOp<Sqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_sqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { sqrt_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

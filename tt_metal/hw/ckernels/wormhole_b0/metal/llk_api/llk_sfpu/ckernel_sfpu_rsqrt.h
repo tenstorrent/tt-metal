@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_sqrt.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -25,6 +26,15 @@ void rsqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sqrt_init<APPROXIMATION_MODE>();
 }
+
+// Op class for the reciprocal square root.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en = false, bool FAST_APPROX = false>
+struct Rsqrt : SfpuUnaryOp<Rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { rsqrt_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

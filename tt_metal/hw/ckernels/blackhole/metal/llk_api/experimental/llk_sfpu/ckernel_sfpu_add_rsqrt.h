@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_sfpu_rsqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -22,8 +24,8 @@ template <
     bool fp32_dest_acc_en,
     bool FAST_APPROX,
     bool typed_bf16_store = false,
-    uint32_t INPUT_SCALE = 0x3f800000u>
-inline void calculate_add_rsqrt(uint32_t param0) {
+    std::uint32_t INPUT_SCALE = 0x3f800000u>
+inline void calculate_add_rsqrt(std::uint32_t param0) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -54,5 +56,28 @@ template <bool APPROXIMATION_MODE>
 inline void init_add_rsqrt() {
     sqrt_init<APPROXIMATION_MODE>();
 }
+
+// Op class for rsqrt(x * INPUT_SCALE + addend), with addend and INPUT_SCALE passed as the bits of floats.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool fp32_dest_acc_en = false,
+    bool FAST_APPROX = false,
+    bool typed_bf16_store = false,
+    std::uint32_t INPUT_SCALE = 0x3f800000u>
+struct AddRsqrt
+    : SfpuUnaryOp<
+          AddRsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, typed_bf16_store, INPUT_SCALE>> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t param0) {
+        calculate_add_rsqrt<
+            APPROXIMATION_MODE,
+            ITERATIONS,
+            fp32_dest_acc_en,
+            FAST_APPROX,
+            typed_bf16_store,
+            INPUT_SCALE>(param0);
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_add_rsqrt<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

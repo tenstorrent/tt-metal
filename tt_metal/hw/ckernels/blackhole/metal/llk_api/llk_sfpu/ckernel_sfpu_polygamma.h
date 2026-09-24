@@ -13,6 +13,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -139,5 +140,15 @@ void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for polygamma(n, x), with n and the scale packed by the host.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Polygamma : SfpuUnaryOp<Polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t n_packed, const std::uint32_t scale_packed) {
+        calculate_polygamma<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(n_packed, scale_packed);
+    }
+    static inline __attribute__((always_inline)) void init_op() { polygamma_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

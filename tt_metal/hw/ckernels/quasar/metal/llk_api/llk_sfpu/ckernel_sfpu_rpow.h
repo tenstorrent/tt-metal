@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_sfpu_binary_pow.h"
 #include "ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -20,5 +21,19 @@ inline void calculate_rpow(const uint32_t base_val) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for base ** x.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = false,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Rpow : SfpuUnaryOp<Rpow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t base_val) {
+        calculate_rpow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(base_val);
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

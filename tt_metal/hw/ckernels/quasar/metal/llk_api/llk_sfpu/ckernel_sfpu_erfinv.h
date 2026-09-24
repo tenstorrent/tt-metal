@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -62,6 +63,14 @@ void erfinv_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     log_init<false, false, false>();
 }
+
+// Op class for erfinv(x).
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Erfinv : SfpuUnaryOp<Erfinv<APPROXIMATION_MODE, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_erfinv<APPROXIMATION_MODE>(); }
+    static inline __attribute__((always_inline)) void init_op() { erfinv_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

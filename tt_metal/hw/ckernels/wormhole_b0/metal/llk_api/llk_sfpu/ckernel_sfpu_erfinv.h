@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -62,6 +63,13 @@ void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     log_init<false, false, false>();
 }
+
+// Op class for erfinv(x).
+template <bool APPROXIMATION_MODE>
+struct Erfinv : SfpuUnaryOp<Erfinv<APPROXIMATION_MODE>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_erfinv<APPROXIMATION_MODE>(); }
+    static inline __attribute__((always_inline)) void init_op() { erfinv_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
