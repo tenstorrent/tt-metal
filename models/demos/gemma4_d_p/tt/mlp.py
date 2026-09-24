@@ -89,6 +89,7 @@ class MLP:
         With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
         the explicit path accumulates in fp32. That halves the output subblock, which only pays off for
         short M: at a per-core M of 4 (chunk 8192 at CP8) the default config is as fast, so it is kept.
+        packer_l1_acc accumulates the K-block partials in L1, a little faster with no accuracy cost.
         """
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
@@ -103,7 +104,7 @@ class MLP:
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
         return program_config, compute_kernel_config
 
