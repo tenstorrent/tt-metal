@@ -7,8 +7,9 @@ dense recipes share numerics, so for B-E each chip's ring output must equal the 
 Q/K chunking) on that chip's KV concatenated in visiting order whenever every visited segment except the
 last is a whole number of K chunks (the ring restarts K chunking at each shard); other chips are gated on
 FP64 L2 against that dense result. Every case also checks determinism (program-cache rerun). A (FAST) keeps
-the legacy ring / exp ring compute and is gated on FP64 L2 against the dense FAST recipe (ring) or the legacy
-default call (exp ring). Two connected Blackholes; each class opens its own fabric.
+the legacy ring / exp ring compute: inside its qualified geometries it is gated on FP64 L2 against the dense
+FAST recipe (ring) or the legacy default call (exp ring); outside them the op must reject it before dispatch.
+Two connected Blackholes; each class opens its own fabric.
 """
 
 import math
@@ -106,15 +107,19 @@ def maybe_select(geometry):
         pytest.skip(f"SDPA_RING_GEOMETRY={SELECTED}")
 
 
-def legacy_rejects(record_property, legacy_call, error):
-    """FAST routes to the legacy kernels: a geometry it cannot run must be one the legacy call (precision unset)
-    cannot run either."""
-    try:
-        legacy_call()
-    except RuntimeError as legacy_error:
-        record_property("legacy_rejects", str(legacy_error).splitlines()[0][:200])
-        pytest.skip(f"legacy kernels do not support this geometry: {str(error).splitlines()[0][:160]}")
-    pytest.fail(f"FAST rejected a geometry the legacy call runs: {error}")
+def fast_geometry(exp, q_chunk, k_chunk, head_dim):
+    """FAST keeps the legacy ring / exp ring kernels and stays limited to their qualified geometries."""
+    ring = head_dim in (64, 128, 256) and 128 <= q_chunk <= 320 and k_chunk in (256, 384, 512)
+    return ring and (not exp or (k_chunk == 512 and head_dim == 128))
+
+
+def expect_fast_rejection(invoke, exp, q_chunk, k_chunk, head_dim):
+    """Outside the FAST set the op must reject before dispatch; returns True when it did."""
+    if fast_geometry(exp, q_chunk, k_chunk, head_dim):
+        return False
+    with pytest.raises(RuntimeError, match="do not support"):
+        invoke()
+    return True
 
 
 def gate(record_property, variant, chip, got, dense, expected, bitwise):
@@ -215,9 +220,7 @@ class TestRingGeometry:
                 )
             )
 
-        def invoke(**overrides):
-            options = dict(precision=precision_of(variant), inputs_prepared=variant.startswith("E_"))
-            options.update(overrides)
+        def invoke():
             return ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 *inputs,
                 *joints,
@@ -232,7 +235,8 @@ class TestRingGeometry:
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(2, 1), q_chunk_size=q_chunk, k_chunk_size=k_chunk
                 ),
-                **options,
+                precision=precision_of(variant),
+                inputs_prepared=variant.startswith("E_"),
                 dim=2,
                 multi_device_global_semaphore=semaphores,
                 num_links=1,
@@ -244,12 +248,12 @@ class TestRingGeometry:
                 use_column_major_ccl=True,
             )
 
+        if variant == "A" and expect_fast_rejection(invoke, False, q_chunk, k_chunk, head_dim):
+            record_property("fast_rejected", True)
+            return
         try:
             outputs = invoke()
         except RuntimeError as error:
-            if variant == "A" and not l1_rejection(error):
-                # FAST keeps the legacy ring kernels and their geometry limits.
-                legacy_rejects(record_property, lambda: invoke(precision=None), error)
             if not l1_rejection(error):
                 raise
             record_property("rejected_l1", True)
@@ -422,12 +426,12 @@ class TestExpRingGeometry:
             )
 
         recipe = dict(precision=precision_of(variant), inputs_prepared=variant.startswith("E_"))
+        if variant == "A" and expect_fast_rejection(lambda: invoke(**recipe), True, q_chunk, k_chunk, head_dim):
+            record_property("fast_rejected", True)
+            return
         try:
             outputs = invoke(**recipe)
         except RuntimeError as error:
-            if variant == "A" and not l1_rejection(error):
-                # FAST keeps the legacy exp ring kernels and their geometry limits.
-                legacy_rejects(record_property, invoke, error)
             if not l1_rejection(error):
                 raise
             record_property("rejected_l1", True)

@@ -27,6 +27,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -577,15 +578,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                     tensor_args.joint_v->dtype() == kv_dtype,
                 "Named ring recipe joint types must match their primary Q/K/V types");
         }
-        // Any tile-aligned geometry (Q chunk 32..1024 rows, any K chunk, any head dim); L1 fit is checked when the
-        // program is built.
         TT_FATAL(
-            q_shape[3] % 32 == 0 && tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
-                tensor_args.input_v->logical_shape()[3] == q_shape[3] && args.get_q_chunk_size() % 32 == 0 &&
-                args.get_q_chunk_size() >= 32 && args.get_q_chunk_size() <= 1024 && args.get_k_chunk_size() % 32 == 0 &&
-                args.get_k_chunk_size() >= 32,
-            "Named ring recipes require tile-aligned head dims, a tile-aligned Q chunk of 32-1024 rows and a "
-            "tile-aligned K chunk");
+            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] == q_shape[3],
+            "Named ring recipes require matching Q/K/V head dims");
+        // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
+        // checked when the program is built.
+        ttnn::operations::transformer::sdpa::detail::validate_recipe_geometry(
+            ttnn::operations::transformer::sdpa::detail::RecipeOp::Ring,
+            ttnn::operations::transformer::sdpa::detail::resolve_precision_policy(
+                ttnn::operations::transformer::sdpa::detail::select_recipe(*args.precision, tensor_args.input_k.dtype())),
+            args.get_q_chunk_size(),
+            args.get_k_chunk_size(),
+            q_shape[3]);
         TT_FATAL(
             !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
                 !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,

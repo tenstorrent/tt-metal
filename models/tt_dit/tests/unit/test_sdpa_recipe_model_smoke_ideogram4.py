@@ -18,7 +18,8 @@ Gates, per recipe variant:
   norm error shared by all variants, so the SDPA-core gate is the one that isolates the recipe.
 
 Paths: dense SDPA (sp_factor 1, unmasked) on 1x1; ring joint SDPA (SP=2 on the size-2 axis, TP=1) on
-1x2, incl. a logical_n pad tail. A segment mask with a recipe set must raise ValueError.
+1x2, incl. a logical_n pad tail; segment-masked dense SDPA (two packed samples, additive attn_mask) on
+1x1, gated against fp64 masked attention on the captured inputs.
 """
 
 from __future__ import annotations
@@ -91,6 +92,8 @@ class _SdpaCapture:
             out = result[0] if isinstance(result, tuple) else result
             call = dict(q=self._host(q), k=self._host(k), v=self._host(v), out=self._host(out))
             call["logical_n"] = kwargs.get("logical_n")
+            mask = kwargs.get("attn_mask")
+            call["mask"] = None if mask is None else self._host(mask)
             call["dtypes"] = (q.dtype, k.dtype, v.dtype)
             call["kwargs"] = {key: kwargs[key] for key in ("precision", "inputs_prepared") if key in kwargs}
             if self._unprepared:
@@ -108,7 +111,8 @@ class _SdpaCapture:
             n = c["logical_n"] or c["q"].shape[2]
             pre = "0" if unprepared and "q0" in c else ""
             q, k, v = (c[f"{name}{pre}"][:, :, :n].double() for name in "qkv")
-            ref = F.scaled_dot_product_attention(q, k, v)
+            mask = None if c["mask"] is None else c["mask"][:, :, :n, :n].double()
+            ref = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
             diffs.append((c["out"][:, :, :n].double() - ref).flatten())
             refs.append(ref.flatten())
         return 100.0 * torch.cat(diffs).norm().item() / torch.cat(refs).norm().item()
@@ -141,15 +145,18 @@ def _inputs(seq_len):
     return x, adaln_input, cos, sin
 
 
-def _run_variants(mesh_device, seq_len, sp_axis, tp_axis, monkeypatch, record_property, tag, expect_path):
+def _run_variants(
+    mesh_device, seq_len, sp_axis, tp_axis, monkeypatch, record_property, tag, expect_path, segment_split=None
+):
     torch.manual_seed(0)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     torch_block = _reference_block()
     x, adaln_input, cos, sin = _inputs(seq_len)
+    segment_ids = torch.zeros(1, seq_len, dtype=torch.long)
+    if segment_split is not None:
+        segment_ids[:, segment_split:] = 1
     with torch.no_grad():
-        torch_out = torch_block(
-            x, segment_ids=torch.zeros(1, seq_len, dtype=torch.long), cos=cos, sin=sin, adaln_input=adaln_input
-        )
+        torch_out = torch_block(x, segment_ids=segment_ids, cos=cos, sin=sin, adaln_input=adaln_input)
     torch_delta = torch_out - x
     state = torch_block.state_dict()
 
@@ -172,6 +179,12 @@ def _run_variants(mesh_device, seq_len, sp_axis, tp_axis, monkeypatch, record_pr
     tt_cos = bf16_tensor(cos4, device=mesh_device, **shard, **(dict(shard_dim=2) if shard else {}))
     tt_sin = bf16_tensor(sin4, device=mesh_device, **shard, **(dict(shard_dim=2) if shard else {}))
     tt_adaln = bf16_tensor(adaln_input, device=mesh_device)
+    tt_mask = None
+    if segment_split is not None:
+        assert sp_factor == 1 and pad == 0
+        same = segment_ids.unsqueeze(2) == segment_ids.unsqueeze(1)
+        mask = torch.zeros(1, 1, seq_len, seq_len).masked_fill(~same.unsqueeze(1), float("-inf"))
+        tt_mask = bf16_tensor(mask, device=mesh_device)
 
     deltas, cores = {}, {}
     for vid, precision, kv_dtype in VARIANTS:
@@ -190,7 +203,7 @@ def _run_variants(mesh_device, seq_len, sp_axis, tp_axis, monkeypatch, record_pr
         )
         tt_block.load_torch_state_dict({k: v.clone() for k, v in state.items()})
         tt_out = tt_block(
-            tt_x, cos=tt_cos, sin=tt_sin, adaln_input=tt_adaln, attn_mask=None, spatial_sequence_length=seq_len
+            tt_x, cos=tt_cos, sin=tt_sin, adaln_input=tt_adaln, attn_mask=tt_mask, spatial_sequence_length=seq_len
         )
         out = tensor.to_torch(tt_out, mesh_axes=[None, sp_axis if sp_factor > 1 else None, None])[:, :seq_len]
         monkeypatch.undo()
@@ -198,6 +211,7 @@ def _run_variants(mesh_device, seq_len, sp_axis, tp_axis, monkeypatch, record_pr
         assert len(capture.calls) == 1, f"{tag} {vid}: expected one SDPA call, got {len(capture.calls)}"
         call = capture.calls[0]
         assert (call["logical_n"] is not None) == (expect_path == "ring")
+        assert (call["mask"] is not None) == (segment_split is not None)
         if precision is None:
             assert call["kwargs"] == {}
         else:
@@ -253,30 +267,17 @@ def test_ideogram4_block_ring_sp2_recipes(mesh_device, seq_len, record_property,
 
 @pytest.mark.parametrize("device_params", [{}], indirect=True)  # no fabric on a single device
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_ideogram4_block_recipe_rejects_segment_mask(mesh_device):
-    torch.manual_seed(0)
-    seq_len = 256
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    tt_block = Ideogram4TransformerBlock(
-        hidden_size=HIDDEN,
-        intermediate_size=INTERMEDIATE,
-        num_heads=NUM_HEADS,
-        norm_eps=NORM_EPS,
-        adaln_dim=ADALN_DIM,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        sdpa_precision=ttnn.SDPAPrecision.ACCURATE,
+@pytest.mark.parametrize("seq_len", [512, 1088], ids=["n512", "n1088"])
+def test_ideogram4_block_dense_segment_mask_recipes(mesh_device, seq_len, record_property, monkeypatch):
+    # Two packed samples with a non-tile-aligned boundary: the recipe gets the additive segment mask.
+    _run_variants(
+        mesh_device,
+        seq_len,
+        0,
+        1,
+        monkeypatch,
+        record_property,
+        f"masked_n{seq_len}",
+        "dense",
+        segment_split=seq_len // 3,
     )
-    tt_block.load_torch_state_dict(_reference_block().state_dict())
-    x, adaln_input, cos, sin = _inputs(seq_len)
-    cos4, sin4 = rope_halfsplit_to_interleaved(cos.unsqueeze(1), sin.unsqueeze(1), HEAD_DIM)
-    mask = torch.zeros(1, 1, seq_len, seq_len)
-    mask[..., : seq_len // 2, seq_len // 2 :] = float("-inf")
-    with pytest.raises(ValueError, match="unmasked"):
-        tt_block(
-            bf16_tensor(x, device=mesh_device),
-            cos=bf16_tensor(cos4, device=mesh_device),
-            sin=bf16_tensor(sin4, device=mesh_device),
-            adaln_input=bf16_tensor(adaln_input, device=mesh_device),
-            attn_mask=bf16_tensor(mask, device=mesh_device),
-        )

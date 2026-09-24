@@ -21,7 +21,6 @@ from ...utils.padding import pad_weight_tensor
 from ...utils.sdpa_recipe import (
     prepare_recipe_inputs,
     recipe_program_config,
-    reject_mask,
     sdpa_kwargs,
     validate_recipe_args,
 )
@@ -120,8 +119,8 @@ class Ideogram4TransformerBlock(Module):
         super().__init__()
 
         assert hidden_size % num_heads == 0
-        # Opt-in named SDPA recipe (None keeps the tuned legacy attention). Unmasked only: the
-        # segment-masked dense path rejects a recipe at call time.
+        # Opt-in named SDPA recipe (None keeps the tuned legacy attention). A segment mask runs the
+        # dense recipe with attn_mask (K/V all-gathered under SP), like the legacy masked path.
         self.sdpa_precision = sdpa_precision
         self.sdpa_kv_dtype = validate_recipe_args(
             sdpa_precision,
@@ -356,10 +355,10 @@ class Ideogram4TransformerBlock(Module):
         return pc
 
     def _recipe_sdpa_program_config(self, program_config: ttnn.SDPAProgramConfig, *, ring: bool):
-        """Legacy config unchanged when no recipe is set; else the same grid with recipe chunks.
+        """Legacy config unchanged when no recipe is set; else the same grid with op-selected chunks.
 
-        The tuned D256 Q128/K256 (L1-limited) is recipe-supported on dense and ring (Q128 = 4 tiles,
-        even), so the helper keeps it; exp_approx_mode is left to the recipe.
+        The tuned D256 Q128/K256 (L1-limited) stays legacy-only: under a recipe SDPA sizes the chunks
+        to fit L1 itself; exp_approx_mode is left to the recipe.
         """
         if self.sdpa_precision is None:
             return program_config
@@ -604,12 +603,10 @@ class Ideogram4TransformerBlock(Module):
         )
 
         if self.sdpa_precision is not None:
-            # Recipes are unmasked only (the segment-masked SDPA stays legacy). LOW_PRECISION
-            # prepares Q/K/V after QK-norm/RoPE and before the ring all-gather / SDPA call.
-            reject_mask(self.sdpa_precision, attn_mask, model="Ideogram4")
+            # LOW_PRECISION prepares Q/K/V after QK-norm/RoPE and before the ring all-gather / SDPA call.
             q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
 
-        if self.sdpa_precision is not None and self.sp_factor > 1:
+        if self.sdpa_precision is not None and self.sp_factor > 1 and attn_mask is None:
             out, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -639,10 +636,20 @@ class Ideogram4TransformerBlock(Module):
                 ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
             )  # [B, n_local_heads, L/sp, head_dim]
         elif self.sdpa_precision is not None:
+            if self.sp_factor > 1:
+                # Segment mask under SP: gather full K/V (as the legacy masked path does), Q stays
+                # sequence-sharded; attn_mask is [B, 1, L/sp, L].
+                k = self.ccl_manager.all_gather_persistent_buffer(
+                    k, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True
+                )
+                v = self.ccl_manager.all_gather_persistent_buffer(
+                    v, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True
+                )
             out = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k,
                 v,
+                attn_mask=attn_mask,
                 is_causal=False,
                 program_config=self._recipe_sdpa_program_config(self.sdpa_program_config, ring=False),
                 **self._sdpa_kwargs(),
@@ -786,9 +793,9 @@ class Ideogram4Transformer(Module):
         sdpa_precision: ttnn.SDPAPrecision | None = None,
         sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named SDPA recipe (Blackhole D256, unmasked
-        dense/ring self-attention; a segment mask then raises ValueError). ``None`` keeps the existing
-        attention configuration."""
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named SDPA recipe (Blackhole D256 dense/ring
+        self-attention; a segment mask uses the dense recipe with ``attn_mask``). ``None`` keeps the
+        existing attention configuration."""
         self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=emb_dim // num_heads)
         super().__init__()
         self.emb_dim = emb_dim

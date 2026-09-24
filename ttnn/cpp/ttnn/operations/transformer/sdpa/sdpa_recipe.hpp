@@ -11,8 +11,9 @@
 namespace ttnn::operations::transformer::sdpa::detail {
 
 RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataType kv_type);
-// Dense, joint, ring and exp ring recipes: any tile-aligned Q chunk up to 1024 rows and any tile-aligned K
-// chunk (L1 fit is checked when the program is built).
+// Dense/joint recipes: any tile-aligned Q chunk up to 1024 rows and any tile-aligned K chunk (ring and exp ring
+// validate through recipe_geometry_rejection in sdpa_recipe_blocking.hpp; L1 fit is checked when the program is
+// built).
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
 uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
 
@@ -47,11 +48,17 @@ std::tuple<Tensor, Tensor> run_joint_recipe(
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config);
 
+// Checks an additive attn_mask for the dense recipe path (shape, dtype, layout) before any dispatch.
+void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, const PrecisionPolicy& policy);
+
+// attn_mask: optional additive mask [1|B, 1|H, Sq, Sk] (BF16/BFP8/BFP4, tiled DRAM), already
+// multiplied by 1/scale like legacy SDPA; it is L1-accumulated onto the QK scores before the row max.
 Tensor run_recipe(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
     const PrecisionPolicy& policy,
-    const std::optional<SDPAProgramConfig>& program_config);
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask = std::nullopt);
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

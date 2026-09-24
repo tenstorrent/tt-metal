@@ -29,20 +29,13 @@ def _chunks(config):
     return config.q_chunk_size, config.k_chunk_size
 
 
-@pytest.mark.parametrize("q, k", sorted({*MochiAttention.sdpa_chunk_size_map.values(), (256, 256)}))
-def test_recipe_ring_keeps_tuned_chunks(q, k):
-    config = MochiAttention._recipe_program_config(_config(q, k), ring=True)
-    assert _chunks(config) == (q, k)
+@pytest.mark.parametrize("q, k", sorted({*MochiAttention.sdpa_chunk_size_map.values(), (256, 256), (64, 128)}))
+@pytest.mark.parametrize("ring", [False, True])
+def test_recipe_chunks_are_op_selected(q, k, ring):
+    config = MochiAttention._recipe_program_config(_config(q, k), ring=ring)
+    assert _chunks(config) == (0, 0)
     assert config.exp_approx_mode is None
     assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == (12, 9)
-
-
-def test_recipe_dense_keeps_joint_chunk_and_falls_back():
-    assert _chunks(MochiAttention._recipe_program_config(_config(256, 512), ring=False)) == (256, 512)
-    assert _chunks(MochiAttention._recipe_program_config(_config(224, 512), ring=False)) == (224, 512)
-    # Ring keeps odd Q tile counts too; K1024 is unsupported everywhere.
-    assert _chunks(MochiAttention._recipe_program_config(_config(224, 1024), ring=True)) == (224, 512)
-    assert _chunks(MochiAttention._recipe_program_config(_config(64, 128), ring=False)) == (256, 512)
 
 
 def test_legacy_kwargs_read_compute_config_at_call_time():

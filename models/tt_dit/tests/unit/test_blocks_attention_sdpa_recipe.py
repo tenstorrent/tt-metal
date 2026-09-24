@@ -59,34 +59,26 @@ def test_recipe_sdpa_kwargs_replace_compute_config(precision, prepared):
     assert attention._sdpa_kwargs() == {"precision": precision, "inputs_prepared": prepared}
 
 
-def test_recipe_keeps_supported_tuned_chunks():
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=128, k_chunk=256)
-    recipe = attention._sdpa_program_config(ring=True)
+@pytest.mark.parametrize("q_chunk, k_chunk", [(128, 256), (64, 1024), (224, 384)])
+@pytest.mark.parametrize("ring", [False, True])
+def test_recipe_leaves_chunks_to_the_op(q_chunk, k_chunk, ring):
+    # Tuned or not, the recipe config keeps the grid and lets SDPA choose the chunks (0 = op-selected).
+    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)
+    recipe = attention._sdpa_program_config(ring=ring)
     assert recipe is not attention.sdpa_program_config
-    assert _chunks(recipe) == (128, 256)
-
-
-def test_recipe_falls_back_for_unsupported_chunks():
-    # Motif-style K1024 and FLUX (BH, sp8, tp4) Q64 are outside the recipe blocking rules.
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=64, k_chunk=1024)
-    assert _chunks(attention._sdpa_program_config(ring=False)) == (256, 512)
-    assert _chunks(attention._sdpa_program_config(ring=True)) == (256, 512)
-
-
-def test_ring_recipe_keeps_odd_q_tiles():
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=224, k_chunk=384)
-    assert _chunks(attention._sdpa_program_config(ring=False)) == (224, 384)  # joint: odd tiles allowed
-    assert _chunks(attention._sdpa_program_config(ring=True)) == (224, 384)  # ring: odd tiles allowed too
+    assert _chunks(recipe) == (0, 0)
+    assert (recipe.compute_with_storage_grid_size.x, recipe.compute_with_storage_grid_size.y) == GRID
+    assert recipe.exp_approx_mode is None
 
 
 @pytest.mark.parametrize("key", sorted(Flux1Transformer.sdpa_chunk_size_map))
-def test_flux_tuned_chunks_map_to_recipe_chunks(key):
+def test_flux_tuned_chunks_are_legacy_only(key):
     q_chunk, k_chunk = Flux1Transformer.sdpa_chunk_size_map[key]
-    attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)
-    q, k = _chunks(attention._sdpa_program_config(ring=True))
-    assert q % 32 == 0 and 128 <= q <= 320 and (q // 32) % 2 == 0
-    assert k in (256, 384, 512)
-    assert q == (q_chunk if q_chunk >= 128 else 256) and k == k_chunk
+    assert _chunks(_bare_attention(None, q_chunk=q_chunk, k_chunk=k_chunk)._sdpa_program_config(ring=True)) == (
+        q_chunk,
+        k_chunk,
+    )
+    assert _chunks(_bare_attention(ttnn.SDPAPrecision.ACCURATE, q_chunk=q_chunk, k_chunk=k_chunk)._sdpa_program_config(ring=True)) == (0, 0)
 
 
 def _construct_attention(head_dim, precision, kv_dtype=None):
@@ -140,14 +132,10 @@ def test_motif_accepts_d64_recipes(precision, kv_dtype):
         MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, ttnn.bfloat8_b)
 
 
-@pytest.mark.parametrize(
-    ("sp_factor", "ring", "expected"),
-    [(1, False, (128, 512)), (2, True, (128, 512)), (4, True, (128, 256))],
-    ids=["joint_k1024_to_k512", "ring_sp2_kept", "ring_sp4_kept"],
-)
-def test_motif_tuned_chunks_map_to_recipe_chunks(sp_factor, ring, expected):
+@pytest.mark.parametrize(("sp_factor", "ring"), [(1, False), (2, True), (4, True)])
+def test_motif_recipe_chunks_are_op_selected(sp_factor, ring):
     k_chunk = MotifTransformer.get_k_chunk_size(sp_factor)
     attention = _bare_attention(
         ttnn.SDPAPrecision.ACCURATE, q_chunk=MotifTransformer.Q_CHUNK_SIZE, k_chunk=k_chunk
     )
-    assert _chunks(attention._sdpa_program_config(ring=ring)) == expected
+    assert _chunks(attention._sdpa_program_config(ring=ring)) == (0, 0)

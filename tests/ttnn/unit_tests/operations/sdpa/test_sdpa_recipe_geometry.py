@@ -131,9 +131,12 @@ def test_recipe_geometry(
 @pytest.mark.parametrize("variant", ["A", "B", "D", "E_bfp8"])
 @pytest.mark.parametrize("q_chunk,k_chunk,head_dim", [(96, 160, 96), (160, 96, 160)], ids=lambda x: str(x))
 def test_recipe_geometry_constant_v(device, variant, q_chunk, k_chunk, head_dim):
-    """Softmax weights sum to one: constant V returns 1.0 within a few BF16 ulps at any geometry."""
+    """Softmax weights sum to one: constant V returns 1.0 within a few BF16 ulps at any geometry,
+    no further from 1.0 than the same recipe at the qualified Q256/K512 blocking allows."""
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     host = inputs_with_head_dim(head_dim, 1100, "constant_v", 700)
     actual = run_or_skip(device, host, variant, (3, 1), q_chunk, k_chunk)
-    assert (actual.float() - 1).abs().max().item() <= 1 / 64
+    error = (actual.float() - 1).abs().max().item()
+    qualified = (run_or_skip(device, host, variant, (3, 1), 256, 512).float() - 1).abs().max().item()
+    assert error <= 2 * qualified + 1 / 128, (error, qualified)

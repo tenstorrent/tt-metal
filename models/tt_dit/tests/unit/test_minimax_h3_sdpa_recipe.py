@@ -45,43 +45,32 @@ def test_legacy_program_configs_unchanged():
             assert attn._attn_program_config(seq, ring=ring) is attn._sdpa_program_config(seq, ring=ring)
 
 
-def test_ring_recipe_keeps_supported_measured_chunks():
-    attn = _bare_attention(ACCURATE)
-    assert _chunks(attn._attn_program_config(4768, ring=True)) == (320, 384)  # 10 tiles: even
-    assert _chunks(attn._attn_program_config(9216, ring=True)) == (256, 512)
-    pc = attn._attn_program_config(9216, ring=True)
-    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
-
-
-def test_ring_recipe_odd_tiles_and_fallback():
-    attn = _bare_attention(COMPENSATED)
-    attn.measured_sdpa_chunk_sizes = {5000: (288, 384), 6000: (224, 1024), 7000: (96, 128)}
-    assert _chunks(attn._attn_program_config(5000, ring=True)) == (288, 384)  # 9 tiles: odd OK on ring
-    assert _chunks(attn._attn_program_config(5000, ring=False)) == (288, 384)  # dense accepts odd tiles
-    assert _chunks(attn._attn_program_config(6000, ring=False)) == (224, 512)
-    assert _chunks(attn._attn_program_config(7000, ring=True)) == (256, 512)
-
-
-def test_dense_recipe_short_refiner_sequence_falls_back():
-    # The token refiner's short text stream: legacy clamps chunks to the sequence, the recipe cannot.
-    attn = _bare_attention(ACCURATE, use_exp=False)
-    assert _chunks(attn._sdpa_program_config(96, ring=False)) == (96, 96)
-    assert _chunks(attn._attn_program_config(96, ring=False)) == (256, 512)
-    pc = attn._attn_program_config(96, ring=False)
-    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (12, 10)
+@pytest.mark.parametrize("seq", [4768, 9216, 5000, 6000, 7000, 96])
+@pytest.mark.parametrize("ring", [True, False])
+def test_recipe_chunks_are_op_selected(seq, ring):
+    attn = _bare_attention(COMPENSATED, use_exp=False)
+    attn.measured_sdpa_chunk_sizes = {**attn.measured_sdpa_chunk_sizes, 5000: (288, 384), 6000: (224, 1024)}
+    pc = attn._attn_program_config(seq, ring=ring)
+    assert _chunks(pc) == (0, 0)  # SDPA chooses; the measured table is legacy-only
+    expected_grid = (11, 10) if ring else (12, 10)
+    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == expected_grid
 
 
 @pytest.mark.parametrize("seq_local", [2304, 3072, 1152, 4768 // 4])
-def test_exp_ring_recipe_config_is_recipe_supported(seq_local):
+def test_exp_ring_recipe_config_is_op_selected(seq_local):
     attn = _bare_attention(ACCURATE)
     pc = attn._exp_sdpa_program_config(seq_local)
-    assert pc is not None
-    q, k = _chunks(pc)
-    assert k == 512 and 128 <= q <= 320 and q % 32 == 0
-    cols = pc.compute_with_storage_grid_size.x - 1
-    segs = -(-seq_local // q) // cols
-    assert -(-seq_local // q) == cols * segs  # a head's chunks fill whole rows, as the op requires
-    assert -(-attn.n_local_heads * segs // attn.full_grid.y) <= 3
+    assert pc is not None and _chunks(pc) == (0, 0)
+    grid = pc.compute_with_storage_grid_size
+    assert (grid.x, grid.y) == (attn.full_grid.x, attn.full_grid.y)
+    # The op's own chooser finds a blocking wherever the model's feasibility search does.
+    for precision, kv in ((ACCURATE, ttnn.bfloat16), (COMPENSATED, ttnn.bfloat16)):
+        choice = ttnn._ttnn.operations.transformer._sdpa_recipe_blocking(
+            "exp_ring", precision, kv, 1, attn.n_local_heads, seq_local, seq_local, 128, grid, 1_344_544, ring_size=32
+        )
+        assert choice is not None
+        q, k, gx, gy, *_ = choice
+        assert k == 512 and 128 <= q <= 320 and -(-seq_local // q) % (gx - 1) == 0
 
 
 def test_exp_ring_recipe_infeasible_falls_back_to_ring():
