@@ -36,7 +36,11 @@ from .vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBloc
 # SD35_VAE_NOGATHER=1: keep the decoded image spatially sharded on device and stitch the shards on
 # the host, instead of all-gathering the full image onto every chip and then DMA-reading all four
 # identical copies (4x the PCIe traffic; the readback is what contends when 8 columns decode at once).
-_NOGATHER = os.environ.get("SD35_VAE_NOGATHER", "0") == "1"
+
+
+def _nogather() -> bool:
+    # read at call time so a host process can decide per worker after import (tt-media-server)
+    return os.environ.get("SD35_VAE_NOGATHER", "0") == "1"
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -181,7 +185,7 @@ class SD35VaeDecoder(Module):
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
         z = self.conv_out.forward(z)
-        if _NOGATHER:
+        if _nogather():
             return z
         return _all_gather_hw(self._ctx, z)
 
@@ -271,7 +275,7 @@ class SD35SpatialVaeAdapter:
     def _concat_dims(self) -> list[int | None]:
         """Host concat dims for fast_device_to_host: none when the image is replicated, else the
         (B, H, W, C) dims the decoder shards over each mesh axis."""
-        if not _NOGATHER:
+        if not _nogather():
             return [None, None]
         ctx = self.decoder._ctx
         dims: list[int | None] = [None, None]
