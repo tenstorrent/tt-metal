@@ -125,6 +125,7 @@ from .policy import (
     served_envelope,
     served_reference_image_sizes,
     served_reference_video_canvases,
+    validate_input,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
@@ -1548,7 +1549,7 @@ class MiniMaxH3Pipeline:
         last_image: Image.Image | None = None,
         references: Sequence[MiniMaxH3Reference] | None = None,
         num_frames: int | None = 124,
-        aspect_ratio: tuple[float, float] = (16, 9),
+        aspect_ratio: tuple[int, int] = (16, 9),
         height: int | None = None,
         width: int | None = None,
         reference_resize_mode: str = "match",
@@ -1586,8 +1587,7 @@ class MiniMaxH3Pipeline:
             raise ValueError("num_frames may only be left to the references, and only for ref2va")
 
         # 1. Setup: keyframes, canvas, frame alignment and the derived latent geometry.
-        if (height is None) != (width is None):
-            raise ValueError("pass both height and width, or neither")
+        validate_input(image=image, last_image=last_image, aspect_ratio=aspect_ratio, height=height, width=width)
 
         # EXIF-transpose and RGB before anything else. `prepare_keyframe_image` does neither, and both
         # matter: a phone photo carries its rotation in EXIF and would encode sideways, and a palette or
@@ -1600,8 +1600,6 @@ class MiniMaxH3Pipeline:
             # A keyframe's own dimensions decide the canvas; `aspect_ratio` only applies to t2va.
             height, width = resolve_canvas_size(*(sources[0].size if sources else aspect_ratio))
         ratio = self.vae_config.spatial_compression_ratio
-        if height % 32 or width % 32:
-            raise ValueError(f"canvas {height}x{width} must be a multiple of 32 on both axes")
         num_frames = align_num_frames(num_frames)
         latent_height, latent_width = height // ratio, width // ratio
         num_audio_latents = audio_latent_num_frames(num_frames)
@@ -1703,7 +1701,7 @@ class MiniMaxH3Pipeline:
         *,
         references: Sequence[MiniMaxH3Reference],
         num_frames: int | None,
-        aspect_ratio: tuple[float, float],
+        aspect_ratio: tuple[int, int],
         height: int | None,
         width: int | None,
         reference_resize_mode: str,
@@ -1996,7 +1994,7 @@ class MiniMaxH3Pipeline:
         num_frames: int | None = 124,
         height: int | None = None,
         width: int | None = None,
-        aspect_ratio: tuple[float, float] = (16, 9),
+        aspect_ratio: tuple[int, int] = (16, 9),
         num_inference_steps: int = 50,
         rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
