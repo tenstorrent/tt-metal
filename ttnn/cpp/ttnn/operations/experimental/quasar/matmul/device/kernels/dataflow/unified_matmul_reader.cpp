@@ -129,8 +129,13 @@ void kernel_main() {
                 }
                 noc.async_read_barrier();
 
-                A_slice.push_back(A_slice_tiles);
-                B_slice.push_back(B_slice_tiles);
+                // A borrowed operand was published once above; only copied slices are pushed here.
+                if constexpr (!A_borrowed) {
+                    A_slice.push_back(A_slice_tiles);
+                }
+                if constexpr (!B_borrowed) {
+                    B_slice.push_back(B_slice_tiles);
+                }
             }
 
             // Next C slice: across N, then down M.

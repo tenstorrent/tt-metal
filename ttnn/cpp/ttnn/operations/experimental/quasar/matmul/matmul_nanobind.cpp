@@ -686,12 +686,13 @@ void py_module(nb::module_& mod) {
             divide K in tiles. 0 = auto (largest divisor <= 8 whose rings fit L1).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
-            Subblock height in tiles (the C slice's tiles accumulated in DST at once); must divide C_slice_M_tiles.
-            0 with subblock_N_tiles = 0 means auto.
+            Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
+            C_slice_M_tiles: the C slice is padded up to a subblock multiple and the overshoot is clipped on
+            write. 0 with subblock_N_tiles = 0 means auto.
         )doc")
         .def_rw("subblock_N_tiles", &MatmulUnifiedProgramConfig::subblock_N_tiles, R"doc(
-            Subblock width in tiles; must divide C_slice_N_tiles. A subblock holds at most 8 tiles (4 with fp32
-            accumulation), the DST capacity.
+            Subblock width in tiles; need not divide C_slice_N_tiles (padded and clipped like the height). A
+            subblock holds at most 8 tiles (4 with fp32 accumulation), the DST capacity.
         )doc")
         .def_rw("row_major_cores", &MatmulUnifiedProgramConfig::row_major_cores, R"doc(
             Core enumeration order for the work-item assignment: x fastest when True, y fastest when False.

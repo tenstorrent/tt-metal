@@ -202,6 +202,17 @@ def test_single_tile(device):
     _check(out, _golden(a, b))
 
 
+def test_auto_K_chunk_falls_back_to_one(device):
+    """K_tiles = 11 has no divisor in [2, 8], so the auto K chunk search has to walk all the way down to 1
+    (11 K chunks, spill/reload between each)."""
+    M, K, N = 2 * TILE, 11 * TILE, 2 * TILE
+    torch.manual_seed(9)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2)
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
 def test_sub_tile_dims(device):
     """M=5, K=10, N=7 elements: one partly-valid tile per operand; A's K padding must be zeroed."""
     M, K, N = 5, 10, 7
