@@ -11,6 +11,11 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
+#include "metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
 void kernel_main() {
     Noc noc;
     noc.async_write_barrier();
@@ -21,8 +26,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
@@ -114,6 +119,37 @@ void kernel_main() {
     // Split-head forwarding dedup buddy gate (see the AG gate below).
     const uint32_t buddy_gate_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7);
 
+    // When set, logical_n_ct/logical_nt_ct are worst-case placeholders; the live value is read below.
+    constexpr bool has_logical_n_tensor =
+        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 8) == 1;
+    constexpr auto logical_n_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset() + 9>();
+
+    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
+
+    // Read the live length ONCE, before the ring loop, into locals. Every logical_n-dependent quantity
+    // below derives from these — including the chunk-skip predicate that sets this kernel's credit caps
+    // and the injector's per-link gate demand. A mid-loop re-read could observe a host rewrite and
+    // desynchronize those counts from the writer's, which forwards on the same predicate.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    [[maybe_unused]] uint32_t global_n_partial_col_live = 0;
+    if constexpr (has_logical_n_tensor) {
+        // Borrow cb_q_in's L1 as read scratch: this runs before any Q is fetched into it.
+        logical_n = trace_metadata::read_metadata_scalar_u32(
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(tt::CBIndex::c_0).get_write_ptr());
+        ASSERT(logical_n >= 1);
+        logical_nt = ring_joint::tiles_for(logical_n);
+        global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
+
+        // Hand compute the values it cannot read itself (compute RISCs cannot NoC-read DRAM).
+        CircularBuffer cb_derived_obj(cb_derived);
+        cb_derived_obj.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> d(cb_derived_obj.get_write_ptr());
+        d[ring_joint::kDerivedLogicalNt] = logical_nt;
+        d[ring_joint::kDerivedGlobalNPartialCol] = global_n_partial_col_live;
+        cb_derived_obj.push_back(1);
+    }
+
     // Receiver flips this to INVALID before each wait; initialize so the first iteration sees it as VALID.
     Semaphore<>(valid_semaphore_id).set(VALID);
 
@@ -168,9 +204,6 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
-
     // Number of Q chunks already pushed to cb_q_in. Q is identical across ring iterations; with
     // resident Q each pass reads its head's chunk exactly once (on the first active ring iteration)
     // and all q_count chunks stay resident until compute pops them after the last pass of the last
@@ -192,12 +225,9 @@ void kernel_main() {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
-
-        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
 
         if (!ring_iter_does_work) {
             continue;
@@ -457,11 +487,13 @@ void kernel_main() {
                     post_k_credit();
                 }
 
-                // Download Q on the first K iteration — after K is downloaded and forwarded.
+                // Download Q on the first processed K chunk — after K is downloaded and forwarded.
+                // First processed, not k_chunk == 0: a shard's leading spatial chunks past logical_n
+                // are skipped, so chunk 0 is not always the first one read.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc.async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0 && need_q_read) {
+                if (KV_chunks_processed_in_iter == 1 && need_q_read) {
                     if constexpr (use_q_subblock_push) {
                         const auto& q_gen = is_joint_q ? joint_q_generator : q_generator;
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {

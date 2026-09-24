@@ -22,6 +22,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "gelu_bw/device/gelu_bw_device_operation.hpp"
+#include "device/unary_backward_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -468,14 +469,32 @@ std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor sig_result = ttnn::sigmoid(
+
+    // The fused device operation is interleaved-only: it sizes its circular buffers from
+    // tt::tile_size and splits work by physical_volume() / TILE_HW. The composite it replaces
+    // was built from unary and binary ops that do support sharding, and callers rely on that
+    // (a height-sharded call returns a height-sharded result), so sharded operands -- or a
+    // request for a sharded output -- keep the composite path rather than being rejected.
+    // Adding sharding to the shared factory would let this fall away.
+    const auto& output_memory_config = output_mem_config.value_or(input.memory_config());
+    if (grad.is_sharded() || input.is_sharded() || output_memory_config.is_sharded()) {
+        Tensor sig_result = ttnn::sigmoid(
+            input,
+            (int)ttnn::operations::unary::VecMode::RC,
+            ttnn::operations::unary::SigmoidMode::ACCURATE,
+            output_mem_config);
+        Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
+        Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
+        return grad_tensor;
+    }
+
+    grad_tensor.emplace_back(ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW,
+        grad,
         input,
-        (int)ttnn::operations::unary::VecMode::RC,
-        ttnn::operations::unary::SigmoidMode::ACCURATE,
-        output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
-    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
+        input.dtype(),
+        output_memory_config));
     return grad_tensor;
 }
 
@@ -695,7 +714,7 @@ std::vector<Tensor> logit_bw(
         ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_result = where(ttnn::eq(status, 1.0f, std::nullopt, output_mem_config), grad_result, std::nanf(""));
+    grad_result = where(status, grad_result, std::nanf(""));
     grad_result = where(
         ttnn::logical_or(
             ttnn::eq(input, 0.0f, std::nullopt, output_mem_config),
@@ -1073,18 +1092,17 @@ std::vector<Tensor> sin_bw(
 std::vector<Tensor> sinh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, 88.5f, std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, -88.5f, std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::multiply(grad, ttnn::cosh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_inf.deallocate();
+    // An input-domain guard used to sit here, returning +/-inf once |input| passed 88.5. That
+    // bound is log(FLT_MAX), the point where exp saturates -- but cosh is (e^x + e^-x)/2 and does
+    // not overflow until log(2*FLT_MAX) = 89.4159862. Over that window the guard discarded a
+    // value the forward op computes correctly and finitely, and with grad = 0 it produced
+    // sign(0) * inf = NaN where torch returns 0.
+    //
+    // It was also redundant. The magnitude clamp immediately below already returns inf exactly
+    // when the result overflows and the finite value when it does not, which is the decision the
+    // guard was trying to make, made on the right quantity. Removing it takes six element-wise
+    // operations and one intermediate tensor off every call.
+    Tensor grad_a = ttnn::multiply(grad, ttnn::cosh(input, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
@@ -1191,21 +1209,11 @@ std::vector<Tensor> softsign_bw(
 std::vector<Tensor> cosh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor t_neg_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, 88.50f, std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, -88.50f, std::nullopt, output_mem_config),
-            t_neg_inf,
-            ttnn::multiply(grad, ttnn::sinh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_neg_inf.deallocate();
-    t_inf.deallocate();
+    // The same stale guard as in sinh_bw, and eight element-wise operations here rather than six,
+    // because the negative branch builds a second infinity tensor. sinh overflows at the same
+    // log(2*FLT_MAX) = 89.4159862, so the window above the old bound was being thrown away, and
+    // the magnitude clamp below already decides the genuine overflow correctly.
+    Tensor grad_a = ttnn::multiply(grad, ttnn::sinh(input, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),

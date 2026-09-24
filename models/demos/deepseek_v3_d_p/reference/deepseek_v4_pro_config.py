@@ -45,6 +45,7 @@ class DeepSeekV4ProConfig:
 
     # Model architecture
     NUM_LAYERS = 61
+    NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
@@ -71,5 +72,9 @@ class DeepSeekV4ProConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
+    # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576

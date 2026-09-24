@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -27,8 +26,6 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/types/tlb.hpp>
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -153,32 +150,6 @@ DeviceClock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const Core
     return out;
 }
 
-// A static TLB window skips UMD's per-access reconfigure on the socket's ack write (171 vs 382 ns). Metal
-// maps a window per DRAM channel only on the channel's preferred worker endpoint port (configure_static_tlbs
-// -> ddr_to_noc0) and the relay sits on the unused port, so it maps its own: 2 MB at address 0 spans the whole
-// 128 KB DRISC L1. Best-effort: windows are finite, and losing the race costs only the ~210 ns.
-void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual) {
-    if (cluster.is_mock_or_emulated()) {
-        return;
-    }
-    auto* tlb_manager = cluster.get_driver()->get_chip(device_id)->get_tlb_manager();
-    const tt_xy_pair tlb_core(drisc_virtual.x, drisc_virtual.y);
-    if (tlb_manager->is_tlb_mapped(tlb_core)) {
-        return;
-    }
-    try {
-        tlb_manager->configure_tlb(tlb_core, /*tlb_size=*/2 * 1024 * 1024, /*address=*/0, tt::umd::tlb_data::Strict);
-    } catch (const std::exception& e) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] could not configure a static TLB for DRISC core ({}, {}): {} "
-            "-- the socket ack write stays on the dynamic path",
-            tlb_core.x,
-            tlb_core.y,
-            e.what());
-    }
-}
-
 // A resident relay launches fire-and-forget, so a core that never leaves reset produces no error and the
 // workload wedges on full rings; the heartbeat counts sweeps, and two of them prove the loop runs.
 bool relay_heartbeat_advanced(
@@ -201,29 +172,6 @@ bool relay_heartbeat_advanced(
         d,
         hb);
     return false;
-}
-
-// Every relay's NIU into stream mode, in one launch, run to completion. D2HSocket construction writes its
-// config into DRISC L1 from the host, which only lands once the NIU terminates inbound traffic at L1. One
-// launch: every LaunchProgram carries a dram_barrier that MMIO-polls a core in every DRAM channel, and a
-// barrier that reaches a core already in stream mode never completes.
-void set_drisc_niu_stream_mode(IDevice* device, const std::vector<CoreCoord>& drisc_logicals) {
-    std::set<CoreRange> ranges;
-    for (const auto& c : drisc_logicals) {
-        ranges.insert(CoreRange(c, c));
-    }
-    Program p = CreateProgram();
-    CreateKernel(
-        p,
-        "tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp",
-        CoreRangeSet(ranges),
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {1u}});
-    detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
-    detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
-    // Launch and wait split so a failure names which half stalled; a stall on the first label means a core was
-    // already in stream mode when this run began.
-    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-    detail::WaitProgramDone(device, p);
 }
 
 }  // namespace
@@ -412,7 +360,6 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
         banks.size(),
         nbanks);
 
-    // Picked up front so that every relay's NIU flips in one launch (see set_drisc_niu_stream_mode).
     std::vector<CoreCoord> relay_cores;
     for (uint32_t d = 0; d < ctx.n_relays; d++) {
         ctx.relays[d].logical = mesh_device->impl().pick_unused_dram_logical_core(ctx.device, banks[d]);
@@ -434,27 +381,28 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
                 relay_cores[a].y);
         }
     }
-    // Cluster::dram_barrier syncs subchannel 0 of every channel and every LaunchProgram carries one; a relay
-    // resident there is in stream mode, where a DRAM-range address no longer forwards to GDDR. Reported, not
-    // fatal: it usually works, and this is the explanation for a later MMIO timeout.
-    uint32_t collide = 0;
-    for (int ch = 0; ch < soc.get_num_dram_channels(); ch++) {
-        // Only x/y take part in the comparison against relay_cores, so the coord-system/type fields are
-        // dropped deliberately rather than by an implicit slice.
-        const auto bar_umd = soc.get_dram_core_for_channel(ch, 0, CoordSystem::LOGICAL);
-        const CoreCoord bar{bar_umd.x, bar_umd.y};
-        collide += static_cast<uint32_t>(std::count(relay_cores.begin(), relay_cores.end(), bar));
+    // A DRISC initiates NoC traffic only on an NIU firmware left in stream mode, and the relay uses both:
+    // NOC_INDEX for egress, the other NoC for gathers. pick_unused_dram_logical_core() skips the endpoints of
+    // the view it was asked for, but a channel carved into several views has one endpoint set per view, so the
+    // free subchannel of one view can still be another's -- and firmware keeps that NIU in NOC2AXI, where the
+    // relay's reads would never issue. Capture off rather than a relay whose gathers go nowhere.
+    for (uint32_t d = 0; d < ctx.n_relays; d++) {
+        const CoreCoord translated = soc.get_physical_dram_core_from_logical(relay_cores[d]);
+        const uint8_t noc2axi_mask = soc.get_dram_endpoint_noc_mask(translated);
+        if (noc2axi_mask != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Device {}: relay {}'s DRISC ({},{}) is a DRAM view's preferred endpoint on "
+                "NOC mask {:#x}, so firmware holds those NIUs in NOC2AXI mode and the relay cannot initiate NoC "
+                "traffic on them -- the streaming profiler is OFF for this device.",
+                chip,
+                d,
+                translated.x,
+                translated.y,
+                noc2axi_mask);
+            return false;
+        }
     }
-    if (collide != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] {} of {} relays sit on a dram_barrier target core (subchannel 0 "
-            "of their channel). Every LaunchProgram barriers those cores while they are in stream "
-            "mode; a 60-70 ms MMIO timeout at bring-up or weight upload has this as a candidate.",
-            collide,
-            ctx.n_relays);
-    }
-    set_drisc_niu_stream_mode(ctx.device, relay_cores);
     return true;
 }
 
@@ -515,8 +463,6 @@ bool Devices::launch_relay(
         tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
     relay.virt = ctx.device->virtual_core_from_logical_core(relay.logical, CoreType::DRAM);
     const tt_cxy_pair drisc(chip, relay.virt);
-
-    configure_relay_static_tlb(cluster, chip, relay.virt);
 
     try {
         auto socket = std::make_unique<distributed::D2HSocket>(
@@ -656,10 +602,6 @@ void Devices::quiesce(const RelayStateFn& on_state) {
         }
         // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
         set_producers_armed(ctx, false);
-        // Release restores the NIU; NOC2AXI takes this L1 out of the host's view, so it comes last.
-        for (uint32_t d = 0; d < ctx.n_relays; d++) {
-            write_stop(d, kernel_profiler::kRelayStopRelease);
-        }
     }
 }
 

@@ -51,6 +51,7 @@ enum class BinaryOpType {
     XLOGY,
     HYPOT,
     ATAN2,
+    NEXTAFTER,
     WHERE_TST,
     WHERE_TTS,
     ISCLOSE,

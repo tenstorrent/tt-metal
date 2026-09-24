@@ -638,8 +638,10 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy LUT tanh': tanh_derivative_init loads the tanh piecewise-linear
-        // LUT into LReg0/1/2, which _calculate_tanh_derivative_ then consumes.
+        // Legacy LUT tanh': tanh_derivative_init loads a 6-entry piecewise-linear
+        // LUT fitted for sech^2 -- slopes into LReg0/1/2, intercepts into LReg4/5/6 --
+        // which _calculate_tanh_derivative_ then consumes as 1 - lut(x)^2. It is no
+        // longer tanh's own table; the two are fitted separately and free to diverge.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
@@ -1066,7 +1068,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_square,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -1901,11 +1909,15 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::RSHFT)
     {
+        // INT32, not INT32_2S_COMP, to match binary_shift.h: native Int32 tiles hold 2's complement
+        // in Dst, so the shift operates on the bits directly. INT32_2S_COMP would ask for a
+        // sign-magnitude conversion that no Blackhole caller wants and that the load/store mode
+        // does not perform there anyway. Drive these ops with twos_complement=True.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1917,7 +1929,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_left_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1929,7 +1942,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logical_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
