@@ -28,9 +28,9 @@ The endpoint launches a hardcoded pair, not a scalable set:
 - **worker B** — receiver, endpoint id `0x7FFF0000` = 2147418112 (`kWorkerLoopbackReceiverId`),
   `--ep-app-color 1`, queues `/ep_1_b_*`
 
-`run_loopback()` calls `launch_worker_pair()` unconditionally. `--num-subordinates` scales a
-different axis and will not give you more workers. There is no `--loopback` flag — the docs are
-wrong; loopback is unconditional at this engine commit.
+`run_loopback()` calls `launch_worker_pair()` unconditionally. `--num-subordinates` scales A and B
+alike — each spans `1 + num_subordinates` ranks — so it will not give you a third logical worker.
+There is no `--loopback` flag — the docs are wrong; loopback is unconditional at this engine commit.
 
 ### One endpoint per runner — this is the constraint that bites
 
@@ -339,15 +339,17 @@ of the box:
 2. Same file — yaml-cpp never linked. `migration_worker` deliberately does not link `libtt_metal.so`
    (ULFM vs stock-OpenMPI ABI conflict) and compiles `metal_soc_descriptor.cpp` directly, which drags
    in yaml-cpp. Only the include dir was globbed.
-3. `launch_migration_endpoints.sh:442` passes `--resp-queue`; the binary requires `--response-queue`.
+3. `build_migration_layer.sh` accepts only `--flag=value`; `--flag value` exits 1 on the value it
+   just consumed. It also builds tt-metal with `|| true`, hiding a failed metal build until the
+   migration-layer link step.
 4. `docs/launch.md` documents a `--loopback` flag that does not exist.
 5. Launching a worker without `TT_METAL_HOME` set kills both workers with a bare `YAML::BadFile`.
 6. A second `SET_TABLE` aborts the worker via `terminate called without an active exception` instead
    of returning an error to the endpoint. The endpoint survives, so the next client hangs in
    `wait_complete` with no diagnostic. Either make the table re-settable or fail the endpoint loudly.
 
-Patched locally in `/data/nmilicevic/tt-llm-engine`, kept out of the main tree on purpose. The patch
-uses path fallbacks so older pins still resolve — upstreamable as-is.
+1-4 are fixed on tt-llm-engine branch `nmilicevic/migration-build-fixes`; the CMake patch uses path
+fallbacks so older pins still resolve. 5 and 6 are untouched — 6 is the one that costs hours.
 
 **tt-metal**: #56877 left the contradicting comment at `tt_prefill_runtime.py:1015-1023` in place.
 

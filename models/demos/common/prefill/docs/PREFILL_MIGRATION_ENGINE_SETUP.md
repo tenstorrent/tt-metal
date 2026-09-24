@@ -27,7 +27,9 @@ git submodule update --init --recursive     # pulls tt-metal at the pin; takes a
 
 ## 2. The migration layer does not build out of the box
 
-At this pin, `disaggregation/migration/CMakeLists.txt` needs two fixes before it links.
+At this pin, `disaggregation/migration/CMakeLists.txt` needs two fixes before it links. Both, plus
+the build-script fixes below, are on tt-llm-engine branch `nmilicevic/migration-build-fixes` — check
+it out and skip this section.
 
 **a. Stale UMD library paths.** UMD commit `6d8cc51f` (2026-06-03, *predates the pin*) folded
 `libdevice.so` into `libtt-umd.so` and moved it from `build/lib` to
@@ -47,8 +49,10 @@ Build:
 cd /data/<user>/tt-llm-engine && ./build_migration_layer.sh --build-type RelWithDebInfo --jobs 32
 ```
 
-Script gotchas:
-- `--targets` accepts only the `--targets=value` form. `--build-type` and `--jobs` take either form.
+Script gotchas (fixed on the branch above; they bite on stock `main`):
+- Every flag takes only the `--flag=value` form. `--flag value` parses the value and then dies on it
+  with `Unknown argument: <value>` — the argument loop iterates a word list it froze before the
+  first `shift`.
 - It builds tt-metal with `|| true`, so a **metal build failure is swallowed** and you only find out
   at the migration-layer link step. Read the log, don't trust the exit code.
 - There is no passthrough for extra `-D` args, which is why patching the CMakeLists is the right
@@ -143,13 +147,17 @@ awk '/^read_bytes/{print $2}' /proc/<rank0-python-pid>/io     # weight-load prog
 
 ## 7. Upstream bugs hit during bring-up
 
+Fixed on tt-llm-engine branch `nmilicevic/migration-build-fixes`:
+
 1. `CMakeLists.txt` stale UMD paths (§2a) — link error, not a configure error.
 2. `CMakeLists.txt` yaml-cpp not linked (§2b).
-3. `launch_migration_endpoints.sh:442` passes `--resp-queue`; `endpoint_main.cpp:61` accepts only
-   `--response-queue`.
+3. `build_migration_layer.sh` rejects every `--flag value` form, and hides a failed tt-metal build.
 4. `docs/launch.md` documents a `--loopback` flag that does not exist. Loopback is unconditional at
-   this pin — `EndpointOrchestrator::run()` always calls `run_loopback()`. Loopback vs cross-endpoint
-   is a *protocol usage* distinction (`dest_endpoint_id == own id` routes to worker B), not a flag.
+   this pin — `EndpointOrchestrator::run()` always calls `run_loopback()`.
+
+Still open, and worth a word with whoever owns the migration layer:
+
 5. Missing `TT_METAL_HOME` surfaces as a bare `YAML::BadFile` with no path in the message.
 6. A second `SET_TABLE` aborts both workers instead of being rejected, and the failure is only
-   visible in `endpoint.log` (§4).
+   visible in `endpoint.log` (§4). This is the expensive one — the next driver hangs with no
+   diagnostic of its own.
