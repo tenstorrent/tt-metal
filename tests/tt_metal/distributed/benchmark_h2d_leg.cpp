@@ -42,13 +42,17 @@ constexpr int kDeviceId = 0;
 
 // `cores` must stay a single element: the region maps once per process.
 const std::vector<int64_t> kPageSizes = {16384};
-const std::vector<int64_t> kCores = {4};
+const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 const std::vector<int64_t> kRingPages = {8};
-const std::vector<int64_t> kIterations = {20000};
-const std::vector<int64_t> kWarmupPct = {10};
+const std::vector<int64_t> kIterations = {2000, 20000, 200000};
+const std::vector<int64_t> kWarmupPct = {0, 10, 25};
 // Both: the verified case is the only correctness check this leg has, and the compare runs
 // on the device, so it cannot be the same case that reports bandwidth.
 const std::vector<int64_t> kVerify = {0, 1};
+
+// The region maps once per process and reserved_base() refuses to resize, so the mapping
+// is sized for the sweep's largest case; provision() then pins only each case's prefix.
+const uint32_t kReservedCores = static_cast<uint32_t>(*std::max_element(kCores.begin(), kCores.end()));
 
 // Fail rather than spin: the receiver kernel exits only after `iters` frames.
 constexpr auto kStall = std::chrono::seconds(30);
@@ -209,7 +213,7 @@ public:
         HostRegion& region = HostRegion::storage();
         std::string err;
         try {
-            region_base_ = region.reserved_base(cores_);
+            region_base_ = region.reserved_base(kReservedCores);
             hc.alias_region_base = region_base_;
             h2d_ = H2DLeg::create(mesh_, hc, err);
         } catch (const std::exception& ex) {
@@ -376,7 +380,9 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
                     if (frames == warmup_frames_) {
                         t0 = std::chrono::steady_clock::now();
                     }
-                    if (frames > warmup_frames_) {
+                    // Bounded by the same cap the reserve uses: past it the percentiles have
+                    // converged, and the growth would realloc inside the window being timed.
+                    if (frames > warmup_frames_ && rt_us.size() < kMaxSamples) {
                         rt_us.push_back(us_since(core[c].at[slot]));
                     }
                     ++core[c].drained;
