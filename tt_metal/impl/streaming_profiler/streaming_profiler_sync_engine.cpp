@@ -597,11 +597,11 @@ void LinkSolver::try_solve_links(bool final) {
         out.solved_at_refclk = newest;
         std::vector<RoundPoint> pts;
         pts.reserve(w);
-        const double path_med = path_median(rounds, begin, n);
+        const double path_med = path_median(rounds, begin, n, out.rate);
         out.path_dropped = 0;
         for (size_t i = begin; i < n; i++) {
             const Round& r = rounds[i];
-            if (std::abs(path_ns(r) - path_med) > kPathDevNs) {
+            if (std::abs(path_ns(r, out.rate) - path_med) > kPathDevNs) {
                 out.path_dropped++;
                 continue;
             }
@@ -639,14 +639,14 @@ double LinkSolver::mid_b_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t1.units) + static_cast<double>(r.t1b.units)) * kRefclkPerStampUnit;
 }
 
-double LinkSolver::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
+double LinkSolver::path_median(const std::vector<Round>& rounds, size_t begin, size_t n, double rate) {
     if (n <= begin) {
         return std::numeric_limits<double>::quiet_NaN();
     }
     std::vector<double> v;
     v.reserve(n - begin);
     for (size_t i = begin; i < n; i++) {
-        v.push_back(path_ns(rounds[i]));
+        v.push_back(path_ns(rounds[i], rate));
     }
     std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
     return v[v.size() / 2];
@@ -1233,7 +1233,8 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     const CaptureContext::Link& L = ctx_.links[li];
     const std::vector<Round>& rounds = links_.rounds(li);
     LinkErrors e;
-    e.path_med = LinkSolver::path_median(rounds, 0, rounds.size());
+    const double rate = links_.solutions()[li].rate;
+    e.path_med = LinkSolver::path_median(rounds, 0, rounds.size(), rate);
     const auto until = [&](uint32_t dev) {
         const auto it = local_.find(dev);
         return it == local_.end() ? 0.0 : it->second.frontier();
@@ -1241,7 +1242,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     const double until_a = until(L.dev_a), until_b = until(L.dev_b);
     const int64_t oldest_a = map_.oldest_at(L.chip_a), oldest_b = map_.oldest_at(L.chip_b);
     for (const Round& r : rounds) {
-        if (std::abs(LinkSolver::path_ns(r) - e.path_med) > LinkSolver::kPathDevNs) {
+        if (std::abs(LinkSolver::path_ns(r, rate) - e.path_med) > LinkSolver::kPathDevNs) {
             e.off_path++;
             continue;
         }
@@ -1265,7 +1266,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         e.raw_x.push_back(LinkSolver::mid_a_refclk(r));
         e.raw_y.push_back(LinkSolver::mid_b_refclk(r) - e.raw_x.back());
         e.rtt.push_back(LinkSolver::rtt_ns(r));
-        e.path.push_back(LinkSolver::path_ns(r));
+        e.path.push_back(LinkSolver::path_ns(r, rate));
         e.turn.push_back(e.rtt.back() - 2.0 * e.path.back());
     }
     if (!e.rtt.empty()) {

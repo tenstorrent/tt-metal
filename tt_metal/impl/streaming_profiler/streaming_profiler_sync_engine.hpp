@@ -248,7 +248,10 @@ public:
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<double>* weights) const;
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
-    // one-way delay inside the stamps, in ns.
+    // one-way delay inside the stamps, in ns. Each end averages the frames it could pair, which need not be the same
+    // frames at both ends, so the round trip can span the round: the one-way delay carries it into the receiver's
+    // refclk at the link's `rate` (LinkSolution::rate). The midpoints need no such term, the link's relation being a
+    // line.
     static double mid_a_refclk(const Round& r);
     static double mid_b_refclk(const Round& r);
     static double rtt_ns(const Round& r) {
@@ -258,8 +261,8 @@ public:
         return (static_cast<double>(r.t1b.units) - static_cast<double>(r.t1.units)) * kRefclkPerStampUnit *
                kNsPerRefclk;
     }
-    static double path_ns(const Round& r) { return 0.5 * (rtt_ns(r) - turn_ns(r)); }
-    static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n);
+    static double path_ns(const Round& r, double rate) { return 0.5 * (rtt_ns(r) * (1.0 + rate) - turn_ns(r)); }
+    static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n, double rate);
 
 private:
     // A link's rounds: the complete ones in the order they completed, the rest waiting for their other end. A round

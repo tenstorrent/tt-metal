@@ -726,9 +726,9 @@ namespace {
 // What each end leaves past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path, 1 ran,
 // 2 never acknowledged its rate, in which case that end emitted no hardware stamps; the session's PTP offset in the
 // bits above, a tick multiple), wall cycles inside bursts, wall
-// cycles and refclk ticks of the run, the longest burst in wall cycles, then rounds dropped, bursts with a hand-off
-// beyond the frames, bursts whose frames did not all hand off or stamp in time, rounds with the ingress count off,
-// and waits for a frame or echo given up.
+// cycles and refclk ticks of the run, the longest burst in wall cycles, then rounds not recorded, bursts with queue
+// units beyond their frames' (a keepalive or a resend), bursts whose pilot or frames did not hand off in time, frames
+// whose ingress stamps could not be matched to them, and frames that came in without an egress stamp.
 struct StopDiag {
     uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
     double wall() const { return static_cast<double>((uint64_t{wall_hi} << 32) | wall_lo); }
@@ -769,12 +769,12 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
         static_cast<int32_t>(da.timer & ~3u),
         static_cast<int32_t>(db.timer & ~3u));
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
-        if (d->drop[0] != 0 || d->drop[1] != 0 || d->drop[4] != 0) {
+        if (std::any_of(std::begin(d->drop), std::end(d->drop), [](uint32_t n) { return n != 0; })) {
             log_info(
                 tt::LogMetal,
-                "[streaming profiler] link sync chip {} {} dropped {} hardware rounds: bursts with a hand-off beyond "
-                "the frames {}, bursts whose frames did not all stamp in time {}, ingress count off {}, waits given "
-                "up {}",
+                "[streaming profiler] link sync chip {} {}: {} rounds not recorded; bursts with a keepalive or resend "
+                "among the frames {}, bursts not handed off in time {}; frames left unpaired: ingress stamps unmatched "
+                "{}, no egress stamp {}",
                 chip,
                 name,
                 d->drop[0],
