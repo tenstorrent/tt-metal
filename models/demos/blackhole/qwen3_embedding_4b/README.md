@@ -2,10 +2,11 @@
 
 Optimized inference of [Qwen/Qwen3-Embedding-4B](https://huggingface.co/Qwen/Qwen3-Embedding-4B) on Tenstorrent Blackhole (P150) hardware.
 
-> **Faster path (2026-09-24):** the tuned stack in [`../pplx_embed_4b/`](../pplx_embed_4b/README.md) runs this
-> checkpoint unchanged with `HF_MODEL=Qwen/Qwen3-Embedding-4B` (causal attention and last-token pooling follow
-> the checkpoint): bs1 18.1 ms, bs8 115.7, bs16 217.6, bs32 426.9 ms cold (18.3 / 121.9 / 228.3 / 445.5 sustained)
-> at ISL 512 against the 32.3 / 725 ms profiled below. See `../pplx_embed_4b/doc/PERF_GUIDE.md` §9.
+The demo, perf tests and MTEB script here run through the optimized
+[`pplx_embed_4b`](../pplx_embed_4b/README.md) stack: Qwen3-Embedding-4B is the backbone pplx-embed-v1-4B was
+trained from, so the same tuned code path serves both. `demo/_common.py` sets `HF_MODEL=Qwen/Qwen3-Embedding-4B`
+and the stack switches to causal attention and last-token pooling from that. Performance from baseline to now:
+[`../pplx_embed_4b/PERF.md`](../pplx_embed_4b/PERF.md).
 
 ## Model overview
 
@@ -44,11 +45,12 @@ export MESH_DEVICE=P150
 
 ## Running demo files
 
-The demo scripts measure prefill latency over multiple iterations with all optimizations enabled. Each can be run via pytest or as a standalone script.
+The demo scripts time the extended trace (forward + pooling + I/O in one replay) over 10 iterations with the
+tuned per-batch defaults applied by `apply_workload_env`. Each can be run via pytest or as a standalone script.
 
 ### Batch size 1
 
-Activation = 512 x 2560 x 2 = 2.5 MB -- fits in L1 (single-user path, no `TT_BATCHED_L1_PREFILL`).
+Activation = 512 x 2560 x 2 = 2.5 MB -- L1-resident; legacy 2D-multicast matmuls on a 12x8 grid.
 
 ```bash
 # Via pytest
@@ -60,7 +62,8 @@ MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs1_
 
 ### Batch size 32
 
-Activation = 32 x 512 x 2560 x 2 = 80 MB -- DRAM-resident. Uses the full 130-core (13x10) matmul grid via `QWEN_MM_GRID=13,10` for an 18% speedup over the default 80-core grid.
+Activation = 32 x 512 x 2560 x 2 = 80 MB -- DRAM-resident; `minimal_matmul` on the full worker grid (12x10 on a
+Galaxy P150, 13x10 on a p150a card).
 
 ```bash
 # Via pytest
@@ -74,7 +77,10 @@ MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs32
 
 ```bash
 python .../demo_bs1_isl512.py --device-id 0 --iterations 20
+python .../demo_bs1_isl512.py --no-full-pipeline      # time only the bare forward replay
 ```
+
+On a multi-chip host pick the chip with `TT_VISIBLE_DEVICES=<n>` (the process then sees it as device 0).
 
 ## Running MTEB evaluation
 
@@ -104,55 +110,49 @@ These scripts run a single measured iteration with `tracy.signpost("start"/"stop
 ```bash
 # bs=1 Tracy profile
 MESH_DEVICE=P150 \
-  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \
   python -m tracy -p -r -v -m pytest \
   models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
 
 # bs=32 Tracy profile
 MESH_DEVICE=P150 \
-  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \
   python -m tracy -p -r -v -m pytest \
   models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs32_isl512.py -sv
 ```
 
-Filter the resulting `ops_perf_results_*.csv` to ops between the `start` and `stop` signposts.
+Filter the resulting `ops_perf_results_*.csv` to the ops between the `start` and `stop` signposts, in file
+order (trace-replayed ops keep their capture-time host timestamps). The 40000 program budget is required or
+the batched-shape ops get no device data.
 
-## Profiled performance (P150)
+## Performance (P150, sustained)
 
-### bs=1, ISL=512 (~32.3 ms wall)
+Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run; the board settles its clock at
+≈1.1–1.3 GHz under load), one Galaxy P150 (12x10 = 120 worker cores), measured 2026-09-24:
 
-| Component | Time | Share | Detail |
-|---|---|---|---|
-| Matmuls (64-core 8x8 grid) | 19.5 ms | 61.4% | FF2: 8.1ms, FF1+FF3: 7.4ms, QKV: 2.3ms, WO: 1.7ms |
-| Attention (SDPA + RoPE) | 5.6 ms | 17.6% | SDPA: 3.6ms (32 Q-heads), RoPE: 1.5ms |
-| Norms | 3.4 ms | 10.7% | 40 us/layer x 2 on 16 cores |
-| Element-wise | 2.5 ms | 7.7% | SiLU-mul 48 us/layer on 130 cores |
-| TM ops | 0.8 ms | 2.7% | Head-split at 6-12 us/layer |
+| batch | Qwen3-Embedding-4B | pplx-embed-4B (same stack) | H200 reference | × H200 |
+|---|---|---|---|---|
+| 1 | **18.4 ms** | 17.6 ms | 5.44 ms | 3.4× |
+| 8 | **120.8** | 120.9 | 33.08 | 3.7× |
+| 16 | **228.2** | 227.6 | 67.23 | 3.4× |
+| 32 | **445.1** | 446.4 | 139.15 | 3.2× |
 
-### bs=32, ISL=512 (~725 ms wall)
-
-130-core (13x10) matmul grid gives 18% speedup vs default 80-core (8x10) grid (882 ms -> 725 ms). Activations are DRAM-resident at this batch size.
+The previous demo in this directory measured 32.3 ms at bs=1 and 725 ms at bs=32. STS-B Spearman through the
+batched paths (last token + EOS): 0.819 / 0.810 / 0.808 / 0.807 at bs 1 / 8 / 16 / 32
+(`../pplx_embed_4b/demo/eval_accuracy_batched.py --pool last --eos`). The H200 reference is the pplx-embed-4B
+measurement; the compute is identical. Per-op profiles of the shipped configuration are described in
+`../pplx_embed_4b/doc/PERF_GUIDE.md` §5.
 
 ## Optimizations enabled
 
-All demos and tests automatically apply these optimizations via `_common.apply_recommended_env()`:
-
-| Env var | Effect |
-|---|---|
-| `QWEN_QKV_BFP4=1` | QKV projection weights in BFP4 |
-| `QWEN_WO_BFP4=1` | Output projection weights in BFP4 |
-| `QWEN_FF13_OUT_BFP8=1` | FF1/FF3 output activations in BFP8 |
-| `QWEN_FFNORM_IN_BFP8=1` | FFN norm input in BFP8 |
-| `QWEN_RESIDUAL_BFP8=1` | Post-FFN residual add in BFP8 |
-| `QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1` | Split NlpCreateHeads by head group (16 -> 128 work units) |
-| `QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1` | Split NlpConcatHeads by head group (16 -> 128 work units) |
-| `QWEN_ROPE_PREFILL_L1=1` | Keep RoPE cos/sin tables in L1 |
-| `QWEN_LN_BLOCK_SHARDED=1` | Set but inert for 4B (dim=2560 exceeds per-core budget) |
-| `TT_SKIP_KV_CACHE_FILL=1` | Skip KV cache fill for embedding (prefill-only) |
-| `TT_BATCHED_L1_PREFILL=1` | L1-resident activations for batched prefill (bs <= 10 only) |
-| `QWEN_MM_GRID=13,10` | 130-core matmul grid for DRAM-resident workloads (bs >= 11) |
-
-All vars use `os.environ.setdefault` so you can override any single knob from the shell for A/B comparisons.
+Everything comes from the shared stack: `../pplx_embed_4b/demo/_common.py::apply_workload_env(batch, seq)` sets
+the tuned defaults per batch size (all `os.environ.setdefault`, so any knob can be overridden from the shell for
+an A/B), and the model-local kernels live in `../pplx_embed_4b/tt/custom_ops/`. In short: bfp4 weights with
+LoFi matmuls (legacy 2D multicast on 12x8 at bs1, `minimal_matmul` on 120 cores at bs≥8), a fused head-split +
+Q/K RMSNorm + RoPE op emitting bfp8 Q/K/V, SDPA on the streaming kernel writing the concatenated-heads layout
+directly, a fused residual add + RMSNorm, a fused SwiGLU product, and DRAM-interleaved weights at bs32. The
+Qwen3-specific switch is `QWEN_SDPA_CAUSAL=1`, set automatically for a non-pplx `HF_MODEL`. The full list with
+the effect of each change is in [`../pplx_embed_4b/PERF.md`](../pplx_embed_4b/PERF.md).
 
 ## Key differences from 0.6B
 
@@ -163,5 +163,5 @@ All vars use `os.environ.setdefault` so you can override any single knob from th
 | Q-heads | 16 | 32 |
 | bs=1 L1 activation | 1 MB | 2.5 MB |
 | bs=32 activation | 32 MB | 80 MB (DRAM) |
-| LN block sharding | Active | Auto-disabled (dim too large) |
-| Matmul grid (bs=32) | 8x8 (64 cores) | 13x10 (130 cores) |
+| LN block sharding | Active | Active at bs=1 (10x8 grid); fused add + RMSNorm at bs≥8 |
+| Matmul grid (bs=32) | 8x8 (64 cores) | full worker grid (12x10 here, 13x10 on p150a) |

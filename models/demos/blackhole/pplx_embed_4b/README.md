@@ -47,8 +47,8 @@ loading.
 | Q-heads           | 16     | 32            |
 | bs=1 ISL=512 act  | 1 MB   | 2.5 MB (L1)   |
 | bs=32 ISL=512 act | 32 MB  | 80 MB (DRAM)  |
-| DRAM matmul grid  | 80-core (8×10) | **130-core (13×10)** |
-| LN block sharding | active | auto-disabled (dim 2560 > per-core cap) |
+| DRAM matmul grid  | 80-core (8×10) | **full worker grid: 12×10 = 120 here** (13×10 on p150a) |
+| LN block sharding | active | active at bs=1 (10×8); fused add + RMSNorm at bs≥8 |
 
 ---
 
@@ -83,51 +83,38 @@ activations in **L1** when the per-user sequence is ≤ 512
 (`TT_SHORT_SEQ_L1_PREFILL_MAX`, default 512). Activation bytes (bf16) =
 `bs × seq × 2560 × 2`:
 
-| Workload        | Activation | Placement | Matmul grid | Best prefill |
-|-----------------|-----------:|-----------|-------------|--------------|
-| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | standard (8×8) | **25.9 ms · 19.8k tok/s** |
-| bs=2  ISL=512   |  5 MB      | **L1** (batched) | 130-core | 67.4 ms · 15.2k tok/s ᵃ |
-| bs=4  ISL=512   | 10.5 MB    | **L1** (batched) | 130-core (13×10) | 74.8 ms · 27.4k tok/s ᵃ |
-| bs=8  ISL=512   | 20 MB      | DRAM | 130-core | **157.6 ms · 26.0k tok/s** |
-| bs=16 ISL=512   | 40 MB      | DRAM | 130-core | **291.4 ms · 28.1k tok/s** |
-| **bs=32 ISL=512** | **80 MB** | DRAM | 130-core | **558.0 ms · 29.4k tok/s** |
-| bs=1  ISL=1024  |  5 MB      | DRAM | 130-core | — |
-| bs=1  ISL=2048  | 10 MB      | DRAM | 130-core | — |
+| Workload        | Activation | Placement | Matmul kernel / grid | Sustained latency (median of it 15–29 of 30) |
+|-----------------|-----------:|-----------|----------------------|----------------------------------------------|
+| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | legacy 2D multicast, 12×8 (96 cores) | **17.6 ms · 29.1k tok/s** |
+| bs=4  ISL=512   | 10.5 MB    | DRAM ᵃ    | `minimal_matmul`, 12×10 (120 cores) | **69.0 ms · 29.7k tok/s** |
+| bs=8  ISL=512   | 20 MB      | DRAM      | `minimal_matmul`, 12×10 | **120.9 ms · 33.9k tok/s** |
+| bs=16 ISL=512   | 40 MB      | DRAM      | `minimal_matmul`, 12×10 | **227.6 ms · 36.0k tok/s** |
+| **bs=32 ISL=512** | **80 MB** | DRAM    | `minimal_matmul`, 12×10 | **446.4 ms · 36.7k tok/s** |
+| bs=1  ISL=1024 / 2048 | 5 / 10 MB | DRAM | `minimal_matmul`, 12×10 | not re-measured since the 2026-09-22 baseline |
 
-ᵃ bs=2 / bs=4 rows are the pre-optimization figures; not re-measured since.
-All other rows measured on a **harvested P150 exposing 12×10 = 120 worker
-cores** (nominal 13×10 = 130), so they are roughly 8% pessimistic against a
-full part. For reference, H200 FP8 at the same shapes: bs=1 5.44 ms,
-bs=8 33.08, bs=16 67.23, bs=32 139.15 — i.e. 4.0-4.8x.
+ᵃ bs=4 moved to the DRAM path on 2026-09-24: the batched-L1 placement now clashes with the fused ops'
+circular buffers, and DRAM is faster with them anyway (65 ms best of 10 vs the 75 ms the L1 path read before).
+Measured 2026-09-24 on a Galaxy P150 exposing **12×10 = 120 worker cores** (a p150a card exposes 13×10);
+"sustained" is after the board's power manager has settled the clock at ≈1.1–1.3 GHz under continuous
+load, which is the like-for-like comparison against a steady-state H200 (bs=1 5.44 ms, bs=8 33.08,
+bs=16 67.23, bs=32 139.15): **3.24× / 3.65× / 3.39× / 3.21×**. Qwen3-Embedding-4B through the same
+stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Baseline, same method:
+28.8 / 190.3 / 372.7 / 720.8 ms — the full path is in [PERF.md](PERF.md).
 
 ### Optimization history
 
-Against the BFP8 / FF13-BFP4 reference configuration
-(bs=1 44.08 ms, bs=8 185.01, bs=16 366.23, bs=32 690.53) the current defaults
-are **-41% / -15% / -20% / -19%**. STS-B Spearman 0.8125 throughout
-(pre-optimization 0.8116). What moved, in order of size:
+Every landing from the 2026-09-22 baseline to the numbers above, with its mechanism and measured effect, is in
+[PERF.md](PERF.md); the long-form notes per landing are in §5 below, and every rejected experiment with numbers
+is in `doc/NEGATIVE_RESULTS.md`. Most of the early wins were constants tuned for the 0.6B sibling that silently
+mis-applied to 4B (2.5× the hidden size, 2× the heads); re-check them before reusing this config on another
+model in the family.
 
-| Change | Env | Effect |
-|---|---|---|
-| MinimalMatmul output subblock (was 1x1) | `QWEN_MM_SUBBLOCK=1,8` | bs8 -12%, bs16 -13%, bs32 -18% |
-| Head-split QKV + concat (`tt/custom_ops`) | `QWEN_NLP_*_HEAD_SPLIT=1` | bs1 -2.7 ms, bs32 -8.8 ms |
-| `in0_block_w` cap 8 -> 38 (FF2 was pinned at 2) | `QWEN_MM_MAX_DIVISOR=38` | bs1 -4.4 ms |
-| Fused SwiGLU MLP (`tt/mlp.py`) | `QWEN_FUSE_SWIGLU` | bs16 -5.7%, bs8 -1.6%, **off at bs32** |
-| Block-sharded LayerNorm (was silently inert) | `QWEN_LN_GRID_MAX_X=10` | bs1 -1.9 ms |
-| SDPA q/k chunk | `QWEN_SDPA_Q_CHUNK=512` / `_K_CHUNK=256` | bs8/16/32 -2..-4% |
-
-Most of these were constants tuned for the 0.6B sibling that silently
-mis-applied to 4B, which has 2.5x the hidden size and 2x the head count.
-Re-check them before reusing this config on another model in the family.
-
-- **L1 path (bs≤4, ISL≤512):** activations stay resident in L1, eliminating DRAM
-  round-trips for the residual stream. **bs=4 batched-L1 is the throughput-optimal
-  config** (27.4k tok/s — higher than bs=8/bs=32) once the matmul grid is widened.
-- **DRAM path (bs≥8):** activations spill to DRAM, which *frees the per-core L1
-  budget*. We spend that freed budget by widening the MinimalMatmul grid to the
-  **full 130-core (13×10) Blackhole grid** (`QWEN_MM_GRID=13,10`). Matmuls dominate
-  ≈60% of device time, so this is the dominant DRAM-path win (the analogous
-  80→130-core change gave ≈18% on Qwen3-Embedding-4B).
+- **L1 path (bs=1, ISL≤512):** activations stay resident in L1, so the residual stream never
+  round-trips DRAM; the matmuls are the legacy 2D-multicast kernel on 12×8 with DRAM-width-sharded
+  bfp4 weights (at M=512 it beats `minimal_matmul` by 53–65%).
+- **DRAM path (bs≥4):** activations live in DRAM, which frees the per-core L1 for `minimal_matmul` on
+  the full worker grid (12×10 here). Matmuls are ≈65% of device time at bs=32, the fused SwiGLU product
+  13%, the fused residual add + RMSNorm 8%, SDPA 8%.
 
 ### What the per-op SQLite memory report showed
 
@@ -163,7 +150,7 @@ DP scripts pick the right placement + grid for their shape with no extra flags.
 
 | Script | What it does / produces |
 |--------|--------------------------|
-| `demo/demo_bs{1,4,8,32}_isl{512,1024,2048}.py` | Single-device **latency benchmark** for one (batch, ISL). Prints avg/best prefill time, embeddings/s and tokens/s. Add `--full-pipeline` for end-to-end latency (H2D + replay + post-proc + D2H). **`demo_bs4_isl512.py` is the throughput-optimal config (27.4k tok/s, batched-L1).** |
+| `demo/demo_bs{1,4,8,32}_isl{512,1024,2048}.py` | Single-device **latency benchmark** for one (batch, ISL). Times the extended trace (forward + pooling + I/O in one replay) by default and prints avg/best time, embeddings/s and tokens/s; `--no-full-pipeline` times the bare forward replay. |
 | `demo/dp32_multiprocess.py` | **Data-parallel benchmark** across N chips (one resident model per chip). Prints per-chip latency (mean/median/min/max), slowest-chip latency and aggregate throughput. `--mean-pool` runs the real serving post-processing (RMSNorm + mean-token pooling folded in-trace). |
 | `demo/live_demo.py` | **Resident encoder** — loads the model once and keeps it up. Embed your own text interactively, from a file (one text/line), or from a folder (one doc/file). `--fast` = low-latency traced serving; `--mask` = accurate for short/variable inputs; `--dp N` = serve across N chips; `--bench N` = report per-request latency. |
 | `demo/eval_accuracy.py` | **CPU fp32 reference** accuracy (STS-B Spearman / SciFact nDCG@10). The ground-truth baseline the device is compared against. |
@@ -173,16 +160,16 @@ DP scripts pick the right placement + grid for their shape with no extra flags.
 ### 3.1 Latency benchmarks (single device)
 
 ```bash
-# bs=1, ISL=512 (L1-resident, pure device trace replay)
+# bs=1, ISL=512 (L1-resident; the extended trace is the default)
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs1_isl512.py
 
-# end-to-end latency (H2D + replay + post-processing + D2H)
-python models/demos/blackhole/pplx_embed_4b/demo/demo_bs1_isl512.py --full-pipeline
+# bare forward replay only (device time without pooling / I/O)
+python models/demos/blackhole/pplx_embed_4b/demo/demo_bs1_isl512.py --no-full-pipeline
 
-# bs=4, ISL=512 — throughput-optimal (batched-L1 activations + 130-core grid)
+# bs=4, ISL=512 (DRAM-resident activations, minimal_matmul on the full grid)
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs4_isl512.py --full-pipeline
 
-# DRAM-resident shapes with the 130-core matmul grid
+# DRAM-resident shapes on the full worker grid
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs8_isl512.py
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs32_isl512.py
 
@@ -365,7 +352,7 @@ Applied by default across all workloads (centralized in
 scripts):
 
 - **Memory placement** (Section 2): L1-resident activations for bs≤4/ISL≤512
-  (batched-L1, 12 MiB cap — bs=4 is the throughput-optimal config at 27.4k tok/s);
+  (batched-L1, 12 MiB cap — bs=4 runs on the DRAM path since 2026-09-24, see §2);
   DRAM + the **full-device MinimalMatmul grid** for every larger shape. A P150
   is nominally 13×10 but ships harvested: this board reports 12×10 = **120**
   workers, and the profile confirms `cores=120` on every batched matmul.
@@ -1086,13 +1073,13 @@ sharded input fails it, so every other layer fell back to the stock path. With t
 ```bash
 # bs=1 (L1 path) Tracy device profile
 MESH_DEVICE=P150 \
-  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \
   python -m tracy -p -r -v -m pytest \
   models/demos/blackhole/pplx_embed_4b/tests/perf/new_perf_bs1_isl512.py -sv
 
-# bs=32 (DRAM + 130-core grid) Tracy device profile
+# bs=32 (DRAM-resident, full worker grid) Tracy device profile
 MESH_DEVICE=P150 \
-  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \
   python -m tracy -p -r -v -m pytest \
   models/demos/blackhole/pplx_embed_4b/tests/perf/new_perf_bs32_isl512.py -sv
 ```

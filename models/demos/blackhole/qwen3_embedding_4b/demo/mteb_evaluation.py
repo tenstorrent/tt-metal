@@ -51,7 +51,7 @@ from tqdm import tqdm
 import ttnn
 from models.demos.blackhole.qwen3_embedding_4b.demo._common import (
     MODEL_NAME,
-    apply_recommended_env,
+    apply_workload_env,
     build_single_device_model,
     generate_synthetic_inputs,
 )
@@ -354,7 +354,7 @@ def _encode_hf(
 
 def _build_tt_model(device, batch_size: int, seq_len: int):
     os.environ.setdefault("HF_MODEL", MODEL_NAME)
-    apply_recommended_env(batched_l1=batch_size <= 10)
+    apply_workload_env(batch_size, seq_len)  # the tuned per-batch defaults of the shared pplx-embed-4B stack
 
     generator, model_args, kv_caches, page_table = build_single_device_model(
         device, batch_size=batch_size, seq_len=seq_len

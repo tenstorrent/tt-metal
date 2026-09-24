@@ -3,31 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tracy-friendly Qwen3-Embedding-4B perf capture: bs=32 / ISL=512 / DP=1.
-
-ONE measured iteration with signpost markers around the trace-replay forward.
-bs=32 keeps activations DRAM-resident (80 MB activation exceeds L1 budget) and
-uses `QWEN_MM_GRID=13,10` to push MinimalMatmuls onto the full (13,10)=130-core
-grid on Blackhole (18% faster than 80-core). Same config as `demo_bs32_isl512.py`.
+Tracy-friendly Qwen3-Embedding-4B perf capture: bs=32 / ISL=512, one measured iteration with
+``tracy.signpost("start"/"stop")`` around the trace replay, through the optimized pplx-embed-4B stack.
 
 Usage:
-    MESH_DEVICE=P150 \\
-      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
+    MESH_DEVICE=P150 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \\
       python -m tracy -p -r -v -m pytest \\
       models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs32_isl512.py -sv
 
-Filter the resulting CSV between the `start`/`stop` signposts.
+Take the ops between the ``start`` and ``stop`` signposts of the resulting ``ops_perf_results_*.csv``
+in file order (trace-replayed ops keep their capture-time host timestamps).
 """
-
 
 import pytest
 
-from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf
+from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_workload_env, run_perf
 
 BATCH_SIZE = 32
 SEQ_LEN = 512
 
-apply_recommended_env(batched_l1=False)
+apply_workload_env(BATCH_SIZE, SEQ_LEN)
 
 
 @pytest.mark.parametrize(

@@ -3,33 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tracy-friendly Qwen3-Embedding-4B perf capture: bs=1 / ISL=512 / DP=1.
+Tracy-friendly Qwen3-Embedding-4B perf capture: bs=1 / ISL=512, one measured iteration with
+``tracy.signpost("start"/"stop")`` around the trace replay, through the optimized pplx-embed-4B stack.
 
-ONE measured iteration with `tracy.signpost("start"/"stop")` markers around the
-trace-replay forward. The signposted zone is what you filter on in Tracy/the CSV
-post-processor to get a clean device-time number.
-
-Uses the same all-optimizations-on environment as `demo_bs1_isl512.py`,
-including head-split NlpCreateHeads/NLPConcatHeads (~128 cores), BFP4 weights,
-BFP8 residual stream, and RoPE tables in L1.
-
-Usage (Tracy device profile):
-    MESH_DEVICE=P150 \\
-      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
+Usage:
+    MESH_DEVICE=P150 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 \\
       python -m tracy -p -r -v -m pytest \\
       models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
 
-Filter the resulting `ops_perf_results_*.csv` between `start`/`stop` signposts.
+Take the ops between the ``start`` and ``stop`` signposts of the resulting ``ops_perf_results_*.csv``
+in file order (trace-replayed ops keep their capture-time host timestamps).
 """
 
 import pytest
 
-from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf
+from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_workload_env, run_perf
 
 BATCH_SIZE = 1
 SEQ_LEN = 512
 
-apply_recommended_env(batched_l1=BATCH_SIZE > 1)
+apply_workload_env(BATCH_SIZE, SEQ_LEN)
 
 
 @pytest.mark.parametrize(
