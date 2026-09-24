@@ -502,13 +502,12 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
     to stock SDPA + concat (tests/perf/encoder_sdpa_concat.py, Galaxy chip 0).
     - B1/S512 on Blackhole: the stock chunk plan and 8x8 grid. 22.4 us against
       30.7 us for stock SDPA + concat.
-    - B8 and B16/S512 on a grid narrower than 13 columns (Galaxy): the stock
-      q256/k512 plan on the full 12x10 grid, with a balanced flat work split (B8 256
-      units, 2 or 3 per core; B16 512 units, 4 or 5 per core). B8 86.1 us against
-      121.8 us for stock SDPA + concat; B16 144.7 us against 239.9 us. A 13-column
-      grid keeps the stock path; it has not been measured there.
-    - B32 the same, on q256/k256 (the stock plan on 12 columns; see
-      _sdpa_program_config), 1024 units, 8 or 9 per core. 301.7 us against 571.2 us.
+    - B8, B16 and B32/S512 on a grid narrower than 13 columns (Galaxy): the stock
+      chunk plan (_galaxy_s512_chunks) on the full 12x10 grid, with a balanced flat
+      work split. Against stock SDPA + concat: B8 q128/k512 (512 units, 4 or 5 per
+      core) 76.4 us against 126.9 us; B16 q256/k512 144.7 us against 239.9 us; B32
+      q256/k256 301.7 us against 571.2 us. A 13-column grid keeps the stock path;
+      it has not been measured there.
     """
     if seq_len != 512 or batch_size not in (1, 8, 16, 32) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
@@ -517,13 +516,12 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
     from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
 
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
-    if batch_size == 32:
-        k_chunk = min(k_chunk, 256)
     if batch_size == 1:
         grid_x, grid_y = 8, 8
     else:
         g = mesh_device.compute_with_storage_grid_size()
         grid_x, grid_y = int(g.x), int(g.y)
+        q_chunk, k_chunk = _galaxy_s512_chunks(batch_size, grid_x, q_chunk, k_chunk)
     return EncoderSDPAConfig(
         batch=batch_size,
         num_q_heads=16,
@@ -558,16 +556,32 @@ def _sdpa_compute_grid(mesh_device):
         return (8, 8)
 
 
+def _galaxy_s512_chunks(batch_size, grid_x, q_chunk, k_chunk):
+    """S512 chunk plan on a grid narrower than 13 columns (Galaxy, 12x10).
+
+    The stock (masked) and model-local (nomask) SDPA calls both use it, so the
+    two paths stay bit-identical.
+    - B8: q128. 512 work units balance better on 120 cores than 256. Masked
+      17.99 to 17.77 ms, nomask 13.339 to 13.039 ms sustained.
+    - B32: k256. The k512 circular buffers overlap the L1 heads by 30 KB.
+    """
+    if grid_x >= 13:
+        return q_chunk, k_chunk
+    if batch_size == 8:
+        q_chunk = 128
+    if batch_size == 32:
+        k_chunk = min(k_chunk, 256)
+    return q_chunk, k_chunk
+
+
 def _sdpa_program_config(seq_len, mesh_device, batch_size=None, data_parallel=False):
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size, data_parallel=data_parallel)
     grid = _sdpa_compute_grid(mesh_device)
+    if seq_len == 512 and not isinstance(grid, tuple):
+        q_chunk, k_chunk = _galaxy_s512_chunks(batch_size, int(grid.x), q_chunk, k_chunk)
     # B1/S512 on Blackhole: an 8x8 grid beats the default 11x10.
     if seq_len == 512 and batch_size == 1 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         grid = ttnn.CoreCoord(8, 8)
-    # B32 on a 12-column grid (Galaxy Blackhole): 120 cores hold larger L1 head
-    # shards, and the k512 circular buffers overlap them by 30 KB. k256 fits.
-    if seq_len == 512 and batch_size == 32 and int(grid.x) < 13:
-        k_chunk = min(k_chunk, 256)
     kwargs = {
         "compute_with_storage_grid_size": grid,
         "q_chunk_size": q_chunk,
