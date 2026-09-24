@@ -1315,8 +1315,14 @@ static void sdpa_inner_loop_step(
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
     {
+#ifdef SDPA_RECIPE_FP32
+        // FP32 recipes keep single-row PV groups (their in-place numerator and row-wise
+        // FP32 state updates are qualified that way), including narrower D64 subblocks.
+        constexpr uint32_t qktv_h = qktv_subblock_h;
+#else
         constexpr uint32_t qktv_h =
             ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
+#endif
         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
         // QK and PV row groups coincide; an odd BF16 chunk ends with one single-row group.
         static_assert(qktv_h == qkt_subblock_h && qktv_remainder_h <= 1 && Sq_chunk_t / qktv_h > 1);
@@ -1342,8 +1348,8 @@ static void sdpa_inner_loop_step(
 
 #ifdef SDPA_RECIPE_FP32
         static_assert(
-            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt == 4 &&
-            qktv_h == 1);
+            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> &&
+            (vDHt == 2 || vDHt == 4) && qktv_h == 1);
         // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
@@ -1877,7 +1883,12 @@ template <
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
-        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == 4 && vDHt == 4);
+        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
+        (DHt == 4
+#ifdef SDPA_RECIPE_FP32
+         || DHt == 2  // FP32 recipes are width-generic; compensated BF16 state is laid out for D128.
+#endif
+         ));
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;

@@ -33,6 +33,10 @@ void kernel_main() {
     constexpr uint32_t scale = get_compile_time_arg_val(1);
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t d_tiles = get_compile_time_arg_val(4);
+    static_assert(d_tiles == 2 || d_tiles == 4, "Named recipes support D64/D128");
+    // PV subblocks are at most four tiles wide and must divide the head dim.
+    constexpr uint32_t pv_subblock_w = d_tiles < 4 ? d_tiles : 4;
     static_assert(k_tiles == 8 || k_tiles == 12 || k_tiles == 16, "Named recipes support K256/K384/K512");
     const uint32_t jobs = get_arg_val<uint32_t>(0);
     static_assert(q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320");
@@ -46,7 +50,7 @@ void kernel_main() {
 #endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 16);
     matmul_init(0, 1);
-    cb_wait_front(0, q_tiles * 4);
+    cb_wait_front(0, q_tiles * d_tiles);
     cb_wait_front(3, 1);
     cb_wait_front(4, 1);
     {
@@ -57,19 +61,19 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_BASELINE
             k_tiles * k_chunks,
 #endif
-            4,
-            4,
+            d_tiles,
+            d_tiles,
             scale,
 #ifdef SDPA_RECIPE_FP32
             1,
             4,
             1,
-            4,
+            pv_subblock_w,
 #else
             bf16_subblock_h,
             4,
             bf16_subblock_h,
-            4,
+            pv_subblock_w,
 #endif
 #ifdef SDPA_RECIPE_BASELINE
             false,

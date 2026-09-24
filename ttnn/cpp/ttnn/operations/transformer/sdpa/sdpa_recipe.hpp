@@ -22,7 +22,8 @@ tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const CoreRangeSet& grid,
     uint32_t k_chunks,
     uint32_t q_tiles = 8,
-    uint32_t k_tiles = 16);
+    uint32_t k_tiles = 16,
+    uint32_t d_tiles = 4);
 
 PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,

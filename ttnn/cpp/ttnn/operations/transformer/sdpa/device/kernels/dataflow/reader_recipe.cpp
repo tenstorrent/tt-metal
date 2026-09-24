@@ -39,14 +39,17 @@
 #ifndef SDPA_K_CHUNK_TILES
 #define SDPA_K_CHUNK_TILES 16
 #endif
-constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * 4;
+#ifndef SDPA_RECIPE_DHT
+#define SDPA_RECIPE_DHT 4
+#endif
+constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_DHT;
 
 template <uint32_t tile_bytes, bool transpose, typename Accessor>
 FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
     // Sequential source requests distribute traffic over the interleaved banks;
     // K scatters the tile grid in L1, without transposing individual tiles.
     for (uint32_t p = 0; p < kv_tiles; ++p) {
-        const uint32_t dst_tile = transpose ? (p % 4) * SDPA_K_CHUNK_TILES + p / 4 : p;
+        const uint32_t dst_tile = transpose ? (p % SDPA_RECIPE_DHT) * SDPA_K_CHUNK_TILES + p / SDPA_RECIPE_DHT : p;
         const CoreLocalMem<uint32_t> destination(write_ptr + dst_tile * tile_bytes);
         if (!tensor.visit(first_page + p, [&](const auto& source, uint32_t page) {
                 noc.async_read(source, destination, tile_bytes, {.page_id = page}, {});
@@ -64,7 +67,7 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
         for (uint32_t p = 0; p < kv_tiles; ++p) {
             const uint32_t rows = tensor.valid_rows(first_page + p);
             if (rows > 0 && rows < 32) {
-                const uint32_t dst_tile = transpose ? (p % 4) * SDPA_K_CHUNK_TILES + p / 4 : p;
+                const uint32_t dst_tile = transpose ? (p % SDPA_RECIPE_DHT) * SDPA_K_CHUNK_TILES + p / SDPA_RECIPE_DHT : p;
                 zero_tile_padding<tile_bytes>(write_ptr + dst_tile * tile_bytes, rows);
             }
         }
@@ -88,18 +91,18 @@ void kernel_main() {
     constexpr auto jqa = TensorAccessorArgs<va.next_compile_time_args_offset()>();
     constexpr auto jka = TensorAccessorArgs<jqa.next_compile_time_args_offset()>();
     constexpr auto jva = TensorAccessorArgs<jka.next_compile_time_args_offset()>();
-    const auto q = sequence_accessor<q_primary_rows, q_joint_rows, q_tiles * 32>(
+    const auto q = sequence_accessor<q_primary_rows, q_joint_rows, q_tiles * 32, SDPA_RECIPE_DHT>(
         TensorAccessor(qa, get_arg_val<uint32_t>(0)), TensorAccessor(jqa, get_arg_val<uint32_t>(12)));
-    const auto k = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32>(
+    const auto k = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(
         TensorAccessor(ka, get_arg_val<uint32_t>(1)), TensorAccessor(jka, get_arg_val<uint32_t>(13)));
-    const auto v = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32>(
+    const auto v = sequence_accessor<kv_primary_rows, kv_joint_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(
         TensorAccessor(va, get_arg_val<uint32_t>(2)), TensorAccessor(jva, get_arg_val<uint32_t>(14)));
 #else
-    const auto q = sequence_accessor<q_primary_rows, q_tiles * 32>(TensorAccessor(qa, get_arg_val<uint32_t>(0)));
+    const auto q = sequence_accessor<q_primary_rows, q_tiles * 32, SDPA_RECIPE_DHT>(TensorAccessor(qa, get_arg_val<uint32_t>(0)));
     const auto k =
-        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32>(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
+        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
     const auto v =
-        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32>(TensorAccessor(va, get_arg_val<uint32_t>(2)));
+        sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(va, get_arg_val<uint32_t>(2)));
 #endif
     const uint32_t first_job = get_arg_val<uint32_t>(3);
     const uint32_t jobs = get_arg_val<uint32_t>(4);
@@ -159,10 +162,10 @@ void kernel_main() {
 #endif
     const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
     for (uint32_t qi = 0; qi < jobs; ++qi) {
-        const uint32_t qbase = (first_job + qi) * q_tiles * 4;
-        qcb.reserve_back(q_tiles * 4);
+        const uint32_t qbase = (first_job + qi) * q_tiles * SDPA_RECIPE_DHT;
+        qcb.reserve_back(q_tiles * SDPA_RECIPE_DHT);
         const uint32_t qptr = qcb.get_write_ptr();
-        for (uint32_t p = 0; p < q_tiles * 4; ++p) {
+        for (uint32_t p = 0; p < q_tiles * SDPA_RECIPE_DHT; ++p) {
             const CoreLocalMem<uint32_t> destination(qptr + p * qbytes);
             if (!q.visit(qbase + p, [&](const auto& source, uint32_t page) {
                     noc.async_read(source, destination, qbytes, {.page_id = page}, {});
@@ -172,14 +175,14 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         if constexpr (decltype(q)::has_partial_rows) {
-            for (uint32_t p = 0; p < q_tiles * 4; ++p) {
+            for (uint32_t p = 0; p < q_tiles * SDPA_RECIPE_DHT; ++p) {
                 const uint32_t rows = q.valid_rows(qbase + p);
                 if (rows > 0 && rows < 32) {
                     zero_tile_padding<qbytes>(qptr + p * qbytes, rows);
                 }
             }
         }
-        qcb.push_back(q_tiles * 4);
+        qcb.push_back(q_tiles * SDPA_RECIPE_DHT);
 
         const bool receive = link.should_receive(head);
         const bool forward = link.should_forward(head, qi);
