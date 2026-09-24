@@ -9,7 +9,8 @@ import torch
 from helpers.chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    is_4row_arch,
+    quasar_has_mx_formats,
+    quasar_mx_formats,
 )
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -70,15 +71,11 @@ MATH_FIDELITY_MODES = [
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
 )
 
 REDUCE_FORMATS = input_output_formats(
@@ -361,7 +358,7 @@ _ARCH = get_chip_architecture()
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
+    _ARCH != ChipArchitecture.QUASAR or not quasar_has_mx_formats(),
     reason="MxFp4_2x GAPOOL reduce is not implemented on this architecture",
 )
 @parametrize(

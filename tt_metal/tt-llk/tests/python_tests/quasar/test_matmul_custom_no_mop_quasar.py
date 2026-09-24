@@ -23,7 +23,7 @@ THROTTLE_LEVEL == 0 (same on Wormhole).
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
+from helpers.chip_architecture import quasar_has_mx_formats
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
@@ -295,7 +295,7 @@ MATMUL_2X_DIMENSIONS = [
 
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    is_4row_arch(),
+    not quasar_has_mx_formats(),
     reason="MxFp4_2x is not implemented on the 4-row Quasar architecture",
 )
 @parametrize(

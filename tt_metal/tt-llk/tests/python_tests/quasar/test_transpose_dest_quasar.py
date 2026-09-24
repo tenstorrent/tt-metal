@@ -5,7 +5,7 @@ from typing import List
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
+from helpers.chip_architecture import quasar_mx_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -195,14 +195,10 @@ def transpose_dest_implied_math_formats(*, is_perf=False):
     )
 
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
 )
 
 TRANSPOSE_DEST_FORMATS = input_output_formats(

@@ -7,7 +7,7 @@
  * ckernel_proj_params.h to typed C++ constants.
  *
  * This is the only header permitted to include ckernel_proj_params.h or to name
- * a raw project macro; tests/check_arch_config.sh enforces both. Everything that
+ * a raw project macro; infra/check_arch_config.py enforces both. Everything that
  * varies between Quasar parts is a named constant here, so a new part costs a
  * regenerated ckernel_proj_params.h plus at most one capability constant — never
  * a second copy of a kernel.
@@ -50,6 +50,11 @@ constexpr std::uint32_t fpu_rows = MATH_ROWS;
 // every eight rows, whatever the FPU width. Fixed on every part.
 constexpr std::uint32_t dest_row_group = 8;
 
+// True when one dest row group takes more than one FPU issue, i.e. the FPU is narrower than the
+// layout granularity. Tiny-tile matmul then needs its own replay image: the full-tile image walks a
+// 16-row face, and no window of it walks an eight-row one.
+constexpr bool fpu_splits_dest_row_group = dest_row_group > fpu_rows;
+
 // ---------------------------------------------------------------------------
 // Instruction encodings derived from the geometry
 // ---------------------------------------------------------------------------
@@ -81,7 +86,8 @@ constexpr std::uint32_t mov_fpu_rows = mov_rows_encoding(fpu_rows);
 // ---------------------------------------------------------------------------
 
 // Records the MXFP4_2x matmul as a seven-MVMUL replay image. Parts without it
-// reach 2x through direct indexing instead (see llk_lib/variants/).
+// reach 2x through direct indexing instead (see _llk_math_matmul_init_ in
+// llk_lib/llk_math_matmul.h).
 constexpr bool has_mxfp4_2x_replay = (fpu_rows == 8);
 
 // Packer emits FP4; Int8 packing; 32-bit integer datapath variant. Already

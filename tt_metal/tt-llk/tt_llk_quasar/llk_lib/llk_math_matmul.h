@@ -17,11 +17,6 @@ static_assert(MAX_FACE_R_DIM % ELTWISE_MATH_ROWS == 0, "an FPU row band must div
 // FPU width, so this is the clamp for tiny-tile geometry — not ELTWISE_MATH_ROWS.
 constexpr std::uint8_t DEST_ROW_GROUP = ckernel::arch::dest_row_group;
 
-// True when one dest row group takes more than one MVMUL, i.e. the FPU is narrower than the layout
-// granularity. Tiny tiles then need their own replay image: the full-tile image walks a 16-row face,
-// and no window of it walks an eight-row one.
-constexpr bool FPU_SPLITS_DEST_ROW_GROUP = DEST_ROW_GROUP > ELTWISE_MATH_ROWS;
-
 // MVMULs one K face costs on a full tile: every face row band takes one issue.
 constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / ELTWISE_MATH_ROWS);
 
@@ -186,7 +181,7 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
         .has_next_k_face   = has_next_k_face,
         // A face clamped to one dest row group needs the half-face image, but only where the FPU is
         // narrower than that group; otherwise one MVMUL covers the face and the window suffices.
-        .use_half_face_replay = FPU_SPLITS_DEST_ROW_GROUP && face_rows == DEST_ROW_GROUP,
+        .use_half_face_replay = ckernel::arch::fpu_splits_dest_row_group && face_rows == DEST_ROW_GROUP,
         .output_num_faces_c   = output_shape.num_faces_c_dim,
         .output_num_faces_r   = output_shape.num_faces_r_dim,
     };
@@ -466,22 +461,13 @@ inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
 }
 
 /**
- * @brief Records the standard or 2x MVMUL image into replay buffer slot 0.
- *
- * Standard matmul always records the full 15-entry K-outer image. MOP-based tiny matmul selects a
- * window from that image.
- *
- * @tparam ENABLE_2X_FORMAT: When true, records the non-DI MXFP4_2x variant.
- * The variant uses a 7-MVMUL replay for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
- * @note Call @ref _llk_math_matmul_addrmod_ with the matching template args first, the recorded MVMULs select its addrmod slots.
- */
-/**
- * @brief Records the half-face MVMUL image over the window a tiny-tile shape selects.
+ * @brief Records the half-face MVMUL image into the window a tiny-tile shape selects.
  *
  * Only reachable where the FPU is narrower than a dest row group. Such a shape occupies
  * DEST_ROW_GROUP dest rows per face but only needs DEST_ROW_GROUP / ELTWISE_MATH_ROWS MVMULs to walk
  * one, and no window of the full-tile image (which walks a 16-row face) has that cadence. Recording
- * over the window the geometry already selected keeps @ref _llk_math_matmul_mop_config_ unchanged.
+ * into the window the geometry already selected keeps @ref _llk_math_matmul_mop_config_ unchanged,
+ * and replaces the full-tile image rather than adding to it.
  *
  * @param geometry: Replay window from @ref _llk_math_matmul_execution_geometry_.
  */
@@ -538,6 +524,17 @@ inline void _llk_math_matmul_load_half_face_replay_(const _llk_math_matmul_execu
         });
 }
 
+/**
+ * @brief Records the standard or 2x MVMUL image into replay buffer slot 0.
+ *
+ * Records the full K-outer image. MOP-based tiny matmul selects a window from it, except where the
+ * FPU is narrower than a dest row group: there @ref _llk_math_matmul_load_half_face_replay_ records
+ * the window instead of this image.
+ *
+ * @tparam ENABLE_2X_FORMAT: When true, records the non-DI MXFP4_2x variant.
+ * The variant uses a 7-MVMUL replay for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
+ * @note Call @ref _llk_math_matmul_addrmod_ with the matching template args first, the recorded MVMULs select its addrmod slots.
+ */
 template <bool ENABLE_2X_FORMAT>
 inline void _llk_math_matmul_load_replay_()
 {
@@ -613,17 +610,22 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
 
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
-    _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
-
-    // A face clamped to one dest row group has no matching window in the image just recorded, so
-    // overwrite that window with a traversal at the group's cadence. Compiled away entirely where one
-    // MVMUL covers a whole group.
-    if constexpr (FPU_SPLITS_DEST_ROW_GROUP && !ENABLE_2X_FORMAT)
+    // A face clamped to one dest row group has no matching window in the full-tile image, so it gets a
+    // traversal at the group's cadence instead. The MOP replays only that window, so the full image is
+    // not recorded at all. Compiled away entirely where one MVMUL covers a whole group.
+    bool use_half_face_replay = false;
+    if constexpr (ckernel::arch::fpu_splits_dest_row_group && !ENABLE_2X_FORMAT)
     {
-        if (geometry.use_half_face_replay)
-        {
-            _llk_math_matmul_load_half_face_replay_(geometry);
-        }
+        use_half_face_replay = geometry.use_half_face_replay;
+    }
+
+    if (use_half_face_replay)
+    {
+        _llk_math_matmul_load_half_face_replay_(geometry);
+    }
+    else
+    {
+        _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
     }
 
     const std::uint32_t replay_start_idx = ENABLE_2X_FORMAT ? 0 : geometry.replay_start_idx;

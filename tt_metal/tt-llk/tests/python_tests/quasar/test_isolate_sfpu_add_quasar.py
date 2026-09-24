@@ -9,7 +9,7 @@ result packed from SrcS slice 2 to L1.
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
+from helpers.chip_architecture import quasar_mx_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
@@ -41,13 +41,9 @@ from helpers.utils import passed_test
 # quantization (two operands each capped at 45% of max -> sum <= 90% of max).
 ADD_RANGE_SAFETY_FACTOR = 0.45
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxFp8R,
+    DataFormat.MxFp8P,
 )
 
 SFPU_ADD_FORMATS = input_output_formats(

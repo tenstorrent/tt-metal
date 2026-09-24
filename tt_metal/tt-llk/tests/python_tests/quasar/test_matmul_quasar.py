@@ -7,7 +7,7 @@ import torch
 from helpers.chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    is_4row_arch,
+    quasar_mx_formats,
 )
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
@@ -245,17 +245,13 @@ def matmul_tiny_transpose_modes(
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
 # entries where MxFp4 would land as an output.
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxFp8R,
+    DataFormat.MxFp8P,
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
 )
 
 MATMUL_FORMAT = input_output_formats(

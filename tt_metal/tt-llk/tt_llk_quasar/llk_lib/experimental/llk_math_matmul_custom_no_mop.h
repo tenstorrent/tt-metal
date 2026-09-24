@@ -28,11 +28,25 @@ using namespace ckernel::math;
 // issue mechanism differs, trading MOP occupancy for RISC instruction-issue bandwidth.
 
 /**
+ * @brief True when no-MOP matmul must use the direct-indexing image instead of the MVMUL one.
+ *
+ * Mirrors the selection in @ref _llk_math_matmul_init_: a part without the non-DI MXFP4_2x image
+ * reaches 2x through direct indexing, which every part has. Init and run both key off this, so the
+ * image recorded and the closing instruction issued always belong to the same traversal.
+ */
+template <bool ENABLE_2X_FORMAT>
+inline constexpr bool _llk_math_matmul_no_mop_uses_di_()
+{
+    return ENABLE_2X_FORMAT && !ckernel::arch::has_mxfp4_2x_replay;
+}
+
+/**
  * @brief Issues the MVMUL stream for one Tile x Tile matrix multiply directly, bypassing the MOP.
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam ENABLE_2X_FORMAT: When true, replays the non-DI MXFP4_2x sequence (8 MVMULs per tile instead of 16).
+ * @tparam ENABLE_2X_FORMAT: When true, replays the 2x traversal: the non-DI MXFP4_2x image on parts that have it,
+ * the direct-indexing 2x image otherwise.
  * @param reuse_a: True when SrcA is held across the reuse dimension (ct_dim >= rt_dim), so the closing MVMUL releases SrcA; otherwise it releases SrcB.
  * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args first this replays the buffer and addrmod slots it programmed.
  */
@@ -41,11 +55,33 @@ inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
 {
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
 
-    // Mirrors the selection in _llk_math_matmul_init_: on a part without the non-DI MXFP4_2x image,
-    // 2x runs through direct indexing, so the image to replay is the direct-indexing one.
-    constexpr bool USE_DI_IMAGE = ENABLE_2X_FORMAT && !ckernel::arch::has_mxfp4_2x_replay;
+    constexpr bool USE_DI_IMAGE = _llk_math_matmul_no_mop_uses_di_<ENABLE_2X_FORMAT>();
     constexpr std::uint32_t replay_buf_len =
         USE_DI_IMAGE ? _llk_math_matmul_di_replay_buf_len_<ENABLE_2X_FORMAT>() : _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
+
+    if constexpr (USE_DI_IMAGE)
+    {
+        // Same closing MVMULDI as _llk_math_matmul_di_mop_config_: the last row band of the last face
+        // pair, on the direct-indexing addrmods (ADDR_MOD_1 advances fidelity, ADDR_MOD_2 closes the tile).
+        constexpr _llk_math_matmul_di_block_t FINAL = _llk_math_matmul_di_final_<ENABLE_2X_FORMAT>();
+
+        for (std::uint32_t phase = 0; phase < FIDELITY_PHASES - 1; phase++)
+        {
+            TTI_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+            TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, FINAL.src_b, FINAL.src_a, ADDR_MOD_1, FINAL.dest);
+        }
+
+        TTI_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+        if (reuse_a)
+        {
+            TTI_MVMULDI(p_setrwc::CLR_A, 0x0, FINAL.src_b, FINAL.src_a, ADDR_MOD_2, FINAL.dest);
+        }
+        else
+        {
+            TTI_MVMULDI(p_setrwc::CLR_B, 0x0, FINAL.src_b, FINAL.src_a, ADDR_MOD_2, FINAL.dest);
+        }
+        return;
+    }
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
     constexpr std::uint8_t tile_completion_addr_mod           = ADDR_MOD_5;
@@ -94,8 +130,16 @@ inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_init_no_mop_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
-    _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
+    if constexpr (_llk_math_matmul_no_mop_uses_di_<ENABLE_2X_FORMAT>())
+    {
+        _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
+        _llk_math_matmul_di_load_replay_<ENABLE_2X_FORMAT>();
+    }
+    else
+    {
+        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+        _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
+    }
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }

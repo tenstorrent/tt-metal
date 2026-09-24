@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
+from helpers.chip_architecture import quasar_mx_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -81,17 +81,13 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxFp8R,
+    DataFormat.MxFp8P,
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
 )
 
 UNARY_BROADCAST_FORMATS = input_output_formats(

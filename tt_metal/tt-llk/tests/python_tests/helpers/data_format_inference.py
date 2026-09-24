@@ -10,7 +10,12 @@ architecture-specific differences between Wormhole and Blackhole.
 """
 from typing import List, Optional
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    quasar_has_int8_2x,
+    quasar_has_mx_formats,
+)
 from .format_config import DataFormat, FormatConfig
 from .llk_params import DestAccumulation
 
@@ -118,8 +123,8 @@ def is_format_combination_outlier(
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
-    # Int8_2x/UInt8_2x are 4row_arch-only, but the 4row_arch target builds run on the
-    # Quasar-arch emulator, so they are gated on QUASAR here.
+    # Every 2x register format is Quasar-only. Which Quasar part supports which one is a
+    # capability check in infer_unpack_out (quasar_has_int8_2x / quasar_has_mx_formats).
     DataFormat.Int8_2x: ChipArchitecture.QUASAR,
     DataFormat.UInt8_2x: ChipArchitecture.QUASAR,
 }
@@ -174,6 +179,20 @@ def infer_unpack_out(
             raise ValueError(
                 f"{register_format_hint.name} is only valid on "
                 f"{_SRCAB_ONLY_FORMATS[register_format_hint].value}"
+            )
+        if (
+            register_format_hint in (DataFormat.Int8_2x, DataFormat.UInt8_2x)
+            and not quasar_has_int8_2x()
+        ):
+            raise ValueError(
+                f"{register_format_hint.name} is not supported by the selected Quasar part"
+            )
+        if (
+            register_format_hint in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
+            and not quasar_has_mx_formats()
+        ):
+            raise ValueError(
+                f"{register_format_hint.name} is not supported by the selected Quasar part"
             )
         if input_format == DataFormat.MxFp4 and register_format_hint not in [
             DataFormat.MxFp4_2x_A,

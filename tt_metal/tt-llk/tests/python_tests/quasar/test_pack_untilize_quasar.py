@@ -5,7 +5,7 @@ from typing import List
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
+from helpers.chip_architecture import quasar_mx_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -148,15 +148,11 @@ def generate_pack_untilize_combinations(
     return combinations
 
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+_MX_FORMATS = quasar_mx_formats(
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
 )
 
 PACK_UNTILIZE_FORMATS = input_output_formats(
