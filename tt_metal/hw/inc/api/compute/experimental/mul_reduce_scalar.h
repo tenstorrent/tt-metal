@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_fill.h"  // _calculate_fill_ used by mul_reduce_scalar_tile
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "experimental/llk_math_mul_reduce_scalar_api.h"
 #endif
 #ifdef TRISC_UNPACK
@@ -37,7 +38,7 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
-ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
+ALWI void mul_reduce_scalar_init(std::uint32_t icb0, std::uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 }
@@ -51,10 +52,11 @@ template <
     MathFidelity reduce_fidelity,
     bool accumulate_in_one_tile,
     bool is_fp32_dest_acc_en>
-ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
+ALWI void mul_reduce_scalar_tile_impl(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t num_tiles, float scaler) {
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
-    constexpr uint32_t dest_capacity =
+    constexpr std::uint32_t dest_capacity =
         get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
     LLK_ASSERT(
         accumulate_in_one_tile || num_tiles <= dest_capacity,
@@ -65,7 +67,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
         MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f>(accumulate_in_one_tile ? 0 : i, icb0)));
     }
@@ -81,25 +83,11 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with the scaler value
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
-        0 /*dst_index*/,
-        VectorMode::RC_custom,
-        scaler));
+    MATH((sfpu::UnaryFn::run_once(sfpu::_calculate_fill_<APPROX, 2 /*ITERATIONS*/>, 0 /*dst_index*/, scaler)));
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
-        0 /*dst_index*/,
-        VectorMode::RC_custom,
-        0.0f));
+    MATH((sfpu::UnaryFn::run_once(sfpu::_calculate_fill_<APPROX, 2 /*ITERATIONS*/>, 0 /*dst_index*/, 0.0f)));
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
@@ -109,8 +97,8 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
 
     // Remaining iterations - always move
-    const uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
-    for (uint32_t i = 1; i < product_tiles; i++) {
+    const std::uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
+    for (std::uint32_t i = 1; i < product_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
     }
@@ -155,7 +143,8 @@ template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool accumulate_in_one_tile = false>
-ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+ALWI void mul_reduce_scalar_tile(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t num_tiles, float scaler = 1.0f) {
     // The two fidelity arguments are placeholders: program_fidelity=true reads MATH_FIDELITY instead.
     detail::mul_reduce_scalar_tile_impl<
         true,
@@ -181,7 +170,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
  */
 // clang-format on
 template <MathFidelity mul_fidelity>
-ALWI void mul_reduce_scalar_init_fidelity(uint32_t icb0, uint32_t icb1) {
+ALWI void mul_reduce_scalar_init_fidelity(std::uint32_t icb0, std::uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<mul_fidelity>(icb0, false /*acc_to_dest*/)));
 }
@@ -209,7 +198,7 @@ template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reduce_scalar_tile_fidelity(
-    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t num_tiles, float scaler = 1.0f) {
     detail::
         mul_reduce_scalar_tile_impl<false, mul_fidelity, reduce_fidelity, accumulate_in_one_tile, is_fp32_dest_acc_en>(
             icb0, icb1, ocb, num_tiles, scaler);

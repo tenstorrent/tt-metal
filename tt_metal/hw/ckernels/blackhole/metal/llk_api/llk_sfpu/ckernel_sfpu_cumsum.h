@@ -7,6 +7,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -165,6 +166,18 @@ inline void cumsum_init() {
         TTI_SFPNOP;
     });
 }
+
+// Op class for the column-wise cumulative sum of a whole tile. The kernel walks Dest itself.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Cumsum : SfpuUnaryOp<Cumsum<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr bool walks_faces = false;
+
+    static inline __attribute__((always_inline)) void calculate(const bool first) {
+        calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>(first);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { cumsum_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

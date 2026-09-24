@@ -77,22 +77,17 @@ template <
     bool rank_stamped = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_local_sort(
-    uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
+    std::uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
     static_assert(
-        !stable_sort || tie_order != TopkTieOrder::Unset,
-        "comparator-stable topk requires an explicit tie_order");
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_phases_steps,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
-        idst,
-        VectorMode::RC_custom,
-        idir,
-        i_end_phase,
-        i_start_phase,
-        i_end_step,
-        i_start_step));
+        !stable_sort || tie_order != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie_order");
+    MATH((sfpu::TopkLocalSort<
+          true /* APPROXIMATE */,
+          is_fp32_dest_acc_en,
+          stable_sort,
+          fused,
+          rank_stamped,
+          static_cast<ckernel::sfpu::TopkTieOrder>(
+              tie_order)>::run(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
 // topK merge
@@ -138,27 +133,19 @@ template <
     bool rank_stamped = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset,
     std::uint32_t tag_bits = 16>
-ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
+ALWI void topk_merge(std::uint32_t idst, int m_iter, int k) {
     static_assert(rank_stamped || tag_bits == 16, "tag_bits applies to the rank-stamped mode only");
     static_assert(
-        !stable_sort || tie_order != TopkTieOrder::Unset,
-        "comparator-stable topk requires an explicit tie_order");
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */,
-         is_fp32_dest_acc_en,
-         idir,
-         stable_sort,
-         fused,
-         rank_stamped,
-         static_cast<ckernel::sfpu::TopkTieOrder>(tie_order),
-         tag_bits),
-        idst,
-        VectorMode::RC_custom,
-        m_iter,
-        k));
+        !stable_sort || tie_order != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie_order");
+    MATH((sfpu::TopkMerge<
+          true /* APPROXIMATE */,
+          is_fp32_dest_acc_en,
+          idir,
+          stable_sort,
+          fused,
+          rank_stamped,
+          static_cast<ckernel::sfpu::TopkTieOrder>(tie_order),
+          tag_bits>::run(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -203,22 +190,16 @@ template <
     bool fused = false,
     bool rank_stamped = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset>
-ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
+ALWI void topk_rebuild(std::uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     static_assert(
-        !stable_sort || tie_order != TopkTieOrder::Unset,
-        "comparator-stable topk requires an explicit tie_order");
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_rebuild,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
-        idst,
-        VectorMode::RC_custom,
-        idir,
-        m_iter,
-        k,
-        logk,
-        skip_second));
+        !stable_sort || tie_order != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie_order");
+    MATH((sfpu::TopkRebuild<
+          true /* APPROXIMATE */,
+          is_fp32_dest_acc_en,
+          stable_sort,
+          fused,
+          rank_stamped,
+          static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)>::run(idst, idir, m_iter, k, logk, skip_second)));
 }
 
 /**
@@ -232,7 +213,14 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
 template <bool fused = false, bool rank_stamped = false, std::uint32_t tag_bits = 16>
 ALWI void topk_tile_init() {
     static_assert(rank_stamped || tag_bits == 16, "tag_bits applies to the rank-stamped mode only");
-    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused, rank_stamped, tag_bits)));
+    MATH((sfpu::TopkLocalSort<
+          true /* APPROXIMATE */,
+          DST_ACCUM_MODE,
+          false /* STABLE_SORT */,
+          fused,
+          rank_stamped,
+          ckernel::sfpu::TopkTieOrder::Unset,
+          tag_bits>::init()));
 }
 
 // clang-format off
@@ -253,14 +241,8 @@ ALWI void topk_tile_init() {
  */
 // clang-format on
 template <bool largest>
-ALWI void topk_fuse_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_topk_fuse,
-        (true /* APPROXIMATE */, largest),
-        idst,
-        VectorMode::RC_custom));
+ALWI void topk_fuse_tile(std::uint32_t idst) {
+    MATH((sfpu::TopkFuse<true /* APPROXIMATE */, largest>::run(idst)));
 }
 
 // clang-format off
@@ -281,15 +263,9 @@ ALWI void topk_fuse_tile(uint32_t idst) {
  */
 // clang-format on
 template <bool largest>
-ALWI void topk_defuse_tile(uint32_t idst, uint32_t num_tiles) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_topk_defuse,
-        (true /* APPROXIMATE */, largest, 9u /* TOPK_SFPSTORE_MODE_PACK_UINT16 */),
-        idst,
-        VectorMode::RC_custom,
-        num_tiles));
+ALWI void topk_defuse_tile(std::uint32_t idst, std::uint32_t num_tiles) {
+    MATH((sfpu::TopkDefuse<true /* APPROXIMATE */, largest, 9u /* TOPK_SFPSTORE_MODE_PACK_UINT16 */>::run(
+        idst, num_tiles)));
 }
 
 // clang-format off
@@ -317,13 +293,7 @@ ALWI void topk_defuse_tile(uint32_t idst, uint32_t num_tiles) {
 // clang-format on
 template <bool largest, std::uint32_t tag_bits = 16>
 ALWI void topk_stamp_local_positions(std::uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_topk_stamp_local_positions,
-        (true /* APPROXIMATE */, largest, tag_bits),
-        idst,
-        VectorMode::RC_custom));
+    MATH((sfpu::TopkStampLocalPositions<true /* APPROXIMATE */, largest, tag_bits>::run(idst)));
 }
 
 // clang-format off
@@ -349,16 +319,9 @@ ALWI void topk_stamp_local_positions(std::uint32_t idst) {
  */
 // clang-format on
 template <bool largest, std::uint32_t tag_bits = 16>
-ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uint32_t rank_base) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_topk_stamp_tile_rank_range,
-        (true /* APPROXIMATE */, largest, tag_bits),
-        idst,
-        VectorMode::RC_custom,
-        dst_tile_index,
-        rank_base));
+ALWI void topk_stamp_tile_rank_range(std::uint32_t idst, std::uint32_t dst_tile_index, std::uint32_t rank_base) {
+    MATH((
+        sfpu::TopkStampTileRankRange<true /* APPROXIMATE */, largest, tag_bits>::run(idst, dst_tile_index, rank_base)));
 }
 
 /**
@@ -367,14 +330,8 @@ ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uin
  * first topk_local_sort, when stable_sort=true. No-op unless values are fp32-family in 32-bit DEST.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void topk_canonicalize_negzero_values(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_topk_canonicalize_negzero,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC_custom));
+ALWI void topk_canonicalize_negzero_values(std::uint32_t idst) {
+    MATH((sfpu::TopkCanonicalizeNegzero<true /* APPROXIMATE */, is_fp32_dest_acc_en>::run(idst)));
 }
 
 // clang-format off
@@ -420,7 +377,7 @@ ALWI void topk_finalize_uint16_indices(std::uint32_t idst) {
  * No-op unless the compute kernel was built with TOPK_UINT16_FP32_DEST. Must run on MATH while DEST is
  * still acquired (before tile_regs_commit / pack_tile). See #50215.
  */
-ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
+ALWI void topk_uint16_prepare_value_tile_for_pack(std::uint32_t idst) {
     MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
 }
 
@@ -432,7 +389,7 @@ ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
  * acquired (before tile_regs_commit / pack_tile).
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void topk_uint16_move_dest_tile_to_pack_half(uint32_t idst) {
+ALWI void topk_uint16_move_dest_tile_to_pack_half(std::uint32_t idst) {
     static_assert(
         is_fp32_dest_acc_en,
         "topk_uint16_move_dest_tile_to_pack_half moves 32-bit DEST words; it requires fp32 DEST accumulation");
