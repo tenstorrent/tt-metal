@@ -16,13 +16,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 NUM_CAMS = 6
 
-# (height, width) of each camera image, and the ResNet stages whose activations
-# are kept in DRAM because their convs do not fit in L1. 640x360 is the resolution
-# the backbone was first brought up at; 928x1600 is BEVFormer-base's 1600x900 input
-# padded to a multiple of 32. There the stage-1 output alone is 6 x 232 x 400 x 256
-# bf16 = 285 MB, and stage 4's 2048-channel 1x1 convs overflow L1 when sharded.
-INPUT_SIZES = [(640, 360, ()), (928, 1600, (0, 1, 3))]
-INPUT_SIZE_IDS = ["640x360", "928x1600"]
+# BEVFormer-base's camera images are 1600x900, padded to 1600x928 so the height is a
+# multiple of 32 before the backbone.
+IMAGE_HEIGHT = 928
+IMAGE_WIDTH = 1600
+
+# ResNet stages whose activations are kept in DRAM because their convs do not fit in
+# L1: the stage-1 output alone is 6 x 232 x 400 x 256 bf16 = 285 MB, and stage 4's
+# 2048-channel 1x1 convs overflow L1 when sharded.
+DRAM_ACTIVATION_STAGES = (0, 1, 3)
 
 
 def _assert_pcc(expected, actual, pcc):
@@ -32,8 +34,7 @@ def _assert_pcc(expected, actual, pcc):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_stages", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_bottleneck_layer1(device, reset_seeds, height, width, dram_activation_stages):
+def test_bottleneck_layer1(device, reset_seeds):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -61,12 +62,12 @@ def test_bottleneck_layer1(device, reset_seeds, height, width, dram_activation_s
 
     reference_model = load_backbone_weights(reference_model)
 
-    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, height, width))
+    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
 
     bottle_neck = reference_model.layer1[0]
     bottle_neck.eval()
 
-    torch_input = torch.randn(NUM_CAMS, 64, height // 4, width // 4)
+    torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
 
     torch_output = bottle_neck(torch_input)
 
@@ -87,7 +88,7 @@ def test_bottleneck_layer1(device, reset_seeds, height, width, dram_activation_s
         False,
         64,
         style="caffe",
-        dram_activation=0 in dram_activation_stages,
+        dram_activation=0 in DRAM_ACTIVATION_STAGES,
     )
 
     ttnn_input = ttnn.from_torch(torch_input_permute, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -104,8 +105,7 @@ def test_bottleneck_layer1(device, reset_seeds, height, width, dram_activation_s
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_stages", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_bottleneck_layer3(device, reset_seeds, height, width, dram_activation_stages):
+def test_bottleneck_layer3(device, reset_seeds):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -132,12 +132,12 @@ def test_bottleneck_layer3(device, reset_seeds, height, width, dram_activation_s
     )
     reference_model = load_backbone_weights(reference_model)
 
-    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, height, width))
+    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
 
     bottle_neck = reference_model.layer3[0]
     bottle_neck.eval()
 
-    torch_input = torch.randn(NUM_CAMS, 512, height // 8, width // 8)
+    torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
 
     torch_output = bottle_neck(torch_input)
 
@@ -159,7 +159,7 @@ def test_bottleneck_layer3(device, reset_seeds, height, width, dram_activation_s
         256,
         style="caffe",
         dcn=True,
-        dram_input=1 in dram_activation_stages,
+        dram_input=1 in DRAM_ACTIVATION_STAGES,
     )
 
     ttnn_input = ttnn.from_torch(torch_input_permute, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -176,8 +176,7 @@ def test_bottleneck_layer3(device, reset_seeds, height, width, dram_activation_s
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_stages", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_reslayer1(device, reset_seeds, height, width, dram_activation_stages):
+def test_reslayer1(device, reset_seeds):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -204,12 +203,12 @@ def test_reslayer1(device, reset_seeds, height, width, dram_activation_stages):
     )
     reference_model = load_backbone_weights(reference_model)
 
-    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, height, width))
+    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
 
     reslayer = reference_model.layer1
     reslayer.eval()
 
-    torch_input = torch.randn(NUM_CAMS, 64, height // 4, width // 4)
+    torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reslayer(torch_input)
 
     ttnn_model = TtResLayer(
@@ -228,7 +227,7 @@ def test_reslayer1(device, reset_seeds, height, width, dram_activation_stages):
         style="caffe",
         conv_cfg=None,
         dcn=None,
-        dram_activation=0 in dram_activation_stages,
+        dram_activation=0 in DRAM_ACTIVATION_STAGES,
     )
     torch_input_permute = torch_input.permute(0, 2, 3, 1)
     torch_input_permute = torch_input_permute.reshape(
@@ -252,8 +251,7 @@ def test_reslayer1(device, reset_seeds, height, width, dram_activation_stages):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_stages", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_reslayer2(device, reset_seeds, height, width, dram_activation_stages):
+def test_reslayer2(device, reset_seeds):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -280,12 +278,12 @@ def test_reslayer2(device, reset_seeds, height, width, dram_activation_stages):
     )
     reference_model = load_backbone_weights(reference_model)
 
-    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, height, width))
+    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
 
     reslayer = reference_model.layer2
     reslayer.eval()
 
-    torch_input = torch.randn(NUM_CAMS, 256, height // 4, width // 4)
+    torch_input = torch.randn(NUM_CAMS, 256, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reslayer(torch_input)
 
     ttnn_model = TtResLayer(
@@ -304,7 +302,7 @@ def test_reslayer2(device, reset_seeds, height, width, dram_activation_stages):
         style="caffe",
         conv_cfg=None,
         dcn=None,
-        dram_activation=1 in dram_activation_stages,
+        dram_activation=1 in DRAM_ACTIVATION_STAGES,
     )
     torch_input_permute = torch_input.permute(0, 2, 3, 1)
     torch_input_permute = torch_input_permute.reshape(
@@ -328,8 +326,7 @@ def test_reslayer2(device, reset_seeds, height, width, dram_activation_stages):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-@pytest.mark.parametrize("height, width, dram_activation_stages", INPUT_SIZES, ids=INPUT_SIZE_IDS)
-def test_resnet(device, reset_seeds, height, width, dram_activation_stages):
+def test_resnet(device, reset_seeds):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -356,9 +353,9 @@ def test_resnet(device, reset_seeds, height, width, dram_activation_stages):
     )
     reference_model = load_backbone_weights(reference_model)
 
-    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, height, width))
+    parameters = create_resnet_parameters(reference_model, torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
 
-    torch_input = torch.randn(NUM_CAMS, 3, height, width)
+    torch_input = torch.randn(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH)
     torch_output = reference_model(torch_input)
 
     ttnn_model = TtResNet(
@@ -382,7 +379,7 @@ def test_resnet(device, reset_seeds, height, width, dram_activation_stages):
         stage_with_dcn=(False, False, True, True),
         pretrained=None,
         init_cfg=None,
-        dram_activation_stages=dram_activation_stages,
+        dram_activation_stages=DRAM_ACTIVATION_STAGES,
     )
 
     torch_input_permute = torch_input.permute(0, 2, 3, 1)
