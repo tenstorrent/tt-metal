@@ -12,10 +12,9 @@ The metric is device kernel duration summed over the worker's launches, which is
 launch, so each baseline covers the worker's warm-up plus its ITERATIONS measured launches. Re-measure
 both baselines together whenever the worker's launch count changes.
 
-At production geometry dispatch_fabric2d runs roughly 1.5x faster than production `dispatch`, not at
-parity: relaying through DRAM costs a store and a load per hop, but it also replaces the production
-op's multi-hop fabric routing, and the cheaper transport wins by more than the relay costs. Treat the
-ratio as approximate -- production `dispatch` varies several percent run to run, so it moves.
+At production geometry dispatch_fabric2d runs about 1.5x faster than production `dispatch`: relaying
+through DRAM costs a store and a load per hop, but it replaces the production op's multi-hop fabric
+routing and wins by more than the relay costs.
 
 This gate spawns a CHILD pytest that opens the mesh itself, so it must not share a pytest session
 with anything holding a device: the child blocks on the open and the run dies at the global 300 s
@@ -37,15 +36,17 @@ _K_FILTER = "fabric2d-torus-xy-8x4-2link"
 
 # Only the op this test exists for is gated. `DispatchDeviceOperation` is still in the capture -- the
 # ratio between the two is the transferable quantity and it is right there in the log -- but it is not
-# baselined here: over three back-to-back captures its summed device time moved 6.3% (12.15 / 12.91 /
-# 12.17 ms) while dispatch_fabric2d held to 0.12% (8.0827 / 8.0737 / 8.0734 ms). A margin wide enough
-# for production `dispatch` would tolerate a regression two orders of magnitude larger than this op's
-# own noise, and production already has its own gates.
+# baselined here: production already has its own gates, and over three back-to-back captures at the
+# hot profile it moved 1.5% against this op's 0.24%.
+#
+# Measured at the `hot` routing profile. Re-measure if PRODUCTION_ROUTING changes: at the uniform
+# profile the same op runs roughly 40% faster, so a baseline taken under one profile fails under the
+# other for no reason connected to the code.
 #
 # `run_model_device_perf_test_per_op` fails the test if an op substring matches no row, so a typo in a
 # key shows up as a failure rather than a silent pass.
 _EXPECTED_NS: dict[str, int] = {
-    "DispatchFabric2dDeviceOperation": 8_073_707,
+    "DispatchFabric2dDeviceOperation": 10_384_185,
 }
 
 
