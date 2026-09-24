@@ -4,6 +4,7 @@
 
 #include "moreh_group_norm_backward.hpp"
 
+#include <tt_stl/assert.hpp>
 #include "device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp"
 
@@ -26,6 +27,10 @@ std::vector<std::optional<Tensor>> moreh_group_norm_backward(
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(
+        are_required_outputs.size() == 3,
+        "are_required_outputs must have exactly 3 entries (input_grad, gamma_grad, beta_grad), got {}.",
+        are_required_outputs.size());
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 
