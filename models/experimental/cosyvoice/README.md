@@ -261,9 +261,10 @@ PCC ≈ 0.3.
 
 ## Why the vocoder is the interesting part
 
-HiFTNet ends in an inverse STFT, and TTNN has no STFT; its only transform is the
-general-purpose `ttnn.experimental.fft` / `ifft`. So the vocoder looks like the part to
-leave on the host, as it usually is.
+HiFTNet ends in an inverse STFT, and when this port was written TTNN had no FFT of any
+kind. `ttnn.experimental.fft` / `ifft` have arrived since (Wormhole on 2026-09-07, Blackhole
+on 2026-09-16), but there is still no STFT. So the vocoder looks like the part to leave on
+the host, as it usually is.
 
 It needs no FFT at all, because CosyVoice uses `n_fft = 16`. At that
 size the inverse DFT of 9 one-sided bins is a fixed 16×9 real matrix pair, smaller than a
