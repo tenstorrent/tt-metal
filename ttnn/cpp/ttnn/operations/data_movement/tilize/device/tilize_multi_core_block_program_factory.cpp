@@ -465,6 +465,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         }
     }
 
+    // A block split that produces neither a full nor a cliff-row buffer set emits no kernels. Catch
+    // that here, naming the factory, rather than leaving it to the generic ValidateProgramSpec check.
+    TT_FATAL(!spec.kernels.empty(), "Block tilize emitted no kernels");
+
     ProgramRunArgs run_args;
     if (!full_set.empty()) {
         run_args.kernel_run_args.push_back(std::move(full_reader_run));
