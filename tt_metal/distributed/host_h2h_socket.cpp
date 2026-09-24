@@ -86,6 +86,9 @@ struct H2HSocket::Impl {
     std::vector<uint64_t> credit_out;  // frames this host has credited back, per RECEIVING core
     std::vector<uint64_t> done_out;    // the same frames counted per SENDING core
     std::vector<uint32_t> next_slot;   // next RX slot to inspect, per core
+    // The origin's frame index this ring expects next. next_slot wraps at ring_pages and so
+    // cannot tell a slot re-armed before its credit from the frame that belongs there.
+    std::vector<uint64_t> rx_seq;
     std::vector<bool> dirty;           // peers with an unflushed put
 
     bool broken = false;
@@ -245,6 +248,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.done_out.assign(per_peer, 0);
     im.rx_pending.assign(cfg.cores, {});
     im.next_slot.assign(cfg.cores, 0);
+    im.rx_seq.assign(cfg.cores, 0);
     im.tx_queue.assign(cfg.cores, {});
     im.tx_payload.assign(cfg.cores, {});
     im.tx_trailer.assign(cfg.cores, {});
@@ -413,9 +417,22 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             }
             const uint32_t slot = im.next_slot[c];
             volatile uint64_t* const guard = im.trailer_guard(c, slot);
-            if (!tt_uva_frame_armed(load_acquire(guard))) {
+            const uint64_t g = load_acquire(guard);
+            if (!tt_uva_frame_armed(g)) {
                 break;
             }
+            // Armed says a frame is here; the sequence says WHICH. The guard is the sending
+            // DEVICE's frame index, carried through verbatim, and this ring has one origin.
+            if (const uint32_t want = static_cast<uint32_t>(im.rx_seq[c]); tt_uva_frame_seq(g) != want) {
+                im.fail(fmt::format(
+                    "h2h: core {} slot {} carries frame {} but this ring expects {}",
+                    c,
+                    slot,
+                    tt_uva_frame_seq(g),
+                    want));
+                break;
+            }
+            ++im.rx_seq[c];
             const FrameTrailer* const t = im.trailer(c, slot);
 
             DeliverTask d;

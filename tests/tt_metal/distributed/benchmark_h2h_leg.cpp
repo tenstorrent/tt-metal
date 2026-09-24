@@ -261,7 +261,9 @@ protected:
         FrameTrailer* const t = reinterpret_cast<FrameTrailer*>(src + payload_bytes_);
         std::memset(t, 0, sizeof(*t));
         t->length = payload_bytes_;
-        t->guard = tt_uva_frame_guard(kFrameVersion);
+        // The same stamp the payload carries: this benchmark drives the window itself, so
+        // the frame index is in hand at post time -- see the arm_frame(src, posted) call.
+        t->guard = tt_uva_frame_guard(kFrameVersion, stamp);
     }
 
     // Rank 1's side of verify. The stamp is the sender's frame index, so a stale or
