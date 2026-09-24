@@ -299,6 +299,7 @@ class ttMLA:
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
+        tp_shard_kv: bool | None = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -569,7 +570,39 @@ class ttMLA:
         self._is_dsa_family = TtIndexer.matches_config(config)
         self._sparse_kv_gather_buffer = None
 
-        self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
+        # KV dedup: shard the KVPE cache over SP *and* TP so each of the sp*tp chips holds a distinct
+        # 1/(sp*tp) slice instead of tp copies. Sparse (DSA) always takes it -- its gather has no other
+        # mode. Dense (ring_mla) opts in, because it needs the split-KV op: ring_mla resolves a full-mesh
+        # gather over all sp*tp ranks and reads the striped cache in place, which requires Q sequence on
+        # mesh axis 0 and the KV stripes on axis 1. Default None keeps every existing caller on the
+        # derived sparse-only behavior.
+        if tp_shard_kv is None:
+            self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
+        else:
+            self.tp_shard_kv = tp_shard_kv
+            assert not tp_shard_kv or self.tp_factor > 1, (
+                f"tp_shard_kv needs a TP axis to dedup across (tp_factor={self.tp_factor}); at tp=1 the "
+                "cache has no replicas to remove"
+            )
+            assert (
+                not tp_shard_kv or self._has_indexer or self.is_chunked
+            ), "dense tp_shard_kv is the chunked ring_mla split-KV path; single-shot prefill has no striped write"
+        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
+        # Dense dedup geometry, checked at construction rather than on the first chunk (a deep model
+        # reaches that only after a long weight load). ring_mla's RingMLAGeometry::valid rejects a cache
+        # whose per-source capacity is not a whole number of block-cyclic regions, and the region is the
+        # Q slab divided by the stripe split -- so the capacity must hold whole global chunks and the Q
+        # slab must divide tile-aligned across TP.
+        if self._kv_dedup and not self._has_indexer:
+            chunk_local = self.active_seq_len // self.sp_factor
+            assert self.active_seq_len % self.sp_factor == 0 and chunk_local % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
+                f"dense tp_shard_kv needs a tile-aligned per-chip KV region: chunk {self.active_seq_len} / "
+                f"sp {self.sp_factor} / tp {self.tp_factor} is not a multiple of {ttnn.TILE_SIZE}"
+            )
+            assert seq_len % self.active_seq_len == 0, (
+                f"dense tp_shard_kv needs the cache to hold a whole number of chunks: seq_len {seq_len} "
+                f"is not a multiple of chunk {self.active_seq_len}"
+            )
         if self._has_indexer:
             assert self.tp_factor > 1, (
                 f"the sparse (DSA) path requires tp_factor > 1 (got {self.tp_factor}): its KV and indexer-key "
@@ -589,6 +622,19 @@ class ttMLA:
                 f"the sparse (DSA) path requires a 2D fabric config, got {_fabric}: its only KVPE gather is "
                 "the full-mesh snake, which spans both mesh axes. Open the mesh with FABRIC_2D (or a 2D "
                 "torus variant)."
+            )
+        if self._kv_dedup and not self._has_indexer:
+            # Same narrowing for dense dedup, same reason: ring_mla's fused gather rings all sp*tp ranks
+            # and so spans both mesh axes. Checked at construction for the same reason as above.
+            _fabric = ttnn.get_fabric_config()
+            assert _fabric in (
+                ttnn.FabricConfig.FABRIC_2D,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            ), (
+                f"dense tp_shard_kv requires a 2D fabric config, got {_fabric}: ring_mla's full-mesh KV "
+                "gather spans both mesh axes. Open the mesh with FABRIC_2D (or a 2D torus variant)."
             )
         # KV dedup shards the cache over BOTH axes, so its gather needs the scratch even at sp == 1.
         if self._has_indexer and not self.kv_only:
@@ -694,6 +740,13 @@ class ttMLA:
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
         """Read and decode the logical KVPE cache in natural SP order."""
+        # A TP-deduped cache has no TP replica to collapse -- every tp coord holds a distinct stripe, so
+        # this composer would silently drop 1 - 1/tp of the sequence and still return a plausible tensor.
+        stripes = mesh_device.shape[0] * mesh_device.shape[1]
+        assert ttMLA._declared_seq_shard_factor(kvpe_cache.storage) != stripes, (
+            "kv_cache_to_host reads an SP-sharded, TP-replicated cache; this one is TP-deduped "
+            "(dim 2 sharded across both axes). Use utils.test_utils.gather_cache_natural(tp_shard_kv=True)."
+        )
         host = ttnn.to_torch(
             kvpe_cache.storage,
             mesh_composer=ttnn.create_mesh_composer(
@@ -993,8 +1046,6 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
-        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -1004,6 +1055,7 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
@@ -1016,6 +1068,9 @@ class ttMLA:
         # logical_n is a placeholder = global cache capacity. metadata[0] holds only the user slot, so pass
         # the per-layer factor (kv_cache_num_layers/kv_cache_layer_idx) so the readers recompute the full
         # (user, layer) slot on-device -- otherwise every layer would read layer 0's KV cache.
+        # Global rows the cache holds. KV dedup splits the per-chip depth across BOTH axes, so
+        # recovering the global capacity takes sp*tp rather than sp alone.
+        cache_rows_global = kvpe_cache.storage.shape[2] * self.sp_factor * (self.tp_factor if self._kv_dedup else 1)
         if metadata is not None:
             meta_slot_kwargs = {
                 "slot_id": metadata[0],
@@ -1023,12 +1078,19 @@ class ttMLA:
                 "kv_cache_num_layers": self.layer_num,
                 "kv_cache_layer_idx": cache_layer_idx,
             }
-            ring_logical_n = kvpe_cache.storage.shape[2] * self.sp_factor  # global cache capacity
+            ring_logical_n = cache_rows_global  # global cache capacity
         else:
             meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
             # Capped at the capacity ring_mla accepts: the last chunk's pad rows can sit past the cache
             # end, and only pad rows read them.
-            ring_logical_n = min(kv_actual_isl + chunk_size_global, kvpe_cache.storage.shape[2] * self.sp_factor)
+            ring_logical_n = min(kv_actual_isl + chunk_size_global, cache_rows_global)
+        # KV dedup reads the striped cache IN PLACE: the fused gather rings all sp*tp ranks instead of
+        # the SP axis alone, so cluster_axis is the whole mesh. The op derives the stripe split from the
+        # Q/KV shard factors (Q sequence on mesh axis 0, KV stripes on axis 1) and packs the tp
+        # co-located sources into one K chunk, so nothing here describes the geometry. Undeduped keeps
+        # the SP-axis ring byte-for-byte.
+        if self._kv_dedup:
+            tt_q = self._declare_q_sequence_topology(tt_q, seq_len_local)
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
             kvpe_cache.storage,
@@ -1041,9 +1103,11 @@ class ttMLA:
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
             num_links=self.ccl_num_links,
-            cluster_axis=self.sp_axis,
+            cluster_axis=None if self._kv_dedup else self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=self.sp_ccl_topology,
+            # Full mesh asks for a ring and lets the proved route decide whether it closes; the SP-axis
+            # gather keeps its configured per-axis topology.
+            topology=ttnn.Topology.Ring if self._kv_dedup else self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -1994,6 +2058,36 @@ class ttMLA:
     # never reaches these). The full forward above shares the dense/sparse Q/KV stem and epilogue;
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
+
+    def _declare_q_sequence_topology(self, tt_q: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """Restate Q's distribution as sequence-on-SP / heads-on-TP for ring_mla's split-KV check.
+
+        Q reaches here physically sharded that way, but carrying a STALE declaration: the transformer
+        seeds activations from a token tensor sharded on dim 0 (ShardTensor2dMesh dims=(0, None)), and
+        that Shard(0) rides along unchanged after the reshape to [1, heads, seq, dim] moves the sequence
+        to dim 2. tensor_dim_shard_factor(q, 2) then reads 1, so the op resolves q_shards=1 and rejects
+        the geometry. The MLA unit test never hit this because it uploads hidden with dims[sp_axis]=-2.
+
+        This only re-describes what is already true, so it is guarded by the shape identities that make
+        it true -- a genuine layout mismatch must still fail loudly rather than be relabelled away.
+        """
+        heads_local = tt_q.shape[1]
+        assert tt_q.shape[2] == seq_len_local, (
+            f"Q slab {tt_q.shape[2]} is not this chip's chunk rows {seq_len_local}; refusing to declare "
+            "a sequence distribution that does not hold"
+        )
+        assert heads_local * self.tp_factor == self.num_heads, (
+            f"Q holds {heads_local} of {self.num_heads} heads at tp={self.tp_factor}; refusing to declare "
+            "a head distribution that does not hold"
+        )
+        current = tt_q.tensor_topology()
+        placements = [None, None]
+        placements[self.sp_axis] = ttnn.PlacementShard(2)  # sequence
+        placements[self.tp_axis] = ttnn.PlacementShard(1)  # heads
+        tt_q.update_tensor_topology(
+            ttnn.TensorTopology(current.distribution_shape(), placements, current.mesh_coords())
+        )
+        return tt_q
 
     @property
     def tp_shard_kv_axis(self) -> Optional[int]:

@@ -600,7 +600,10 @@ def open_ring_joint_sdpa_runtime(
         topology = Topology.Ring
     else:
         use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
-        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+        # An explicit fabric_config wins here too, so an axis gather can be measured on the same
+        # 2D fabric as a full-mesh one. Callers that pass None keep the 1D default.
+        if fabric_config is None:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
         topology = Topology.Ring if use_ring else Topology.Linear
 
     sp_axis = 1

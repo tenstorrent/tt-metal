@@ -607,6 +607,7 @@ def run_chunked_transformer_padded(
     num_links,
     topology,
     routing_use_l1_small_for_semaphores=False,
+    tp_shard_kv=False,
 ):
     """Chunked prefill through num_layers with VARIABLE/partial chunks `splits` (each run as a full
     CHUNK-wide tile padded with a pad token). Exercises the rotated + partial MLA path across the full
@@ -678,6 +679,7 @@ def run_chunked_transformer_padded(
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        tp_shard_kv=tp_shard_kv,
     )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
@@ -692,6 +694,9 @@ def run_chunked_transformer_padded(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
+        # KV dedup: dim 2 sharded across BOTH axes. Must match the model's tp_shard_kv -- the
+        # allocation and ring_mla's reader describe the same cache.
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     mesh_device.enable_program_cache()
@@ -773,6 +778,7 @@ def run_chunked_transformer_padded(
         seq_len_cache,
         total_len,
         config.kv_lora_rank,
+        tp_shard_kv=tp_shard_kv,
     )
 
     profiler.end("total_test_time")
@@ -1181,6 +1187,10 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
+# tp_sharded shards the KVPE cache over SP*TP and lets ring_mla gather the full mesh and read the
+# stripes in place -- 4x less cache DRAM per device. Paired against sp_only on the same golden, so a
+# pure data-movement change has to reproduce the per-layer PCCs rather than merely pass them.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
@@ -1194,6 +1204,7 @@ def test_kimi_prefill_transformer_chunked_padded(
     splits,
     num_links,
     mode,
+    tp_shard_kv,
 ):
     """Padded/rotated chunked prefill, traced vs untraced (see _PADDED_MODES). Both modes exercise
     padding-aware MoE over the same `splits` and assert per-layer KV-cache PCC against the golden, so
@@ -1215,6 +1226,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         *common,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
+        tp_shard_kv=tp_shard_kv,
     )
 
 
@@ -1498,6 +1510,7 @@ def run_chunked_transformer_updated(
     determinism_check=False,
     kv_pcc_threshold=None,
     seq_cache=None,
+    tp_shard_kv=None,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1641,7 +1654,8 @@ def run_chunked_transformer_updated(
     # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
     # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
     config = copy.deepcopy(config)
-    tp_shard_kv = resolve_has_indexer(config)
+    # Dense (ring_mla) opts into KV dedup explicitly; sparse always takes it. None = derive as before.
+    tp_shard_kv = resolve_has_indexer(config) if tp_shard_kv is None else tp_shard_kv
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_cache
     # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
@@ -1744,6 +1758,7 @@ def run_chunked_transformer_updated(
         # there is no norm / LM-head tail with a host read anymore.)
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        tp_shard_kv=tp_shard_kv,
     )
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
@@ -2509,6 +2524,10 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
     not is_high_power(),
     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
 )
+# tp_sharded shards the KVPE cache over SP*TP and lets ring_mla gather the full mesh and read the
+# stripes in place -- 4x less cache DRAM per device. Gated against the SAME recorded baseline as
+# sp_only: the question this leg answers is whether the dedup stays inside the committed band.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_perf(
     variant,
@@ -2523,6 +2542,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     perf_margin,
     use_trace,
     preload_isl,
+    tp_shard_kv,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2550,6 +2570,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
+        tp_shard_kv=tp_shard_kv,
     )
 
 
@@ -2904,6 +2925,7 @@ def run_chunked_transformer_padded_trace(
     topology,
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
+    tp_shard_kv=False,
 ):
     """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
     param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
@@ -2978,6 +3000,7 @@ def run_chunked_transformer_padded_trace(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        tp_shard_kv=tp_shard_kv,
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
@@ -3019,6 +3042,8 @@ def run_chunked_transformer_padded_trace(
             sp_axis=sp_axis,
             num_kvpe_cache_layers=num_layers,
             num_users=1,
+            # KV dedup: dim 2 sharded across BOTH axes; must match the model's tp_shard_kv.
+            tp_axis=tp_axis if tp_shard_kv else None,
         )
 
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None))
@@ -3128,6 +3153,7 @@ def run_chunked_transformer_padded_trace(
             config.kv_lora_rank,
             assert_threshold=LAYER_PCC_THRESHOLD,
             assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+            tp_shard_kv=tp_shard_kv,
         )
         ttnn.deallocate(cache.storage)
         transformer.release_sub_device_managers()

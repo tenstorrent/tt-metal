@@ -917,7 +917,7 @@ def init_mla_kv_cache(
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False
+    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False, tp_axis=None
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -925,6 +925,11 @@ def allocate_mla_kvpe_cache(
     shared cache holds ``num_users * num_layers`` user-major slots of
     ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
     and the MLA model adapter, so the MLA KV layout has one definition.
+
+    tp_axis: KV dedup, forwarded to init_kvpe_cache -- see its docstring. Passing it shards the
+    sequence across SP *and* TP, so each chip holds a distinct 1/(sp*tp) slice instead of tp copies.
+    It must agree with the consuming ttMLA's tp_shard_kv: the allocation and the reader describe the
+    same cache.
     """
     return init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -936,6 +941,7 @@ def allocate_mla_kvpe_cache(
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
         full_mesh=full_mesh,
+        tp_axis=tp_axis,
     )
 
 
