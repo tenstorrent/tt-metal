@@ -58,7 +58,15 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import _WH_ONLY, _ring_4k
-from .common_av import CALIBRATED_FOX_PROMPT, log_pipeline_perf, run_warm_generation, to_uint8_frames, weights_dir
+from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    clip_prompt_alignment,
+    log_pipeline_perf,
+    run_warm_generation,
+    to_uint8_frames,
+    weights_dir,
+    write_artifacts,
+)
 
 STEPS = int(os.environ.get("H3_SWEEP_STEPS", "10"))
 ASPECT = tuple(int(x) for x in os.environ.get("H3_SWEEP_ASPECT", "16,9").split(","))
@@ -141,7 +149,12 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
     )
     assert pipeline.dit_fsdp or os.environ.get("H3_SWEEP_ALLOW_NO_FSDP"), (
         "DiT FSDP is off; 15 s does not fit a 12 GB Wormhole chip without it. Set MINIMAX_H3_DIT_FSDP=1 "
-        "(or H3_SWEEP_ALLOW_NO_FSDP=1 to measure the OOM deliberately)."
+        "(or H3_SWEEP_ALLOW_NO_FSDP=1: with `adaln_tables` TP8/SP4 fits, TP4/SP8 measures its OOM)."
+    )
+    # The residency choice is what an unsharded DiT lives or dies by on 12 GB, so it is stated, not implied.
+    logger.info(
+        f"parallel sweep {config_id}: dit_fsdp={pipeline.dit_fsdp} adaln_tables={pipeline.adaln_tables} "
+        f"coresident={pipeline.coresident} trace_denoise={pipeline.trace_denoise}"
     )
 
     profiler = BenchmarkProfiler()
@@ -186,6 +199,11 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
     audio_path = OUT_DIR / f"{config_id}_s{STEPS}.audio.npy"
     np.save(frames_path, frames[::FRAME_STRIDE])
     np.save(audio_path, output.audio.float().cpu().numpy())
+    # The viewable artifact and the prompt-alignment score the end-to-end gate uses (33.0 bar at 16:9 / 5 s),
+    # recorded rather than gated: a parallel configuration is compared against the baseline's number.
+    write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, OUT_DIR, stem=f"{config_id}_s{STEPS}")
+    clip = clip_prompt_alignment(frames, CALIBRATED_FOX_PROMPT)
+    logger.info(f"parallel sweep {config_id}: CLIP prompt alignment {clip}")
 
     record = {
         "config": config_id,
@@ -196,6 +214,8 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
         "sp_factor": pipeline.sp_factor,
         "num_links": NUM_LINKS,
         "dit_fsdp": pipeline.dit_fsdp,
+        "adaln_tables": pipeline.adaln_tables,
+        "coresident": pipeline.coresident,
         "aspect": list(ASPECT),
         "canvas": [width, height],
         "num_frames": num_frames,
@@ -211,6 +231,7 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
         "frame_mean": float(frames.mean()),
         "frame_std": float(frames.std()),
         "audio_absmax": float(output.audio.abs().max()),
+        "clip": clip,
         "frames_path": str(frames_path),
         "audio_path": str(audio_path),
         "commit": _git_head(),

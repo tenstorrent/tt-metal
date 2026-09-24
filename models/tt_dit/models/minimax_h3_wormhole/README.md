@@ -804,6 +804,27 @@ output, at 12130 ms/step (FSDP-on TP8/SP4 12256, the shipped TP4/SP8+FSDP 12014;
 within noise of each other). Untuned TP=8 blockings (see the TP/SP sweep above) are the remaining perf lever
 on that configuration.
 
+**End to end, 50 steps (`test_parallel_sweep_minimax_h3.py`, H3_SWEEP_STEPS=50, seed 0, fox prompt, same host,
+2026-09-24).** Both configurations ran the full generation; the harness now logs `dit_fsdp` / `adaln_tables` /
+`coresident` and records CLIP and the mp4/wav (`~/h3_wormhole_results/fsdp_off_feasibility_2026-09-24/e2e_50steps/`).
+
+| config | DiT FSDP | adaLN | coresident | ms/fwd (49) | denoise | total | realtime | CLIP mean / min |
+|---|---|---|---|---|---|---|---|---|
+| shipped TP4/SP8 | on | resident | False | 12117 | 593.7 s | 635.5 s | 42.1x | 37.65 / 35.99 |
+| TP8/SP4 | **off** | tables | False | 12239 | 599.7 s | 640.1 s | 42.4x | 37.25 / 35.66 |
+
+Video PCC between the two 0.914, audio 0.973 -- the same regime as the TP/SP sweep's TP8-vs-TP4 comparison
+(0.907 / 0.972), i.e. the bf16 reduction order of TP=8 versus TP=4 after 49 steps, not the tables: at equal
+TP the tables path is bit-identical (run F vs E above). Both clear the 33.0 CLIP bar. The unsharded run is
++1.0% per forward against the shipped preset, and its adaLN table build was 2.6 s of the 3.6 s preamble.
+
+One hang on the way: the first 50-step attempt built the request `temb` with a device `ttnn.concat` of 49
+row-major `[1, 1, 3, 2688]` fp32 tensors and hung in the concat's reader/writer kernels on every core
+(triage `generated/tt-triage/triage.csv`, log `fsdpoff_tp8sp4_tables.HANG_concat.log`); three inputs (the
+3-step probe) had worked. The concat is now done on host, where fp32 round-trips losslessly. After the
+dispatch-timeout reset the fabric mapper refused the 4x8 once ("Logical mesh 0 failed to map"); a second
+`tt-smi -r` cleared it.
+
 ### Open issues
 
 Fixed items have been removed; their forensics live in the commits. The intermittent mid-denoise

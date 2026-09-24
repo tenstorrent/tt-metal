@@ -16,7 +16,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.tensor import from_torch, pad_single
+from ....utils.tensor import from_torch, pad_single, to_torch
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import ADALN_TABLE_COPIES, MODALITY_NUM, MiniMaxH3TransformerBlock
@@ -367,13 +367,14 @@ class MiniMaxH3Transformer3DModel(Module):
                 raise ValueError("every step must carry the same number of AdaLN slots")
             # Replicated float32, as the pipeline's per-step `timestep` state tensor is built.
             timestep = from_torch(levels.reshape(1, 1, num_slots, 1), device=self.mesh_device, dtype=ttnn.float32)
-            # Row-major for the concat: the per-step `temb` has `num_slots` rows, not a tile's worth.
-            tembs.append(ttnn.to_layout(self.time_embedder(self.time_proj(timestep)), ttnn.ROW_MAJOR_LAYOUT))
-        temb_all = ttnn.to_layout(ttnn.concat(tembs, dim=2) if len(tembs) > 1 else tembs[0], ttnn.TILE_LAYOUT)
+            temb = self.time_embedder(self.time_proj(timestep))
+            # Concatenated on host: fp32 round-trips losslessly and the tensors are tiny, whereas a device
+            # `ttnn.concat` of 49 row-major inputs hung the mesh (triage: every core in the concat kernels).
+            tembs.append(to_torch(temb)[..., :num_slots, :])
+            ttnn.deallocate(temb)
+        temb_all = from_torch(torch.cat(tembs, dim=2), device=self.mesh_device, dtype=ttnn.float32)
         for block in self.transformer_blocks:
             block.build_request_modulation(temb_all, rows_per_step=num_slots * MODALITY_NUM)
-        for t in tembs:
-            ttnn.deallocate(t)
         ttnn.deallocate(temb_all)
 
     def release_request_modulation(self) -> None:
