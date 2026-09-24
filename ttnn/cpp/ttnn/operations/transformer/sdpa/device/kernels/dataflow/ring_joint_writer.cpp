@@ -4,6 +4,7 @@
 
 struct RingJointWriterPolicy {
     static constexpr bool kResidentRingState = false;
+    static constexpr uint32_t kCommonArgCount = 0;
 };
 
 #include "ring_joint_writer_impl.hpp"
