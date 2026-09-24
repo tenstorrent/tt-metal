@@ -176,7 +176,9 @@ class WanAttention(Module):
                 # Exp ring keeps recipe state resident, so odd Q chunks only matter to paired recipes.
                 self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=full_grid,
-                    q_chunk_size=self._recipe_q_chunk(ring_sdpa_chunk_size[0], sdpa_precision, ring=False),
+                    q_chunk_size=self._recipe_q_chunk(
+                        ring_sdpa_chunk_size[0], sdpa_precision, ring=False, exp_ring=True
+                    ),
                     k_chunk_size=512,
                 )
             self.sdpa_program_config = ttnn.SDPAProgramConfig(
@@ -343,13 +345,16 @@ class WanAttention(Module):
         return output
 
     @staticmethod
-    def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool) -> int:
+    def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool, exp_ring: bool = False) -> int:
         """Reuse a tuned Q chunk when the recipe supports it, else Q256.
 
         Ring checkpoints need an even Q tile count; dense and exp-ring recipes accept any 32-row step.
         """
         tiles = q_chunk // 32
-        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not ring)
+        paired = precision in (ttnn.SDPAPrecision.COMPENSATED, ttnn.SDPAPrecision.LOW_PRECISION)
+        # Exp ring: odd chunks work for FAST/BALANCED/ACCURATE; the paired recipes need even tiles.
+        even_required = ring or (exp_ring and paired)
+        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not even_required)
         return q_chunk if supported else 256
 
     def _self_sdpa_kwargs(self) -> dict:

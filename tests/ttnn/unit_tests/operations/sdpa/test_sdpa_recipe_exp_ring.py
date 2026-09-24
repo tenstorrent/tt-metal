@@ -201,6 +201,11 @@ def test_recipe_exp_ring(exp_ring_mesh, case, variant, q_chunk, record_property)
             **kwargs,
         )
 
+    if q_chunk == 224 and variant in ("B", "E_bf16", "E_bfp8", "E_bfp4"):
+        # Odd chunks hang the paired recipes on exp ring; the host rejects them for now.
+        with pytest.raises(RuntimeError, match="multiple of 64 rows"):
+            invoke()
+        return
     if variant == "A" and heads * (-(-(local + joint) // q_chunk) // (grid[0] - 1)) > 2 * grid[1]:
         # FAST keeps the legacy exp compute and its multi-pass L1 layout (all passes' Q chunks and
         # accumulator states resident), which does not fit three passes at Q256/K512: the legacy call
@@ -390,7 +395,7 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
         "logical_n_tensor": "scalar logical_n",
         "compute": "not both",
         "exp": "exp_approx_mode=false",
-        "scale": "default D128 scale",
+        "scale": r"default 1/sqrt\(head_dim\) scale",
         "prepared": "LOW_PRECISION requires inputs_prepared",
         "unprepared": "LOW_PRECISION requires inputs_prepared",
         "q512": "Q chunks from 128 to 320 rows",
