@@ -106,3 +106,121 @@ def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, cau
         gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
         p = pcc(plain[0], gold)
         assert p >= DEVICE_PCC, f"sp={sp}: plain op vs golden pcc={p:.5f}"
+
+
+def _block_cyclic_chunk_positions(chunk_start, sp, chunk_local):
+    """Global positions of the chunk_local query rows each SP rank holds for the chunk
+    [chunk_start, chunk_start + sp*chunk_local), in the rank's local-row order.
+
+    Brute force from the KV writer's placement (update_padded_kv_cache: position g lives on rank
+    (g // chunk_local) % sp at local row (g // chunk_global) * chunk_local + g % chunk_local), NOT from the
+    closed form under test. A mid-slab chunk_start rotates which rank holds the chunk's first block, and the
+    boundary rank's rows jump from the tail of one slab block to the head of its next one."""
+    chunk_global = sp * chunk_local
+    per_rank = [[] for _ in range(sp)]
+    for g in range(chunk_start, chunk_start + chunk_global):
+        local_row = (g // chunk_global) * chunk_local + g % chunk_local
+        per_rank[(g // chunk_local) % sp].append((local_row, g))
+    return [torch.tensor([g for _, g in sorted(rows)]) for rows in per_rank]
+
+
+def _diag_plus_past_indices(positions, n_kv, topk, n_past, gen):
+    """Per-query block ids: the query's own (diagonal) block plus up to n_past random past blocks, sentinel
+    tail. Keeping the selection small makes the diagonal block a large share of the attention, so a query
+    masked at the wrong position (future keys leaking into, or valid keys cut from, its own block) moves the
+    output well past the PCC threshold instead of hiding under 16 blocks of averaging."""
+    S = positions.numel()
+    idx = torch.full((1, n_kv, S, topk), -1, dtype=torch.int32)
+    for g in range(n_kv):
+        for s, p in enumerate(positions.tolist()):
+            diag = p // BLK_KV
+            past = torch.randperm(diag, generator=gen)[: min(n_past, diag)].tolist() if diag else []
+            chosen = sorted([diag] + past)
+            idx[0, g, s, : len(chosen)] = torch.tensor(chosen, dtype=torch.int32)
+    return idx
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
+@pytest.mark.parametrize(
+    "start_offset",
+    [0, 32, 128, 256, 352],
+    ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle"],
+)
+def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
+    """Causal sparse_sdpa_msa over a block-cyclic cache when the chunk starts mid-slab (a multi-turn resume at
+    a 32-token boundary). Each SP rank's query rows sit at the KV writer's rotated positions, not the linear
+    chunk_start + rank*S; the op must derive them (compute_causal_geometry) so the diagonal-block mask lands on
+    each query's true position. Checked per rank against the golden at the brute-force positions."""
+    rows, cols = tuple(mesh_device.shape)
+    sp_axis, sp = 1, cols
+    if rows != 1 or sp < 2:
+        pytest.skip(f"needs a (1, sp>1) mesh (got {(rows, cols)})")
+
+    H, n_kv, d = 32, 1, 128
+    chunk_local = S = 2 * BLK_KV  # one rank's query rows == the block-cyclic per-shard chunk
+    chunk_global = sp * chunk_local
+    n_slabs = 4
+    T = n_slabs * chunk_global
+    chunk_start = chunk_global + start_offset  # one whole prior slab + the mid-slab offset
+    assert chunk_start + chunk_global <= T
+    topk, n_past = 16, 3
+
+    gen = torch.Generator().manual_seed(1000 + start_offset)
+    k = torch.randn(1, n_kv, T, d, generator=gen)
+    v = torch.randn(1, n_kv, T, d, generator=gen)
+    positions = _block_cyclic_chunk_positions(chunk_start, sp, chunk_local)
+    qs = [torch.randn(1, H, S, d, generator=gen) for _ in range(sp)]
+    idxs = [_diag_plus_past_indices(pos, n_kv, topk, n_past, gen) for pos in positions]
+    scale = d**-0.5
+
+    golds = [
+        sparse_attention_ref_msa(q_r, k, v, i_r, scale, causal=True, q_positions=pos)
+        for q_r, i_r, pos in zip(qs, idxs, positions)
+    ]
+    if start_offset % chunk_global:
+        # Sanity: the case must discriminate -- masking at the old linear positions would fail the threshold.
+        linear = [
+            sparse_attention_ref_msa(q_r, k, v, i_r, scale, causal=True, chunk_start_idx=chunk_start + r * S)
+            for r, (q_r, i_r) in enumerate(zip(qs, idxs))
+        ]
+        assert min(pcc(lin, gold) for lin, gold in zip(linear, golds)) < DEVICE_PCC
+
+    seq_shard = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(rows, cols))
+    repl = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def dev(x, dt, layout, mapper):
+        return ttnn.from_torch(
+            x,
+            dtype=dt,
+            layout=layout,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    out = ttnn.transformer.sparse_sdpa_msa(
+        dev(torch.cat(qs, dim=2).to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, seq_shard),
+        dev(
+            _natural_to_block_cyclic(k, sp, n_slabs, chunk_local).to(torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            repl,
+        ),
+        dev(
+            _natural_to_block_cyclic(v, sp, n_slabs, chunk_local).to(torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            repl,
+        ),
+        dev(torch.cat(idxs, dim=2), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, seq_shard),
+        scale=scale,
+        block_size=BLK_KV,
+        chunk_start_idx=chunk_start,
+        cluster_axis=sp_axis,
+        block_cyclic_sp_axis=sp_axis,
+        block_cyclic_chunk_local=chunk_local,
+    )
+    for r, (dev_out, gold) in enumerate(zip(ttnn.get_device_tensors(out), golds)):
+        p = pcc(ttnn.to_torch(dev_out)[:, :H], gold)
+        assert p >= DEVICE_PCC, f"sp={sp} chunk_start={chunk_start}: rank {r} diverges from golden (pcc={p:.5f})"
