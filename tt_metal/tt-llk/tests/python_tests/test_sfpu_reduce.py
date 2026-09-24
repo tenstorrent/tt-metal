@@ -621,6 +621,124 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     )
 
 
+UINT32_AVG_HIGH_BIT_STIMULI = {
+    # Every column sums to exactly 0x80000000: the smallest sum with bit 31 set.
+    "sum_eq_2pow31": lambda size: torch.full(size, 1 << 26, dtype=torch.int64),
+    # Column sum 3,200,000,000 (0xBEBC2000), well inside the UInt32 range.
+    "sum_3p2e9": lambda size: torch.full(size, 100_000_000, dtype=torch.int64),
+    # Column sum 0xFFFFFFE0, the largest sum a full column of equal values reaches without overflow.
+    "sum_near_max": lambda size: torch.full(size, 0x07FFFFFF, dtype=torch.int64),
+    # Random terms with every column sum in [2^31, 2^32).
+    "random_high": lambda size: torch.randint(
+        1 << 26, 1 << 27, size, dtype=torch.int64
+    ),
+    # Random terms whose column sums straddle 2^31, so both sides of the boundary share one tile.
+    "random_straddle": lambda size: torch.randint(0, 1 << 27, size, dtype=torch.int64),
+}
+
+
+@pytest.mark.parametrize("stimuli", list(UINT32_AVG_HIGH_BIT_STIMULI))
+def test_uint32_reduce_avg_high_bit(stimuli):
+    """Repro/guard for tenstorrent/tt-metal#57509 item 4: a UInt32 column AVG must stay an
+    unsigned divide-by-32 when the column sum has bit 31 set.
+
+    UInt32 loads with InstrModLoadStore::INT32, and perform_int_average used to pick its arm from the
+    load mode alone, so UInt32 took the sign-magnitude arm (SFPABS, shift, conditional negate). Any
+    column sum >= 2^31 was then read as negative and the stored average came back wrong, e.g.
+    0x80000000 -> 0 instead of 0x04000000. The regular sweep bounds UInt32 stimuli to [0, 1000),
+    so its column sums never get near bit 31.
+    """
+    if TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        pytest.xfail(
+            reason="Blackhole copy of the defect (#57509 item 2) is fixed separately"
+        )
+
+    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
+    mathop = MathOperation.ReduceColumn
+    reduce_pool = ReducePool.Average
+    input_dimensions = [TILE_DIM, TILE_DIM]
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    torch.manual_seed(0)
+    src_A_untilized = UINT32_AVG_HIGH_BIT_STIMULI[stimuli]((TILE_DIM, TILE_DIM))
+    column_sums = src_A_untilized.sum(dim=0)
+    assert int(column_sums.max()) < (1 << 32), "stimuli must not overflow UInt32"
+    # Unsigned divide-by-32 of the exact column sum; the kernel's logical shift rounds toward zero.
+    golden = column_sums // TILE_DIM
+
+    src_A = tilize_block(
+        src_A_untilized.flatten(), input_dimensions, stimuli_format=formats.input_format
+    ).flatten()
+    src_B = torch.zeros_like(src_A)
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res = untilize_block(res_tensor, formats.output_format, input_dimensions)[0].to(
+        torch.int64
+    )
+
+    mismatch = golden != res
+    num_mismatch = int(mismatch.sum().item())
+    if num_mismatch:
+        lines = [
+            f"  col={i}: sum=0x{int(column_sums[i]):08X} golden=0x{int(golden[i]):08X} "
+            f"device=0x{int(res[i]):08X}"
+            for i in torch.nonzero(mismatch).flatten().tolist()[:12]
+        ]
+        logger.info(
+            "\nUInt32 column AVG {}: {} mismatched columns\n{}",
+            stimuli,
+            num_mismatch,
+            "\n".join(lines),
+        )
+
+    assert num_mismatch == 0, (
+        f"{num_mismatch}/{TILE_DIM} mismatched columns for UInt32 column AVG "
+        f"stimuli={stimuli} (see stdout)"
+    )
+
+
 # =============================================================================
 # Cat B — IEEE specials in a reduction
 #
