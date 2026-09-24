@@ -633,6 +633,12 @@ def passed_test(
     under the ``rtol`` half it replaces -- ``rtol * 2**mantissa_bits`` steps, ~6 for bf16
     and ~51 for fp16 -- and the gate warns when it does not.
 
+    Within that ceiling, and with *near_zero_atol* no wider than ``atol``, the gate is
+    strictly stricter than the tolerance check: it passes nothing ``isclose`` would
+    reject. Against PCC it is stricter on every element but not a superset -- PCC can
+    reject a near-constant tile whose every lane is one step off, because a whole-tensor
+    correlation is unstable at low variance. Both are pinned in ``test_ulp_gate.py``.
+
     * *mask* narrows the gate to the lanes it selects. The exhaustive sweep needs it:
       the subnormals the unpack path flushes are not the op's accuracy.
     * *near_zero_atol* is the floor under the budget where the reference crosses zero;

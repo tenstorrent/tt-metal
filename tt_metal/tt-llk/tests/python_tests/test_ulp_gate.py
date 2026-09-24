@@ -16,8 +16,8 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import INTEGER_FORMATS, ulp_distance
-from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test
+from helpers.ulp import INTEGER_FORMATS, MANTISSA_BITS_FOR_ULP, ulp_distance, ulp_dtype
+from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test, tolerances
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
@@ -252,6 +252,62 @@ def test_the_budget_catches_what_pcc_waves_through():
     assert calculate_pcc(result, golden) > 0.99
     assert passed_test(golden, result, fmt)
     assert not passed_test(golden, result, fmt, max_ulp=8, print_errors=False)
+
+
+def _move_magnitude(tensor, steps):
+    """*tensor* with every magnitude moved *steps* representable values away from zero
+    (toward it if negative), sign kept. Bit arithmetic rather than ``nextafter``, so a
+    fp32 budget of 419,430 steps is one operation. Valid while no lane crosses zero,
+    the subnormal band or the top of the range."""
+    width = tensor.element_size() * 8
+    bits = tensor.view(torch.int16 if width == 16 else torch.int32).to(torch.int64)
+    bits &= (1 << width) - 1
+    sign_bit = 1 << (width - 1)
+    moved = ((bits & (sign_bit - 1)) + steps) | (bits & sign_bit)
+    signed = torch.where(moved >= sign_bit, moved - (1 << width), moved)
+    return signed.to(torch.int16 if width == 16 else torch.int32).view(tensor.dtype)
+
+
+@pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)
+@pytest.mark.parametrize("direction", [1, -1], ids=["away_from_zero", "toward_zero"])
+def test_a_budget_within_the_ceiling_passes_nothing_the_tolerance_check_rejects(
+    fmt, direction
+):
+    """The claim the docstring makes: a budget no wider than ``rtol * 2**mantissa_bits``
+    steps is at least as strict as the tolerance check on every lane. N steps from a
+    golden in binade ``2**e`` span at most ``N * 2**(e - mantissa_bits)``, which is
+    ``rtol * 2**e <= rtol * |golden|`` -- the ``rtol`` half alone, before ``atol``.
+
+    Every lane sits exactly at the widest budget allowed, across both signs and many
+    binades, and the tolerance-plus-PCC verdict must accept all of it. The first
+    assertion keeps the test from passing vacuously."""
+    ceiling = tolerances[fmt].rtol * (1 << MANTISSA_BITS_FOR_ULP[ulp_dtype(fmt)])
+    budget = int(ceiling)
+    low, high = (-6, 6) if fmt is DataFormat.Float16 else (-20, 20)
+    magnitudes = torch.logspace(low, high, TILE_SIZE // 2, base=2.0)
+    golden = torch.cat([magnitudes, -magnitudes]).to(TORCH_DTYPE[fmt])
+    result = _move_magnitude(golden, direction * budget)
+
+    assert passed_test(golden, result, fmt, max_ulp=budget)
+    assert passed_test(golden, result, fmt)
+
+
+def test_pcc_can_reject_what_a_budget_correctly_passes():
+    """Stricter on every lane is not the same as a superset of PCC. PCC is a whole-tensor
+    correlation, so a near-constant tile with every lane one step off correlates at
+    -1.0 and fails, although the largest error is 0.008 -- inside ``atol`` and within a
+    budget of one step. That is PCC being unstable at low variance, not the budget
+    missing an error."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    golden[::2] = _step(golden[::2], 1)
+    result = golden.clone()
+    result[::2] = _step(golden[::2], -1)
+    result[1::2] = _step(golden[1::2], 1)
+
+    assert calculate_pcc(result, golden) < 0.99
+    assert not passed_test(golden, result, fmt, print_errors=False)
+    assert passed_test(golden, result, fmt, max_ulp=1)
 
 
 def test_pcc_is_not_consulted_under_a_budget():
