@@ -54,8 +54,8 @@ def recipe_ring_device():
 @pytest.mark.parametrize("head_dim", [128, 64, 256], ids=["d128", "d64", "d256"])
 @pytest.mark.parametrize(
     "q_chunk,k_chunk",
-    [(256, 512), (128, 512), (320, 512), (256, 256), (256, 384), (128, 256)],
-    ids=["q256", "q128", "q320", "q256k256", "q256k384", "q128k256"],
+    [(256, 512), (128, 512), (320, 512), (256, 256), (256, 384), (128, 256), (224, 512), (288, 512)],
+    ids=["q256", "q128", "q320", "q256k256", "q256k384", "q128k256", "q224", "q288"],
 )
 @pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "changed_max"])
@@ -106,6 +106,8 @@ def test_recipe_ring(
 ):
     mesh, subdevice, semaphores, ccl_column = recipe_ring_device
     # Reduced matrices: D64 at Q256/K512, D256 (Ideogram4) at its L1-limited Q128/K256.
+    if q_chunk == 288 and variant != "A":
+        pytest.skip("Q288 ring fits L1 only for FAST")
     if head_dim == 64 and ((q_chunk, k_chunk) != (256, 512) or distribution == "uniform"):
         pytest.skip("D64 ring runs a reduced continuation matrix")
     if head_dim == 256 and ((q_chunk, k_chunk) != (128, 256) or distribution == "uniform"):
@@ -240,15 +242,23 @@ def test_recipe_ring(
         dense_inputs = upload(
             [torch.cat(x, dim=0) for x in (queries, ordered[1], ordered[2])], ttnn.ShardTensorToMesh(mesh, dim=0)
         )
-        dense_output = ttnn.transformer.scaled_dot_product_attention(
-            *dense_inputs,
-            is_causal=False,
-            precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
-            inputs_prepared=variant.startswith("E_"),
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=q_chunk, k_chunk_size=k_chunk
-            ),
-        )
+        try:
+            dense_output = ttnn.transformer.scaled_dot_product_attention(
+                *dense_inputs,
+                is_causal=False,
+                precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
+                inputs_prepared=variant.startswith("E_"),
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=q_chunk, k_chunk_size=k_chunk
+                ),
+            )
+        except RuntimeError as error:
+            if "L1" not in str(error):
+                raise
+            # The ring's single-slot Q fallback fits Q320 B/E_bf16, but the dense reference double-buffers Q
+            # and does not: the ring result was gated on FP64 L2 above; the bitwise comparison is skipped.
+            record_property("dense_reference_rejected_l1", True)
+            pytest.skip(f"dense {variant} Q{q_chunk}/K{k_chunk} reference exceeds Blackhole L1")
         dense_segments.append([ttnn.to_torch(x) for x in ttnn.get_device_tensors(dense_output)])
     dense = [torch.cat([segment[chip] for segment in dense_segments], dim=2) for chip in range(2)]
     for chip in range(2):
