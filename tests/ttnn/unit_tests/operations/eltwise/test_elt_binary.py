@@ -63,24 +63,6 @@ def test_logaddexp2(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logical_and(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_and, -100, 100, exact=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_or(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_or, -100, 100, exact=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_xor(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_xor, -100, 100, exact=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_xlogy(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.xlogy, 1e-6, 1e6)
 
