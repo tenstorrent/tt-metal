@@ -1711,7 +1711,7 @@ class ModelArgs:
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
-                grid_size=self.mlp1_3_grid(seq_len),
+                grid_size=self._legacy_grid("FF13", self.mlp1_3_grid(seq_len)),
                 per_core_N=(
                     math.ceil(
                         (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
@@ -2227,10 +2227,20 @@ class ModelArgs:
                 k_tiles_per_row = max(1, (self.dim // ttnn.TILE_SIZE) // qkv_grid_y)
                 qkv_in0_block_w = self.find_largest_divisor(k_tiles_per_row)
                 qkv_out_subblock_w = get_out_subblock_w(qkv_per_core_N, out_subblock_h=1) if not self.is_galaxy else 1
+                qkv_in0_block_w, qkv_out_subblock_h, qkv_out_subblock_w = self._legacy_block_overrides(
+                    self.dim,
+                    self.qkv_size // self.cluster_shape[1],
+                    qkv_in0_block_w,
+                    1,
+                    qkv_out_subblock_w,
+                    qkv_per_core_M,
+                    qkv_per_core_N,
+                    k_tiles_per_row,
+                )
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(qkv_grid_x, qkv_grid_y),
                     in0_block_w=qkv_in0_block_w,
-                    out_subblock_h=1,
+                    out_subblock_h=qkv_out_subblock_h,
                     out_subblock_w=qkv_out_subblock_w,
                     per_core_M=qkv_per_core_M,
                     per_core_N=qkv_per_core_N,
@@ -4135,6 +4145,11 @@ class ModelArgs:
             per_core_M = math.ceil(m / (ttnn.TILE_SIZE * grid_size[1]))
         if per_core_N is None:
             per_core_N = math.ceil(n / (ttnn.TILE_SIZE * grid_size[0]))
+        elif os.getenv("QWEN_LEGACY_TIGHT_PER_CORE_N", "0") == "1":
+            # Callers pass per_core_N sized to the DRAM shard width (N / 8 banks). On a grid with
+            # more columns than banks (QWEN_LEGACY_GRID_* / QWEN_QKV_GRID_X) that over-covers N, so
+            # size it to the grid instead; unchanged whenever the grid has <= 8 columns.
+            per_core_N = min(per_core_N, math.ceil(n / (ttnn.TILE_SIZE * grid_size[0])))
 
         out_subblock_h = 1
         out_subblock_w = (
@@ -4146,6 +4161,16 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * grid_size[1]) == 0
             ), f"Input width must be divisible by tile size times grid size"
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * grid_size[1]))
+        in0_block_w, out_subblock_h, out_subblock_w = self._legacy_block_overrides(
+            k,
+            n,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            k // (ttnn.TILE_SIZE * grid_size[1]),
+        )
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -4158,6 +4183,28 @@ class ModelArgs:
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
         )
+
+    @staticmethod
+    def _legacy_block_overrides(
+        k, n, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, k_tiles_per_row
+    ):
+        """Per-shape overrides for the legacy 2D multicast prefill matmul (the bs=1 short-seq path).
+
+        Keyed by the projection's (K, N) so each of QKV / WO / FF1,FF3 / FF2 can be tuned alone:
+        QWEN_LEGACY_IN0_BW_K<k>_N<n>=<tiles> and QWEN_LEGACY_SUBBLOCK_K<k>_N<n>=<h>,<w>.
+        Unset means the derived values are used. An override that does not divide the block it
+        is applied to (e.g. the same (K, N) at a shorter warm-up seq_len with per_core_M=1) is
+        skipped, so the derived config stays valid for every shape the generator captures.
+        """
+        bw = os.getenv(f"QWEN_LEGACY_IN0_BW_K{k}_N{n}")
+        if bw and k_tiles_per_row % int(bw) == 0:
+            in0_block_w = int(bw)
+        sb = os.getenv(f"QWEN_LEGACY_SUBBLOCK_K{k}_N{n}")
+        if sb and "," in sb:
+            h, w = (int(v) for v in sb.split(","))
+            if per_core_M % h == 0 and per_core_N % w == 0:
+                out_subblock_h, out_subblock_w = h, w
+        return in0_block_w, out_subblock_h, out_subblock_w
 
     def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
         """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.

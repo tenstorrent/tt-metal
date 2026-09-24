@@ -369,32 +369,30 @@ void kernel_main() {
                             if (i == 0) {
                                 shard_base_addr += dram_tensor_start_offset;
                             }
-                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                            uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
+                            uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
+                            // The tiles of one block row that live in this bank are contiguous both in the
+                            // DRAM shard (row pitch in1_block_w_dram_bytes) and in the L1 block (row pitch
+                            // in1_block_w_bytes), so read each row segment as one multi-burst NoC transaction
+                            // instead of one 576/1088-byte request per tile. The per-tile version was
+                            // request-rate bound at ~16 GB/s per sender, which capped the M=512 bfp4 matmuls
+                            // on 8 senders at ~70% of their LoFi compute time.
+                            const uint32_t in1_row_segment_bytes =
+                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC>(
                                 dram_bank,
-                                in1_single_tile_size_bytes,
+                                in1_row_segment_bytes,
                                 {.bank_id = shard_bank_id, .addr = shard_base_addr},
                                 NocOptVals{.vc = vc});
 
-                            uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
-                            uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
-                            uint32_t in1_block_w_dram =
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
-                                in1_single_tile_size_bytes;
-
                             for (uint32_t m = 0; m < in1_block_h; ++m) {
-                                uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
-                                uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
-                                for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                                        dram_bank,
-                                        CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
-                                        in1_single_tile_size_bytes,
-                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
-                                        {},
-                                        NocOptVals{.vc = vc});
-                                    l1_read_addr_in1_temp += in1_single_tile_size_bytes;
-                                    l1_write_addr_in1_temp += in1_single_tile_size_bytes;
-                                }
+                                noc.async_read_with_state<NocOptions::CUSTOM_VC>(
+                                    dram_bank,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                                    in1_row_segment_bytes,
+                                    {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1},
+                                    {},
+                                    NocOptVals{.vc = vc});
                                 l1_read_addr_in1 += in1_block_w_dram_bytes;
                                 l1_write_addr_in1 += in1_block_w_bytes;
                             }

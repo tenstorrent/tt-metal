@@ -1368,7 +1368,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                         if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
-                            worker_core_stride = per_core_N_storage - storage_core_stride;
+                            // A worker never takes more than its own per_core_N tiles from a bank. Without
+                            // the cap, grids with more in1 columns than DRAM banks (per_core_N <
+                            // per_core_N_storage) read a whole bank stripe into a narrower L1 block and
+                            // every such column produces garbage.
+                            worker_core_stride = std::min(per_core_N_storage - storage_core_stride, per_core_N);
 
                             mm_in1_sender_writer_args.push_back(
                                 storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
@@ -2880,7 +2884,11 @@ create_program_mcast_in0_in1(
                         if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
-                            worker_core_stride = per_core_N_storage - storage_core_stride;
+                            // A worker never takes more than its own per_core_N tiles from a bank. Without
+                            // the cap, grids with more in1 columns than DRAM banks (per_core_N <
+                            // per_core_N_storage) read a whole bank stripe into a narrower L1 block and
+                            // every such column produces garbage.
+                            worker_core_stride = std::min(per_core_N_storage - storage_core_stride, per_core_N);
 
                             mm_in1_sender_writer_args.push_back(
                                 storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
