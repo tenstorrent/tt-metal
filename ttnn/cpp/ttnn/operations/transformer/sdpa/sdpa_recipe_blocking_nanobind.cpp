@@ -19,6 +19,7 @@
 #include "sdpa.hpp"
 #include "sdpa_recipe.hpp"
 #include "sdpa_recipe_blocking.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -197,6 +198,43 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
         },
         SDPA_RECIPE_BLOCKING_ARGS,
         "Every feasible blocking, cheapest modeled cost first (same tuples as _sdpa_recipe_blocking).");
+    mod.def(
+        "_sdpa_recipe_resolved_program_config",
+        [](const std::string& op,
+           ttnn::transformer::SDPAPrecision precision,
+           const Tensor& q,
+           const Tensor& k,
+           const std::optional<Tensor>& joint_q,
+           const std::optional<Tensor>& joint_k,
+           const std::optional<SDPAProgramConfig>& program_config,
+           uint32_t ring_size) -> std::optional<SDPAProgramConfig> {
+            const auto policy = policy_of(precision, k.dtype());
+            switch (parse_op(op)) {
+                case recipe::RecipeOp::Dense:
+                    return recipe::resolve_dense_recipe_blocking(policy, q, k, nullptr, nullptr, program_config);
+                case recipe::RecipeOp::Joint:
+                    TT_FATAL(joint_q && joint_k, "joint blocking needs joint_q and joint_k");
+                    return recipe::resolve_dense_recipe_blocking(policy, q, k, &*joint_q, &*joint_k, program_config);
+                case recipe::RecipeOp::Ring:
+                    TT_FATAL(program_config, "ring blocking needs the program config (worker grid)");
+                    return recipe::resolve_ring_recipe_blocking(
+                        policy, q, k, joint_q, joint_k, ring_size, *program_config);
+                case recipe::RecipeOp::ExpRing:
+                    TT_FATAL(program_config, "exp ring blocking needs the program config (grid)");
+                    return recipe::resolve_exp_ring_recipe_blocking(policy, q, k, joint_q, ring_size, *program_config);
+            }
+            return program_config;
+        },
+        nb::arg("op"),
+        nb::arg("precision"),
+        nb::arg("q"),
+        nb::arg("k"),
+        nb::kw_only(),
+        nb::arg("joint_q") = nb::none(),
+        nb::arg("joint_k") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("ring_size") = 1,
+        "The program config the op resolves for these inputs (the caller's, or with op-selected chunks).");
     mod.def(
         "_sdpa_recipe_geometry_rejection",
         [](const std::string& op,

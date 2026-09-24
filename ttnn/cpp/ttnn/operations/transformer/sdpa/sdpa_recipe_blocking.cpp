@@ -34,8 +34,6 @@ constexpr double kFallbackPenalty = 1.03;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
-bool is_paired(const PrecisionPolicy& policy) { return policy.recurrent_state == RecurrentState::CompensatedBF16; }
-
 // Per (Q chunk, K chunk) block cost model, a roofline in units of one D128 QK+PV tile product:
 //   compute   = c * (q_tiles * k_tiles * d_tiles / 4 + ck * q_tiles * d_tiles / 4)
 //   bandwidth = bw * k_tiles * d_tiles / 4
