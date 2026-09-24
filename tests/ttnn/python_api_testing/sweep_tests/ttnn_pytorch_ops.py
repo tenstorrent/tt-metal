@@ -7,7 +7,7 @@ import math
 import ttnn
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
-from tests.ttnn.python_api_testing.typecast_test_helpers import narrow_to_8bit
+from tests.ttnn.python_api_testing.typecast_test_helpers import device_truncates_float_to_uint16, narrow_to_8bit
 import transformers
 from loguru import logger
 
@@ -225,6 +225,8 @@ def _simulate_bfp_quantization(x, man_bits):
 
 
 def _float_to_uint16_clamp(x):
+    if device_truncates_float_to_uint16():
+        return torch.clamp(torch.trunc(x.float()).to(torch.int32), min=0, max=65535)
     # Device float_to_uint16 converts to float32 before std::round; match in float32.
     return torch.clamp(torch.floor(x.float() + 0.5).to(torch.int32), min=0, max=65535)
 
