@@ -13,9 +13,26 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <enchantum/enchantum.hpp>
+
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::experimental::ccl {
+
+uint32_t count_worker_cores_placeable_after_offset(
+    const tt::tt_metal::CoreRangeSet& worker_cores, const tt::tt_metal::CoreCoord& core_grid_offset) {
+    // Shift every range by the offset, then keep the part that still lands on worker cores. The
+    // ranges of a CoreRangeSet are disjoint, so the intersection's core count is exactly the number
+    // of cores whose shifted position is a worker core.
+    std::vector<tt::tt_metal::CoreRange> shifted_ranges;
+    shifted_ranges.reserve(worker_cores.ranges().size());
+    for (const auto& core_range : worker_cores.ranges()) {
+        shifted_ranges.emplace_back(
+            tt::tt_metal::CoreCoord(core_range.start_coord.x + core_grid_offset.x, core_range.start_coord.y + core_grid_offset.y),
+            tt::tt_metal::CoreCoord(core_range.end_coord.x + core_grid_offset.x, core_range.end_coord.y + core_grid_offset.y));
+    }
+    return tt::tt_metal::CoreRangeSet(std::move(shifted_ranges)).intersection(worker_cores).num_cores();
+}
 
 uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -40,21 +57,15 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
     const tt::tt_metal::CoreCoord& core_grid_offset) {
+    TT_FATAL(
+        topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "reduce_scatter_default_workers only supports Ring and Linear topologies, got {}",
+        enchantum::to_string(topology));
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    // choose_worker_cores shifts every core it picks by core_grid_offset, so a core only counts as
-    // available if its shifted position is still a worker core; the rest would land off the grid.
-    uint32_t num_cores = 0;
-    for (const auto& core_range : subdevice_core_range_set.ranges()) {
-        for (size_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-            for (size_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                if (subdevice_core_range_set.contains(
-                        tt::tt_metal::CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))) {
-                    ++num_cores;
-                }
-            }
-        }
-    }
+    // choose_worker_cores shifts every core it picks by core_grid_offset, so only the cores whose
+    // shifted position is still a worker core are available; the rest would land off the grid.
+    const uint32_t num_cores = count_worker_cores_placeable_after_offset(subdevice_core_range_set, core_grid_offset);
     log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
     ttsl::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
@@ -106,10 +117,6 @@ uint32_t reduce_scatter_default_workers(
             return worker_count;
         }
     }
-    TT_FATAL(
-        !candidate_worker_counts.empty(),
-        "reduce_scatter_default_workers only supports Ring and Linear topologies, got {}",
-        static_cast<int>(topology));
     TT_THROW(
         "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
         "links {}: {} worker cores stay on the grid after core_grid_offset ({}, {}), the smallest candidate needs {}",
