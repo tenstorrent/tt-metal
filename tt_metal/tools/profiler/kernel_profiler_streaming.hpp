@@ -228,7 +228,7 @@ constexpr uint32_t STALL_RESERVE_WORDS = STALL_CLOSE_WORDS;
 constexpr uint32_t RING_USABLE = RING_CAPACITY - STALL_RESERVE_WORDS;
 static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry a stall reserve");
 
-#if defined(PROFILE_INLINE_ENABLED) || defined(COMPILE_FOR_ERISC)
+#if defined(PROFILE_INLINE_ENABLED)
 #define PROFILER_INLINE_ATTR inline __attribute__((always_inline))
 #else
 #define PROFILER_INLINE_ATTR __attribute__((noinline))
