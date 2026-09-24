@@ -3,15 +3,20 @@
 
 #include "chunk_gated_delta_rule_nanobind.hpp"
 #include "chunk_gated_delta_rule.hpp"
+#include "chunk_gated_delta_rule_config.hpp"
 #include "device/chunk_gdn_phased.hpp"
 #include "device/chunk_gdn_fused.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/device.hpp"
 
+#include <fmt/format.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
+
+#include <string>
 
 namespace ttnn::operations::transformer {
 
@@ -40,7 +45,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     uint32_t chunk_size,
     bool use_qk_l2norm,
     bool output_head_major,
-    bool use_mcast,
+    const std::optional<ttnn::transformer::ChunkGdnProgramConfig>& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& eye,
@@ -59,7 +64,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         chunk_size,
         use_qk_l2norm,
         output_head_major,
-        use_mcast,
+        program_config,
         memory_config,
         gdn_default_compute_kernel_config(q.device()->arch(), compute_kernel_config),
         eye,
@@ -86,7 +91,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool prep_serial) {
     return ttnn::prim::chunk_gdn_prep(
         q,
         k,
@@ -105,7 +111,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
         qk_norm,
         scale,
         qk_flat,
-        Hk);
+        Hk,
+        prep_serial);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
@@ -120,7 +127,9 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
     uint32_t chunk_size,
     bool output_final_state,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool use_mcast,
+    bool force_serial) {
     return ttnn::prim::chunk_gdn_scan(
         v_beta,
         kd,
@@ -133,15 +142,113 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
         chunk_size,
         output_final_state,
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
-        gdn_default_compute_kernel_config(v_beta.device()->arch(), compute_kernel_config));
+        gdn_default_compute_kernel_config(v_beta.device()->arch(), compute_kernel_config),
+        use_mcast,
+        force_serial);
 }
+
+std::string py_bool(bool b) { return b ? "True" : "False"; }
+std::string py_opt(const std::optional<uint32_t>& v) { return v.has_value() ? std::to_string(*v) : "None"; }
+std::string py_opt(const std::optional<bool>& v) { return v.has_value() ? py_bool(*v) : "None"; }
 
 }  // namespace
 
 void bind_chunk_gated_delta_rule(nb::module_& mod) {
-    // Host-side geometry oracle (design D8 v0.3): what the fused op will choose for (grid, BH, NC, Vt)
-    // when no QWEN_GDN_* knob overrides it. Pure function of its arguments — no device needed — so
-    // the dispatch-table tests can run for any grid (validation plan N12).
+    using ttnn::transformer::ChunkGdnFusedProgramConfig;
+    using ttnn::transformer::ChunkGdnMonoProgramConfig;
+    using ttnn::transformer::ChunkGdnPhasedProgramConfig;
+
+    nb::class_<ChunkGdnMonoProgramConfig>(
+        mod,
+        "ChunkGdnMonoProgramConfig",
+        R"doc(chunk_gated_delta_rule on a simple single-kernel path: one core per head for every chunk.
+        The slowest path, kept as the benchmark/debug reference; it does not accept
+        flat (token-major) q/k/v.)doc")
+        .def(nb::init<>())
+        .def("__repr__", [](const ChunkGdnMonoProgramConfig&) { return std::string("ChunkGdnMonoProgramConfig()"); });
+
+    nb::class_<ChunkGdnPhasedProgramConfig>(
+        mod,
+        "ChunkGdnPhasedProgramConfig",
+        R"doc(chunk_gated_delta_rule on the two-phase path: prep phase fanned over the grid, seven fp32
+        intermediates stored in DRAM, followed by the scan phase.
+
+        Keyword Args:
+            use_mcast (bool): default True. One sender core per head multicasts the scan's six shared
+                inputs to that head's sibling core; False makes every core read them from DRAM.
+            scan_serial (bool): default False. One core per head (NV=1, the full V) instead of the
+                V-block split. Used for validation only.
+            prep_serial (bool): default False. BH prep cores (one per head) instead of the whole grid.
+                Validation only.)doc")
+        .def(
+            nb::init<bool, bool, bool>(),
+            nb::kw_only(),
+            nb::arg("use_mcast") = true,
+            nb::arg("scan_serial") = false,
+            nb::arg("prep_serial") = false)
+        .def_rw("use_mcast", &ChunkGdnPhasedProgramConfig::use_mcast)
+        .def_rw("scan_serial", &ChunkGdnPhasedProgramConfig::scan_serial)
+        .def_rw("prep_serial", &ChunkGdnPhasedProgramConfig::prep_serial)
+        .def("__repr__", [](const ChunkGdnPhasedProgramConfig& c) {
+            return fmt::format(
+                "ChunkGdnPhasedProgramConfig(use_mcast={}, scan_serial={}, prep_serial={})",
+                py_bool(c.use_mcast),
+                py_bool(c.scan_serial),
+                py_bool(c.prep_serial));
+        });
+
+    nb::class_<ChunkGdnFusedProgramConfig>(
+        mod,
+        "ChunkGdnFusedProgramConfig",
+        R"doc(chunk_gated_delta_rule on the fused path: one program in which, per head, NP producer
+        cores run prep and NoC-write the seven intermediates into NV receiver cores' CBs.
+        The geometry fields default to the calibrated cost model's pick for
+        (grid, BH, NC, Vt) (see chunk_gdn_fused_geometry); pinning one of num_producers /
+        num_receivers makes the model fill the other so the pair still fits the grid.
+
+        Keyword Args:
+            num_producers (int, optional): NP per head, clamped to the chunk count.
+            num_receivers (int, optional): NV per head; must divide Vt = V / 32.
+            row_local (bool, optional): core map. True: one head per row with its producers east of
+                its receivers, so no two heads share a NoC link. False: row-major 1xNV receiver
+                rectangles with the producers on the remaining cores. None: row-local whenever the
+                geometry has such a layout.
+            handoff_depth (int): default 2. Hand-off ring slots per CB (1..8): how many chunks a
+                producer may run ahead of its receivers.
+            unicast (bool): default True. Per-receiver unicast writes; False sends the linked
+                multicast chain.
+            posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
+                in-order delivery; requires unicast.)doc")
+        .def(
+            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::kw_only(),
+            nb::arg("num_producers") = nb::none(),
+            nb::arg("num_receivers") = nb::none(),
+            nb::arg("row_local") = nb::none(),
+            nb::arg("handoff_depth") = 2,
+            nb::arg("unicast") = true,
+            nb::arg("posted") = false)
+        .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
+        .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
+        .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
+        .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
+        .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
+        .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
+            return fmt::format(
+                "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
+                "unicast={}, posted={})",
+                py_opt(c.num_producers),
+                py_opt(c.num_receivers),
+                py_opt(c.row_local),
+                c.handoff_depth,
+                py_bool(c.unicast),
+                py_bool(c.posted));
+        });
+
+    // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
+    // config leaves the geometry free. Pure function of its arguments — no device needed — so the
+    // dispatch-table tests can run for any grid.
     mod.def(
         "chunk_gdn_fused_geometry",
         [](uint32_t grid_x,
@@ -161,9 +268,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("Vt") = 4,
         nb::arg("fixed_nv") = 0,
         nb::arg("fixed_np") = 0,
-        R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) without env
-        overrides: (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused
-        geometry fits the grid.)doc");
+        R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
+        program config leaves it free (fixed_nv / fixed_np = a pinned num_receivers / num_producers, 0 =
+        free): (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused geometry
+        fits the grid.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -214,18 +322,16 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             chunk_size (int): default 64.
             use_qk_l2norm (bool): default False.
             output_head_major (bool): default False. When True, o is returned head-major as
-                [B*HV, T, V] in TILE layout (skips the token<->head permute round-trip);
-                otherwise token-major [B, T, HV, V] ROW_MAJOR.
-            use_mcast (bool): default True. The scan phase multicasts its shared inputs from one
-                sender core per head to that head's sibling V-block cores; False makes every core
-                read them from DRAM itself. Meant as a validation argument.
+                [B*HV, T, V] in TILE layout; otherwise token-major [B, T, HV, V] ROW_MAJOR.
+            program_config (ChunkGdnFusedProgramConfig | ChunkGdnPhasedProgramConfig |
+                ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
+                laid out on the chip — the alternative you pass selects the path, its fields the
+                geometry (see each class). None: the fused path or the phased path depending on the cost model.
             memory_config (ttnn.MemoryConfig, optional).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             eye, tril, ones (ttnn.Tensor, optional): [1,1,C,C] fp32 TILE constant tiles (identity,
-                lower-triangular ones, all-ones). Caller-supplied so they are device-resident before
-                trace capture and their lifetime is device-scoped. Traced callers MUST pass these
-                (an internal build does a host upload, illegal under trace); if omitted they are
-                built eagerly.
+                lower-triangular ones, all-ones). Caller-supplied. Traced callers MUST pass these;
+                if omitted they are built eagerly.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
 
@@ -251,7 +357,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("chunk_size") = 64,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("output_head_major") = false,
-        nb::arg("use_mcast") = true,
+        nb::arg("program_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("eye") = nb::none(),
@@ -289,6 +395,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             qk_norm (bool) / scale (float): OPT-B in-kernel q/k L2 norm with scale folded into
                 q's norm, chunk_gdn_phased.hpp:45-48.
             qk_flat (bool) / Hk (int): OPT-A flat token-major q/k, chunk_gdn_phased.hpp:41-44.
+            prep_serial (bool): default False. ChunkGdnPhasedProgramConfig.prep_serial: BH cores
+                (one per head) instead of the whole grid. Measurement only.
 
         Returns:
             list[ttnn.Tensor]: the 7 fp32 per-chunk DRAM intermediates the scan consumes —
@@ -319,7 +427,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("qk_norm") = false,
         nb::arg("scale") = 1.0f,
         nb::arg("qk_flat") = false,
-        nb::arg("Hk") = 0);
+        nb::arg("Hk") = 0,
+        nb::arg("prep_serial") = false);
 
     const auto* scan_doc =
         R"doc(
@@ -347,6 +456,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 op's default).
             compute_kernel_config (optional): default HiFi4 + fp32 dest acc, no approx — built
                 by the same helper as the public op's default.
+            use_mcast (bool) / force_serial (bool): ChunkGdnPhasedProgramConfig.use_mcast /
+                scan_serial — the shared-input multicast (default True) and the one-core-per-head
+                NV=1 layout (default False; measurement only).
 
         Returns:
             list[ttnn.Tensor]: [o [BH, NC, C, V] fp32, final_state [BH, K, V] fp32]
@@ -369,7 +481,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("chunk_size") = 32,
         nb::arg("output_final_state") = true,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("use_mcast") = true,
+        nb::arg("force_serial") = false);
 }
 
 }  // namespace ttnn::operations::transformer

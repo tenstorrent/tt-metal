@@ -22,6 +22,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
 
 namespace ttnn::prim {
 
@@ -39,38 +40,37 @@ struct ChunkGdnFusedParams {
     uint32_t Hk = 0;
     bool qk_norm = false;
     float scale = 1.0f;
-    // F3a: producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
-    // writes them into the head's single receiver in order (receiver-driven rotating ready
-    // credits). Read from QWEN_GDN_NP at attrs construction (never in the factory — this field
-    // being hashed is what keeps the program cache honest) and clamped to num_chunks.
+    // Every geometry/transport field below is resolved from the ChunkGdnFusedProgramConfig (or the
+    // cost model, for the fields it leaves free) at attrs construction — never in the factory: these
+    // fields being hashed is what keeps the program cache honest.
+    // Producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
+    // writes them into the head's receivers in order (receiver-driven rotating ready credits).
+    // Clamped to num_chunks.
     uint32_t np = 1;
     // Receivers per head (NV): a head's NV receiver cores form a 1xNV row rectangle and each carries a
-    // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC). Read from QWEN_GDN_NV
-    // at attrs construction (hashed); default 1 until the cost model (Phase 2) chooses it.
+    // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC).
     uint32_t nv = 1;
     // Hand-off CB depth (slots per CB): how many chunks a producer may run ahead of a receiver's
-    // consumption, and how early a receiver can reserve+credit the next chunk. 2 = F2's value; deeper
-    // rings hide more of the per-chunk handshake round trip at +76 KB of L1 per slot on every core.
-    // Read from QWEN_GDN_HANDOFF_NBUF at attrs construction (hashed). Phase 1b: the receiver keeps
+    // consumption, and how early a receiver can reserve+credit the next chunk. Deeper rings hide more
+    // of the per-chunk handshake round trip at +76 KB of L1 per slot on every core. The receiver keeps
     // nbuf-1 hand-offs in flight (per-slot VALID flags, BH x nbuf credit words), so 3 hides the unicast
-    // round trip (5.8-6.1 us) behind two receiver steps at both NV=2 and NV=4.
-    uint32_t nbuf = 2;  // measured (v0.3 §10b): 3 and 4 are slower than 2 in every transport
-    // Phase 1 A/B (design D5/D16): ship the six shared tensors and the v_beta slices as NV plain unicast
-    // writes per item instead of a linked multicast chain. Multicasts reserve router ports along their
-    // path; the zone captures show sporadic 20-120 us multicast-issue stalls on individual producers.
-    // Read from QWEN_GDN_UNICAST at attrs construction (hashed). Default since Phase 1b (QWEN_GDN_UNICAST=0
-    // restores the multicast chain for A/B).
+    // round trip (5.8-6.1 us) behind two receiver steps at NV=2 and NV=4.
+    uint32_t nbuf = 2;  // measured: 3 and 4 are slower than 2 in every transport
+    // Ship the six shared tensors and the v_beta slices as NV plain unicast writes per item instead of
+    // a linked multicast chain. Multicasts reserve router ports along their path; the zone captures show
+    // sporadic 20-120 us multicast-issue stalls on individual producers. The default; unicast=false
+    // restores the multicast chain for A/B.
     bool unicast = true;
-    // Phase 1b A/B (design D5): with the unicast transport, ship the data as POSTED writes (no acks,
+    // With the unicast transport, ship the data as POSTED writes (no acks,
     // no per-item write barrier) and order the VALID flag behind them by the NoC's in-order delivery
     // on one (source, destination, VC, command buffer) — the argument tt-metal's matmul multicast
-    // sender uses. Requires unicast. Read from QWEN_GDN_POSTED at attrs construction (hashed).
+    // sender uses. Requires unicast.
     bool posted = false;
-    // Placement (design D9): 0 = receivers row-major from row 0, producers fill the rest (v0.2);
+    // Placement: 0 = receivers row-major from row 0, producers fill the rest;
     // 1 = ROW-LOCAL: one head per row (receivers in columns 0..NV-1, its NP producers to their east in
     // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
-    // share NoC links (v0.3 §10b). Read from QWEN_GDN_PLACEMENT at attrs construction (hashed).
+    // share NoC links. The config's row_local, or row-local whenever it is feasible.
     uint32_t placement = 0;
     bool has_initial_state = false;
     bool output_final_state = false;
@@ -147,9 +147,10 @@ FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
 
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
-// Needs BH*(NV+NP) cores (NP producers + NV receivers per head; both default to 1 and are explicit
-// QWEN_GDN_NP / QWEN_GDN_NV opt-ins) and BH <= (grid.x / NV) * grid.y receiver row rectangles;
-// validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing this path.
+// The geometry (NV receivers + NP producers per head, placement) comes from program_config, with the
+// calibrated cost model filling whatever it leaves free. Needs BH*(NV+NP) cores and a placement that
+// fits; validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing
+// this path (choose_fused_geometry(...).nv == 0 means no geometry fits).
 std::vector<Tensor> chunk_gdn_fused(
     const Tensor& q,
     const Tensor& k,
@@ -165,6 +166,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
+    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
     bool v_flat = false,
     uint32_t HV = 0,
     bool qk_norm = false,

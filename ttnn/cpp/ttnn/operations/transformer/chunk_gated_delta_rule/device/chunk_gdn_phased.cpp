@@ -3,8 +3,6 @@
 
 #include "chunk_gdn_phased.hpp"
 
-#include <cstdlib>
-
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -108,7 +106,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool prep_serial) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -129,6 +128,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .prep_serial = prep_serial,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -208,10 +208,10 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast) {
+    bool use_mcast,
+    bool force_serial) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
-    const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
         .BH = vb_shape[0],
         .num_chunks = vb_shape[1],
@@ -221,7 +221,7 @@ std::vector<Tensor> chunk_gdn_scan(
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .use_mcast = use_mcast,
-        .force_serial = serial_env && serial_env[0] == '1',
+        .force_serial = force_serial,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

@@ -131,17 +131,6 @@ def _dev(device, t, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def _clean_env(monkeypatch):
-    # Neutralize ambient GDN debug/perf knobs that fork the kernel topology or corrupt outputs.
-    monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
-    monkeypatch.delenv("QWEN_GDN_PREP_SERIAL", raising=False)
-    # Mcast on/off is documented bit-exact, but pin the shipped default topology anyway.
-    monkeypatch.delenv("QWEN_GDN_SCAN_MCAST", raising=False)
-    # QWEN_GDN_DUMP is read once via a function-local static; delenv helps only if the op has not
-    # run yet in this process — kept for hygiene.
-    monkeypatch.delenv("QWEN_GDN_DUMP", raising=False)
-
-
 # ---------------------------------------------------------------------------
 # (1) prep prim vs torch, each of the seven outputs
 # ---------------------------------------------------------------------------
@@ -150,8 +139,7 @@ def _clean_env(monkeypatch):
 # (16, 8) = 128 (head, chunk) work-items: exercises the multi-core fan-out of distribute_prep
 # (fills a full 8x8+ grid); (4, 4) is the small-shape smoke.
 @pytest.mark.parametrize("bh, nc", [(4, 4), (16, 8)])
-def test_prep_outputs_vs_torch(device, monkeypatch, bh, nc):
-    _clean_env(monkeypatch)
+def test_prep_outputs_vs_torch(device, bh, nc):
     scale = KDIM**-0.5
     q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
 
@@ -203,8 +191,7 @@ def test_prep_outputs_vs_torch(device, monkeypatch, bh, nc):
 # ---------------------------------------------------------------------------
 
 
-def test_scan_vs_torch(device, monkeypatch):
-    _clean_env(monkeypatch)
+def test_scan_vs_torch(device):
     bh, nc = 4, 4
     q, k, v, g, beta, s0 = _make_inputs(bh, nc, seed=20260821, scale=KDIM**-0.5)
     seven = _prep_reference(q.float(), k.float(), v.float(), g, beta)
@@ -233,11 +220,11 @@ def test_scan_vs_torch(device, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_composition_bit_exact(device, monkeypatch):
-    """prep->scan on head-major inputs must be BYTE-IDENTICAL to the public op on the equivalent
-    token-major inputs: the op's preprocessing is all bit-reproducible data movement (typecasts
-    skipped for already-bf16/fp32 inputs; permute/reshape; pad==0 since T % 32 == 0), except the
-    on-device q*scale multiply — neutralized here by passing scale=1.0, which is a numerical
+def test_composition_bit_exact(device):
+    """prep->scan on head-major inputs must be BYTE-IDENTICAL to the public op on the phased path with
+    the equivalent token-major inputs: the op's preprocessing is all bit-reproducible data movement
+    (typecasts skipped for already-bf16/fp32 inputs; permute/reshape; pad==0 since T % 32 == 0), except
+    the on-device q*scale multiply — neutralized here by passing scale=1.0, which is a numerical
     identity in bf16 (x*1.0 repacks to the same bits for the normal values randn+l2norm makes).
     G=1 (H==HV) so the GQA repeat_interleave is not in the path either."""
     torch.manual_seed(20260822)
@@ -246,9 +233,6 @@ def test_composition_bit_exact(device, monkeypatch):
     grid = device.compute_with_storage_grid_size()
     if BH > grid.x * grid.y:
         pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
-
-    monkeypatch.setenv("QWEN_GDN_PHASED", "1")
-    _clean_env(monkeypatch)
 
     # Token-major op inputs (bf16 q/k/v so the op's typecast is a no-op; q/k host-normalized).
     q = F.normalize(torch.randn(B, T, H, KDIM), dim=-1).to(torch.bfloat16)
@@ -272,6 +256,7 @@ def test_composition_bit_exact(device, monkeypatch):
         output_final_state=True,
         chunk_size=CHUNK,
         output_head_major=True,
+        program_config=ttnn.ChunkGdnPhasedProgramConfig(),
         eye=const_tiles[0],
         tril=const_tiles[1],
         ones=const_tiles[2],

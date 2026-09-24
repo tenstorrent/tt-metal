@@ -130,6 +130,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_dk = self.linear_key_head_dim
         self.gdn_nv = self.linear_num_value_heads
         self.gdn_dv = self.linear_value_head_dim
+        self.gdn_program_config = None
         self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
         self.gdn_key_dim = self.linear_q_dim  # q and k equal
         self.gdn_value_dim = self.linear_v_dim

@@ -5,7 +5,7 @@
 No device needed. The fused op's geometry is three pure C++ functions, bound through nanobind:
 
 * ``chunk_gdn_fused_geometry``           — the calibrated cost model (NV, NP, placement) the op picks
-                                           when no QWEN_GDN_NV / QWEN_GDN_NP / QWEN_GDN_PLACEMENT knob is set;
+                                           when the fused program config leaves those fields free;
 * ``chunk_gdn_fused_row_local_feasible`` — the row-local feasibility predicate;
 * ``chunk_gdn_fused_placement``          — the core map, computed by the SAME function the program
                                            factory calls.
@@ -244,8 +244,8 @@ def test_row_local_feasibility_mirror(grid, bh):
 @pytest.mark.parametrize("bh", [4, 12, 16, 32])
 @pytest.mark.parametrize("grid", [(11, 10), (12, 10)], ids=["11x10", "12x10"])
 def test_constrained_choice_mirror(grid, bh, fixed):
-    """A partial env override (QWEN_GDN_NV or QWEN_GDN_NP alone) pins that field; C++ and the oracle
-    fill in the other one identically, and the result always fits the grid."""
+    """A partially pinned fused config (num_receivers or num_producers alone) fixes that field; C++ and
+    the oracle fill in the other one identically, and the result always fits the grid."""
     fnv, fnp = fixed
     nv, np_, pl, _, _, _ = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 16, VT, fnv, fnp)
     o = _choose_geometry(grid, bh, 16, fixed_nv=fnv, fixed_np=fnp)

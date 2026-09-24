@@ -5,15 +5,14 @@
 
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include <mutex>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "device/chunk_gated_delta_rule_device_operation.hpp"
-#include "device/chunk_gdn_fused.hpp"
 #include "device/chunk_gdn_fused.hpp"
 #include "device/chunk_gdn_phased.hpp"
 
@@ -142,7 +141,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     uint32_t chunk_size,
     bool use_qk_l2norm,
     bool output_head_major,
-    bool use_mcast,
+    const std::optional<ChunkGdnProgramConfig>& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& eye,
@@ -277,54 +276,37 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         /*default_l1_acc=*/false);
 
     // Path selection. Three device implementations, same math:
-    //   fused  — ONE program: per head NP producer cores run prep and NoC-write the 7
-    //            intermediates straight into a receiver core's CBs (zero DRAM intermediates).
-    //            Needs (1+NP) cores/head; NP defaults to 1, QWEN_GDN_NP opts into the F3a
-    //            round-robin producer split (read inside the prim at attrs construction, hashed).
+    //   fused  — ONE program: per head NP producer cores run prep and NoC-write the 7 intermediates
+    //            straight into NV receiver cores' CBs (zero DRAM intermediates).
     //   phased — prep -> (7 fp32 DRAM tensors) -> scan, two prims. The bit-exact reference.
     //   mono   — the original single-kernel op, 1 core/head (benchmark/debug only).
-    // Precedence: QWEN_GDN_PATH=fused|phased|mono if set; else the legacy QWEN_GDN_PHASED
-    // ('0' -> mono, else phased) if set; else DEFAULT by the fused op's calibrated geometry cost
-    // model (design D8 v0.3, chunk_gdn_fused.hpp): fused iff a row-local geometry fits this grid
-    // AND its predicted time beats the phased reference (fused_pays). On QB2's 11x10 grid that is
-    // every BH <= 48 (BH=64 needs 128 cores -> phased); the fused path is bit-exact vs phased and
-    // measured 1.2-1.9x faster at BH = 4..32 (design doc §5/§10e).
-    // Envs are read fresh per call — op-level env dispatch is cache-safe (each branch launches a
-    // DIFFERENT prim with its own program-cache hash), unlike an env read inside a factory.
-    enum class GdnPath { Fused, Phased, Mono };
-    const GdnPath path = [&] {
-        if (const char* p = std::getenv("QWEN_GDN_PATH")) {
-            if (std::strcmp(p, "fused") == 0) {
-                return GdnPath::Fused;
-            }
-            if (std::strcmp(p, "phased") == 0) {
-                return GdnPath::Phased;
-            }
-            if (std::strcmp(p, "mono") == 0) {
-                return GdnPath::Mono;
-            }
-            TT_FATAL(false, "QWEN_GDN_PATH must be one of fused|phased|mono (got '{}')", p);
-            return GdnPath::Phased;  // unreachable — TT_FATAL(false, ...) throws
-        }
-        if (const char* e = std::getenv("QWEN_GDN_PHASED")) {
-            return e[0] == '0' ? GdnPath::Mono : GdnPath::Phased;
-        }
+    // The program config names the path, as a matmul program config names its factory; without one
+    // the op chooses by the fused op's calibrated geometry cost model (chunk_gdn_fused.hpp): fused iff
+    // a row-local geometry fits this grid AND its predicted time beats the phased reference
+    // (fused_pays). On QB2's 11x10 grid that is every BH <= 48 (BH=64 needs 128 cores -> phased); the
+    // fused path is bit-exact vs phased and measured 1.2-1.9x faster at BH = 4..32. Each branch
+    // launches a DIFFERENT prim with its own program-cache hash, and every config field is hashed
+    // inside its prim's attributes.
+    const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
         const auto grid = dev->compute_with_storage_grid_size();
         const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
-        return (choice.nv >= 1 && choice.fused_pays) ? GdnPath::Fused : GdnPath::Phased;
+        if (choice.nv >= 1 && choice.fused_pays) {
+            return ChunkGdnFusedProgramConfig{};  // geometry left free: the prim re-derives this same pick
+        }
+        return ChunkGdnPhasedProgramConfig{};
     }();
+    const bool is_mono = std::holds_alternative<ChunkGdnMonoProgramConfig>(cfg);
 
     ttnn::Tensor o_c;          // [BH, NC, C, V]
     ttnn::Tensor final_state;  // [BH, K, V]
     // OPT-A/OPT-B are handled by the prep reader/compute, which both the phased and fused paths
     // run unchanged; only the monolithic kernel lacks them.
-    TT_FATAL(!flat_v || path != GdnPath::Mono, "OPT-A flat v is not supported on the mono path");
+    TT_FATAL(!flat_v || !is_mono, "OPT-A flat v is not supported on the mono path");
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
     TT_FATAL(
-        !flat_qk || (path != GdnPath::Mono && qk_norm),
-        "OPT-A flat q/k needs the phased or fused path + in-kernel norm (Ct==1)");
+        !flat_qk || (!is_mono && qk_norm), "OPT-A flat q/k needs the phased or fused path + in-kernel norm (Ct==1)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    if (path == GdnPath::Fused) {
+    if (const auto* fused_cfg = std::get_if<ChunkGdnFusedProgramConfig>(&cfg)) {
         // Same preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS
         // provides — zeros built above when the caller passed none), same outputs scan produces;
         // the postprocessing below is shared.
@@ -343,6 +325,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             output_final_state,
             out_mem,
             kernel_cfg,
+            *fused_cfg,
             flat_v,
             HV,
             qk_norm,
@@ -351,7 +334,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             H);
         o_c = fused[0];
         final_state = fused[1];
-    } else if (path == GdnPath::Phased) {
+    } else if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {
         auto prep = ttnn::prim::chunk_gdn_prep(
             q_c,
             k_c,
@@ -370,7 +353,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             qk_norm,
             scale,
             flat_qk,
-            H);
+            H,
+            phased_cfg->prep_serial);
         // prep = {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],
@@ -385,7 +369,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             output_final_state,
             out_mem,
             kernel_cfg,
-            use_mcast);
+            phased_cfg->use_mcast,
+            phased_cfg->scan_serial);
         o_c = scan[0];
         final_state = scan[1];
         // DEBUG: QWEN_GDN_DUMP=<idx> routes prep[idx] out through the o path (idx 2 = q_decay,

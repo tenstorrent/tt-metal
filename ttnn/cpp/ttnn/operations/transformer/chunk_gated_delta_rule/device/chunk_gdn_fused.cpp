@@ -4,7 +4,6 @@
 #include "chunk_gdn_fused.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -372,6 +371,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
+    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
     bool v_flat,
     uint32_t HV,
     bool qk_norm,
@@ -385,60 +385,45 @@ std::vector<Tensor> chunk_gdn_fused(
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
     const uint32_t val_dim = v_flat ? (v_shape[2] / HV) : v_shape[3];
-    // Geometry defaults from the calibrated cost model (design D8 v0.3); every knob below overrides
-    // its field. Read HERE (attrs construction), never in the factory — all of them are hashed, so a
-    // toggle compiles a fresh program instead of silently serving a stale cached one.
+    // Geometry: the program config's pinned fields, the calibrated cost model for the rest. Resolved HERE (attrs
+    // construction), never in the factory — every field is hashed, so a different config compiles a fresh program
+    // instead of silently serving a stale cached one.
     const auto grid0 = q.device()->compute_with_storage_grid_size();
-    uint32_t np_env = 0, nv_env = 0;
-    if (const char* e = std::getenv("QWEN_GDN_NP")) {
-        const int v_np = std::atoi(e);
-        TT_FATAL(v_np >= 1, "QWEN_GDN_NP must be a positive integer (got '{}')", e);
-        np_env = static_cast<uint32_t>(v_np);
-    }
-    if (const char* e = std::getenv("QWEN_GDN_NV")) {
-        const int v_nv = std::atoi(e);
-        TT_FATAL(v_nv >= 1, "QWEN_GDN_NV must be a positive integer (got '{}')", e);
-        nv_env = static_cast<uint32_t>(v_nv);
-    }
-    // The model fills whatever the knobs leave free (both, one, or none) so the pair fits the grid.
-    const auto choice = choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / TILE_WIDTH, nv_env, np_env);
+    const uint32_t np_pin = program_config.num_producers.value_or(0);
+    const uint32_t nv_pin = program_config.num_receivers.value_or(0);
+    TT_FATAL(
+        !program_config.num_producers.has_value() || np_pin >= 1,
+        "chunk_gdn_fused: num_producers must be >= 1 (got {})",
+        np_pin);
+    TT_FATAL(
+        !program_config.num_receivers.has_value() || nv_pin >= 1,
+        "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
+        nv_pin);
+    // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
+    const auto choice = choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / TILE_WIDTH, nv_pin, np_pin);
     TT_FATAL(
         choice.nv >= 1,
-        "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with NV={} NP={} (0 = free); the dispatch must "
-        "choose phased",
+        "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
+        "(0 = free); the dispatch must choose phased",
         BH,
         grid0.x,
         grid0.y,
-        nv_env,
-        np_env);
-    // F3a producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
+        nv_pin,
+        np_pin);
+    // Producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
     // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
     // divide Vt (validated).
-    const uint32_t np = np_env ? std::min<uint32_t>(np_env, num_chunks) : choice.np;
-    const uint32_t nv = nv_env ? nv_env : choice.nv;
-    uint32_t nbuf = 2;
-    if (const char* e = std::getenv("QWEN_GDN_HANDOFF_NBUF")) {
-        const int v_nb = std::atoi(e);
-        TT_FATAL(v_nb >= 1 && v_nb <= 8, "QWEN_GDN_HANDOFF_NBUF must be in [1, 8] (got '{}')", e);
-        nbuf = static_cast<uint32_t>(v_nb);
-    }
-    bool unicast = true;
-    if (const char* e = std::getenv("QWEN_GDN_UNICAST")) {
-        unicast = std::atoi(e) != 0;
-    }
-    bool posted = false;
-    if (const char* e = std::getenv("QWEN_GDN_POSTED")) {
-        posted = std::atoi(e) != 0;
-    }
-    TT_FATAL(
-        !posted || unicast, "chunk_gdn_fused: QWEN_GDN_POSTED requires the unicast transport (QWEN_GDN_UNICAST=1)");
-    // Placement: row-local whenever the (possibly overridden) geometry has a row-local layout.
-    uint32_t placement = fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np) ? 1 : 0;
-    if (const char* e = std::getenv("QWEN_GDN_PLACEMENT")) {
-        const int v_pl = std::atoi(e);
-        TT_FATAL(v_pl == 0 || v_pl == 1, "QWEN_GDN_PLACEMENT must be 0 (row-major) or 1 (row-local), got '{}'", e);
-        placement = static_cast<uint32_t>(v_pl);
-    }
+    const uint32_t np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
+    const uint32_t nv = nv_pin ? nv_pin : choice.nv;
+    const uint32_t nbuf = program_config.handoff_depth;
+    TT_FATAL(nbuf >= 1 && nbuf <= 8, "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})", nbuf);
+    const bool unicast = program_config.unicast;
+    const bool posted = program_config.posted;
+    TT_FATAL(!posted || unicast, "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
+    // Placement: the config's choice, else row-local whenever the (possibly pinned) geometry has a
+    // row-local layout.
+    const bool row_local = program_config.row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np));
+    const uint32_t placement = row_local ? 1u : 0u;
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,

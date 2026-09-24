@@ -15,7 +15,6 @@
 #include "chunk_gdn_phased.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
@@ -208,10 +207,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
 
     auto* device = in.q.device();
     // Fan the BH*NC independent (head, chunk) prep work-items across the whole grid.
-    // QWEN_GDN_PREP_SERIAL=1 caps to BH cores (old 1-core/head layout) for perf A/B only.
+    // prep_serial (ChunkGdnPhasedProgramConfig, hashed) caps to BH cores — the old 1-core/head
+    // layout — for perf A/B only.
     const uint32_t total_work = BH * NC;
-    const char* serial_env = std::getenv("QWEN_GDN_PREP_SERIAL");
-    const uint32_t core_cap = (serial_env && serial_env[0] == '1') ? BH : ~0u;
+    const uint32_t core_cap = attrs.prep_serial ? BH : ~0u;
     auto dist = distribute_prep(device->compute_with_storage_grid_size(), total_work, core_cap);
     const CoreRangeSet& cores = dist.core_set;
     const uint32_t n_used = static_cast<uint32_t>(dist.cores.size());

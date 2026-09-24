@@ -300,9 +300,9 @@ def test_chunk_vs_recurrent_reference(
 # relative floor (chunk-parallel vs serial fp32 association), so corruption below it is invisible
 # there at any tolerance; this comparison's floor is exactly zero.
 #
-# `use_mcast` is a hashed attribute of ChunkGdnScanParams, so the two calls compile two distinct
-# cached scan programs. The program-cache assertion below checks that, which is what keeps the A/B
-# non-vacuous: were the argument no longer threaded or hashed, both runs would share one program.
+# ChunkGdnPhasedProgramConfig.use_mcast lands as a hashed attribute, so the two calls compile two
+# distinct cached scan programs. The program-cache assertion below checks that, which is what keeps
+# the A/B comparison meaningful.
 # --------------------------------------------------------------------------------------------
 
 
@@ -334,7 +334,7 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
         tril=tril,
         ones=ones,
         masks=masks,
-        use_mcast=use_mcast,
+        program_config=ttnn.ChunkGdnPhasedProgramConfig(use_mcast=use_mcast),
     )
     o_t = ttnn.to_torch(o)
     fs_t = ttnn.to_torch(fs)
@@ -373,7 +373,6 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
 @pytest.mark.parametrize("with_initial_state", [False, True])
 def test_scan_mcast_bit_exact(
     device,
-    monkeypatch,
     batch,
     num_k_heads,
     num_v_heads,
@@ -394,13 +393,6 @@ def test_scan_mcast_bit_exact(
     nv = _scan_nv(device, BH, Dv // 32)
     if want_mcast and nv == 1:
         pytest.skip(f"grid {grid.x}x{grid.y} gives NV=1 for BH={BH}: multicast path not exercised")
-
-    # Neutralize ambient GDN debug/profiling knobs that would bypass or fork the scan path.
-    monkeypatch.setenv("QWEN_GDN_PHASED", "1")
-    monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
-    # QWEN_GDN_DUMP is read once via a function-local static; delenv helps only if the op has not
-    # run yet in this process — kept for hygiene.
-    monkeypatch.delenv("QWEN_GDN_DUMP", raising=False)
 
     # Realistic-shaped inputs; bit-exactness holds for any values, but keep them in the op's
     # numeric regime (L2-normalized q/k upstream, beta in (0,1), g <= 0).

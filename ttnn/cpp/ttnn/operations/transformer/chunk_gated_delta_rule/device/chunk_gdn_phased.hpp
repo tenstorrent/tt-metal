@@ -46,6 +46,9 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
+    // work-items over the whole grid. Measurement only. Hashed, like every field here.
+    bool prep_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -101,7 +104,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool prep_serial = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -114,6 +118,7 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
+    // ChunkGdnPhasedProgramConfig::use_mcast / scan_serial (see chunk_gated_delta_rule_config.hpp).
     bool use_mcast = true;
     bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -165,6 +170,7 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast = true);
+    bool use_mcast = true,
+    bool force_serial = false);
 
 }  // namespace ttnn::prim
