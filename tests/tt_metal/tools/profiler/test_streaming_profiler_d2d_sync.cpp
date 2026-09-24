@@ -166,35 +166,26 @@ int main() {
         }
     }
     // Two boot-time link bursts, 300 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)
-    // receiver: sender stamps round start and end, receiver the arrival and its echo. The streams are damaged the way
-    // a lapped consumer or a full ring damages them: the receiver's stamp is missing for every seventh round, the
-    // sender's end stamp for every eleventh, and one receiver stamp arrives five rounds late.
+    // receiver: each end records the peer's egress stamp, read from the frame, and its own ingress stamp -- the
+    // receiver the frame's (T0, T1), the sender the echo's (T1B, T2). The streams are damaged the way a lapped
+    // consumer or a full ring damages them: the receiver's stamps are missing for every seventh round, the sender's
+    // ingress stamp for every eleventh, and one round of the receiver's arrives five rounds late.
     const auto burst = [&](uint32_t snd_dev, uint32_t snd_lane, uint32_t rcv_dev, uint32_t rcv_lane) {
         const auto receiver = [&](uint32_t k) {
             const double t = 0.020 + k * 10e-6;
             sync.on_clock(
+                sample(rcv_dev, rcv_lane, kLink, k, kT0, hw_stamp(snd_dev, t), wall(rcv_dev, t + kOneWay)));
+            sync.on_clock(
                 sample(rcv_dev, rcv_lane, kLink, k, kT1, hw_stamp(rcv_dev, t + kOneWay), wall(rcv_dev, t + kOneWay)));
-            sync.on_clock(sample(
-                rcv_dev,
-                rcv_lane,
-                kLink,
-                k,
-                kT1B,
-                hw_stamp(rcv_dev, t + kOneWay + kTurn),
-                wall(rcv_dev, t + kOneWay + kTurn)));
         };
         for (uint32_t k = 0; k < 300; k++) {
             const double t = 0.020 + k * 10e-6;
-            sync.on_clock(sample(snd_dev, snd_lane, kLink, k, kT0, hw_stamp(snd_dev, t), wall(snd_dev, t)));
+            const double echo_out = t + kOneWay + kTurn, echo_in = t + 2 * kOneWay + kTurn;
+            sync.on_clock(
+                sample(snd_dev, snd_lane, kLink, k, kT1B, hw_stamp(rcv_dev, echo_out), wall(snd_dev, echo_in)));
             if (k % 11 != 5) {
-                sync.on_clock(sample(
-                    snd_dev,
-                    snd_lane,
-                    kLink,
-                    k,
-                    kT2,
-                    hw_stamp(snd_dev, t + 2 * kOneWay + kTurn),
-                    wall(snd_dev, t + 2 * kOneWay + kTurn)));
+                sync.on_clock(
+                    sample(snd_dev, snd_lane, kLink, k, kT2, hw_stamp(snd_dev, echo_in), wall(snd_dev, echo_in)));
             }
             if (k % 7 != 3 && k != 100) {
                 receiver(k);

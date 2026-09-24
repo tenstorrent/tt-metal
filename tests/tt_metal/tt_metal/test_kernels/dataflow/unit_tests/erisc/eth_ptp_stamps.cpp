@@ -90,6 +90,7 @@ void kernel_main() {
     res->sel_before = raw::rd(eth_ptp::txq_reg(Session::kTxq, eth_ptp::kTxqPktCfgSelSwOff));
     res->no_match_before = raw::rd(eth_ptp::kRxFlNoMatchActions);
     res->timer_ok = g_sess.begin();
+    eth_ptp::raw::mac_tx_fifo_drain();
     res->ptp_offset_lo = static_cast<uint32_t>(g_sess.ptp_offset_64);
     res->ptp_offset_hi = static_cast<uint32_t>(static_cast<uint64_t>(g_sess.ptp_offset_64) >> 32);
 

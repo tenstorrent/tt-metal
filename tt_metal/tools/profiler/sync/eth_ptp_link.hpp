@@ -47,17 +47,19 @@ using LinkSession = StampSession<kLinkTxq, kLinkHeaderRow, kLinkTcamRow, kLinkLa
 // the tick whatever the cadence or AICLK, and the mean's rounding noise falls to ~0.4 ns per round. The pacer lands
 // a frame on a wall cycle, so the grid has as many distinct phases as the tick has cycles, and where that comb sits
 // against the timer's edge would otherwise be fixed for the session; each burst shifts it by a pseudo-random part of
-// a tick, so the comb's origin averages out over the round as its phases do. The stamp
-// request is armed once per burst, and the queue's counters tell the frames' stamps from those of a keepalive the
-// queue had waiting (arm_burst, collect_burst). Each side sums its stamps unpaired, so a round counts only if every
-// frame produced both of a side's stamps.
+// a tick, so the comb's origin averages out over the round as its phases do. A frame carries its own egress stamp
+// (stamps_arm_in_frame), so each side sums the peer's egress stamps read from the frames it received and its own
+// ingress stamps of them, unpaired: a round counts only if every frame produced both, the peer's timer ran, and the
+// peer's PTP offset (carried in every frame, to put its stamps in its refclk domain) held for the whole round.
 constexpr uint32_t kTripsPerRound = 256;
 constexpr uint32_t kBurstFrames = 4;
 constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
-// A frame's payload: the sync word first, the rest padding. Two WORD_CNT units against a keepalive's one, which is
-// what counts the frames among the queue's hand-offs; 80 bytes is the first two-unit size, 96 leaves a unit's margin
-// either way. Frames of 16 to 128 bytes hand off in the same time.
+// A frame's payload: the sync word (bytes_sent the frame's key, receiver_ack the key an echo answers, reserved_2 the
+// round), the sending end's PTP offset and timer flag, then the MAC's egress stamp field. Two WORD_CNT units against
+// a keepalive's one, which is what counts the frames among the queue's hand-offs; 80 bytes is the first two-unit
+// size, 96 leaves a unit's margin either way. Frames of 16 to 128 bytes hand off in the same time.
 constexpr uint32_t kFrameBytes = 96;
+constexpr uint32_t kWordOffsetLo = 4, kWordOffsetHi = 5, kWordTimerOk = 6;
 // The L1 both ends own, the same addresses on both (kernel_profiler::kLinkSyncL1Bytes): where the peer's pilot lands,
 // the frame slots, then the control and diagnostic words.
 constexpr uint32_t kPilotOffset = 0;
@@ -80,6 +82,8 @@ constexpr uint32_t kPaceTicks =
     kernel_profiler::kLinkSyncPaceTicks;  // the product's round period; tests pick their own
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
 static_assert(kFrameBytes >= 80 && kFrameBytes % 16 == 0 && kFrameBytes >= sizeof(eth_channel_sync_t));
+static_assert(sizeof(eth_channel_sync_t) <= 4 * kWordOffsetLo && 4 * (kWordTimerOk + 1) <= kFrameStampField);
+static_assert(kFrameStampField + 10 <= kFrameBytes);
 static_assert(kSlotsOffset + kSlotsBytes <= kCtlOffset);
 static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncRingOffset);  // StopDiag::write
 
@@ -149,35 +153,62 @@ struct StampSum {
     // taken off in 64ths of a ns and the one rounding done last, so no part of it settles on every stamp of the
     // session. The quotient and remainder of the ns sum are scaled separately: the sum itself times the units would
     // not fit.
-    uint64_t q(const LinkSession& s) const {
+    uint64_t q(int64_t ptp_offset_64) const {
         static_assert(64 % kHwUnitsPerNs == 0);
         constexpr int64_t kPerUnit = 64 / kHwUnitsPerNs;
         const uint32_t whole = rel / n;
         const uint32_t part = rel - whole * n;
         // part < n <= kTripsPerRound, so the remainder's share stays a 32-bit division: a 64-bit one is a routine.
-        const int64_t avg64 = static_cast<int64_t>(base) * 64 - s.ptp_offset_64 + static_cast<int64_t>(whole) * 64 +
+        const int64_t avg64 = static_cast<int64_t>(base) * 64 - ptp_offset_64 + static_cast<int64_t>(whole) * 64 +
                               static_cast<int64_t>((part * 64u + n / 2) / n);
         return static_cast<uint64_t>((avg64 + kPerUnit / 2) / kPerUnit);
     }
 };
-// One side's hardware round: the egress stamps of the frames it sent and the ingress stamps of those it received.
+// One side's hardware round: the peer's egress stamps, read from the frames it sent this side, the ingress stamps of
+// those frames here, and the peer's PTP offset they came with.
 struct HwRound {
     uint32_t id = 0;
     StampSum tx, rx;
+    int64_t peer_offset_64 = 0;
+    bool peer_ok = false, peer_seen = false;
     __attribute__((always_inline)) void begin(uint32_t round) {
         id = round;
         tx.reset();
         rx.reset();
+        peer_seen = false;
+        peer_ok = true;
     }
-    bool complete(uint32_t frames) const { return tx.n == frames && rx.n == frames; }
+    // A frame from the peer: its egress stamp and the offset and timer flag it carried.
+    __attribute__((always_inline)) void peer_frame(const volatile uint32_t* w) {
+        const int64_t off = static_cast<int64_t>((static_cast<uint64_t>(w[kWordOffsetHi]) << 32) | w[kWordOffsetLo]);
+        peer_ok = peer_ok && w[kWordTimerOk] == 1 && (!peer_seen || off == peer_offset_64);
+        peer_offset_64 = off;
+        peer_seen = true;
+        const uint64_t ts = frame_stamp(w);
+        if (ts != 0) {
+            tx.add(ts);
+        }
+    }
+    bool complete(uint32_t frames) const { return tx.n == frames && rx.n == frames && peer_ok; }
 };
+// This end's offset and timer flag into a frame it is about to send, and its stamp field cleared: the slot still holds
+// the stamp of the last frame that came in through it, so a frame the MAC did not stamp reads as zero, not as that.
+template <typename Session>
+__attribute__((always_inline)) inline void carry_offset(volatile eth_channel_sync_t* s, const Session& sess) {
+    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(s);
+    w[kWordOffsetLo] = static_cast<uint32_t>(sess.ptp_offset_64);
+    w[kWordOffsetHi] = static_cast<uint32_t>(static_cast<uint64_t>(sess.ptp_offset_64) >> 32);
+    w[kWordTimerOk] = sess.timer_ok ? 1u : 0u;
+    w[kFrameStampHiWord] = 0;
+    w[kFrameStampHiWord + 1] = 0;
+}
 
 // What each end leaves past its control word for the host's log (streaming_profiler_device.cpp reads it back): +8
 // rounds, +12 the timer word (0 no hardware path, 1 ran, 2 never acknowledged its rate), +16 wall cycles inside
 // bursts and +24 wall cycles of the run (two words each), +32 refclk ticks of the run (two words), +40 the longest
 // burst in wall cycles, then the counts: +44 rounds dropped, +48 bursts with a hand-off beyond the frames (none, by
-// the pilot's cover), +52 bursts whose frames did not all hand off or stamp in time, +56 rounds with the ingress
-// count off, +60 waits for a frame or echo given up.
+// the pilot's cover), +52 bursts whose frames did not all hand off in time, +56 rounds with the ingress count off,
+// +60 waits for a frame or echo given up.
 struct StopDiag {
     uint32_t rounds = 0, timer = 0;
     uint64_t hold = 0, span_wall = 0, span_refclk = 0;
@@ -216,20 +247,15 @@ struct StopDiag {
     }
 };
 
-// A burst's egress stamps come out of the queue's counters, not out of the tag alone: PKT_START_CNT counts each
-// hand-off as the tag is sampled, WORD_CNT a keepalive as one unit and a frame as two, so once the units minus the
-// hand-offs since arming reach kBurstFrames every frame has been handed off, and the entries under the tag number
-// the hand-offs. The queue's own keepalives are kept out of the armed window altogether: a keepalive is generated
-// only after the keepalive timeout without a packet sent (documented; measured 8002 cycles), so a pilot frame sent
-// just before arming leaves the queue no keepalive to generate for many times a burst's length. Without it a
-// keepalive generated while the request sat armed either went ahead of the first frame (counted, tellable) or, when
-// it fell on the first frame's command, merged into that frame and left its stamp request behind: a second entry
-// under the tag for the first frame, one burst in ~1000, that no counter sees. arm_burst waits for the pilot's two
-// units (a keepalive that left just before it is one and cannot pass for it), then arms and anchors the counters;
-// false, the burst counted lost, if the pilot did not go. The pilot goes under the queue's boot header row, so the
-// peer's classifier does not stamp it: a burst's ingress stamps stay its frames'.
+// The queue's own keepalives are kept out of the armed window: a keepalive is generated only after the keepalive
+// timeout without a packet sent (documented; measured 8002 cycles), so a pilot frame sent just before arming leaves
+// the queue no keepalive to generate for many times a burst's length. Without it a keepalive generated while armed
+// went ahead of a frame or merged into one, one burst in ~1000. arm_burst waits for the pilot's two WORD_CNT units
+// (a keepalive that left just before it is one and cannot pass for it), then arms and anchors the counters; false,
+// the burst counted lost, if the pilot did not go. The pilot goes under the queue's boot header row, so the peer's
+// classifier does not stamp it: a burst's ingress stamps stay its frames'.
 struct Anchor {
-    uint32_t start = 0, word = 0, tag_lo = 0;
+    uint32_t start = 0, word = 0;
 };
 // No context switch while the queue is busy: the core's owner may be a router, whose switches to base firmware
 // are coordinated with the tile's other RISC.
@@ -238,8 +264,7 @@ __attribute__((always_inline)) inline void issue(volatile eth_channel_sync_t* s)
     internal_::eth_send_packet<false>(kLinkTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
 }
 template <typename Session>
-__attribute__((noinline)) inline bool arm_burst(
-    const Session& s, uint32_t base, uint64_t tag, Anchor& at, StopDiag& diag) {
+__attribute__((noinline)) inline bool arm_burst(const Session& s, uint32_t base, Anchor& at, StopDiag& diag) {
     const uint32_t units0 = raw::txq_word_cnt(Session::kTxq);
     tx_header_row_select(s, true);
     issue(pilot(base));
@@ -252,22 +277,20 @@ __attribute__((noinline)) inline bool arm_burst(
             return false;
         }
     }
-    stamps_arm(s, tag);
+    stamps_arm_in_frame(s);
     at.start = raw::txq_pkt_start_cnt(Session::kTxq);
     at.word = raw::txq_word_cnt(Session::kTxq);
-    at.tag_lo = static_cast<uint32_t>(tag);
     return true;
 }
-// The frames' egress stamps added to `into` once they have all been handed off and stamped; false, with the burst
-// counted as lost, if that did not happen within the polls allowed. WORD_CNT is read before PKT_START_CNT so a
-// hand-off between the two reads shows one frame too few, never one too many. The hand-offs beyond the frames are
-// counted (none, by the pilot's cover); their entries, ahead of the frames', are passed over.
+// Disarms once the burst's frames have all been handed off: ts_cmd is sticky and is sampled as the queue latches each
+// frame's command. WORD_CNT is read before PKT_START_CNT, so a hand-off between the two reads shows one frame too
+// few, never one too many; units beyond two per hand-off are a keepalive that went while armed. False, with the
+// burst counted as lost, if the frames did not all go within the polls allowed.
 template <typename Session>
-__attribute__((noinline)) inline bool collect_burst(
-    const Session& s, const Anchor& at, StampSum& into, StopDiag& diag) {
-    uint32_t sent = 0;
+__attribute__((noinline)) inline bool finish_burst(const Session& s, const Anchor& at, StopDiag& diag) {
+    uint32_t sent = 0, units = 0;
     for (uint32_t spin = 0;; spin++) {
-        const uint32_t units = raw::txq_word_cnt(Session::kTxq) - at.word;
+        units = raw::txq_word_cnt(Session::kTxq) - at.word;
         sent = raw::txq_pkt_start_cnt(Session::kTxq) - at.start;
         if (units - sent == kBurstFrames) {
             break;
@@ -278,24 +301,9 @@ __attribute__((noinline)) inline bool collect_burst(
             return false;
         }
     }
-    diag.drop[1] += sent != kBurstFrames;
-    uint64_t got[kBurstFrames] = {};
-    uint32_t n = 0;
-    for (uint32_t spin = 0; n < sent && spin <= kBurstStampSpins; spin++) {
-        tx_stamps_drain(at.tag_lo, [&](uint64_t ts) {
-            got[n % kBurstFrames] = ts;
-            n++;
-        });
-    }
     stamps_disarm(s);
-    if (n != sent) {
-        diag.drop[2]++;
-        return false;
-    }
-    for (uint32_t i = 0; i < kBurstFrames; i++) {
-        into.add(got[(n + i) % kBurstFrames]);
-    }
-    return true;
+    diag.drop[1] += sent != kBurstFrames;
+    return sent == kBurstFrames;
 }
 
 // The records: one per stamp average, this core's refclk-domain reading against its wall clock with the round's
@@ -369,7 +377,8 @@ struct SenderLink {
     HwRound rnd;
     link::Ring<Bracket> ring;
     uint32_t round = 0;
-    bool ok = false;
+    uint32_t sent_round = 0, sent_j0 = 0;  // the last burst sent, whose echoes the next burst reads
+    bool ok = false, sent = false;
 
     bool open() { return sess.begin(); }
     void start(uint32_t l1, uint32_t ctl, uint32_t pace_ticks) {
@@ -435,16 +444,16 @@ private:
     }
     void close_round() {
         if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
-            ring.record_hw(rnd.tx.q(sess), round, link::kRoleT0);
-            ring.record_hw(rnd.rx.q(sess), round, link::kRoleT2);
+            ring.record_hw(rnd.tx.q(rnd.peer_offset_64), round, link::kRoleT1B);
+            ring.record_hw(rnd.rx.q(sess.ptp_offset_64), round, link::kRoleT2);
         }
         diag.note_round(rnd, ok, false);
         write_diag();
     }
-    // A burst: the previous burst's echo stamps, the round's records at a round boundary, then kBurstFrames frames
-    // kFrameTicks apart from the first, each at its phase of the tick, all in wall cycles from one reading (the slot
-    // wait's exit shifts the whole burst alike, which the grid does not mind), and their egress stamps. The echoes
-    // come back after the burst, so none arrives while a frame of ours is being stamped.
+    // A burst: the previous burst's echoes (their egress stamps from the echoes themselves, their ingress stamps
+    // here), the round's records at a round boundary, then kBurstFrames frames kFrameTicks apart from the first, each
+    // at its phase of the tick, all in wall cycles from one reading (the slot wait's exit shifts the whole burst
+    // alike, which the grid does not mind). The echoes come back after the burst, so none arrives while ours go out.
     __attribute__((noinline)) void burst() {
         const Instant now = read_instant();
         const uint32_t hold0 = now.wall_lo;
@@ -457,6 +466,15 @@ private:
             }
         }
         pre = Instant{};
+        if (sent) {
+            for (uint32_t i = 0; i < kBurstFrames; i++) {
+                volatile eth_channel_sync_t* e = slot(slot_base, i);
+                if (e->receiver_ack == frame_key(sent_round, sent_j0 + i)) {
+                    rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(e));
+                }
+            }
+            sent = false;
+        }
         rx_stamps_drain(sess, [&](uint64_t ts) { rnd.rx.add(ts); });
         const uint32_t j0 = static_cast<uint32_t>(bursts % kBurstsPerRound) * kBurstFrames;
         if (j0 == 0) {
@@ -467,9 +485,8 @@ private:
             rnd.begin(round);
             ok = true;
         }
-        const uint64_t tag = 0x5000'0000'0000'0000ull | bursts;
         Anchor at;
-        if (!arm_burst(sess, slot_base, tag, at, diag)) {
+        if (!arm_burst(sess, slot_base, at, diag)) {
             ok = false;
         } else {
             const uint32_t spacing = (kFrameTicks * c16) >> 4;
@@ -480,14 +497,19 @@ private:
             for (uint32_t i = 0; i < kBurstFrames; i++) {
                 const uint32_t j = j0 + i;
                 volatile eth_channel_sync_t* s = slot(slot_base, i);
+                carry_offset(s, sess);
+                s->receiver_ack = 0;
                 pacer.until(w0 + i * spacing + frame_phase_cycles(j, c16) - phase0);
                 s->reserved_2 = round;
                 s->bytes_sent = frame_key(round, j);
                 issue(s);
             }
-            if (!collect_burst(sess, at, rnd.tx, diag)) {
+            if (!finish_burst(sess, at, diag)) {
                 ok = false;
             }
+            sent = true;
+            sent_round = round;
+            sent_j0 = j0;
         }
         diag.note_hold(rd(kWallClockLo) - hold0);
         bursts++;
@@ -574,16 +596,17 @@ private:
     }
     void close_round() {
         if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
-            ring.record_hw(rnd.rx.q(sess), round, link::kRoleT1);
-            ring.record_hw(rnd.tx.q(sess), round, link::kRoleT1B);
+            ring.record_hw(rnd.tx.q(rnd.peer_offset_64), round, link::kRoleT0);
+            ring.record_hw(rnd.rx.q(sess.ptp_offset_64), round, link::kRoleT1);
         }
         diag.note_round(rnd, ok, false);
         write_diag();
     }
-    // A frame: its ingress stamp, its echo from the same slot, and after a burst's last echo the burst's egress
-    // stamps. The round's number is the sender's, read from the frame; a new one closes the previous. An echo waits
-    // for the previous one's hand-off, so the queue never holds two of ours: four issued back to back left the last
-    // unfinished for microseconds, one burst in ~1000. True while the burst has frames to come.
+    // A frame: its egress stamp from the frame itself, its ingress stamp, and its echo from the same slot, which
+    // carries its key back and this end's egress stamp. The round's number is the sender's, read from the frame; a
+    // new one closes the previous. An echo waits for the previous one's hand-off, so the queue never holds two of
+    // ours: four issued back to back left the last unfinished for microseconds, one burst in ~1000. True while the
+    // burst has frames to come.
     __attribute__((noinline)) bool frame(volatile eth_channel_sync_t* s, uint32_t key) {
         const Instant now = read_instant();
         const uint32_t j = (key & kTripMask) - 1;
@@ -601,11 +624,11 @@ private:
         } else if (j != expect) {
             ok = false;
         }
+        rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(s));
         rx_stamps_drain(sess, [&](uint64_t ts) { rnd.rx.add(ts); });
         const uint32_t i = j % kBurstFrames;
         if (i == 0) {
-            const uint64_t tag = 0x5200'0000'0000'0000ull | (round * kBurstsPerRound + j / kBurstFrames);
-            armed = arm_burst(sess, slot_base, tag, at, diag);
+            armed = arm_burst(sess, slot_base, at, diag);
             ok = ok && armed;
         } else if (armed) {
             for (uint32_t spin = 0; raw::txq_pkt_start_cnt(LinkSession::kTxq) - at.start < i; spin++) {
@@ -618,10 +641,12 @@ private:
                 }
             }
         }
+        carry_offset(s, sess);
+        s->receiver_ack = key;
         s->bytes_sent = 0;
         issue(s);
         if (i == kBurstFrames - 1 && armed) {
-            if (!collect_burst(sess, at, rnd.tx, diag)) {
+            if (!finish_burst(sess, at, diag)) {
                 ok = false;
             }
         }

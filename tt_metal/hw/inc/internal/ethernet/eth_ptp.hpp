@@ -385,7 +385,6 @@ struct StampSession {
         raw::rx_stamp_rule_install(kTcamRow, kLabel);
         hdr_prev = raw::tx_header_row_install(kTxq, kHeaderRow, kStampFrameDa);
         raw::txq_clear_timestamp_cmd(kTxq);
-        raw::mac_tx_fifo_drain();
         return timer_ok;
     }
     __attribute__((noinline, cold)) void end() {
@@ -418,6 +417,24 @@ inline __attribute__((always_inline)) void stamps_arm(const Session&, uint64_t t
 template <typename Session>
 inline __attribute__((always_inline)) void stamps_disarm(const Session&) {
     raw::txq_clear_timestamp_cmd(Session::kTxq);
+}
+// A run of frames that carry their own egress stamp: stamps_arm_in_frame once, then every frame the queue sends until
+// stamps_disarm has the MAC write its egress time into the frame itself, kFrameStampField bytes into the payload as
+// sixteen bits of the MAC's ORIGIN_TIMESTAMP_MSBS then PTP64NS big-endian (ts_offset kFrameStampOffset, in 2-byte
+// units; the field lands two bytes past it, measured). The peer reads the stamp out of the frame in its own L1, so no
+// core reads the MAC: under fabric traffic a router's reads of any MAC register, the egress FIFO or a status word,
+// wedged the link.
+constexpr uint32_t kFrameStampOffset = 40;
+constexpr uint32_t kFrameStampField = 2 * kFrameStampOffset + 2;
+constexpr uint32_t kFrameStampHiWord = (kFrameStampField + 2) / 4;
+static_assert((kFrameStampField + 2) % 4 == 0);
+template <typename Session>
+inline __attribute__((always_inline)) void stamps_arm_in_frame(const Session&) {
+    raw::wr(txq_reg(Session::kTxq, kTxqTimestampOff), TS_CMD_ONE_STEP_ORIGIN | (kFrameStampOffset << 16));
+}
+inline __attribute__((always_inline)) uint64_t frame_stamp(const volatile uint32_t* payload) {
+    return (static_cast<uint64_t>(__builtin_bswap32(payload[kFrameStampHiWord])) << 32) |
+           __builtin_bswap32(payload[kFrameStampHiWord + 1]);
 }
 // Points the queue's software frames at its boot header row (`boot`), under which the peer's classifier leaves them
 // unstamped like the queue's keepalives, or back at the session's row. The row is latched with a frame's command,

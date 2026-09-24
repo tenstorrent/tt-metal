@@ -527,11 +527,13 @@ void LinkSolver::on_stamp(const ClockSample& s) {
         return;
     }
     const auto [li, sender] = side->second;
+    // Each end records the peer's egress average (read from the frames it received) and its own ingress average:
+    // the receiver T0 and T1, the sender T1B and T2.
     Stamp Round::* slot = nullptr;
     if (sender) {
-        slot = s.role == kp::kSyncRoleT0 ? &Round::t0 : s.role == kp::kSyncRoleT2 ? &Round::t2 : nullptr;
+        slot = s.role == kp::kSyncRoleT1B ? &Round::t1b : s.role == kp::kSyncRoleT2 ? &Round::t2 : nullptr;
     } else {
-        slot = s.role == kp::kSyncRoleT1 ? &Round::t1 : s.role == kp::kSyncRoleT1B ? &Round::t1b : nullptr;
+        slot = s.role == kp::kSyncRoleT0 ? &Round::t0 : s.role == kp::kSyncRoleT1 ? &Round::t1 : nullptr;
     }
     if (slot == nullptr) {
         dropped_++;
@@ -1175,9 +1177,9 @@ bool SyncEngine::round_error(
     // recorded the stamp, moved to the midpoint by the model's slope over that ~1 ms, a measured AICLK instant.
     // Otherwise the model's wall for the midpoint, which cancels the model out of the error.
     const double mid_a = LinkSolver::mid_a_refclk(r), mid_b = LinkSolver::mid_b_refclk(r);
-    anchored = anchored && r.t0.ref != 0 && r.t1.ref != 0;
-    const double wa = anchored ? static_cast<double>(r.t0.wall) + la->second.wall_at(mid_a) -
-                                     la->second.wall_at(static_cast<double>(r.t0.ref))
+    anchored = anchored && r.t2.ref != 0 && r.t1.ref != 0;
+    const double wa = anchored ? static_cast<double>(r.t2.wall) + la->second.wall_at(mid_a) -
+                                     la->second.wall_at(static_cast<double>(r.t2.ref))
                                : la->second.wall_at(mid_a);
     const double wb = anchored ? static_cast<double>(r.t1.wall) + lb->second.wall_at(mid_b) -
                                      lb->second.wall_at(static_cast<double>(r.t1.ref))
@@ -1194,12 +1196,12 @@ bool SyncEngine::round_error(
             const double ghz = (m.wall_at(ref + 1.0) - m.wall_at(ref)) / kNsPerRefclk;
             return (static_cast<double>(st.wall) - m.wall_at(ref)) / std::max(ghz, 0.1);
         };
-        t.res_a = res_ns(la->second, r.t0);
+        t.res_a = res_ns(la->second, r.t2);
         t.res_b = res_ns(lb->second, r.t1);
-        t.spins_a = r.t0.spins;
+        t.spins_a = r.t2.spins;
         t.spins_b = r.t1.spins;
-        t.ref_a = static_cast<double>(r.t0.ref);
-        t.wraw_a = static_cast<double>(r.t0.wall);
+        t.ref_a = static_cast<double>(r.t2.ref);
+        t.wraw_a = static_cast<double>(r.t2.wall);
         t.ref_b = static_cast<double>(r.t1.ref);
         t.wraw_b = static_cast<double>(r.t1.wall);
     }
@@ -1247,7 +1249,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
             e.past_model++;
             continue;
         }
-        if (static_cast<int64_t>(r.t0.wall) < oldest_a || static_cast<int64_t>(r.t1.wall) < oldest_b) {
+        if (static_cast<int64_t>(r.t2.wall) < oldest_a || static_cast<int64_t>(r.t1.wall) < oldest_b) {
             e.before_series++;
             continue;
         }
@@ -1259,7 +1261,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         }
         e.pts.push_back(PlotPoint{H, err});
         e.terms.push_back(t);
-        e.unbracketed += anchored && (r.t0.spins == 0 || r.t1.spins == 0);
+        e.unbracketed += anchored && (r.t2.spins == 0 || r.t1.spins == 0);
         e.raw_x.push_back(LinkSolver::mid_a_refclk(r));
         e.raw_y.push_back(LinkSolver::mid_b_refclk(r) - e.raw_x.back());
         e.rtt.push_back(LinkSolver::rtt_ns(r));
