@@ -27,4 +27,21 @@ FORCE_INLINE void prepare_tiles() {
 
 }  // namespace
 
-void kernel_main() { prepare_tiles(); }
+void kernel_main() {
+    prepare_tiles();
+#ifdef REDUCE_STREAM_OUTPUT
+    // Drain the one-page compute output CB into the resident output tensor. A bulk reservation in
+    // compute would deadlock before the first output; per-tile publication permits every ring wrap.
+    DataflowBuffer computed(16), output(17);
+    const uint32_t output_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t tile_bytes = get_tile_size(16);
+    for (uint32_t tile = 0; tile < output_tiles; ++tile) {
+        computed.wait_front(1);
+        output.reserve_back(1);
+        noc_async_write(computed.get_read_ptr(), get_noc_addr(output.get_write_ptr()), tile_bytes);
+        noc_async_write_barrier();
+        computed.pop_front(1);
+        output.push_back(1);
+    }
+#endif
+}

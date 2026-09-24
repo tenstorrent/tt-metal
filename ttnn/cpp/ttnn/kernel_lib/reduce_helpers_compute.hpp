@@ -278,6 +278,7 @@ struct ReduceInputMemoryLayout {
  *
  * A zero field requests the automatic/default geometry. output_tiles is normally one, except
  * REDUCE_COL where it is the number of independent columns held in DEST together.
+ * Reduction-axis chunking is not implemented: reduce_axis_tiles must remain zero (asserted by reduce()).
  */
 struct ReduceInputChunk {
     std::uint32_t reduce_axis_tiles = 0;
@@ -522,7 +523,7 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @param post_reduce_op Callback after each reduction (default: NoOp)
  * @param partial_mode Handling for a non-tile-aligned reduce dimension
  *        (default: ReducePartialMode::None).
- *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
+ *        Not supported for REDUCE_SCALAR or any SFPU reduce path, including accurate Float32.
  * @param auxiliary_tile_offset Start of this call's recipe in an auxiliary CB
  *        (default: 0 for standalone calls). AccumulateViaAdd
  *        requires a zero tile here, or immediately after the partial-axis mask.

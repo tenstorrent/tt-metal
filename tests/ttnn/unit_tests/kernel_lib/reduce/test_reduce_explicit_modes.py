@@ -21,6 +21,7 @@ CB_INPUT = 0
 CB_AUXILIARY = 1
 CB_ACCUMULATOR = 2
 CB_OUTPUT = 16
+CB_STREAM_DESTINATION = 17
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
 COMPUTE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit.cpp"
@@ -60,6 +61,9 @@ class ReduceCase:
     row_padding: int = 0
     batch_padding: int = 0
     no_auxiliary: bool = False
+    stream_output: bool = False
+    post_exp: bool = False
+    accumulator_to_dest: bool = False
 
     @property
     def additive(self) -> bool:
@@ -507,6 +511,70 @@ def _stride_cases() -> list[ReduceCase]:
     return cases
 
 
+def _regression_cases() -> list[ReduceCase]:
+    cases = []
+    for policy in INDEXED_POLICIES:
+        for dim in ("REDUCE_ROW", "REDUCE_COL"):
+            rows, cols = (2, 1) if dim == "REDUCE_ROW" else (1, 2)
+            for to_dest in (False, True):
+                cases.append(
+                    _case(
+                        f"regression-partial-only-SfpuAdd-{dim}-{policy}-to_dest{to_dest}",
+                        dim=dim,
+                        rows=rows,
+                        cols=cols,
+                        calls=3,
+                        algorithm="AccumulateViaAdd",
+                        policy=policy,
+                        partial=7,
+                        reload="CopySeedSfpuAdd",
+                        accumulator_to_dest=to_dest,
+                    )
+                )
+        for rows, cols, row_padding in ((1, 1, 0), (2, 3, 1)):
+            cases.append(
+                _case(
+                    f"regression-scalar-batch-stride-{policy}-{rows}x{cols}",
+                    dim="REDUCE_SCALAR",
+                    rows=rows,
+                    cols=cols,
+                    batches=2,
+                    policy=policy,
+                    row_padding=row_padding,
+                    batch_padding=1,
+                )
+            )
+        for dim in DIMS:
+            rows, cols, batches = _shape_for_dim(dim)
+            cases.append(
+                _case(
+                    f"regression-one-page-output-{dim}-{policy}",
+                    dim=dim,
+                    rows=rows,
+                    cols=cols,
+                    batches=batches,
+                    algorithm="AccumulateViaAdd",
+                    policy=policy,
+                    stream_output=True,
+                )
+            )
+    for policy in POLICIES:
+        cases.append(
+            _case(
+                f"regression-post-exp-REDUCE_COL-{policy}",
+                dim="REDUCE_COL",
+                rows=2,
+                cols=5,
+                batches=2,
+                calls=2 if policy == "NoWaitNoPop" else 1,
+                algorithm="AccumulateViaAdd",
+                policy=policy,
+                post_exp=True,
+            )
+        )
+    return cases
+
+
 ALL_CASES = tuple(
     _algorithm_cases()
     + _partial_cases()
@@ -516,6 +584,7 @@ ALL_CASES = tuple(
     + _auxiliary_offset_cases()
     + _no_auxiliary_cases()
     + _stride_cases()
+    + _regression_cases()
 )
 assert len({case.name for case in ALL_CASES}) == len(ALL_CASES)
 
@@ -567,7 +636,7 @@ def _auxiliary_compile_args(tiles: list[tuple[str, int, float]]) -> list[int]:
 
 def _defines(case: ReduceCase) -> list[tuple[str, str]]:
     auxiliary_cb = "compute_kernel_lib::REDUCE_NO_AUXILIARY_CB" if case.no_auxiliary else str(CB_AUXILIARY)
-    return [
+    defines = [
         ("REDUCE_OP", f"ckernel::PoolType::{case.pool}"),
         ("REDUCE_DIM", f"ckernel::ReduceDim::{case.dim}"),
         ("REDUCE_INPUT_POLICY", f"compute_kernel_lib::ReduceInputPolicy::{case.policy}"),
@@ -581,6 +650,9 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
         ("REDUCE_AUXILIARY_OFFSET", str(case.auxiliary_offset)),
         ("REDUCE_AUXILIARY_CB", auxiliary_cb),
     ]
+    if case.post_exp:
+        defines.append(("REDUCE_POST_EXP", "1"))
+    return defines
 
 
 def _compute_config(case: ReduceCase) -> ttnn.ComputeConfigDescriptor:
@@ -589,10 +661,12 @@ def _compute_config(case: ReduceCase) -> ttnn.ComputeConfigDescriptor:
         fp32_dest_acc_en=True,
         dst_full_sync_en=False,
     )
-    if case.input_dtype == "fp32" and case.fp32_mode == "Accurate":
+    accurate_input = case.input_dtype == "fp32" and case.fp32_mode == "Accurate"
+    if accurate_input or case.accumulator_to_dest:
         # Host descriptors use the maximum CB count so this vector covers both Wormhole (32) and Blackhole (64).
         unpack_modes = [ttnn.UnpackToDestMode.Default] * 64
-        unpack_modes[CB_INPUT] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        if accurate_input:
+            unpack_modes[CB_INPUT] = ttnn.UnpackToDestMode.UnpackToDestFp32
         if case.calls > 1:
             unpack_modes[CB_ACCUMULATOR] = ttnn.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = unpack_modes
@@ -684,6 +758,8 @@ def _golden(case: ReduceCase, chunks: list[torch.Tensor]) -> torch.Tensor:
     golden = partials.sum(dim=0)
     if case.pool == "AVG":
         golden = golden / case.average_divisor
+    if case.post_exp:
+        golden = torch.exp(-0.01 * golden)
     return golden
 
 
@@ -728,8 +804,10 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     auxiliary_tiles = case.auxiliary_tiles
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, device_input),
-        ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_STREAM_DESTINATION if case.stream_output else CB_OUTPUT, output),
     ]
+    if case.stream_output:
+        cbs.append(_scratch_cb(CB_OUTPUT, output_dtype, 1))
     if case.calls > 1:
         cbs.append(_scratch_cb(CB_ACCUMULATOR, output_dtype, case.output_tiles))
 
@@ -747,12 +825,15 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     ]
     if auxiliary_tiles:
         cbs.append(_scratch_cb(CB_AUXILIARY, _auxiliary_dtype(case), len(auxiliary_tiles)))
+    if auxiliary_tiles or case.stream_output:
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=AUXILIARY_KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=_single_core(),
                 compile_time_args=_auxiliary_compile_args(auxiliary_tiles),
+                runtime_args=_runtime_args([case.output_tiles]),
+                defines=[("REDUCE_STREAM_OUTPUT", "1")] if case.stream_output else [],
                 config=ttnn.WriterConfigDescriptor(),
             )
         )
@@ -792,6 +873,9 @@ def test_reduce_explicit_modes(device, case: ReduceCase):
         torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0, msg=case.name)
     elif (case.pool == "MAX" and case.partial) or case.input_dtype == "bf8":
         torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0, msg=case.name)
+    elif case.post_exp:
+        # The unclamped approximate exponential has about 3% relative error in this input range.
+        torch.testing.assert_close(actual.to(torch.float64), expected, rtol=0.04, atol=0.001, msg=case.name)
     else:
         torch.testing.assert_close(
             actual.to(torch.float64), expected.to(torch.float64), rtol=0.01, atol=0.01, msg=case.name
