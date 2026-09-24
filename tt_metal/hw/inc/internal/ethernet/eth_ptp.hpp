@@ -110,6 +110,7 @@ constexpr uint32_t kRxThTsLabel = 0xFFB9D808;  // [5:0] flow label, [31] valid_t
 constexpr uint32_t kRxThStatus =
     0xFFB9D810;  // [3:0] entries [16] full [17] becoming_full [18] empty [30] flush [31] pop
 constexpr uint32_t kRxThStatusEntriesMask = 0xF;
+constexpr uint32_t kRxThStatusFull = 1u << 16;
 constexpr uint32_t kRxThStatusEmpty = 1u << 18;
 constexpr uint32_t kRxThStatusFlush = 1u << 30;
 constexpr uint32_t kRxThStatusPop = 1u << 31;

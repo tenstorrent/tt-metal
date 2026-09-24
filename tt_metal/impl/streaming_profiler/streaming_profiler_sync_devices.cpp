@@ -725,10 +725,10 @@ namespace {
 
 // What each end leaves past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path, 1 ran,
 // 2 never acknowledged its rate, in which case that end emitted no hardware stamps; the session's PTP offset in the
-// bits above, a tick multiple), wall cycles inside bursts, wall
-// cycles and refclk ticks of the run, the longest burst in wall cycles, then rounds not recorded, bursts with queue
-// units beyond their frames' (a keepalive or a resend), bursts whose pilot or frames did not hand off in time, frames
-// whose ingress stamps could not be matched to them, and frames that came in without an egress stamp.
+// bits above, a tick multiple), wall cycles inside steps that sent or took frames, wall cycles and refclk ticks of the
+// run, the longest such step in wall cycles, then rounds not recorded, frames with queue units beyond their own (a
+// keepalive or a resend), frames whose pilot or itself did not hand off in time, bursts whose ingress stamps did not
+// match their frames, and frames that came in without an egress stamp.
 struct StopDiag {
     uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
     double wall() const { return static_cast<double>((uint64_t{wall_hi} << 32) | wall_lo); }
@@ -750,7 +750,7 @@ StopDiag read_stop_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& vi
 void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const StopDiag& db) {
     log_info(
         tt::LogMetal,
-        "[streaming profiler] link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in bursts: "
+        "[streaming profiler] link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in link steps: "
         "sender {:.2f} % (longest {:.2f} us), receiver {:.2f} % (longest {:.2f} us)",
         chip_a,
         chip_b,
@@ -772,9 +772,9 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
         if (std::any_of(std::begin(d->drop), std::end(d->drop), [](uint32_t n) { return n != 0; })) {
             log_info(
                 tt::LogMetal,
-                "[streaming profiler] link sync chip {} {}: {} rounds not recorded; bursts with a keepalive or resend "
-                "among the frames {}, bursts not handed off in time {}; frames left unpaired: ingress stamps unmatched "
-                "{}, no egress stamp {}",
+                "[streaming profiler] link sync chip {} {}: {} rounds not recorded; frames sent beside a keepalive or "
+                "resend {}, frames not handed off in time {}; bursts whose ingress stamps did not match their frames "
+                "{}; frames without an egress stamp {}",
                 chip,
                 name,
                 d->drop[0],
