@@ -109,8 +109,24 @@
   "status": "PASS"
  },
  "P1.5": {
+  "duration_s": 412.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:38:20"
+   }
+  ],
+  "last_run": "2026-09-24T19:38:20",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.5.log",
+  "metrics": {
+   "book_top5_acc_last_chunk": 0.7925772070884705,
+   "cpu_seconds": 398.9,
+   "golden_chunks": 2,
+   "golden_layers": 28
+  },
+  "rc": 0,
   "started": "2026-09-24T19:31:28",
-  "status": "RUNNING"
+  "status": "PASS"
  },
  "P2.1": {
   "duration_s": 10.9,
