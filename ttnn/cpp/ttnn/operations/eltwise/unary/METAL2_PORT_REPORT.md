@@ -21,7 +21,10 @@ The set of `TT_FATAL`s logged, all of them tests' expected errors, is also ident
 
 Validation was on for the post-port run, with one caveat: the recipe's forced-scaffolding proof was not possible. See [Friction](#friction), first entry.
 
-One comment-only edit landed after the post-port run started: the `get_shard_specs` comment at `common/unary_utils.cpp:75`, "CB-aliasing" → "borrowed-DFB". It has no code effect.
+Comment-only edits that landed after the post-port run started, with no code effect:
+- the `get_shard_specs` comment at `common/unary_utils.cpp:75`, "CB-aliasing" → "borrowed-DFB";
+- the first comment block of `compute_program_hash`, rewritten to describe the post-port hit path;
+- five stale descriptions of the legacy mechanism in `tests/ttnn/unit_tests/operations/eltwise/test_unary_program_cache.py` (see [Open items](#open-items-for-downstream)).
 
 ## Provenance
 
@@ -59,7 +62,12 @@ Both became tensor bindings. None became RTA values.
    - **What changed:** `distribution_key` now reads the sharded geometry from `spec.compute_buffer_sharding_args().buffer_distribution_spec()` for both slots. It no longer reads the `Buffer`'s `buffer_distribution_spec()`, whose fallback to the spec applied only when the output had no buffer yet.
    - The lambda lost its `const Tensor*` parameter.
    - The `TODO(port)` naming this swap was retired, and the explanatory comment was updated to give the new rationale.
-   - The change swaps the source rather than adding one. Hashing both sources measured +16% (doc §2).
+   - **Cost: not neutral. An earlier draft of this report and of doc §2 said it was, and that was wrong.** The swap drops the stored Buffer read (~0.002 µs) and keeps `spec.compute_buffer_sharding_args()` (~27 µs per call on a 64-core `BLOCK_SHARDED` `[1,1,512,512]` tensor). The prerequisite work's "+16% for hashing both" measured exactly that call. Measured directly on `compute_program_hash`, Buffer source → spec source:
+     - fresh output (common path): 32 → 59 µs, one extra recompute on the input slot. The output slot already recomputed, because it had no buffer yet;
+     - preallocated output: 2.4 → 57 µs, two extra recomputes;
+     - interleaved: 1.0 → 1.0 µs.
+
+     Against the 139.7 µs baseline dispatch from the prerequisite work, the common-path addition is ≈ +19%, i.e. all of the +16% figure. The full table is in doc §2 (corrected in this branch). **This regression is not yet accepted.** It needs an explicit accept, or a cheaper or cached spec-side sharding resolution; see [Handoff points](#handoff-points) 6.
    - Nothing else in the hash changed. `tensor_layout` terms, the RM `padded_shape` term, the shard-volume optionals, and `to_hash()` are untouched.
    - **Why the recipe's rule couldn't hold here:** the rule assumes a hash fix can land upstream before the port. Here it can't. Legacy bakes the **buffer's** geometry into accessor CTAs via `TensorAccessorArgs(*src_buffer)`, so before the port the Buffer source is the correct key, and a spec-keyed hash would under-pin what legacy bakes. After the port, the `TensorParameter` bindings resolve geometry from the spec, and `tensorspecs_match_with_relaxation` compares `spec.compute_buffer_sharding_args()` (`tensor_spec_relaxations.cpp:105-109`). So the key's correct source changes *with* the port and must change in the same edit.
    - The two resolutions agree for every freshly allocated tensor (`tensor_impl.cpp` builds the buffer from `tensor_spec.compute_buffer_sharding_args()`). The only known decoupler is a TILE-sharded `view` / `reshape`, and no divergent pair was ever constructed (doc §2). So cache behavior on the test set is unchanged, as the identical program-cache test results show.
@@ -90,6 +98,11 @@ Both became tensor bindings. None became RTA values.
 3. **Framework (Metal 2.0 host API): no gaps hit.** The first production use of `relax_logical_rank`, and relaxations on sharded and borrowed `TensorParameter`s, all validated without incident.
 4. **Kernel-lib / LLK:** none. `dfb::name` passed straight into `compute_kernel_hw_startup`, `copy_init`, `copy_tile`, `pack_tile`, and `compute_kernel_lib::input` / `output` in NTTP position. It compiled first time.
 5. **Removed pybind surface:** none.
+6. **Owner of `TensorSpec` / `TensorLayout` (tt_metal tensor), or the eltwise owner, to decide — hash cost of the sanctioned swap.** *(Tag: perf.)*
+   - `TensorLayoutImpl::compute_buffer_sharding_args` (`tensor_layout.cpp`) recomputes the physical and page shapes and rebuilds a `BufferDistributionSpec`, core enumeration included, on every call: ~27 µs for 64 cores.
+   - After the swap, unary's `compute_program_hash` calls it once per sharded slot, on every dispatch: +27 µs per sharded dispatch on the common path, +55 µs with a preallocated output.
+   - The swap itself is required, because the key must read the same resolution the relaxed match compares.
+   - Options: accept the cost explicitly, or make the resolution cheap (memoize it on the spec, or expose the pinned geometry without building the full distribution spec). Either is outside a port.
 
 ## Successes
 
@@ -138,7 +151,14 @@ Both became tensor bindings. None became RTA values.
   - Compute RTAs `packed_scalar1` / `packed_scalar2` are declared on all 9 compute sources, because legacy always sent 3. Only `where_tss`, `mac_tss`, and `logit` read them.
   - Interleaved-TILE reader/writer RTAs carry five zero chunk fields, as legacy did. Only `RM_INTERLEAVED` reads them.
   - On the native-sharded path the reader and writer still bind `tensor::src` / `tensor::dst` without reading them. That mirrors legacy's dead accessor payload, and the `TensorParameter`s are needed for `borrowed_from` anyway.
-- **Stale comment, not touched because it is outside the sanctioned swap:** `unary_device_operation.cpp` `compute_program_hash`, first comment block. It still says "a hard TT_FATAL once the Metal 2.0 port declares TensorParameter relaxations". The port has now declared them, and the sentence could be reworded to the present tense.
+- **Stale comments fixed after review** (comment-only):
+  - `compute_program_hash`'s first comment block said "no relaxation is applied" and "a hard TT_FATAL once the Metal 2.0 port declares TensorParameter relaxations". It now describes the post-port hit path. The earlier draft declined this as "outside the sanctioned swap", but editing a comment is not a hash edit, and the adjacent paragraph of the same block had already been rewritten.
+  - `test_unary_program_cache.py` described the legacy mechanism in the present tense. Fixed:
+    - the module docstring's geometry paragraph (BufferDistributionSpec "passed to TensorAccessor compile-time args") and its cache-hit paragraph (descriptor, `create_descriptor`, buffer-address rt-arg slots, CB base addresses by CBIndex);
+    - `test_unary_cache_mixed_inplace_outofplace_interleaved` (`reader[0]` / `writer[0]` rt-arg addresses);
+    - `test_unary_inplace_cache_hit_interleaved_readdresses` (buffer-address rt-arg slots);
+    - `test_unary_sharded_mixed_inplace_outofplace`, whose CB / `resolved_bindings.cbs` mechanism is now marked as the legacy path the regression came from.
+  - Still stale and **not** caused by the port, so left alone: the module docstring's "3 ProgramFactory variants" list. It was already wrong on the pre-port tree, which had one factory.
 - **Audit anomalies, still present and unchanged by the port** (`METAL2_PREPORT_AUDIT.md` *Misc anomalies* 2, 3, 4, 6):
   - Non-32×32 tiles are mis-sized. `tile_size(DataFormat)` sizes the DFBs while the split reads the real tile; this is family-wide, relaxation doc §4.
   - There is an unreachable `adjust_to_shape` branch in `get_shard_specs`.

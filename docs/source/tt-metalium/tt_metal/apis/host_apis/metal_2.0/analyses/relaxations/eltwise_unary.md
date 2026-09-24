@@ -77,7 +77,28 @@ The declaration is one line, applied to **both** `TensorParameter`s — input an
 
 `compute_program_hash`'s `distribution_key` keys off the **Buffer's** `buffer_distribution_spec()`, falling back to the spec only when the output has no buffer yet. That is correct today, because `create_descriptor` bakes the buffer's resolution via `TensorAccessorArgs(*src_buffer)`. But `tensorspecs_match_with_relaxation` compares `relaxation_fields::shard_distribution_of`, which reads **`spec.compute_buffer_sharding_args()`** — the spec's resolution, not the buffer's. And `hash_tensorspec_with_relaxation` has no production callers; it is a helper for ops, not something the framework folds into the program key. So after the port the custom hash is still the only gate, and it has to be at least as strict as what validation compares.
 
-**Swap the Buffer branch for `spec.compute_buffer_sharding_args()` on both sides, in the same edit as the declaration.** The code carries a `TODO(port)` at that line naming the swap. It is a change of source, not an addition of one, so it is cost-neutral; hashing *both* sources was implemented and measured during the prerequisite work at **+16%** on a 64-core `BLOCK_SHARDED` dispatch (139.7 µs → 162.5 µs, interleaved unchanged), and backed out for that reason.
+**Swap the Buffer branch for `spec.compute_buffer_sharding_args()` on both sides, in the same edit as the declaration.** The code carries a `TODO(port)` at that line naming the swap.
+
+**The swap is not cost-neutral.** An earlier revision of this section claimed it was, and that claim was wrong. During the prerequisite work, hashing *both* sources was measured at **+16%** on a 64-core `BLOCK_SHARDED` dispatch (139.7 µs → 162.5 µs, interleaved unchanged). But that measurement isolated the cost of the spec-side call, and the swap keeps exactly that call:
+
+- `buffer->buffer_distribution_spec()` returns a stored value.
+- `spec.compute_buffer_sharding_args()` recomputes the physical shape and page shape and builds a fresh `BufferDistributionSpec`, including the core enumeration, on every call.
+
+Measured at the port, calling `compute_program_hash` directly on a 64-core `BLOCK_SHARDED` `[1,1,512,512]` bf16 TILE tensor (shard `64×64`, Wormhole n150 host, best of 5 × 200k calls, two runs each):
+
+| | Buffer source (pre-swap) | spec source (post-swap) |
+|---|---|---|
+| `spec.compute_buffer_sharding_args()` alone | 27.6–28.0 µs | 26.7–27.2 µs |
+| `buffer->buffer_distribution_spec()` alone | 0.002 µs | 0.002 µs |
+| hash, fresh output (common path) | 31.6–32.3 µs | 58.6–60.6 µs |
+| hash, preallocated output | 2.4 µs | 56.7–57.5 µs |
+| hash, interleaved | 1.0 µs | 1.0 µs |
+
+The Buffer-source key already paid one recompute on the common path, because a fresh output has no buffer yet and falls back to the spec. So the swap adds **one recompute (~27 µs) per sharded dispatch on the common path, and two (~55 µs) when the output is preallocated**. Against the prerequisite work's 139.7 µs baseline, the common-path addition is ≈ +19%. That is the whole of the +16% "both sources" figure (which added the same single recompute), not none of it. Interleaved dispatches are unaffected.
+
+End-to-end Python dispatch timing on the port host was too noisy to resolve the difference: the interleaved control drifted 152 → 220 µs between runs. So the numbers above are hash-isolated.
+
+This does not change whether the swap is required; it is. It changes what the swap costs, and that cost has to be either accepted explicitly or reduced, for example by making the spec's sharding resolution cheaper or cached. Either way it is outside the port.
 
 The two resolutions agree for a freshly allocated tensor, since `tt_metal/impl/tensor/tensor_impl.cpp` builds the buffer with `.sharding_args = tensor_spec.compute_buffer_sharding_args()`. The only decoupler found is `view()` / `reshape`: for a TILE-layout sharded tensor `ttnn/core/tensor/tensor_ops.cpp` reuses the parent buffer's `device_local_config`, `sharding_args` included, under a freshly computed `TensorSpec`. No divergent pair could actually be constructed — `squeeze_shape_ranks` normalises aggressively, and every hand-worked candidate (`[1,1,128,64]` vs `[1,2,64,64]` vs `[2,1,64,64]` vs `[1,3,64,64]`, and the last-dim-changing reshape that does rewrite the shard spec) collapsed to the same `[8]` / `[4]` geometry. Make the swap anyway: unreachability by hand-search is not a guarantee, and after the declaration a divergence is a hard `TT_FATAL` rather than a missed cache split.
 

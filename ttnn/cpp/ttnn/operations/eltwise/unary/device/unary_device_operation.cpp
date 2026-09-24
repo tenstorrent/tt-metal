@@ -299,12 +299,12 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
-    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
-    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
-    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
-    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
-    // validation only compares its Layout enum against the input's.
+    // On cache hit, the program is not rebuilt. The TensorParameter relaxations let shape and rank vary
+    // and nothing else: the dispatched tensor_layout must be the same as the one built for the cached
+    // program. Anything omitted from this key that the relaxed match compares exactly fails validation
+    // with a hard TT_FATAL on the hit. The output layout needs its own term because
+    // compute_output_specs can hand back a caller-supplied preallocated spec and validation only
+    // compares its Layout enum against the input's.
     //
     // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
     // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile
