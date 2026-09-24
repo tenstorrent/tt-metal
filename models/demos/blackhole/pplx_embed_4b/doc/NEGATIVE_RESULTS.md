@@ -862,6 +862,10 @@ buffer (`TT_THROW dataflow_buffer.cpp:2682`), so a big-page read layout could no
 | residual adds write the norm's 10×8 block-shard layout (`QWEN_BS1_RESID_SHARDED=1`) | 17.6 | 17.8 | the 72 I2S ops (2.4 µs + 0.6 µs gap each) become no-ops, but the 80-core sharded-output add gives most of it back: **neutral alone** |
 | both | **17.5** | **17.5** | −0.3 ms on the median (−1.7%); STS-B 0.8161 unchanged |
 
+*Correction (09-24, later):* only the even layers' I2S became no-ops (36 of 72): the wrapper's `supported(x, x)` gate
+rejected the sharded residual the previous layer handed over, so odd layers ran the stock adds. That is part of why the item
+measured neutral alone. Fixed to cover every layer (I2S 36 → 1, bs1 −0.07 ms e2e); see POSITIVE_RESULTS.
+
 Standalone (chip 3, L1 bfp8 [512×2560]): add → I2S → sharded LN → S2I 28.9 µs as one traced chain; add with
 block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one sharded and one interleaved input
 11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the

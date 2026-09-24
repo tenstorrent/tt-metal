@@ -54,6 +54,7 @@ sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
 | 9441a6c | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
 | sdpa concat-out | SDPA writes `[B, 1, S, H·d]` directly (`output_heads_concat`), concat pass gone at bs>1 | tile-id remap in the SDPA writer; bit-identical; SDPA +3–7% vs concat −68…−350 µs | 17.7 / **115.4** / **221.9** / **430.1** (same-chip A/B arms) |
 | bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout (the 72 I2S ops become no-ops) | from Gio's B1 shard-layout idea; bit-identical; the residual item is neutral alone, −0.3 ms median together (NEGATIVE_RESULTS §50) | **17.5** / 115.3 / 221.0 / 425.5 |
+| bs1 resid-sharded on every layer (09-24) | the §50 residual-shard item only applied to even layers: `supported(x, x)` in `decoder_fusion.py` rejects the sharded input the previous layer handed over, so odd layers fell back to interleaved adds + a real I2S before each norm (36 of 72 left). Now every layer; I2S 36 → 1 | bit-identical, STS-B 0.8161; device replay 16.97 → 16.80 ms; e2e bs1 −0.07 ms (mean of 3 alternating 30-iteration A/B pairs, 17.285 → 17.218; 8× p150b host, chip 0); bs>1 untouched | bs1 −0.4% |
 
 ## The optimizations, by mechanism
 

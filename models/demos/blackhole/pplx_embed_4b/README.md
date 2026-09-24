@@ -1078,6 +1078,8 @@ interleaved-to-sharded op before each norm is a no-op (`ttnn.add` takes one shar
 the decoder's input-layout assert accepts a sharded L1 residual). Same chip (4), 10 iterations: best 17.6 → 17.5,
 median 17.85 → 17.5; 30-iteration run: cold 17.5, sustained 17.7 (was 17.6 / 18.3). STS-B 0.8161 unchanged.
 The residual item alone is neutral (the 80-core sharded-output add gives back what the 72 I2S ops cost).
+Correction: as landed it covered only the even layers (36 I2S left, see the profile); covering every layer
+removes 35 more I2S ops: device replay 16.97 → 16.80 ms, e2e bs1 −0.07 ms (3 alternating A/B pairs), STS-B 0.8161.
 
 ## 6. Profiling
 
