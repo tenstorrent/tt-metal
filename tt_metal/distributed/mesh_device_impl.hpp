@@ -41,6 +41,8 @@ namespace tt::tt_metal {
 class Allocator;
 class HWCommandQueue;
 class MetalEnv;
+class MetalEnvImpl;
+class MetalContext;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -64,6 +66,9 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+namespace streaming_profiler {
+class Receiver;
+}
 
 namespace distributed {
 
@@ -132,6 +137,10 @@ private:
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
     ContextId context_id_ = DEFAULT_CONTEXT_ID;
+    // Handles to the runtime this MeshDevice belongs to, resolved once at construction.
+    // context_id_ is retained while thread pools, DriscL1Arena, and context teardown still take an id.
+    MetalContext* metal_context_ = nullptr;
+    MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
     // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
@@ -140,6 +149,12 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
+    // Only ever read on the dispatch path, which holds the api lock.
+    mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
+    // Established once the devices are open (see establish_device_property_caches) so that the
+    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
+    std::optional<CoreCoord> compute_with_storage_grid_size_;
+    std::optional<uint32_t> l1_size_per_core_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -159,6 +174,10 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
+    // close_impl().
+    std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
@@ -190,6 +209,10 @@ private:
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
     std::vector<AllocatorImpl*> trace_allocators() const;
+    std::vector<AllocatorImpl*> trace_allocators(SubDeviceManagerId manager_id) const;
+    // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
+    // during initialization and again after a reshape swaps the view.
+    void establish_device_property_caches();
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
@@ -208,7 +231,7 @@ public:
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh,
-        ContextId context_id);
+        MetalContext& metal_context);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -218,6 +241,8 @@ public:
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     ContextId get_context_id() const { return context_id_; }
+    MetalContext& metal_context() const;
+    MetalEnvImpl& metal_env() const;
     // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.
     // This was added to cleanup the MetalContext after MeshDevice closes.
     // It needs to be removed to enable https://github.com/tenstorrent/tt-metal/issues/21500.
@@ -233,9 +258,9 @@ public:
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
+        SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
@@ -264,6 +289,7 @@ public:
         NOC noc, const MeshCoordinate& coord);
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
@@ -319,6 +345,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
@@ -391,6 +418,7 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
+    const std::vector<IDevice*>& get_local_devices(const MeshCoordinateRange& range) const;
     IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;

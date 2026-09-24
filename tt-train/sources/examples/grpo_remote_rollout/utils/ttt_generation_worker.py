@@ -18,6 +18,7 @@ from typing import Any, Callable, List, Optional, Sequence
 
 import torch
 import ttnn
+from huggingface_hub import snapshot_download
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -66,6 +67,14 @@ class TttGenerationWorker:
         self._global_batch_size: int = self._max_batch_size_per_dp * self._data_parallel
 
         os.environ["HF_MODEL"] = model_source  # ModelArgs reads HF_MODEL from env
+        if not dummy_weights and not os.path.isdir(model_source):
+            # ModelArgs reads the HF config with local_files_only=True under CI. CI does not have
+            # every model available locally, so download it as needed.
+            print(f"[TttGenerationWorker] Downloading HuggingFace snapshot for {model_source}")
+            snapshot_download(
+                repo_id=model_source,
+                allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
+            )
 
         # paged block-table sizing (per submesh), sized for worst-case prompt+decode
         required_blocks_per_user = (max_seq_len + paged_block_size - 1) // paged_block_size

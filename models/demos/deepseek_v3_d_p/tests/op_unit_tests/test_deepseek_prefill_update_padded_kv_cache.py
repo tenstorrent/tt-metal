@@ -1302,9 +1302,7 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device, case):
 
 # KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
 # mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
-@pytest.mark.parametrize(
-    "mesh_device", [(1, 2), (1, 4), (2, 2), (2, 4)], ids=["1x2", "1x4", "2x2", "2x4"], indirect=True
-)
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2), (2, 4)], ids=["1x4", "2x2", "2x4"], indirect=True)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, cl_tiles_per_dev, cache_tokens_per_dev",

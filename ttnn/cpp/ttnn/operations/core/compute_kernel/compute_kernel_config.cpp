@@ -134,6 +134,22 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     };
 }
 
+tt::tt_metal::experimental::ComputeHardwareConfig arch_compute_config(
+    tt::ARCH arch, const tt::tt_metal::experimental::ComputeGen1Config& gen1) {
+    if (arch != tt::ARCH::QUASAR) {
+        return gen1;
+    }
+    // Gen2 has no bfp_pack_precision_mode (MXFP replaces BFP); every other field maps 1:1, including the
+    // per-DFB unpack_modes table.
+    return tt::tt_metal::experimental::ComputeGen2Config{
+        .fpu_math_fidelity = gen1.fpu_math_fidelity,
+        .sfpu_precision_mode = gen1.sfpu_precision_mode,
+        .enable_32_bit_dest = gen1.enable_32_bit_dest,
+        .double_buffer_dest = gen1.double_buffer_dest,
+        .unpack_modes = gen1.unpack_modes,
+    };
+}
+
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
     uint32_t tile_height;

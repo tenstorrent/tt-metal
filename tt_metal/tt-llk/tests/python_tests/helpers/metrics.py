@@ -32,9 +32,9 @@ All metrics are bounded 0-100% unless noted otherwise.
 - unpack1_write_efficiency: SRCB_WRITE / UNPACK1_BUSY_THREAD0
     Fraction of unpacker1 busy cycles actually writing to srcB.
 - unpack_write_efficiency: average of unpack0 + unpack1.
-- unpack_to_math_flow0: SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
+- unpack_to_math_flow0: SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
     srcA buffer availability during unpack — high = no backpressure from math.
-- unpack_to_math_flow1: SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
+- unpack_to_math_flow1: SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
     srcB buffer availability during unpack.
 - unpack_to_math_flow: average of flow0 + flow1.
 
@@ -140,8 +140,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     pack_sem_wait = _safe_div(sem_wait_2, instrn_cycles)
 
     # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
-    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
+    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
+    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     unpack0_eff = _safe_div(srca_write, unpack0_busy)
@@ -149,8 +149,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     unpack_eff = _avg_pair(unpack0_eff, unpack1_eff)
 
     # ── Unpacker-to-Math Data Flow (TDMA_UNPACK bank) ──
-    srca_avail = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_AVAILABLE")
-    srcb_avail = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_AVAILABLE")
+    srca_avail = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_REQ")
+    srcb_avail = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_REQ")
     flow0 = _safe_div(srca_avail, unpack0_busy)
     flow1 = _safe_div(srcb_avail, unpack1_busy)
     flow_avg = _avg_pair(flow0, flow1)
@@ -158,7 +158,7 @@ def _compute_single(df: pd.DataFrame) -> dict:
     # Packer Metrics — aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
     packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
     pack_utilization = _safe_div(packer_busy, pack_cycles)
-    dest_read = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
+    dest_read = _avg_count(df, "TDMA_PACK", "PACKER0_DEST_READ_REQ")
     pack_dest_eff = _safe_div(dest_read, packer_busy)
 
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──

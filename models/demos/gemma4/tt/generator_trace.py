@@ -647,8 +647,46 @@ def resolve_gemma4_prefill_chunk_size(
                 continue
             chunk = int(tier["chunk"])
             break
-        return min(chunk, max_seq_len)
-    return non_qb2_default if non_qb2_default is not None else max_seq_len
+        return min(_floor_chunk_for_spec_ring(chunk, policy), max_seq_len)
+    base = non_qb2_default if non_qb2_default is not None else max_seq_len
+    return min(_floor_chunk_for_spec_ring(base, policy), max_seq_len)
+
+
+def _floor_chunk_for_spec_ring(chunk: int, policy) -> int:
+    """Raise the prefill chunk to fit a bounded last-chunk expansion.
+
+    When the last chunk's remnant is shorter than the sliding window, the
+    generator expands it to cover a full window and aligns the start DOWN to the
+    ring (``paged_fill_cache`` writes row r to slot r % ring, so the origin must
+    be ring-aligned). Worst case that needs ``ring + window`` rows, which cannot
+    fit a smaller chunk: at 128k (chunk 2048, ring 2048) it raised
+    "Expanded bounded last chunk has 2489 rows, exceeding chunk_size=2048".
+
+    Only applies with speculative ring headroom on (ring > window); the
+    exact-window ring always fit. Verified no OOM at 256k with chunk 4096
+    (16.37 vs 16.35 tok/s/u at 2048).
+    """
+    from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+    window = None
+    try:
+        window = int(policy.get("sliding_window") or 0) or None
+    except (AttributeError, TypeError, ValueError):
+        window = None
+    if window is None:
+        window = int(os.environ.get("GEMMA4_SLIDING_WINDOW", "1024") or 1024)
+    ring = bounded_ring_modulo(window)
+    if not ring or ring <= window:
+        return chunk  # no headroom -> historical behaviour
+    need = ring + window
+    if chunk >= need:
+        return chunk
+    floored = 1 << (need - 1).bit_length()
+    logger.info(
+        f"Gemma4 prefill chunk floored {chunk} -> {floored} for the bounded "
+        f"last-chunk expansion (ring {ring} + window {window} = {need} rows)"
+    )
+    return floored
 
 
 def model_uses_pli(model) -> bool:
@@ -859,10 +897,38 @@ def warmup_gemma4_batched_prefill_traces(
     warmup (before any traced decode) keeps runtime prefills to trace *replay*,
     avoiding the #49083 cold-eager-capture fetch-queue wedge.
     """
+    # Two-phase note: the plugin's warmup calls this twice (enable_trace=False
+    # compile pass, then enable_trace=True capture pass) and RESETS
+    # already_warmed_up_prefill between the phases (tt model_runner), so the
+    # early-return below does not suppress the capture pass in serving. The
+    # sp1 chunked capture in warmup_gemma4_model_prefill is gated on
+    # enable_trace so it cannot capture during the compile pass.
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
+    generator._defer_prefill_recording = enable_trace
+    try:
+        _warmup_gemma4_prefill_sweep(
+            generator,
+            kv_cache,
+            enable_trace=enable_trace,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+            prefill_forward_fn=prefill_forward_fn,
+        )
+        generator._defer_prefill_recording = False
+        generator._record_pending_prefill_traces()
+    except BaseException:
+        generator.already_warmed_up_prefill = False
+        raise
+    finally:
+        generator._defer_prefill_recording = False
+        generator._pending_prefill_traces.clear()
 
+
+def _warmup_gemma4_prefill_sweep(
+    generator, kv_cache, *, enable_trace, can_sample_on_device, greedy_only, prefill_forward_fn
+):
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
 
     model_args = generator.model_args[0]
@@ -1004,7 +1070,13 @@ def warmup_gemma4_batched_prefill_traces(
                         sampling_params=param,
                     )
 
-                sampling_parameters_sweeped = True
+                # The b=1 iteration is forced greedy-only (penalty masks are only
+                # shape-valid on the batched sharded-logits path), so it must not
+                # complete the sweep: a batch-N iteration (or an explicitly
+                # greedy-only warmup) does, otherwise the penalty/log-prob
+                # variants first-compile at runtime under live traces.
+                if greedy_only or batch_size > 1:
+                    sampling_parameters_sweeped = True
 
             if skip_sequence_lengths:
                 break
@@ -1074,7 +1146,11 @@ def warmup_gemma4_model_prefill(
     # prefill (warmup_prefill=True). The batched helper early-returns via
     # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
     # and add ~1.4s to every request TTFT.
-    if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
+    if (
+        enable_trace
+        and chunked_prefill_trace_enabled()
+        and not getattr(generator, "_warmed_chunked_prefill_sp1", False)
+    ):
         chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
         chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
         if chunk > 0:

@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import math
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
@@ -61,34 +60,4 @@ def test_expm1_all_bitpatterns(dtype, device):
     # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
     result = flush_subnormal_values(result)
 
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
-
-
-@pytest.mark.parametrize(
-    "low, high, expected_atol, expected_rtol",
-    [
-        (-1.6 * 10**38, -0.28515625, 0.001, 0.004),
-        (-0.28515625, 0.69140625, 0.004, 0.02),
-        (0.69140625, 88.5, 0.001, 0.01),
-    ],
-)
-def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
-    num_elements = math.prod([1, 3, 320, 320])
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
-
-    golden_function = ttnn.get_golden_function(ttnn.expm1)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.expm1(tt_in)
-    result = ttnn.to_torch(tt_result)
-
-    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)

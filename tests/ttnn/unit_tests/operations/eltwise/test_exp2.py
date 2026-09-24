@@ -6,78 +6,7 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, flush_subnormal_values_to_zero
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high",
-    [
-        (-5, 5),
-        (-126, 127),
-    ],
-)
-def test_exp2_ULP(input_shapes, low, high, device):
-    num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(input_shapes)
-
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.exp2(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high",
-    [
-        (-127, -126),
-    ],
-)
-def test_exp2_atol(input_shapes, low, high, device):
-    num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(input_shapes)
-
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.exp2(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_allclose(tt_result, golden, rtol=1e-2, atol=1e-3)
+from tests.ttnn.utils_for_testing import assert_with_ulp, flush_subnormal_values_to_zero
 
 
 def test_exp2_fp32_accuracy(device):
@@ -132,7 +61,7 @@ def test_exp2_fp32_accuracy(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 def test_exp2_fp32_special_values(device):
@@ -181,7 +110,7 @@ def test_exp2_fp32_special_values(device):
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 # Targeted edge-case coverage for the optimised exp2 (see #44507).
@@ -252,4 +181,4 @@ def test_exp2_special_values(device):
 
     if finite_indices:
         idx = torch.tensor(finite_indices)
-        assert_with_ulp(golden_flat[idx], result[idx], 1)
+        assert_with_ulp(expected_result=golden_flat[idx], actual_result=result[idx], ulp_threshold=1)

@@ -31,14 +31,43 @@ def kda_state_dict_sha256(state_dict: Mapping[str, torch.Tensor]) -> str:
     return fingerprint.hexdigest()
 
 
-def kda_layer_prefix(layer_idx: int) -> str:
+# Kimi-K3 ships two checkpoints and they root their keys differently: the published MXFP4 one is a
+# multimodal wrapper and spells everything `language_model.model.…`, while the dequantized export
+# drops the wrapper. KDA weights are bf16 in both (`quantization_config.ignore` covers
+# `re:.*self_attn.*`), so either is loadable and only the root differs. Hardcoding one meant the
+# dequantized export -- the only one that loads end to end -- could not be read at all (#54837).
+KIMI_K3_WRAPPED_ROOT = "language_model.model."
+KIMI_K3_BARE_ROOT = "model."
+
+
+def kda_layer_prefix(layer_idx: int, model_root: str = KIMI_K3_WRAPPED_ROOT) -> str:
     """Return Kimi-K3's Hugging Face prefix for one KDA layer."""
     if layer_idx < 0:
         raise ValueError(f"layer_idx must be nonnegative, got {layer_idx}")
-    return f"language_model.model.layers.{layer_idx}.self_attn."
+    return f"{model_root}layers.{layer_idx}.self_attn."
 
 
-def resolve_kda_layer_shards(checkpoint_dir: Path, layer_idx: int, config: KDAConfig) -> tuple[Path, ...]:
+def resolve_model_root(checkpoint_dir: Path) -> str:
+    """Which of the two key roots this checkpoint uses, read off its index rather than guessed.
+
+    Checked against `layers.` rather than `embed_tokens.weight` so a partial index holding only the
+    layers a test needs still resolves. `language_model.model.` is tried first because `model.` is a
+    suffix of it and would otherwise match the wrapped keys too.
+    """
+    index_path = Path(checkpoint_dir) / "model.safetensors.index.json"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"missing safetensor index: {index_path}")
+    with index_path.open(encoding="utf-8") as index_file:
+        weight_map = json.load(index_file).get("weight_map", {})
+    for root in (KIMI_K3_WRAPPED_ROOT, KIMI_K3_BARE_ROOT):
+        if any(name.startswith(f"{root}layers.") for name in weight_map):
+            return root
+    return KIMI_K3_WRAPPED_ROOT
+
+
+def resolve_kda_layer_shards(
+    checkpoint_dir: Path, layer_idx: int, config: KDAConfig, model_root: str | None = None
+) -> tuple[Path, ...]:
     """Resolve and validate the complete local shards containing one KDA layer."""
     checkpoint_dir = Path(checkpoint_dir)
     index_path = checkpoint_dir / "model.safetensors.index.json"
@@ -47,7 +76,7 @@ def resolve_kda_layer_shards(checkpoint_dir: Path, layer_idx: int, config: KDACo
     with index_path.open(encoding="utf-8") as index_file:
         weight_map = json.load(index_file).get("weight_map", {})
 
-    prefix = kda_layer_prefix(layer_idx)
+    prefix = kda_layer_prefix(layer_idx, model_root or resolve_model_root(checkpoint_dir))
     full_names = {name: f"{prefix}{name}" for name in required_kda_weight_names(config)}
     missing = [name for name, full_name in full_names.items() if full_name not in weight_map]
     if missing:
@@ -60,11 +89,14 @@ def resolve_kda_layer_shards(checkpoint_dir: Path, layer_idx: int, config: KDACo
     return shards
 
 
-def load_kda_layer_state_dict(checkpoint_dir: Path, layer_idx: int, config: KDAConfig) -> dict[str, torch.Tensor]:
+def load_kda_layer_state_dict(
+    checkpoint_dir: Path, layer_idx: int, config: KDAConfig, model_root: str | None = None
+) -> dict[str, torch.Tensor]:
     """Load and canonicalize one KDA layer from complete indexed safetensor shards."""
     checkpoint_dir = Path(checkpoint_dir)
-    shards = resolve_kda_layer_shards(checkpoint_dir, layer_idx, config)
-    prefix = kda_layer_prefix(layer_idx)
+    model_root = model_root or resolve_model_root(checkpoint_dir)
+    shards = resolve_kda_layer_shards(checkpoint_dir, layer_idx, config, model_root)
+    prefix = kda_layer_prefix(layer_idx, model_root)
     required = required_kda_weight_names(config)
     state_dict: dict[str, torch.Tensor] = {}
     for shard in shards:

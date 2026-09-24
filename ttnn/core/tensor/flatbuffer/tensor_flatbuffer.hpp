@@ -8,6 +8,8 @@
 
 #include "tensor_generated.h"
 
+#include "tensor/flatbuffer/tensor_file_layout.hpp"
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -24,11 +26,12 @@ Tensor from_flatbuffer(
     const tt::tt_metal::MemoryPin& memory_pin);
 
 // Converts Tensor object to FlatBuffer representation, writing the serialized flatbuffer object to `builder` and
-// recording tensor buffers that need to be serialized in-order to `buffers` vector. Replicated buffers are
-// deduplicated, so that the number of copies that need to be written out from `buffers` is minimized.
+// recording tensor buffers that need to be serialized in-order to `buffers` vector, each with the offset it must
+// be written at. Replicated buffers are deduplicated, so that the number of copies that need to be written out
+// from `buffers` is minimized.
 //
 // Only inline file storage (data stored in the same file) is currently supported.
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers);
+    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers);
 
 }  // namespace ttnn

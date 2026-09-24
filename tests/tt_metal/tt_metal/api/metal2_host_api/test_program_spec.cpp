@@ -31,6 +31,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <algorithm>
 #include <filesystem>
 #include <numeric>
 #include <optional>
@@ -47,7 +48,9 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
+#include "impl/context/metal_context.hpp"                // MetalContext::instance().hal() for scope resolution
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"  // sem_solver::ResolveSemaphoreScopes, ::SemScope
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -72,6 +75,7 @@ using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeMinimalWriterDMKernel;
+using test_helpers::MakeNdShardedTensorParameter;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
@@ -1230,15 +1234,80 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {
-    // DFB total bytes exceed the TensorParameter's packed size: 1*32*sizeof(bfloat16) = 64 bytes,
-    // so 128 bytes of DFB (entry_size 64, num_entries 2) overruns.
+    // DFB total bytes exceed the TensorParameter's per-bank allocation. The default parameter is
+    // interleaved and a single page -- 1*32*sizeof(bfloat16) = 64 bytes -- so it lands wholly in
+    // one bank whatever the bank count, and 128 bytes of DFB (entry_size 64, num_entries 2)
+    // overruns. This covers the interleaved branch of the bound, which the sharded cases below
+    // do not reach.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec(
         "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBShardLargerThanWholeTensorSucceeds) {
+    // Regression: a borrowed DFB is sized for ONE shard, so it must be validated against the
+    // backing buffer's per-bank allocation -- not the tensor's packed size, which is whole-tensor
+    // and unpadded. A row-major sharded tensor pads on width only, so a 1x32 bf16 tensor with a
+    // 32x32 shard on one core packs to 64 bytes while allocating 32 * 64 = 2048 bytes per bank.
+    // Sizing the DFB at the shard (the convention every sharded op follows) used to be rejected
+    // as "larger than its borrowed TensorParameter (64 bytes)".
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBLargerThanShardStillFails) {
+    // Companion to the above: widening the bound to the per-bank allocation must not disarm the
+    // check. Same tensor (2048 bytes per bank), but a DFB of 64 * 64 = 4096 bytes still overruns.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/64);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNdShardLargerThanWholeTensorSucceeds) {
+    // compute_consumed_memory_bytes_per_bank has a THIRD branch, for specs built from an
+    // NdShardSpec (max_num_dev_pages_per_core) rather than a 2D ShardSpec. It over-covers the
+    // logical data the same way, so it needs its own regression alongside the 2D case above.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {MakeNdShardedTensorParameter(
+        "borrowed_tensor", tt::tt_metal::Shape{1, 32}, tt::tt_metal::Shape{32, 32}, /*num_cores=*/1)};
+
+    // Without these the test can silently re-cover the 2D case or assert nothing at all: the ND
+    // branch is only reached when the spec keeps no 2D shard_spec (see MakeNdShardedTensorParameter
+    // on why CONTIGUOUS_1D is what guarantees that), and the bound only has teeth when the shard
+    // allocates more than the tensor packs.
+    const tt::tt_metal::TensorSpec& tensor_spec = spec.tensor_parameters[0].spec;
+    ASSERT_FALSE(tensor_spec.memory_config().shard_spec().has_value());
+    const auto& allocator = mesh_device_->allocator();
+    ASSERT_GT(
+        tensor_spec.compute_consumed_memory_bytes_per_bank(
+            allocator->get_alignment(tt::tt_metal::BufferType::L1),
+            allocator->get_num_banks(tt::tt_metal::BufferType::L1)),
+        tensor_spec.compute_packed_buffer_size_bytes());
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {
@@ -1286,7 +1355,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreBoundToComputeKernelFailsOnQuasar) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings are not supported for compute kernels.")));
+            ::testing::HasSubstr("Semaphore bindings on compute kernels are supported only on Blackhole.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingUnknownSemaphoreFails) {
@@ -3131,7 +3200,7 @@ TEST(AggregateSpecTypes, CPU_NestedStructsDesignatedInitializers) {
 }
 
 // ============================================================================
-// Gen1 (WH/BH) Tests
+// Wormhole validation tests
 // ============================================================================
 
 // Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
@@ -3154,6 +3223,158 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
+
+// Blackhole-specific fixture for compute semaphore binding validation.
+class ProgramSpecTestBlackhole : public ::testing::Test {
+protected:
+    void SetUp() override {
+        slow_dispatch_override_.emplace();
+        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+    }
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
+};
+
+// ============================================================================
+// Semaphore mechanism resolution (SemScope)
+// ============================================================================
+//
+// ResolveSemaphoreScope picks how each bound semaphore is accessed, and codegen bakes the answer
+// into the kernel's binding token. A wrong answer is therefore a silently wrong *mechanism* on
+// device, not a build failure -- so it needs assertions here. On Blackhole a compute binding
+// compiles into three TRISC binaries with two writers (UNPACK and PACK), so a compute-bound
+// semaphore must resolve to COMPUTE_ATOMIC, never to a non-atomic read-modify-write.
+
+// Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: census the binders
+// against each kernel's node set, then resolve. Placement is derived from the work units, which is
+// what CollectSpecData does for kernel_node_set.
+SemScope ResolveScopeFor(const ProgramSpec& spec, const char* semaphore_name) {
+    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
+    for (const auto& work_unit : spec.work_units) {
+        const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
+        for (const auto& kernel_name : work_unit.kernels) {
+            kernel_node_set[kernel_name] = kernel_node_set[kernel_name].merge(nodes);
+        }
+    }
+    const sem_solver::SemaphoreBinderCensus census = sem_solver::CollectSemaphoreBinders(spec, kernel_node_set);
+    // Resolve against the (mock-configured) context Hal, mirroring BuildProgramFromSpec; configure_mock_mode
+    // in each test fixture sets that context's arch.
+    return sem_solver::ResolveSemaphoreScopes(spec, census, tt::tt_metal::MetalContext::instance().hal())
+        .at(SemaphoreSpecName{semaphore_name});
+}
+
+// Binds `semaphore_name` (declared on node (0,0)) to the named kernels of `spec`.
+void BindSemaphoreToKernels(ProgramSpec& spec, const char* semaphore_name, const std::vector<std::string>& kernels) {
+    spec.semaphores.push_back(
+        SemaphoreSpec{.unique_id = SemaphoreSpecName{semaphore_name}, .target_nodes = NodeCoord{0, 0}});
+    for (auto& kernel : spec.kernels) {
+        if (std::find(kernels.begin(), kernels.end(), kernel.unique_id.get()) != kernels.end()) {
+            kernel.semaphore_bindings.push_back(SemaphoreBinding{
+                .semaphore_spec_name = SemaphoreSpecName{semaphore_name}, .accessor_name = semaphore_name});
+        }
+    }
+}
+
+// The headline rule: a Blackhole semaphore with a compute binder gets the atomic mechanism.
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreResolvesToComputeAtomic) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+}
+
+// A compute semaphore synchronizes UNPACK with PACK and may not be shared with a DM kernel: it is
+// a Tensix hardware (Sync Unit) semaphore that a DM core cannot reach, so there is no scope that
+// can serve both binders. Rejected at validation rather than resolved into a mechanism only one
+// side can drive.
+TEST_F(ProgramSpecTestBlackhole, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// The compute semaphore is seeded to 0 on the device by compute_kernel_hw_startup; the host cannot
+// write the Tensix Sync Unit, so any other initial value is rejected up front.
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreWithNonzeroInitialValueIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+    spec.semaphores.back().advanced_options.initial_value = 1;
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// The capacity (max_value) is the 4-bit hardware Max register: 1..15 on a compute semaphore, meaningless
+// on a DM one.
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreMaxValueInRangeSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+    spec.semaphores.back().advanced_options.max_value = 15;
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreMaxValueAbove15IsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+    spec.semaphores.back().advanced_options.max_value = 16;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity is at most 15")));
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_MaxValueOnDMBoundSemaphoreIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "dm_sem", {"dm_kernel"});
+    spec.semaphores.back().advanced_options.max_value = 4;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not bound by a compute kernel")));
+}
+
+// Only one Tensix hardware semaphore is free on Blackhole, so every compute semaphore resolves to it; a
+// second one in the same program would silently alias the first and is rejected up front.
+TEST_F(ProgramSpecTestBlackhole, CPU_SecondComputeBoundSemaphoreIsRejected) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem_a", {"compute_kernel"});
+    BindSemaphoreToKernels(spec, "compute_sem_b", {"compute_kernel"});
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("at most one compute semaphore")));
+}
+
+// No compute binder, no atomics: DM-only bindings keep the pre-existing non-atomic path, so
+// existing DM kernels pay nothing for this feature.
+TEST_F(ProgramSpecTestBlackhole, CPU_DMOnlyBoundSemaphoreResolvesToLocalNonatomic) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "dm_sem", {"dm_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "dm_sem"), SemScope::LOCAL_NONATOMIC);
+}
+
+// Wormhole is Gen1 too, but has no compute semaphore implementation, so COMPUTE_ATOMIC stays
+// Blackhole-only. (A WH compute binding is separately rejected by ValidateProgramSpec; this pins the
+// resolver itself, so the guard survives even if that validation is ever relaxed.)
+TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToComputeAtomic) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::LOCAL_NONATOMIC);
+}
 
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
 // Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
@@ -3775,8 +3996,8 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelTargetsOutOfBoundsNodeFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnGen1) {
-    // Compute kernels cannot have semaphore bindings on Gen 1
+TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
+    // Wormhole compute kernels cannot have semaphore bindings
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
@@ -3792,7 +4013,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnGen1) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings are not supported for compute kernels.")));
+            ::testing::HasSubstr("Semaphore bindings on compute kernels are supported only on Blackhole.")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToDMKernelSucceedsOnGen1) {

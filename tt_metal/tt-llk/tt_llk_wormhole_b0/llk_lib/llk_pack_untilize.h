@@ -14,7 +14,6 @@
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 #include "lltt.h"
-#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
@@ -181,17 +180,14 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    llk::san::pack_operand_check(
-        llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row, row_num_datums, pack_dst_format, face_r_dim);
-
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
 
     if (block_ct_dim != full_ct_dim)
     {
-        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? num_faces / 2 : 1) * FACE_C_DIM);
+        // Match BH: 2 face-cols per tile-row for num_faces>=2; old WH `num_faces/2` gave 1 only at num_faces==2 (#52175).
+        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
     }
 
@@ -220,7 +216,6 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
  */
 inline void _llk_pack_untilize_uninit_()
 {
-    llk::san::operation_uninit<llk::san::Operation::PackUntilize>();
 }
 
 /**
@@ -252,10 +247,6 @@ template <
 inline void _llk_pack_untilize_(
     const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
 {
-    llk::san::pack_operand_check(
-        llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE);
-    llk::san::operation_check<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row, row_num_datums, pack_dst_format, face_r_dim);
-
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);

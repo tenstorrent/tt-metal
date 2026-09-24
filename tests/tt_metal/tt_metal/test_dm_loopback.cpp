@@ -148,7 +148,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     }
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> outputs{0};
     slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_address, sizeof(uint32_t), outputs);

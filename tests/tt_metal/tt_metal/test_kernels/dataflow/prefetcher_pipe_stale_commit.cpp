@@ -4,18 +4,21 @@
 
 // Sender-only kernel that proves commit() rejects a stale entry_size epoch.
 //
-// Compile-time args:
-//   [0] prefetcher_pipe_id
-//   [1] entry_size          - initial / dense-slot size (E1)
-//   [2] new_entry_size      - resize target (E2); must differ from E1
-//   [3] poison_wr_ptr       - value that must NOT land in word[4] on stale commit
-//
-// Runtime args:
-//   [0] l1_staging_addr
+// Bindings:
+//   pipe::out              — KernelAdvancedOptions::PrefetcherPipeBinding accessor (program slot id baked in)
+// Args (named CTAs):
+//   args::entry_size       - initial / dense-slot size (E1)
+//   args::new_entry_size   - resize target (E2); must differ from E1
+//   args::poison_wr_ptr    - value that must NOT land in word[4] on stale commit
+// Args (named RTAs):
+//   args::staging_addr     - sender-local L1 staging base
+// Defines:
+//   PREFETCHER_PIPE_TEST_HELPERS - exposes the test-only friend used below
 
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 
 namespace experimental {
 
@@ -33,41 +36,40 @@ FORCE_INLINE void test_stale_commit_after_resize(
 
     // Change the live epoch without touching peer credits; this test exercises
     // stale-epoch rejection only.
-    iface.fifo_wr_ptr = iface.fifo_start_addr + dfb.derived_wr_offset(iface, 0);
     dfb.resize_sender_interface<false>(new_entry_size, noc_index);
     volatile tt_l1_ptr uint32_t* config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr);
-    config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = iface.fifo_page_size;
+    store_prefetcher_pipe_config_word(config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, iface.fifo_page_size);
 
-    // Make the stale iface resolve to a distinct, valid credit-derived cursor.
-    volatile tt_l1_ptr uint32_t* sent_ptr = dfb.local_sent_ptr(iface, 0);
-    const uint32_t saved_sent = *sent_ptr;
+    // Move this receiver's stored cursor -- what commit() persists -- to a distinct, valid slot,
+    // so a stale commit that got through would be visible in word[4].
+    volatile tt_l1_ptr uint32_t* wr_offset_ptr = dfb.local_wr_offset_ptr(iface, 0);
+    const uint32_t saved_wr_offset = *wr_offset_ptr;
     ASSERT(poison_wr_ptr >= iface.fifo_start_addr);
     ASSERT(poison_wr_ptr < iface.fifo_limit_page_aligned);
     ASSERT((poison_wr_ptr - iface.fifo_start_addr) % L1_ALIGNMENT == 0);
-    *sent_ptr = (poison_wr_ptr - iface.fifo_start_addr) / L1_ALIGNMENT;
+    *wr_offset_ptr = poison_wr_ptr - iface.fifo_start_addr;
 
     const uint32_t live_entry_size = iface.fifo_page_size;
     iface.fifo_page_size = stale_entry_size;
     dfb.commit();
 
     iface.fifo_page_size = live_entry_size;
-    *sent_ptr = saved_sent;
+    *wr_offset_ptr = saved_wr_offset;
 }
 
 }  // namespace experimental
 
 void kernel_main() {
-    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
-    constexpr uint32_t entry_size = get_compile_time_arg_val(1);
-    constexpr uint32_t new_entry_size = get_compile_time_arg_val(2);
-    constexpr uint32_t poison_wr_ptr = get_compile_time_arg_val(3);
-    const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    constexpr uint32_t entry_size = get_arg(args::entry_size);
+    constexpr uint32_t new_entry_size = get_arg(args::new_entry_size);
+    constexpr uint32_t poison_wr_ptr = get_arg(args::poison_wr_ptr);
+    const uint32_t staging_base = get_arg(args::staging_addr);
     const CoreLocalMem<uint8_t> staging(staging_base);
 
     static_assert(entry_size != new_entry_size, "stale-commit test requires distinct entry sizes");
 
     Noc noc;
-    experimental::PrefetcherPipe dfb(prefetcher_pipe_id);
+    experimental::PrefetcherPipe dfb(pipe::out);
 
     // Advance one entry so the durable checkpoint is not fifo_start.
     dfb.reserve_back(1);
@@ -77,5 +79,5 @@ void kernel_main() {
 
     // A stale entry-size epoch must not overwrite word[4] with poison_wr_ptr.
     experimental::test_stale_commit_after_resize(dfb, new_entry_size, entry_size, poison_wr_ptr);
-    // ~PrefetcherPipe commits the restored credit-derived cursor under the live E2 epoch.
+    // ~PrefetcherPipe commits the cursor the helper restored, under the live E2 epoch.
 }

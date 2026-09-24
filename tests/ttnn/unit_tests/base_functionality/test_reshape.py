@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
@@ -24,7 +25,26 @@ def test_view_preserves_root_buffer_unique_id(device):
 
     assert input_buffer_id is not None
     assert reshaped_tensor.buffer_unique_id() == input_buffer_id
-    assert ttnn.mark_corruptible(reshaped_tensor) == input_buffer_id
+    assert trace_allocation_tracker.acknowledge_corruptible(reshaped_tensor) is None
+
+
+def test_view_buffer_unique_id_after_root_force_deallocated(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    reshaped_tensor = ttnn.experimental.view(input_tensor, (1, 32, 32))
+    ttnn.deallocate(input_tensor, force=True)
+
+    # The view's own holder still reports allocated, but the root buffer is gone.
+    assert reshaped_tensor.buffer_unique_id() is None
+    if trace_allocation_tracker.TRACE_ALLOC_TRACKING:
+        with expect_error(ValueError, "acknowledge_corruptible expected a tensor with a valid device buffer_unique_id"):
+            trace_allocation_tracker.acknowledge_corruptible(reshaped_tensor)
+    else:
+        assert trace_allocation_tracker.acknowledge_corruptible(reshaped_tensor) is None
 
 
 @pytest.mark.parametrize(

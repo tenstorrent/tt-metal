@@ -366,6 +366,13 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::NEXTAFTER:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::NEXTAFTER;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::ATAN2:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::ATAN2;
@@ -508,6 +515,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case NEXTAFTER:
+            // One ULP of bfloat16 is a wider step in the fp32 dest register than one ULP of
+            // float32, so the destination format picks the entry point.
+            if (dtype == DataType::FLOAT32) {
+                return {"nextafter_binary_tile_init();", "nextafter_binary_tile"};
+            } else {
+                return {"nextafter_bf16_binary_tile_init();", "nextafter_bf16_binary_tile"};
+            }
         case LT:
             if (int_data_format) {
                 return {
@@ -596,6 +611,11 @@ void add_activation_defines(
             unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
+    // The activations run in the SFPU kernels the unary op uses; give them the same input-dtype define so the
+    // float32 variants are compiled for float32 operands.
+    if (!activations.empty() && dtype.has_value()) {
+        unary::utils::add_input_dtype_defines(*dtype, defines);
+    }
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
