@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Sequence
 import torch
 from einops import rearrange
 from loguru import logger
-from safetensors import safe_open
 from safetensors.torch import load_file
 
 import ttnn
@@ -35,10 +34,19 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
-from ...utils.ltx import pad_hw_replicate
-from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.ltx import pad_hw_replicate, read_vae_per_channel_stats
+from ...utils.tensor import (
+    depth_to_space_channels_last,
+    fast_device_to_host,
+    float_to_uint8,
+    prepare_depth_to_space_channels,
+    typed_tensor,
+    typed_tensor_2dshard,
+)
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
+from .diffvae_ltx import DiffVAEDecoder, DiffVAEOptions
+from .diffvae_ltx import decoder_config as diffvae_config
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -117,7 +125,7 @@ class LTXCausalConv3d(Module):
         super().__init__()
 
         # When set, output channels are reordered at load to (p1,p2,p3,C); see
-        # _depth_to_space_channels_last.
+        # depth_to_space_channels_last.
         self.depth_to_space_stride = depth_to_space_stride
 
         if temporal_padding_mode not in ("repeat", "zeros"):
@@ -236,9 +244,9 @@ class LTXCausalConv3d(Module):
                     bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
             if self.depth_to_space_stride is not None:
-                weight = _prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
+                weight = prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
                 if bias is not None:
-                    bias = _prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
+                    bias = prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
                     state["bias"] = bias
 
             weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
@@ -426,21 +434,6 @@ class LTXCausalConv3d(Module):
         )
 
         return x_BTHWC
-
-
-def _prepare_depth_to_space_channels(t: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
-    """Reorder the output-channel dim (dim 0) from (C,p1,p2,p3) grouping to (p1,p2,p3,C).
-
-    Out channels must be divisible by p1*p2*p3.
-    """
-    p1, p2, p3 = stride
-    out = t.shape[0]
-    assert out % (p1 * p2 * p3) == 0, f"out_channels {out} not divisible by {p1 * p2 * p3}"
-    C = out // (p1 * p2 * p3)
-    rest = t.shape[1:]
-    t = t.reshape(C, p1, p2, p3, *rest)
-    t = t.permute(1, 2, 3, 0, *range(4, t.ndim))
-    return t.reshape(out, *rest)
 
 
 def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -642,22 +635,13 @@ class LTXDepthToSpaceUpsample(Module):
         """Depth-to-space in BTHWC, channel order C,p1,p2,p3: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C).
 
         For the residual path, whose input is not channel-reordered; conv output uses
-        _depth_to_space_channels_last.
+        depth_to_space_channels_last.
         """
         p1, p2, p3 = self.stride
         total_c = x.shape[-1]
         C = total_c // (p1 * p2 * p3)
         x = ttnn.reshape(x, (B, T, H, W, C, p1, p2, p3))
         x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
-        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
-        return x
-
-    def _depth_to_space_channels_last(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
-        """Depth-to-space for conv output in channel order p1,p2,p3,C (keeps C as the last dim)."""
-        p1, p2, p3 = self.stride
-        C = x.shape[-1] // (p1 * p2 * p3)
-        x = ttnn.reshape(x, (B, T, H, W, p1, p2, p3, C))
-        x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
         x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
         return x
 
@@ -686,7 +670,7 @@ class LTXDepthToSpaceUpsample(Module):
         x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
-        x = self._depth_to_space_channels_last(x_BTHWC, B, T, H, W)
+        x = depth_to_space_channels_last(x_BTHWC, self.stride)
 
         # Remove first frame if temporal upsampling (causal padding artifact)
         if p1 == 2:
@@ -761,6 +745,10 @@ def _compute_ltx_decoder_dims(
 
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
+
+    #: This decoder can convert and gather YUV 4:2:0 on device (``output_type="yuv"``), which the
+    #: mp4 export path prefers. DiffVAE cannot, so the pipeline checks before asking.
+    supports_yuv = True
 
     def __init__(
         self,
@@ -1521,13 +1509,12 @@ class LTXVideoEncoder(Module):
 # =============================================================================
 
 
-def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
-    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
-    with safe_open(checkpoint_path, framework="pt") as f:
-        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
-        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
-    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
+    """Return ``key`` with the first matching prefix removed, else ``None``."""
+    for prefix in prefixes:
+        if key.startswith(prefix):
+            return key[len(prefix) :]
+    return None
 
 
 class LTXVideoVAEAdapter:
@@ -1553,6 +1540,8 @@ class LTXVideoVAEAdapter:
         num_frames: int,
         height: int,
         width: int,
+        diffusion_decoder: bool = False,
+        diffvae_options: DiffVAEOptions | None = None,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
@@ -1576,8 +1565,23 @@ class LTXVideoVAEAdapter:
         if self.encoder_blocks:
             logger.info(f"VAE encoder config: {len(self.encoder_blocks)} blocks")
 
-        self._decoder: LTXVideoDecoder | None = None
-        if self.decoder_blocks:
+        # LTX-2.5's own video-VAE file ships the diffusion decoder in place of conv
+        # ``decoder_blocks``, so which decoder is built is a property of the request, not of the
+        # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
+        self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
+        if diffusion_decoder:
+            # How the decoder runs (executors, shard axes, fusions, host boundaries) is the
+            # caller's decision, carried in ``diffvae_options``; the default is replicated on the
+            # linear-order executor.
+            options = diffvae_options or DiffVAEOptions()
+            self._decoder = DiffVAEDecoder(
+                diffvae_config(checkpoint_path),
+                mesh_device=mesh_device,
+                ccl_manager=vae_ccl_manager,
+                options=options,
+            )
+            logger.info(f"VAE config: DiffVAE diffusion decoder {options}")
+        elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,
                 causal=self._causal,
@@ -1605,7 +1609,7 @@ class LTXVideoVAEAdapter:
             )
 
     @property
-    def decoder(self) -> "LTXVideoDecoder | None":
+    def decoder(self) -> "LTXVideoDecoder | DiffVAEDecoder | None":
         return self._decoder
 
     @property
@@ -1626,17 +1630,36 @@ class LTXVideoVAEAdapter:
         if self._decoder is None or self._decoder.is_loaded():
             return
 
+        if isinstance(self._decoder, DiffVAEDecoder):
+            # No conv3d blocking to key on, and the remapping (folded statistics, permuted
+            # upsample projections) lives on the decoder itself. The parameter layout is keyed
+            # because the deterministic block options change which parameters exist (see parameter_layout).
+            decoder = self._decoder
+            cache_module.load_model(
+                decoder,
+                model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+                subfolder=f"diffvae/{decoder.parameter_layout()}",
+                parallel_config=self._dit_parallel_config,
+                mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
+                get_torch_state_dict=lambda: decoder.torch_state_from_checkpoint(self._checkpoint_path),
+            )
+            logger.info("Loaded TTNN DiffVAE decoder")
+            return
+
         def _state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE cache miss — loading safetensors: {self._checkpoint_path}")
             raw = load_file(self._checkpoint_path)
             vae_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
+                # Monolith ``vae.decoder.*`` and split-file bare ``decoder.*``.
+                short = _strip_vae_prefix(k, "vae.decoder.", "decoder.")
+                if short is not None:
+                    vae_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    vae_state[f"per_channel_statistics.{pcs}"] = v
             return vae_state
 
         blocking_key = conv3d_blocking_hash(self._decoder)
@@ -1663,12 +1686,13 @@ class LTXVideoVAEAdapter:
             raw = load_file(self._checkpoint_path)
             enc_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
+                short = _strip_vae_prefix(k, "vae.encoder.", "encoder.")
+                if short is not None:
+                    enc_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    enc_state[f"per_channel_statistics.{pcs}"] = v
             return enc_state
 
         blocking_key = conv3d_blocking_hash(self._encoder)
