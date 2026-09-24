@@ -28,10 +28,20 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--batch", type=int, default=1)
 parser.add_argument("--q-chunk", type=int, default=64)
 parser.add_argument("--k-chunk", type=int, default=512)
-parser.add_argument("--grid-x", type=int, default=8)
-parser.add_argument("--grid-y", type=int, default=8)
+parser.add_argument("--grid-x", type=int, default=8, help="fused op grid")
+parser.add_argument("--grid-y", type=int, default=8, help="fused op grid")
+parser.add_argument("--stock-grid-x", type=int, default=None, help="stock SDPA grid (default: fused grid)")
+parser.add_argument("--stock-grid-y", type=int, default=None)
+parser.add_argument("--stock-max-cores-per-head-batch", type=int, default=None)
+parser.add_argument("--stock-q-chunk", type=int, default=None)
+parser.add_argument("--stock-k-chunk", type=int, default=None)
 parser.add_argument("--streaming", action="store_true", help="fused op uses the streaming compute pipeline")
 parser.add_argument("--concat-groups", type=int, default=4)
+parser.add_argument(
+    "--no-concat", action="store_true", help="fused op writes [B, H, S, D] (isolates the concat writer)"
+)
+parser.add_argument("--no-timing", action="store_true", help="accuracy only")
+parser.add_argument("--fused-fp32-dest", action="store_true", help="fused op accumulates in fp32 DEST")
 args = parser.parse_args()
 
 from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
@@ -63,12 +73,17 @@ ckc = ttnn.init_device_compute_kernel_config(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
-pcfg = ttnn.SDPAProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(args.grid_x, args.grid_y),
-    q_chunk_size=args.q_chunk,
-    k_chunk_size=args.k_chunk,
-    exp_approx_mode=False,
-)
+stock_kwargs = {
+    "compute_with_storage_grid_size": ttnn.CoreCoord(
+        args.stock_grid_x or args.grid_x, args.stock_grid_y or args.grid_y
+    ),
+    "q_chunk_size": args.stock_q_chunk or args.q_chunk,
+    "k_chunk_size": args.stock_k_chunk or args.k_chunk,
+    "exp_approx_mode": False,
+}
+if args.stock_max_cores_per_head_batch:
+    stock_kwargs["max_cores_per_head_batch"] = args.stock_max_cores_per_head_batch
+pcfg = ttnn.SDPAProgramConfig(**stock_kwargs)
 fcfg = EncoderSDPAConfig(
     batch=B,
     num_q_heads=HEADS,
@@ -82,14 +97,18 @@ fcfg = EncoderSDPAConfig(
     grid_y=args.grid_y,
     scale=scale,
     use_streaming=args.streaming,
-    fp32_dest_acc_en=False,
-    direct_concat_heads=True,
+    fp32_dest_acc_en=args.fused_fp32_dest,
+    direct_concat_heads=not args.no_concat,
 )
+
+
+# The model writes the stock SDPA output to DRAM for B > 1 (score_memcfg) and to L1 at B1.
+sdpa_mem = mem if B == 1 else ttnn.DRAM_MEMORY_CONFIG
 
 
 def stock_sdpa():
     return ttnn.transformer.scaled_dot_product_attention(
-        q, k, v, is_causal=False, scale=scale, program_config=pcfg, compute_kernel_config=ckc, memory_config=mem
+        q, k, v, is_causal=False, scale=scale, program_config=pcfg, compute_kernel_config=ckc, memory_config=sdpa_mem
     )
 
 
@@ -105,23 +124,26 @@ def fused():
 
 
 def stats(name, out):
-    t = ttnn.to_torch(out).float().reshape(ref.shape)
+    t = ttnn.to_torch(out).float()
+    if t.shape[1] == HEADS:
+        t = t.permute(0, 2, 1, 3)
+    t = t.reshape(ref.shape)
     cos = torch.nn.functional.cosine_similarity(t.flatten(), ref.flatten(), dim=0).item()
     pcc = torch.corrcoef(torch.stack([t.flatten(), ref.flatten()]))[0, 1].item()
     print("ACC %-6s shape %s cos %.6f pcc %.6f maxabs %.4f" % (name, tuple(out.shape), cos, pcc, (t - ref).abs().max()))
+    ttnn.deallocate(out)
     return t
 
 
 def traced_us(fn):
-    warm = [fn() for _ in range(REPS)]
-    for o in warm:
-        ttnn.deallocate(o)
+    # Free each output at once, as the model does, so L1 holds one output at a time.
+    for _ in range(REPS):
+        ttnn.deallocate(fn())
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    outs = [fn() for _ in range(REPS)]
+    for _ in range(REPS):
+        ttnn.deallocate(fn())
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    for o in outs:
-        ttnn.deallocate(o)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ts = []
     for _ in range(TIMED):
@@ -133,8 +155,8 @@ def traced_us(fn):
 
 
 print(
-    "SHAPE B%d H%d S%d D%d q%d k%d grid %dx%d streaming=%s"
-    % (B, HEADS, SEQ, HEAD_DIM, args.q_chunk, args.k_chunk, args.grid_x, args.grid_y, args.streaming),
+    "SHAPE B%d H%d S%d D%d | fused q%d k%d grid %dx%d streaming=%s | stock %s"
+    % (B, HEADS, SEQ, HEAD_DIM, args.q_chunk, args.k_chunk, args.grid_x, args.grid_y, args.streaming, stock_kwargs),
     flush=True,
 )
 s_out = stats("stock", stock())
@@ -147,6 +169,6 @@ except Exception as exc:
     ttnn.close_mesh_device(device)
     raise SystemExit(1)
 
-for name, fn in (("stock_sdpa", stock_sdpa), ("stock", stock), ("fused", fused)):
+for name, fn in () if args.no_timing else (("stock_sdpa", stock_sdpa), ("stock", stock), ("fused", fused)):
     print("TIME %-10s %.2f us/call" % (name, traced_us(fn)), flush=True)
 ttnn.close_mesh_device(device)
