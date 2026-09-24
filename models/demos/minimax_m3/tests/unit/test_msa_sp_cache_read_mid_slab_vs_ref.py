@@ -119,7 +119,7 @@ def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, re
     chunk_global = sp * CHUNK_LOCAL
     cached_len = chunk_global + start_offset  # one whole prior chunk, then a 32-aligned resume point
     capacity = 3 * chunk_global
-    kv_len, _ = msa_cache_read_extent(cached_len, CHUNK_LOCAL, sp, BLOCK, capacity // sp)
+    kv_len, _ = msa_cache_read_extent(cached_len, CHUNK_LOCAL, sp, BLOCK)
     q, iq, k, v, ik = make_inputs(capacity, chunk_global, cached_len, seed=start_offset)
     positions = rank_positions(cached_len, sp)
     order = torch.cat(positions)  # chip-major: the rows each SP rank holds, in its local-row order

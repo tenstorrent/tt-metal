@@ -456,7 +456,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
 
     def prefill_chunk(c):
         a = c * chunk
-        inp = runtime.make_chunk_input(padded[a : a + chunk])
+        inp = runtime.make_chunk_input(padded[a : a + chunk], a)
         runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
 
     def run_whole():  # cold, no mid-loop syncs — one barrier at the end

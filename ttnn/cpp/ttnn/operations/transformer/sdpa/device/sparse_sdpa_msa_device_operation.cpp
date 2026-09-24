@@ -18,12 +18,11 @@
 namespace ttnn::prim {
 
 namespace {
-// The SP-sharded read of a block-cyclic chunked-prefill cache: q holds this device's chunk_local query rows,
-// whose global positions follow the cache writer's rotation (see compute_causal_geometry). A q seq-sharded
-// across TP as well (chunk_local == tp*S) keeps the linear chunk_start_idx + rank*S.
-bool rotation_exact_causal(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    return attrs.causal_enabled() && attrs.cluster_axis.has_value() && attrs.has_block_cyclic() &&
-           attrs.block_cyclic->chunk_local == t.q.logical_shape()[2];
+// The SP-sharded read of a block-cyclic chunked-prefill cache: the global positions of this device's query rows
+// follow the cache writer's rotation (see compute_causal_geometry) -- q holds its SP rank's chunk_local rows, or,
+// seq-sharded across TP as well (chunk_local == tp*S), its TP rank's S-row slice of them.
+bool rotation_exact_causal(const SparseSDPAMsaParams& attrs) {
+    return attrs.causal_enabled() && attrs.cluster_axis.has_value() && attrs.has_block_cyclic();
 }
 
 // Re-check invariants excluded from the program hash. Interleaved K/V shape fields (T, batch slots, and n_kv)
@@ -100,14 +99,26 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
     } else {
         TT_FATAL(B == 1, "k/v batch must be 1 unless cache_batch_idx is set (got {})", B);
     }
-    // The rotated geometry works in tile-rows (as the KV writer does), so the chunk must start on the tile grid.
     // chunk_start_idx is hash-excluded (patched per dispatch), hence checked on hits too.
-    if (rotation_exact_causal(attrs, t)) {
+    if (attrs.causal_enabled() && attrs.has_block_cyclic()) {
+        const uint32_t chunk_start_idx = attrs.chunk_start_idx.value();
+        const auto& bc = attrs.block_cyclic.value();
+        // The rotated geometry works in tile-rows (as the KV writer does), so the chunk must start on the tile grid.
         TT_FATAL(
-            attrs.chunk_start_idx.value() % tt::constants::TILE_HEIGHT == 0,
+            chunk_start_idx % tt::constants::TILE_HEIGHT == 0,
             "sparse_sdpa_msa: chunk_start_idx ({}) must be a multiple of {} with a block-cyclic cache",
-            attrs.chunk_start_idx.value(),
+            chunk_start_idx,
             tt::constants::TILE_HEIGHT);
+        // Without cluster_axis every device masks at chunk_start_idx + its flat rank * S, which matches the
+        // writer's placement only for a slab-aligned start.
+        TT_FATAL(
+            rotation_exact_causal(attrs) || bc.sp <= 1 || chunk_start_idx % (bc.sp * bc.chunk_local) == 0,
+            "sparse_sdpa_msa: a mid-slab chunk_start_idx ({}, slab {} = sp {} x chunk_local {}) with a block-cyclic "
+            "cache needs cluster_axis (the SP axis) for the rotated per-device query positions",
+            chunk_start_idx,
+            bc.sp * bc.chunk_local,
+            bc.sp,
+            bc.chunk_local);
     }
 }
 }  // namespace
@@ -263,12 +274,14 @@ SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_ge
         mesh_dispatch_coordinate.has_value()
             ? ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
             : 0;
-    if (!rotation_exact_causal(attrs, t)) {
+    if (!rotation_exact_causal(attrs)) {
         return {.chunk_start = chunk_start_idx + device_index * S};
     }
     // The chunk [chunk_start_idx, +sp*chunk_local) was written round-robin by update_padded_kv_cache, so this
     // device's S query rows start at the writer's rotated position, not chunk_start_idx + rank*S, and on the
-    // boundary chip of a mid-slab start they cross a slab boundary (the straddle).
+    // boundary chip of a mid-slab start they cross a slab boundary (the straddle). With q also seq-sharded over
+    // TP (chunk_local == tp*S) the device holds its TP rank's S-row slice of its SP rank's rows: the same
+    // [SP, TP] geometry indexer_score uses with seq_shard_axes=[SP, TP].
     const auto& bc = attrs.block_cyclic.value();
     TT_FATAL(
         device_index < bc.sp,
@@ -276,6 +289,23 @@ SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_ge
         "block-cyclic SP axis)",
         device_index,
         bc.sp);
+    uint32_t tp_index = 0;
+    if (bc.chunk_local != S) {
+        const auto mesh_shape = t.q.device()->get_view().shape();
+        TT_FATAL(
+            mesh_shape.dims() == 2 && bc.chunk_local % S == 0 && mesh_dispatch_coordinate.has_value(),
+            "sparse_sdpa_msa: a TP-sub-sharded q (block_cyclic_chunk_local {} = tp * q seq-len {}) needs a 2D mesh",
+            bc.chunk_local,
+            S);
+        const uint32_t tp_axis = 1 - attrs.cluster_axis.value();
+        tp_index = ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, tp_axis);
+        TT_FATAL(
+            tp_index < bc.chunk_local / S,
+            "sparse_sdpa_msa: TP rank {} out of range for block_cyclic_chunk_local {} / q seq-len {}",
+            tp_index,
+            bc.chunk_local,
+            S);
+    }
     constexpr uint32_t TW = tt::constants::TILE_WIDTH;
     const auto g = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
         chunk_start_idx,
@@ -284,7 +314,7 @@ SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_ge
         bc.sp,
         bc.chunk_local,
         device_index,
-        /*tp_index=*/0,
+        tp_index,
         S);
     return {
         .chunk_start = g.chunk_start_tiles * TW,

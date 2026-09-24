@@ -224,3 +224,111 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
     for r, (dev_out, gold) in enumerate(zip(ttnn.get_device_tensors(out), golds)):
         p = pcc(ttnn.to_torch(dev_out)[:, :H], gold)
         assert p >= DEVICE_PCC, f"sp={sp} chunk_start={chunk_start}: rank {r} diverges from golden (pcc={p:.5f})"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], indirect=True)  # SP along cols, TP sub-shard along rows
+@pytest.mark.parametrize("start_offset", [0, 32, 288], ids=["slab_aligned", "mid_block_straddle", "rotated_straddle"])
+def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset):
+    """Causal sparse_sdpa_msa with q seq-sharded over BOTH mesh axes (block_cyclic_chunk_local == tp*S): device
+    (tp r, sp c) holds rows [r*S, (r+1)*S) of SP rank c's chunk_local rotated rows. The mask must use that
+    [SP, TP] position (as indexer_score does with seq_shard_axes=[SP, TP]), not chunk_start + sp_rank*S."""
+    rows, cols = tuple(mesh_device.shape)
+    sp_axis, sp, tp = 1, cols, rows
+    if tp < 2 or sp < 2:
+        pytest.skip(f"needs a (tp>1, sp>1) mesh (got {(rows, cols)})")
+
+    H, n_kv, d = 32, 1, 128
+    S = BLK_KV
+    chunk_local = tp * S
+    chunk_global = sp * chunk_local
+    n_slabs = 4
+    T = n_slabs * chunk_global
+    chunk_start = chunk_global + start_offset
+    topk, n_past = 16, 3
+
+    gen = torch.Generator().manual_seed(2000 + start_offset)
+    k = torch.randn(1, n_kv, T, d, generator=gen)
+    v = torch.randn(1, n_kv, T, d, generator=gen)
+    sp_positions = _block_cyclic_chunk_positions(chunk_start, sp, chunk_local)
+    positions = [[sp_positions[c][r * S : (r + 1) * S] for c in range(sp)] for r in range(tp)]
+    qs = [[torch.randn(1, H, S, d, generator=gen) for _ in range(sp)] for _ in range(tp)]
+    idxs = [[_diag_plus_past_indices(positions[r][c], n_kv, topk, n_past, gen) for c in range(sp)] for r in range(tp)]
+    scale = d**-0.5
+
+    # [tp, ., sp*S, .] with rows sharding dim 0 and cols dim 2 -> device (r, c) gets its own [1, ., S, .].
+    q_all = torch.cat([torch.cat(qs[r], dim=2) for r in range(tp)], dim=0)
+    idx_all = torch.cat([torch.cat(idxs[r], dim=2) for r in range(tp)], dim=0)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 2), mesh_shape=(rows, cols))
+    repl = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def dev(x, dt, layout, mapper):
+        return ttnn.from_torch(
+            x, dtype=dt, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mapper
+        )
+
+    out = ttnn.transformer.sparse_sdpa_msa(
+        dev(q_all.to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, shard),
+        dev(
+            _natural_to_block_cyclic(k, sp, n_slabs, chunk_local).to(torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            repl,
+        ),
+        dev(
+            _natural_to_block_cyclic(v, sp, n_slabs, chunk_local).to(torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            repl,
+        ),
+        dev(idx_all, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, shard),
+        scale=scale,
+        block_size=BLK_KV,
+        chunk_start_idx=chunk_start,
+        cluster_axis=sp_axis,
+        block_cyclic_sp_axis=sp_axis,
+        block_cyclic_chunk_local=chunk_local,
+    )
+    dev_outs = ttnn.get_device_tensors(out)
+    for r in range(tp):
+        for c in range(sp):
+            gold = sparse_attention_ref_msa(qs[r][c], k, v, idxs[r][c], scale, causal=True, q_positions=positions[r][c])
+            p = pcc(ttnn.to_torch(dev_outs[r * cols + c])[:, :H], gold)
+            assert p >= DEVICE_PCC, f"mesh {(rows, cols)} chunk_start={chunk_start}: device ({r},{c}) pcc={p:.5f}"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_msa_block_cyclic_causal_guards(mesh_device, expect_error):
+    """A mid-slab causal start needs cluster_axis (the rotated positions come from the SP rank), and that
+    cluster_axis must be the cache's block-cyclic SP axis."""
+    rows, cols = tuple(mesh_device.shape)
+    H, n_kv, d = 32, 1, 128
+    chunk_local = S = 2 * BLK_KV
+    sp, n_slabs = cols, 4  # T >= topk blocks
+    T = n_slabs * sp * chunk_local
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=16, d=d, causal=False, seed=1)
+    repl = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def dev(x, dt, layout):
+        return ttnn.from_torch(
+            x, dtype=dt, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=repl
+        )
+
+    def run(**kw):
+        return ttnn.transformer.sparse_sdpa_msa(
+            dev(q.to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            dev(k.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            dev(v.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            dev(indices.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            scale=d**-0.5,
+            block_size=BLK_KV,
+            block_cyclic_sp_axis=1,
+            block_cyclic_chunk_local=chunk_local,
+            **kw,
+        )
+
+    with expect_error(RuntimeError, "needs cluster_axis"):
+        run(chunk_start_idx=32)
+    with expect_error(RuntimeError, "must equal block_cyclic_sp_axis"):
+        run(chunk_start_idx=0, cluster_axis=0)
