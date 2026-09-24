@@ -243,7 +243,8 @@ inline tt::tt_metal::KernelDescriptor make_compute_kernel_descriptor(
     const bool fp32_dest_acc_en,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode = {},
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    const bool math_approx_mode = false) {
+    const bool math_approx_mode = false,
+    const bool dst_full_sync_en = false) {
     return make_kernel_descriptor(
         kernel_path,
         core_ranges,
@@ -252,6 +253,7 @@ inline tt::tt_metal::KernelDescriptor make_compute_kernel_descriptor(
         tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
         });
