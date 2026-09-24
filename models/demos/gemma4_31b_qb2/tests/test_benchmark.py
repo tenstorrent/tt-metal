@@ -178,3 +178,28 @@ def test_stream_error_withholds_server_response(expect_error, capsys):
         run_stream([{"error": {"message": "PRIVATE_SERVER_RESPONSE_SENTINEL"}}])
     capture = capsys.readouterr()
     assert "PRIVATE_SERVER_RESPONSE_SENTINEL" not in capture.out + capture.err
+
+
+def test_startup_status_never_copies_log_content():
+    from models.demos.gemma4_31b_qb2.tests.startup_status import startup_status
+
+    text = "\n".join(
+        (
+            "PRIVATE_PROMPT_SENTINEL",
+            "Loading Gemma4 layer 59",
+            "Gemma4 model loaded",
+            "Warming model trace",
+            "Traceback (most recent call last): PRIVATE_EXCEPTION_SENTINEL",
+            "Loading Gemma4 layer 999999 PRIVATE_ANSWER_SENTINEL",
+        )
+    )
+    assert startup_status(text) == {
+        "last_stage": "weight_loading",
+        "last_layer_started": 59,
+        "exception_logged": True,
+    }
+    assert startup_status("PRIVATE_REASONING_SENTINEL") == {
+        "last_stage": "unknown",
+        "last_layer_started": None,
+        "exception_logged": False,
+    }

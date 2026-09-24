@@ -130,7 +130,17 @@
     PY
     )
     server_pid=
+    startup_log=
+    capture_startup_status() {
+        if [ -n "$startup_log" ]; then
+            # Only fixed stage labels, a layer index and an exception flag are public.
+            python -m models.demos.gemma4_31b_qb2.tests.startup_status \
+                "$startup_log" "$results/server-startup_${server_capacity}.json" || true
+            startup_log=
+        fi
+    }
     cleanup() {
+        capture_startup_status
         if [ -z "$server_pid" ]; then return; fi
         kill -- -"$server_pid" 2>/dev/null || true
         for attempt in {1..30}; do
@@ -148,6 +158,8 @@
     # Keep diagnostics outside public artifacts and AI-summary input directories.
     start_server() {
         local capacity=$1
+        server_capacity=$capacity
+        startup_log="$work/server_${capacity}.log"
         mark_phase "start_server_$capacity"
         setsid python -u -m vllm.entrypoints.openai.api_server \
             --model "$HF_MODEL" --served-model-name google/gemma-4-31B-it \
@@ -166,6 +178,7 @@
             kill -0 "$server_pid"
             sleep 4
         done
+        capture_startup_status
         curl -fsS http://127.0.0.1:8000/health
     }
 
