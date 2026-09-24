@@ -208,15 +208,18 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
-    const uint32_t num_core_types = MetalContext::instance(context_id_).hal().get_programmable_core_type_count();
+    const Hal& hal = MetalContext::instance(context_id_).hal();
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
         const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
-        for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
+        // The HAL's core type slots can be sparse (e.g. Quasar has DISPATCH but a placeholder DRAM slot), so check
+        // each type rather than comparing against the slot count.
+        for (uint32_t i = 0; i < NumHalProgrammableCoreTypes; ++i) {
+            const auto core_type = static_cast<HalProgrammableCoreType>(i);
             TT_FATAL(
-                sub_device.impl()->cores()[i].empty(),
+                sub_device.impl()->cores()[i].empty() || hal.has_programmable_core_type(core_type),
                 "CoreType {} is not allowed in SubDevice",
-                static_cast<HalProgrammableCoreType>(i));
+                core_type);
         }
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(

@@ -542,6 +542,22 @@ TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 }
 
+// Quasar's HAL registers DISPATCH but leaves the lower DRAM slot as an unregistered placeholder.
+TEST(MetalContextIntegrationTest, MockQuasarSubDeviceRejectsPlaceholderCoreType) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::QUASAR, 1).value())};
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    const SubDevice tensix_sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
+    const auto manager_id = mesh_device->create_sub_device_manager({tensix_sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> dram_cores{};
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::DRAM)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice dram_sub_device(dram_cores);
+    EXPECT_THROW(mesh_device->create_sub_device_manager({dram_sub_device}, 0), std::runtime_error);
+}
+
 TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
     MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value())};
 
