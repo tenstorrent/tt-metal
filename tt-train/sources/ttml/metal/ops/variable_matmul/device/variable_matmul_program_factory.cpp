@@ -521,7 +521,8 @@ tt::tt_metal::ProgramDescriptor VariableMatmulProgramFactory::create_descriptor(
         fp32_dest_acc_en,
         /*unpack_to_dest_mode=*/{},
         math_fidelity,
-        math_approx_mode));
+        math_approx_mode,
+        dst_full_sync_en));
 
     // ----- Per-core runtime args -----
     // On a cache hit override_runtime_arguments() rewrites the k*Idx slots on every core.
