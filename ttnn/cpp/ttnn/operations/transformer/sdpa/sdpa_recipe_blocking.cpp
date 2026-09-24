@@ -36,41 +36,61 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 bool is_paired(const PrecisionPolicy& policy) { return policy.recurrent_state == RecurrentState::CompensatedBF16; }
 
-// Per (Q chunk, K chunk) block cost model, in units of one QK+PV tile product at D128:
-//   cost = q_tiles * k_tiles * d_tiles / 4 + cq * k_tiles + ck * q_tiles
-// `cq * k_tiles` is per-K-chunk work that does not amortize over Q rows (K/V reads and
-// forwarding, per-column reductions), so small Q chunks cost more per row; `ck * q_tiles` is
-// per-row, per-K-chunk softmax state work, so small K chunks cost more per key. The coefficients
-// were fitted to the matched-chunk trace timings in docs/sdpa_precision_qualification.md
-// (single P150b, 10 heads, 8192 x 8192, D128: Q128/K512 and Q256/K256 relative to Q256/K512).
-// Odd tile counts in the paired recipes (B, E) end with a single-row group and a size-optimized
-// pack thread.
+// Per (Q chunk, K chunk) block cost model, a roofline in units of one D128 QK+PV tile product:
+//   compute   = c * (q_tiles * k_tiles * d_tiles / 4 + ck * q_tiles * d_tiles / 4)
+//   bandwidth = bw * k_tiles * d_tiles / 4
+//   cost      = max(compute, bandwidth)
+// `ck` is the per-row, per-K-chunk softmax state work (so short K chunks cost more per key) and
+// `bw` the Q tile count below which streaming the K/V chunk into the core dominates (so short Q
+// chunks cost more per row). Per variant, fitted to the matched-chunk trace timings in
+// docs/sdpa_precision_qualification.md (single P150b, 10 heads, 8192 x 8192, D128, full grid):
+// `c` from Q256/K512, `ck` from Q256/K256 (it also predicts Q320/K256 within 2%), `bw` from
+// Q128/K512.
 struct BlockCostModel {
-    double cq;
+    double c;
     double ck;
-    double odd_q_penalty;
+    double bw;
 };
 
 BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
     switch (policy.selection.recipe) {
-        case Recipe::A: return {5.43, 2.50, 1.00};
-        case Recipe::B: return {1.77, 6.40, 1.08};
-        case Recipe::C: return {0.29, 3.70, 1.00};
-        case Recipe::D: return {0.08, 3.20, 1.00};
+        case Recipe::A: return {1.000, 1.49, 5.99};
+        case Recipe::B: return {1.216, 5.28, 7.35};
+        case Recipe::C: return {1.878, 3.58, 9.46};
+        case Recipe::D: return {2.436, 3.14, 11.75};
         case Recipe::E:
             switch (policy.selection.kv_storage) {
-                case KVStorage::BF16: return {5.60, 12.2, 1.08};
-                case KVStorage::BFP8: return {0.14, 7.10, 1.08};
-                case KVStorage::BFP4: return {0.00, 7.95, 1.08};
+                case KVStorage::BF16: return {1.040, 7.19, 7.75};
+                case KVStorage::BFP8: return {1.036, 7.02, 6.03};
+                case KVStorage::BFP4: return {1.028, 7.96, 3.50};
             }
     }
     TT_THROW("Unknown SDPA precision recipe");
 }
 
-double block_cost(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
-    const auto model = block_cost_model(policy);
-    const double cost = static_cast<double>(q_tiles) * k_tiles * d_tiles / 4.0 + model.cq * k_tiles + model.ck * q_tiles;
-    return (is_paired(policy) && q_tiles % 2 != 0) ? cost * model.odd_q_penalty : cost;
+// Build-flag facts of a geometry, read from the recipe program the factory would build.
+struct RecipeBuild {
+    uint64_t cb_bytes = 0;
+    bool size_optimized = false;  // SDPA_RECIPE_SIZE_OPTIMIZED: pack thread built at -Os
+    uint32_t qk_width = 4;        // SDPA_RECIPE_QK_W
+    uint32_t pv_width = 4;        // SDPA_RECIPE_PV_W
+};
+
+// Compute slowdowns not in the fitted model: a size-optimized pack thread (odd or new paired
+// geometries) and narrower matmul subblocks.
+constexpr double kSizeOptimizedPenalty = 1.08;
+double subblock_penalty(uint32_t width) { return width >= 4 ? 1.0 : width == 2 ? 1.10 : 1.30; }
+
+double block_cost(
+    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles, const RecipeBuild& build) {
+    const auto m = block_cost_model(policy);
+    const double d = d_tiles / 4.0;
+    double compute = m.c * (static_cast<double>(q_tiles) * k_tiles * d + m.ck * q_tiles * d);
+    compute *= std::max(subblock_penalty(build.qk_width), subblock_penalty(build.pv_width));
+    if (build.size_optimized) {
+        compute *= kSizeOptimizedPenalty;
+    }
+    return std::max(compute, m.bw * k_tiles * d);
 }
 
 uint64_t cb_bytes(const tt::tt_metal::ProgramDescriptor& program) {
@@ -81,11 +101,45 @@ uint64_t cb_bytes(const tt::tt_metal::ProgramDescriptor& program) {
     return bytes;
 }
 
-// The recipe's own circular buffers (recipe_compute_program), which dense, joint and the B-E ring
-// and exp-ring program factories adopt as their compute layout.
-uint64_t recipe_cb_bytes(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+// The recipe's own circular buffers and build flags (recipe_compute_program), which dense, joint
+// and the B-E ring and exp-ring program factories adopt as their compute layout.
+RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+    static std::mutex mutex;
+    static std::map<std::tuple<uint8_t, uint8_t, uint32_t, uint32_t, uint32_t>, RecipeBuild> memo;
+    const auto key = std::make_tuple(
+        static_cast<uint8_t>(policy.selection.recipe),
+        static_cast<uint8_t>(policy.selection.kv_storage),
+        q_tiles,
+        k_tiles,
+        d_tiles);
+    {
+        std::lock_guard lock(mutex);
+        if (auto it = memo.find(key); it != memo.end()) {
+            return it->second;
+        }
+    }
     const CoreRangeSet core(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    return cb_bytes(recipe_compute_program(policy, core, 1, q_tiles, k_tiles, d_tiles));
+    const auto program = recipe_compute_program(policy, core, 1, q_tiles, k_tiles, d_tiles);
+    RecipeBuild build{.cb_bytes = cb_bytes(program)};
+    for (const auto& [name, value] : program.kernels.front().defines) {
+        if (name == "SDPA_RECIPE_SIZE_OPTIMIZED") {
+            build.size_optimized = true;
+        } else if (name == "SDPA_RECIPE_QK_W") {
+            build.qk_width = std::stoul(value);
+        } else if (name == "SDPA_RECIPE_PV_W") {
+            build.pv_width = std::stoul(value);
+        }
+    }
+    std::lock_guard lock(mutex);
+    if (memo.size() > 65536) {
+        memo.clear();
+    }
+    memo.emplace(key, build);
+    return build;
+}
+
+uint64_t recipe_cb_bytes(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+    return recipe_build(policy, q_tiles, k_tiles, d_tiles).cb_bytes;
 }
 
 // Ring joint (ring_joint_sdpa_program_factory.cpp) adds to the B-E recipe layout: the lightweight
@@ -190,9 +244,19 @@ std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
 std::optional<std::string> recipe_geometry_rejection(
     RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
     (void)policy;
-    // Mirrors recipe_q_tiles / recipe_k_tiles (sdpa_recipe.cpp) and the ring / exp-ring device
-    // operation validation. Keep those checks and this function in lockstep; the chooser only
-    // consults this one.
+    // Mirrors recipe_dense_q_tiles / recipe_dense_k_tiles (dense, joint) and recipe_q_tiles /
+    // recipe_k_tiles plus the ring / exp-ring device operation validation (sdpa_recipe.cpp,
+    // sdpa.cpp, *_device_operation.cpp). Keep those checks and this function in lockstep; the
+    // chooser only consults this one.
+    if (q_tiles == 0 || k_tiles == 0 || d_tiles == 0) {
+        return std::string("recipes require tile-aligned, nonzero Q/K chunks and head dims");
+    }
+    if (op == RecipeOp::Dense || op == RecipeOp::Joint) {
+        if (q_tiles > 32) {
+            return fmt::format("Q chunk {} exceeds 1024 rows", q_tiles * kTile);
+        }
+        return std::nullopt;
+    }
     if (d_tiles != 2 && d_tiles != 4 && d_tiles != 8) {
         return fmt::format("head dim {} is not 64, 128 or 256", d_tiles * kTile);
     }
@@ -254,16 +318,31 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     if (batch_heads == 0 || p.q_rows == 0 || p.k_rows == 0 || p.grid.x == 0 || p.grid.y == 0) {
         return candidates;
     }
-    const auto q_range = tile_range(p.fixed_q_tiles, kRecipeSearchMinQTiles, kRecipeSearchMaxQTiles);
-    const auto k_range = tile_range(p.fixed_k_tiles, 1, kRecipeSearchMaxKTiles);
-    for (const uint32_t qt : q_range) {
-        for (const uint32_t kt : k_range) {
+    // A chunk longer than the sequence only adds padding; the qualified sizes stay in range.
+    const bool dense = p.op == RecipeOp::Dense || p.op == RecipeOp::Joint;
+    const uint32_t q_cap = std::min(kRecipeSearchMaxQTiles, std::max(div_up(p.q_rows + p.joint_q_rows, kTile), 10u));
+    const uint32_t k_cap = std::min(kRecipeSearchMaxKTiles, std::max(div_up(p.k_rows + p.joint_k_rows, kTile), 16u));
+    const auto q_range = tile_range(p.fixed_q_tiles, kRecipeSearchMinQTiles, q_cap);
+    const auto k_range = tile_range(p.fixed_k_tiles, 1, k_cap);
+    for (auto qi = q_range.rbegin(); qi != q_range.rend(); ++qi) {  // ascending Q
+        const uint32_t qt = *qi;
+        bool any_fit = false;
+        for (auto ki = k_range.rbegin(); ki != k_range.rend(); ++ki) {  // ascending K
+            const uint32_t kt = *ki;
             if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles)) {
                 continue;
             }
+            // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
+            if (dense && recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles).minimum > p.l1_bytes) {
+                break;
+            }
+            any_fit = true;
             const uint32_t q_chunk = qt * kTile;
             const uint32_t k_chunk = kt * kTile;
-            const double block = block_cost(p.policy, qt, kt, p.d_tiles);
+            // FAST ring / exp ring keep their legacy compute; everything else builds the recipe program.
+            const bool recipe_compute = dense || p.policy.selection.recipe != Recipe::A;
+            const double block = block_cost(
+                p.policy, qt, kt, p.d_tiles, recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{});
             auto admit = [&](uint32_t jobs, uint32_t k_blocks, CoreCoord grid, const RecipeL1Context& context) {
                 const auto l1 = recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, context);
                 if (l1.minimum > p.l1_bytes) {
@@ -344,6 +423,9 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                     break;
                 }
             }
+        }
+        if (dense && !any_fit && p.fixed_q_tiles == 0) {
+            break;  // nothing fits at this Q, so no larger Q fits either
         }
     }
     // Cheapest first; ties prefer larger K, then larger Q, then a wider grid.

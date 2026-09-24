@@ -33,7 +33,7 @@ enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 // Q/K chunk tile counts the chooser enumerates. Candidates outside the supported geometry are
 // filtered by `recipe_geometry_rejection`; this range only bounds the search.
 inline constexpr uint32_t kRecipeSearchMinQTiles = 1;
-inline constexpr uint32_t kRecipeSearchMaxQTiles = 16;
+inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMaxKTiles = 32;
 
 // Why (op, recipe, q_tiles, k_tiles, d_tiles) is not a supported recipe geometry, or nullopt if it is.
