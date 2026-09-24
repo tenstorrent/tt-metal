@@ -13,6 +13,8 @@ from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import (
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
+    _build_vision_state_dict,
+    _vision_encoder_seq_len,
     align_num_cached_tokens_to_sdpa,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
