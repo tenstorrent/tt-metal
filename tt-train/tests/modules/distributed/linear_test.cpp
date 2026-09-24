@@ -27,6 +27,10 @@ auto check_board_is_n300() {
     return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
 }
 
+auto check_has_at_least_two_chips() {
+    return tt::umd::Cluster::create_cluster_descriptor()->get_number_of_chips() >= 2U;
+}
+
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
     for (const auto& [name, parameter] : parameters) {
         if (name.find(name_substring) != std::string::npos) {
@@ -43,6 +47,23 @@ protected:
     void SetUp() override {
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
+        }
+
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class TwoChipTensorParallelLinearTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!check_has_at_least_two_chips()) {
+            GTEST_SKIP() << "Skipping test that requires at least two chips";
         }
 
         ttml::ttnn_fixed::distributed::enable_fabric(2U);
@@ -419,7 +440,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
         /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
+TEST_F(TwoChipTensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -437,6 +458,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
     auto row_parallel_weight = get_parameter(parameters, "weight");
+    auto row_parallel_bias = get_parameter(parameters, "bias");
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
@@ -451,7 +473,6 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto output = layer(tensor);
     auto ones_grad = ttnn::ones_like(output->get_value());
-    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
     output->set_grad(ones_grad);
     output->backward();
 
@@ -464,6 +485,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     auto row_parallel_weight_gradients =
         ttml::core::to_xtensor<float>(row_parallel_weight->get_grad(), *concat_composer);
+    auto row_parallel_bias_gradients =
+        ttml::core::to_xtensor<float>(row_parallel_bias->get_grad(), ttml::core::IdentityComposer{});
 
     // set generator
     ttml::autograd::ctx().set_generator(generator);
@@ -471,10 +494,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer = ttml::modules::LinearLayer(in_features, out_features, has_bias);
     auto replicate_layer_parameters = replicate_layer.parameters();
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
+    auto replicate_layer_bias = get_parameter(replicate_layer_parameters, "bias");
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
-    // Use unscaled ones_grad for replicate layer because row parallel's all_reduce backward
-    // does all_reduce on grad (noop_backward=false), effectively multiplying by num_devices
     auto replicate_ones_grad = ttnn::ones_like(replicate_layer_output->get_value());
     replicate_layer_output->set_grad(replicate_ones_grad);
     replicate_layer_output->backward();
@@ -487,6 +509,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
     // LinearLayer weight gradient should be replicated - just take device 0
     auto replicate_layer_weight_gradients = replicate_layer_weight_gradients_vec[0];
+    auto replicate_layer_bias_gradients =
+        ttml::core::to_xtensor<float>(replicate_layer_bias->get_grad(), ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[0], row_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -500,6 +524,10 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 
     EXPECT_TRUE(xt::allclose(
         replicate_layer_weight_gradients, row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+    EXPECT_TRUE(xt::allclose(
+        replicate_layer_bias_gradients[0], row_parallel_bias_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+    EXPECT_TRUE(xt::allclose(
+        replicate_layer_bias_gradients[1], row_parallel_bias_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {

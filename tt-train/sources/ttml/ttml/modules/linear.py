@@ -202,7 +202,8 @@ class RowParallelLinear(AbstractModuleBase):
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
         # Sum partial products across TP devices to obtain the full result.
-        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        # The reduced output is replicated, so its gradient passes unchanged to each local partial.
+        x = ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=self.cluster_axis)
         # Bias is replicated, so it is safe to add after the all-reduce.
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)

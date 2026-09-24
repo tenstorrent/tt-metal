@@ -178,7 +178,7 @@ class RowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.shard_dim)
         x = linear(x, self.weight.tensor, None)
-        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.shard_dim)
+        x = ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=self.shard_dim)
         if self.row_bias is not None:
             x = ttml.ops.binary.add(x, self.row_bias.tensor)
         return x
