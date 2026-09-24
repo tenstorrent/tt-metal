@@ -237,9 +237,12 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
 }
 
 // fp32 DEST keeps the output accumulator and the row sums in fp32 while the other intermediates stay bf16, so
-// the packs and unpacks that cross between them switch formats at run time. With bf16 accumulators this is
-// false and nothing extra is emitted.
+// the packs and unpacks that cross between them switch formats at run time. The accumulator is fp32 only with
+// fp32 DEST, so bf16 DEST builds fold this to false and compile none of that path.
 ALWI bool sdpa_fp32_accumulator(uint32_t acc_cb, uint32_t im_cb) {
+    if constexpr (!DST_ACCUM_MODE) {
+        return false;
+    }
 #ifdef TRISC_PACK
     return pack_dst_format[acc_cb] != pack_dst_format[im_cb];
 #elif defined(TRISC_UNPACK) || defined(TRISC_MATH)
@@ -706,6 +709,7 @@ void salad_correct_fused(
     const uint32_t ob_row_base = ob_q_subblock * tiles_per_row;
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+    fp32_acc = fp32_acc && DST_ACCUM_MODE;
 
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
@@ -838,6 +842,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
     [[maybe_unused]] uint32_t sink_row_offset = 0,
     bool fp32_acc = false) {
+    fp32_acc = fp32_acc && DST_ACCUM_MODE;  // noinline: the caller's constant does not reach in here
     // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
     // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
