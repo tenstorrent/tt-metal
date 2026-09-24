@@ -108,7 +108,7 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 # host tier: no device, no silicon, ~90 s. 117 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent. 54 device tests here, 14 more in perf below;
+# device tier: needs /dev/tenstorrent. 54 device tests here, 15 more in perf below;
 # the host tier lives in tests/pcc/ and runs here too, so this collects 171.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
