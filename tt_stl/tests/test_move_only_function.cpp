@@ -14,8 +14,7 @@
 namespace ttsl {
 namespace {
 
-// The properties the implementation was chosen for. Asserted at build time so a future change to
-// the backing type or its policy cannot quietly regress them.
+// Asserted at build time so a change to the backing type cannot quietly regress them.
 static_assert(!std::is_copy_constructible_v<move_only_function<void()>>, "must be move-only");
 static_assert(!std::is_copy_assignable_v<move_only_function<void()>>, "must be move-only");
 static_assert(std::is_nothrow_move_constructible_v<move_only_function<void()>>, "move must be noexcept");
@@ -37,8 +36,7 @@ TEST(MoveOnlyFunctionTest, CPU_ReturnsValueAndTakesArguments) {
     EXPECT_EQ(add(2, 3), 5u);
 }
 
-// The reason this type exists: std::function cannot store a move-only capture at all, so today the
-// codebase wraps them in a shared_ptr.
+// The reason this type exists: std::function cannot store a move-only capture at all.
 TEST(MoveOnlyFunctionTest, CPU_HoldsMoveOnlyCapture) {
     auto owned = std::make_unique<int>(7);
     move_only_function<int()> f{[owned = std::move(owned)]() { return *owned; }};
@@ -53,8 +51,8 @@ TEST(MoveOnlyFunctionTest, CPU_EmptyByDefault) {
 }
 
 TEST(MoveOnlyFunctionTest, CPU_EngagedReportsNonEmpty) {
-    // A captureless lambda is trivially destructible, which is the case that reports itself empty
-    // if the RTTI affordance is ever dropped and a linker folds the destructor into Destroy::noOp.
+    // Captureless, hence trivially destructible: the case that misreports as empty if the RTTI
+    // affordance is ever dropped (#57444).
     move_only_function<void()> f{[]() {}};
     EXPECT_TRUE(static_cast<bool>(f));
     EXPECT_FALSE(f == nullptr);
@@ -75,7 +73,7 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignmentReplacesTarget) {
     EXPECT_EQ(dst(), 42);
 }
 
-// Larger than the inline buffer, so it exercises the heap path rather than small-object storage.
+// Exceeds the inline buffer, so this is the heap path.
 TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     struct Big {
         std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -86,9 +84,8 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     EXPECT_EQ(f(), 8u);
 }
 
-// Current behaviour, and deliberately pinned: std::move_only_function makes this undefined instead.
-// When the alias switches at C++23 this test is the intended signal that the change is not
-// behaviour-neutral.
+// Pinned deliberately: std::move_only_function makes this undefined, so at the C++23 switch this
+// test failing is the intended signal.
 TEST(MoveOnlyFunctionTest, CPU_CallingEmptyThrows) {
     move_only_function<void()> f;
     EXPECT_THROW(f(), std::bad_function_call);
