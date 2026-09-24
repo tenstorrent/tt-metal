@@ -25,6 +25,52 @@
   "rc": 0,
   "status": "PASS"
  },
+ "P1.2": {
+  "duration_s": 75.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:26:58"
+   }
+  ],
+  "last_run": "2026-09-24T19:26:58",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P1.2.log",
+  "metrics": {
+   "book_next_token_acc": 0.8571428656578064,
+   "pcc_hidden_L00": 0.9999999999998836,
+   "pcc_hidden_L01": 0.9999999999994703,
+   "pcc_hidden_L02": 0.9999999999994995,
+   "pcc_hidden_L03": 0.9999999999996662,
+   "pcc_hidden_L04": 0.9999999999998497,
+   "pcc_hidden_L05": 0.999999999999858,
+   "pcc_hidden_L06": 0.9999999999998411,
+   "pcc_hidden_L07": 0.9999999999998458,
+   "pcc_hidden_L08": 0.9999999999998411,
+   "pcc_hidden_L09": 0.9999999999998315,
+   "pcc_hidden_L10": 0.9999999999997817,
+   "pcc_hidden_L11": 0.9999999999997659,
+   "pcc_hidden_L12": 0.9999999999997392,
+   "pcc_hidden_L13": 0.9999999999997011,
+   "pcc_hidden_L14": 0.9999999999997082,
+   "pcc_hidden_L15": 0.9999999999996778,
+   "pcc_hidden_L16": 0.9999999999996205,
+   "pcc_hidden_L17": 0.9999999999995883,
+   "pcc_hidden_L18": 0.9999999999995657,
+   "pcc_hidden_L19": 0.9999999999995152,
+   "pcc_hidden_L20": 0.9999999999994716,
+   "pcc_hidden_L21": 0.9999999999994381,
+   "pcc_hidden_L22": 0.9999999999993663,
+   "pcc_hidden_L23": 0.9999999999992677,
+   "pcc_hidden_L24": 0.9999999999990811,
+   "pcc_hidden_L25": 0.9999999999989003,
+   "pcc_hidden_L26": 0.9999999999988557,
+   "pcc_hidden_L27": 0.9999999999986221,
+   "pcc_logits": 0.999999999998975,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "status": "PASS"
+ },
  "P2.1": {
   "duration_s": 10.9,
   "history": [
