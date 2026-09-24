@@ -202,7 +202,7 @@ struct Routing2DCodec {
     // Destination-major table footprint: one packed row per destination coordinate.
     static constexpr uint32_t table_bytes(uint32_t axis_size) { return axis_size * row_bytes(axis_size); }
 
-    static inline uint8_t get_action_2bit(const std::uint8_t* packed_row, uint32_t index) {
+    static uint8_t get_action_2bit(const std::uint8_t* packed_row, uint32_t index) {
         const uint32_t byte_index = index / ACTIONS_PER_BYTE;
         const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
         return static_cast<uint8_t>((packed_row[byte_index] >> shift) & 0b11);
@@ -259,23 +259,22 @@ struct Routing2DCodec {
     }
 
     // Byte-wise so neither side has to reason about halfword alignment inside a packed union.
-    static inline std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
+    static std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
         const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
         return static_cast<std::uint16_t>(
             region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
     }
 
-    static inline const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
+    static const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
         return table + dst_y * row_bytes(y_size);
     }
-    static inline const std::uint8_t* x_row(
-        const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
+    static const std::uint8_t* x_row(const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
     // Y row while it still holds an action, X row once it is spent. Independent of facing.
-    static inline std::uint8_t decode_action_y_first(
+    static std::uint8_t decode_action_y_first(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         const std::uint8_t action_y = route_buffer[local_y];
         if (action_y != 0) {
@@ -289,7 +288,7 @@ struct Routing2DCodec {
     // whole Y byte is nonzero, and X otherwise. Intermesh landings rebuild the map and restart the Y
     // leg, so they must call decode_action_y_first rather than keying on facing.
     template <eth_chan_directions MY_DIR>
-    static inline std::uint8_t decode_action(
+    static std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
             return route_buffer[y_size + local_x];
@@ -337,8 +336,7 @@ struct Routing2DCodec {
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
     // Both halves matter: mesh-id inequality alone also matches packets merely transiting the chip.
-    static inline bool action_is_intermesh_exit(
-        std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
+    static bool action_is_intermesh_exit(std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
         return action == ACTION_LOCAL_DELIVER && dst_mesh_id != my_mesh_id;
     }
 };
@@ -388,10 +386,52 @@ inline bool mcast_test_row_bit(const std::uint32_t* bits, std::uint32_t row) {
 
 // Default reader for host buffers and other callers that cannot promise halfword alignment.
 struct McastTreeEdgeByteReader {
-    static inline std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
+    static std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
         return Routing2DCodec::get_mcast_tree_edge(region, index);
     }
 };
+
+// True when this Y tree contains a transit chord. X has no express encoding, so it never does.
+// A chord is a real second output of one branch and must stay on the canonical tree.
+template <typename EdgeReader>
+inline bool mcast_axis_has_transit_chord(const std::uint8_t* tree_region, std::uint32_t axis_len, bool is_y_axis) {
+    if (!is_y_axis) {
+        return false;
+    }
+    const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
+    for (std::uint32_t i = 0; i < edge_count; ++i) {
+        const std::uint16_t edge = EdgeReader::get(tree_region, i);
+        if (Routing2DCodec::mcast_edge_output(edge) == Routing2DCodec::Y2_Z) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Straight modular walk of `num_hops` in one direction. `decreasing` is north or west.
+// The canonical tree cannot represent the even-ring tie chip on the decreasing side: at distance
+// axis/2 it always steps toward increasing coordinates, so pruning that tree ORs the opposite
+// direction onto the root. A single connection can inject only one eth output, and the hop count
+// means "walk this way". A step that lands back on the root (a full cycle) is delivery only.
+inline void mcast_walk_direction(
+    std::uint32_t* targets,
+    std::uint8_t* out_actions,
+    std::uint32_t axis_len,
+    std::uint32_t root,
+    std::uint32_t num_hops,
+    bool decreasing,
+    std::uint8_t direction_bit) {
+    for (std::uint32_t k = 1; k <= num_hops; ++k) {
+        const std::uint32_t steps = k % axis_len;
+        const std::uint32_t dest = decreasing ? (root + axis_len - steps) % axis_len : (root + steps) % axis_len;
+        mcast_set_row_bit(targets, dest);
+        if (steps == 0) {
+            continue;
+        }
+        const std::uint32_t pred = decreasing ? (dest + 1) % axis_len : (dest + axis_len - 1) % axis_len;
+        out_actions[pred] |= direction_bit;
+    }
+}
 
 // One axis of the reverse pass. Edges are stored descendants before ancestors, so selecting a needed
 // child marks its parent in time for the parent's edge later in this same pass. `needed` therefore
@@ -434,6 +474,12 @@ inline void mcast_prune_axis(
 // X delivery columns; prune the Y tree; then copy the encode-root X teeth/delivery onto each target Y
 // row. The last step lets an N/S/Z-facing router deliver and branch into X from one nonzero Y action;
 // subsequent E/W-facing routers consume the X map directly.
+//
+// A chordless axis requested in only one direction skips that prune and walks the requested way
+// instead. On an even ring, axis/2 hops against the canonical tie-break (north or west) includes the
+// opposite chip, whose tree parent is the other cardinal, so the root action becomes N|S or E|W.
+// fabric_set_mcast_route injects one connection and rejects that. Both directions, and any axis that
+// contains a Z edge, stay on the tree: a transit chord is a real second output.
 template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
@@ -463,8 +509,25 @@ inline void encode_2d_mcast_maps(
     std::uint32_t y_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
     std::uint32_t x_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
 
+    const std::uint8_t* tree_y = mcast_trees;
+    const std::uint8_t* tree_x = mcast_trees + Routing2DCodec::mcast_tree_x_offset(y_size);
+    const bool y_one_direction = (n_hops == 0) != (s_hops == 0);
+    const bool x_one_direction = (e_hops == 0) != (w_hops == 0);
+    const bool y_directional =
+        y_one_direction && y_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_y, y_size, /*is_y_axis=*/true);
+    const bool x_directional =
+        x_one_direction && x_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_x, x_size, /*is_y_axis=*/false);
+
     if (n_hops == 0 && s_hops == 0) {
         mcast_set_row_bit(y_targets, root_y);
+    } else if (y_directional) {
+        if (n_hops != 0) {
+            mcast_walk_direction(
+                y_targets, out_y, y_size, root_y, n_hops, /*decreasing=*/true, Routing2DCodec::ACTION_NORTH);
+        } else {
+            mcast_walk_direction(
+                y_targets, out_y, y_size, root_y, s_hops, /*decreasing=*/false, Routing2DCodec::ACTION_SOUTH);
+        }
     } else {
         for (std::uint32_t k = 1; k <= n_hops; ++k) {
             mcast_set_row_bit(y_targets, (root_y + y_size - (k % y_size)) % y_size);
@@ -476,26 +539,37 @@ inline void encode_2d_mcast_maps(
 
     // The anchor column is always a target: the spine rows deliver, not merely forward.
     mcast_set_row_bit(x_targets, root_x);
-    for (std::uint32_t k = 1; k <= e_hops; ++k) {
-        mcast_set_row_bit(x_targets, (root_x + k) % x_size);
-    }
-    for (std::uint32_t k = 1; k <= w_hops; ++k) {
-        mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
+    if (x_directional) {
+        if (w_hops != 0) {
+            mcast_walk_direction(
+                x_targets, out_x, x_size, root_x, w_hops, /*decreasing=*/true, Routing2DCodec::ACTION_WEST);
+        } else {
+            mcast_walk_direction(
+                x_targets, out_x, x_size, root_x, e_hops, /*decreasing=*/false, Routing2DCodec::ACTION_EAST);
+        }
+    } else {
+        for (std::uint32_t k = 1; k <= e_hops; ++k) {
+            mcast_set_row_bit(x_targets, (root_x + k) % x_size);
+        }
+        for (std::uint32_t k = 1; k <= w_hops; ++k) {
+            mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
+        }
     }
 
-    const std::uint8_t* tree_y = mcast_trees;
-    const std::uint8_t* tree_x = mcast_trees + Routing2DCodec::mcast_tree_x_offset(y_size);
-
-    std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
-    mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+    if (!x_directional) {
+        std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
+        mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+    }
     for (std::uint32_t x = 0; x < x_size; ++x) {
         if (mcast_test_row_bit(x_targets, x)) {
             out_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
         }
     }
 
-    std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
-    mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+    if (!y_directional) {
+        std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
+        mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+    }
 
     // Every target row carries the encode root column's E/W teeth, and delivers only if that column is
     // itself a target. Indexed by encode_root_x rather than the anchor, since the teeth are what this
@@ -831,10 +905,10 @@ enum class RouterCommand : std::uint32_t {
 };
 
 struct RouterStateManager {
-    RouterState state;  // 4B, written by device, read by host
-    uint8_t padding0[12];     //
-    RouterCommand command;    // 4B, written by host, read by device
-    uint8_t padding1[12];     //
+    RouterState state;      // 4B, written by device, read by host
+    uint8_t padding0[12];   //
+    RouterCommand command;  // 4B, written by host, read by device
+    uint8_t padding1[12];   //
 
     // template <bool ENABLE_RISC_CPU_DATA_CACHE>
     bool is_non_run_command_pending() const {
@@ -865,8 +939,8 @@ static_assert(
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
-    uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
-    uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
+    uint16_t my_mesh_id = 0;             // Current mesh ID // 2 bytes
+    uint16_t my_device_id = 0;           // Current chip ID // 2 bytes
     // First-hop directions are packed at three bits per destination: 256 * 3 / 8 = 96 bytes for
     // intra-mesh routing and 1024 * 3 / 8 = 384 bytes for inter-mesh routing.
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
@@ -879,7 +953,7 @@ struct routing_l1_info_t {
         route_table_2d_t route_table_2d;                            // 1160 bytes
     };
 
-    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
+    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};  // 1024 bytes
     // This chip's (y, x) coordinates and the global (Y, X) shape of its mesh. Device IDs are row-major:
     // y = id / mesh_x_size, x = id % mesh_x_size. Populated host-side with the rest of the table.
     std::uint8_t my_mesh_coord_y = 0;
