@@ -439,11 +439,12 @@ def _w2_core_blocks_per_expert(Ht: int, k_w2_tiles: int, num_cores: int, tiles_p
     )
 
 
-def _tiles_per_txn(Ht: int, Nt: int, has_bias: bool) -> int:
+def _tiles_per_txn(Ht: int, Nt: int, has_bias: bool, num_cores: int) -> int:
     """The per-shape DRAM transaction size in tiles of both weight streams (moe_ring_common.h:tiles_per_txn_for_shape):
-    20 for the Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias), whose layout
-    then has no padding at all on 8 banks; 14 for every other shape (DeepSeek, GPT-OSS, ...)."""
-    return ALT_TILES_PER_TXN if (Ht, Nt, has_bias) == (80, 20, False) else DEFAULT_TILES_PER_TXN
+    20 for the Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) on the 8-bank
+    ring, whose layout then has no padding at all; 14 (one 8 KB Wormhole NoC packet) on every other ring and for every
+    other shape (DeepSeek, GPT-OSS, ...)."""
+    return ALT_TILES_PER_TXN if (Ht, Nt, has_bias, num_cores) == (80, 20, False, 8) else DEFAULT_TILES_PER_TXN
 
 
 def _w0_w1_compact_layout(
@@ -643,7 +644,7 @@ def prepare_w0_w1_tensor_for_moe_compute(
         raise RuntimeError(f"W0W1 shard map must match the kernel distribution {expected_shard_map}, got: {shard_map}")
 
     if tiles_per_txn is None:
-        tiles_per_txn = _tiles_per_txn(K // ttnn.TILE_SIZE, Nt, has_bias=False)
+        tiles_per_txn = _tiles_per_txn(K // ttnn.TILE_SIZE, Nt, has_bias=False, num_cores=num_cores)
     layout = _w0_w1_compact_layout(K // ttnn.TILE_SIZE, Nt, num_cores, num_banks, tiles_per_txn)
     num_banks = layout["num_banks"]
     # K padded to whole blocks of the block-column height and of the half block-column height.
@@ -810,7 +811,7 @@ def prepare_w2_tensor_for_moe_compute(
     # Pad "N" to whole DRAM blocks (and lay a half-width last iteration out 2 wide).
     Nt = N // ttnn.TILE_SIZE
     if tiles_per_txn is None:
-        tiles_per_txn = _tiles_per_txn(Kt, Nt, has_bias=False)
+        tiles_per_txn = _tiles_per_txn(Kt, Nt, has_bias=False, num_cores=num_cores)
     return _w2_blocks_from_groups(N_reordered, Nt, Kt, tiles_per_txn)
 
 
@@ -876,7 +877,7 @@ def prepare_w0_w1_tensor_with_bias(
     torch_w0_b0 = torch.cat([torch_w0, torch_b0_tiled], dim=2)  # (L, E, K+32, N)
     torch_w1_b1 = torch.cat([torch_w1, torch_b1_tiled], dim=2)  # (L, E, K+32, N)
 
-    tiles_per_txn = _tiles_per_txn(K_tiles, N // ttnn.TILE_SIZE, has_bias=True)
+    tiles_per_txn = _tiles_per_txn(K_tiles, N // ttnn.TILE_SIZE, has_bias=True, num_cores=len(shard_map))
     return prepare_w0_w1_tensor_for_moe_compute(
         torch_w0_b0, torch_w1_b1, L, E, K_with_bias, N, shard_map, tiles_per_txn=tiles_per_txn
     )
@@ -1007,7 +1008,7 @@ def prepare_w2_tensor_with_bias(
     N_with_bias = torch.cat([N_reordered, b2_groups_per_bank], dim=4)  # (12, L, E, groups_per_core, N+32, 128)
 
     # Pad "N+32" to whole DRAM blocks (and lay a half-width last iteration out 2 wide).
-    tiles_per_txn = _tiles_per_txn(Kt, Nt, has_bias=True)
+    tiles_per_txn = _tiles_per_txn(Kt, Nt, has_bias=True, num_cores=num_cores)
     return _w2_blocks_from_groups(N_with_bias, Nt + 1, Kt, tiles_per_txn)
 
 
@@ -1106,7 +1107,7 @@ def get_weight_mem_configs(
     Ht = hidden_size // ttnn.TILE_SIZE
     Nt = intermediate_size // ttnn.TILE_SIZE
     num_cores = len(w0_w1_shard_map)
-    tiles_per_txn = _tiles_per_txn(Ht, Nt, has_bias)
+    tiles_per_txn = _tiles_per_txn(Ht, Nt, has_bias, num_cores)
     block_h = _block_tiles_h(tiles_per_txn)
 
     # Calculate K dimension for W0/W1 (stored K tiles: hidden, plus one bias tile row)

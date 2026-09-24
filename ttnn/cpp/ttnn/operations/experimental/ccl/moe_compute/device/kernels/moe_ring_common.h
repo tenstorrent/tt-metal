@@ -173,11 +173,14 @@ constexpr uint32_t half_block_tiles_h(uint32_t tiles_per_txn) {
 }
 
 // The per-shape DRAM transaction size (tiles) of both weight streams. 20-tile transactions store the
-// Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) with no padding at all
-// on 8 banks (gate/up K 80 = 8 x 10 and 4 x 20, W2 K 20 = 2 x 10 and 1 x 20); every other shape (DeepSeek,
-// GPT-OSS, ...) keeps the 14-tile layout. Mirrored by moe_compute_utils.py::_tiles_per_txn.
-constexpr uint32_t tiles_per_txn_for_shape(uint32_t Ht, uint32_t Nt, bool has_bias) {
-    return (Ht == 80 && Nt == 20 && !has_bias) ? ALT_TILES_PER_TXN : DEFAULT_TILES_PER_TXN;
+// Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) on the 8-bank ring, where
+// the layout has no padding at all (gate/up K 80 = 8 x 10 and 4 x 20, W2 K 20 = 2 x 10 and 1 x 20; 80 blocks =
+// 10 per bank; W2 a2a iterations 4 + 4 + a half). Other rings and every other shape keep the 14-tile layout: 14
+// tiles is one 8 KB Wormhole NoC packet, and the 20-tile blocks with padded bank pieces and no half-width W2
+// iteration (12 cores: 7 blocks per bank + 4 pad, W2 4 + 3) produced wrong outputs on a Wormhole chip. Mirrored by
+// moe_compute_utils.py::_tiles_per_txn.
+constexpr uint32_t tiles_per_txn_for_shape(uint32_t Ht, uint32_t Nt, bool has_bias, uint32_t num_cores) {
+    return (Ht == 80 && Nt == 20 && !has_bias && num_cores == 8) ? ALT_TILES_PER_TXN : DEFAULT_TILES_PER_TXN;
 }
 
 // Blocks the weight CB (c_3) holds: as many as fit in the 3-block budget of 14-tile transactions (84 tiles), and at

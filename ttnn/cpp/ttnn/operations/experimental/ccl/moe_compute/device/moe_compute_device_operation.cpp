@@ -84,7 +84,10 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     if (args.has_bias) {
         constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
         const uint32_t tiles_per_txn = moe_ring::tiles_per_txn_for_shape(
-            tensor_args.tilize_input_tensor.logical_shape()[-1] / tile_h, args.intermediate_size / tile_h, true);
+            tensor_args.tilize_input_tensor.logical_shape()[-1] / tile_h,
+            args.intermediate_size / tile_h,
+            true,
+            args.bh_ring_size);
         const uint32_t w0w1_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
         const uint32_t w2_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
 
