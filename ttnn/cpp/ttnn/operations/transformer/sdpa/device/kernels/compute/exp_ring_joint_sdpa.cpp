@@ -7,10 +7,13 @@
 #ifdef SDPA_RECIPE_EXP_RING
 // Named precision recipes B/C/D/E: the shared streaming recipe continuation (recipe_ring.hpp) replaces
 // sdpa_ring_v2. It reuses the ring_joint recipe hooks (valid-row key tail masking), which are keyed on
-// SDPA_RECIPE_RING. Kernel-size settings mirror ring_joint_sdpa.cpp's recipe block.
+// SDPA_RECIPE_RING. -Os only for Watcher or the paired recipes' odd-chunk builds (SDPA_RECIPE_SIZE_OPTIMIZED,
+// as in the dense kernel); O2 otherwise. -Os on the even-chunk BF16 recipes cost ~35% of trace wall. Do not
+// drop to the default compute level: the runtime key-tail mask hook (recipe_tail.hpp) then corrupts
+// masked chunks (~55% L2 on every sub-K512 tail case).
 #define SDPA_RECIPE_RING 1
 #define LLK_ZEROFLAG_OUTLINE 1
-#if defined(WATCHER_ENABLED) || !defined(SDPA_RECIPE_FP32)
+#if defined(WATCHER_ENABLED) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
 #pragma GCC optimize("Os")
 #else
 #pragma GCC optimize("O2")
