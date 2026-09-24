@@ -826,3 +826,44 @@ Landed as the default for batch > 1 (`QWEN_SDPA_CONCAT_OUT=0` opts out); bs1 kee
 concat because the base forward reshapes the bs1 SDPA output before concat. Remaining upside: a drain
 that writes each head's tile run as one NoC transaction (recovers the 3–7% SDPA cost); items 1 (SwiGLU
 epilogue) and 3 (head-major matmul output + SDPA head offsets) stay kernel asks (#57627, #57722).
+
+## 50. Gio's three BGE-M3 items of 2026-09-24 (fused SDPA, new LayerNorm op, embeddings in L1) — sized here
+
+The branch tip on GitHub (`gtobarTT/bge_m3_p150_optimizations`, 09-23 19:17) does not carry the three items;
+what is pushed (L1 placements, B1 projection outputs in the LayerNorm shard layout, `no_padding` mask skip, SDPA
+LoFi/streaming/k512) is §40/§42/§44. Sized against our 2026-09-24 profiles (chips 3/5 for the standalone runs):
+
+| BGE-M3 item | here |
+|---|---|
+| SDPA writes the concatenated output and reads Q/K/V straight from the QKV projection | the first half is §49 (bs>1) and now bs1 too (below). The second half does not apply: between QKV and SDPA sits the fused head-split + Q/K RMSNorm + RoPE op (bs1 44 µs/layer = 1.6 ms, 9.5% of device time; bs8 177 µs = 6.4 ms; bs32 580 µs = 20.9 ms, 5.7%), which BGE-M3 does not have. A layout-only variant (the op rewrites Q/K in place in the QKV layout, SDPA reads V strided) saves at most V's pass, 1/6 of that op ≈ 3.5 ms at bs32, minus a strided-read penalty in SDPA of the size of the §49 drain (3–7% ≈ 1–2 ms) → ≤ 0.5%. Folding norm + RoPE into SDPA's reader is a kernel project, not a wiring change. |
+| New LayerNorm op, bit-identical, 30% faster per call than stock (B8 38 vs 55 µs) | our `fused_add_rmsnorm_split` is already past that point. Stock `rms_norm` at [16384×2560] bfp8 (chip 5, traced): 299 µs = 298 GB/s (58% of 512); with `residual_input_tensor` 416 µs = 322 GB/s (63%). Ours in-model at bs32: 398 µs for four tensors (178 MB) = **448 GB/s (87%)**, i.e. +39% bandwidth over the stock fused-residual op and at the ceiling the best stock op reaches (bf16 add 449 GB/s = 88%). At bs8 ours is 126 µs = 354 GB/s (69%), bs16 223 µs = 400 GB/s (78%): the remaining headroom is ramp/fixed cost at small M, ≤ 1.8 ms at bs8 (1.6%), ≤ 1.7 ms at bs16 (0.9%), ≈ 0 at bs32. |
+| Embedding outputs kept in L1 | bs1's embedding output is already in L1 (profile). At bs32 the embedding op (408 µs) and the first LayerNorm (402 µs) each move 84 MB; an L1 output saves one write + one read ≈ 0.33 ms = 0.08%. Not worth a knob. |
+
+Achieved DRAM bandwidth of stock DM-bound ops at the bs32 shapes (chip 5, traced, DRAM interleaved; 512 GB/s peak):
+
+| op | bfp8 [16384×2560] | bf16 [16384×2560] | bfp8 [16384×9728] | bf16 [16384×9728] |
+|---|---|---|---|---|
+| clone | 410 GB/s (80%) | 406 (79%) | 419 (82%) | 416 (81%) |
+| add / mul | 402 / 400 (78%) | 436 / 435 (85%) | 406 / 405 (79%) | 449 / 447 (88%) |
+| rms_norm / + residual | 298 / 322 (58 / 63%) | 372 / 394 (73 / 77%) | — | — |
+| silu | — | — | 266 (52%) | 264 (51%) |
+
+Stock `silu` is SFPU-bound at half the DRAM rate, so our `silu_mul` at bs32 (1362 µs = 373 GB/s, 73%) is
+compute-bound as well; its DRAM floor is 1131 µs (≤ 8 ms at bs32 if the SFPU were free, which it is not) — the
+fused SwiGLU epilogue (#57627) stays the fix. DRAM height-sharded tensors are rejected by this build's dataflow
+buffer (`TT_THROW dataflow_buffer.cpp:2682`), so a big-page read layout could not be probed with stock ops.
+
+**What did transfer — bs1, same chip (4), 10 iterations, best / median:**
+
+| arm | best | median | note |
+|---|---|---|---|
+| baseline (×3) | 17.6 / 17.7 / 17.7 | 17.8 / 17.85 / 17.85 | |
+| SDPA `output_heads_concat` at bs1 (`QWEN_SDPA_CONCAT_OUT_BS1=1`) | 17.5 | 17.6 | standalone SDPA 57.3 → 54.1 µs *and* the 4.6 µs model-local concat op is gone; bit-identical (unit test) |
+| residual adds write the norm's 10×8 block-shard layout (`QWEN_BS1_RESID_SHARDED=1`) | 17.6 | 17.8 | the 72 I2S ops (2.4 µs + 0.6 µs gap each) become no-ops, but the 80-core sharded-output add gives most of it back: **neutral alone** |
+| both | **17.5** | **17.5** | −0.3 ms on the median (−1.7%); STS-B 0.8161 unchanged |
+
+Standalone (chip 3, L1 bfp8 [512×2560]): add → I2S → sharded LN → S2I 28.9 µs as one traced chain; add with
+block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one sharded and one interleaved input
+11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the
+S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either). Both landed as bs1
+defaults; the neutral-alone item is kept because it is free with the concat change and removes 72 ops.

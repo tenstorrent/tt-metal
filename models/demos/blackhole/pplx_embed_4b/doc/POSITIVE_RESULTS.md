@@ -9,12 +9,12 @@ best of 10 iterations, same-chip sequential A/B for every landing (chips 4 / 7 /
 
 | batch | H200 | start of effort | cold best (best of 10) | × H200 | sustained (median of iterations 5–9) | × H200 | 3× target |
 |---|---|---|---|---|---|---|---|
-| 1 | 5.437 ms | 25.9 ms | **17.6** | 3.24× | 18.3 | 3.37× | 16.3 |
+| 1 | 5.437 ms | 25.9 ms | **17.5** | 3.22× | 17.7 | 3.26× | 16.3 |
 | 8 | 33.081 | 156.4 | **115.3** | 3.49× | 121.0 | 3.66× | 99.2 |
 | 16 | 67.225 | 290.9 | **221.0** | 3.29× | 228.2 | 3.39× | 201.7 |
 | 32 | 139.150 | 557.8 | **425.5** | 3.06× | 451.1 | 3.24× | 417.5 |
 
-(Measured 2026-09-24 with the shipped defaults after the concat-free SDPA landing, one 30-iteration run per
+(Measured 2026-09-24 with the shipped defaults after the concat-free SDPA landing — bs1 after the bs1 op-count landing below, same method — one 30-iteration run per
 batch size on chips 4 / 7 / 8 / 6; sustained here is the median of iterations 15–29.)
 
 "Cold best" is the first iterations on a cool chip at the full 1.35 GHz AICLK; "sustained" is after the
@@ -30,7 +30,7 @@ bs16 0.8140 / bs32 0.8159. Every landing was re-checked on STS-B or per call aga
 AICLK at 1281–1350 MHz for iterations that read 216.7 ms and 1112–1162 MHz for iterations that read
 232–243 ms; the board's power manager pulls the clock down ≈ 0.6 s into a sustained load (iteration 3
 of a cold run) and deeper as the chip warms. No power or clock setting was changed (`AICLK_LIMIT_MAX`
-1350, board defaults). bs1 barely throttles. Sustained with the shipped defaults: bs1 18.3, bs8 121.0, bs16 228.2, bs32 451.1 ms (30-iteration runs); before today's bs>1 rounds 18.0 / 126.7 / 235 / 452.3 — so at bs32 the new defaults only help the cold iteration (the chip is power-bound at the
+1350, board defaults). bs1 barely throttles. Sustained with the shipped defaults: bs1 17.7, bs8 121.0, bs16 228.2, bs32 451.1 ms (30-iteration runs); before today's bs>1 rounds 18.0 / 126.7 / 235 / 452.3 — so at bs32 the new defaults only help the cold iteration (the chip is power-bound at the
 sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
 
 ## Landings, in order (e2e ms bs1 / bs8 / bs16 / bs32 after each)
@@ -53,6 +53,7 @@ sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
 | 213530d | bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 | see below | **17.7** / 123.4 / 228.3 / 438.1 |
 | 9441a6c | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
 | sdpa concat-out | SDPA writes `[B, 1, S, H·d]` directly (`output_heads_concat`), concat pass gone at bs>1 | tile-id remap in the SDPA writer; bit-identical; SDPA +3–7% vs concat −68…−350 µs | 17.7 / **115.4** / **221.9** / **430.1** (same-chip A/B arms) |
+| bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout (the 72 I2S ops become no-ops) | from Gio's B1 shard-layout idea; bit-identical; the residual item is neutral alone, −0.3 ms median together (NEGATIVE_RESULTS §50) | **17.5** / 115.3 / 221.0 / 425.5 |
 
 ## The optimizations, by mechanism
 

@@ -181,6 +181,20 @@ def _wrap_concat_heads_headsplit(original_fn):
     return wrapper
 
 
+def _wrap_reshape_concat_out(original_fn):
+    """bs1: the base forward reshapes the [1, H, S, d] SDPA output to [1, H, -1, d] before concat_heads; a
+    concat-free SDPA output is already [1, 1, S, H*d], so that reshape must hand the tensor back untouched
+    (the concat wrapper then does the same). The batched [1, 1, B*S, -1] reshape (shape[1] == 1) still runs."""
+
+    @functools.wraps(original_fn)
+    def wrapper(tensor, shape=None, *args, **kwargs):
+        if shape is not None and id(tensor) in _SDPA_CONCAT_OUT_IDS and len(shape) == 4 and int(shape[1]) > 1:
+            return tensor
+        return original_fn(tensor, shape, *args, **kwargs)
+
+    return wrapper
+
+
 def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     """Return a wrapper that forces ``is_causal=False`` and injects the padding mask.
 
@@ -192,6 +206,9 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     # QWEN_SDPA_CAUSAL=1 keeps the base forward's causal attention (Qwen3-Embedding-4B: same backbone as
     # pplx-embed, causal attention + last-token pooling); default is pplx-embed's bidirectional attention.
     causal = os.getenv("QWEN_SDPA_CAUSAL", "0") == "1"
+    # bs1 as well (QWEN_SDPA_CONCAT_OUT_BS1=1): the q256 8x8 SDPA drains faster into [1, 1, S, H*d]
+    # (standalone 57.3 -> 54.1 us) and the 4.6 us model-local concat op disappears.
+    concat_out_bs1 = os.getenv("QWEN_SDPA_CONCAT_OUT_BS1", "1") == "1"
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
@@ -200,7 +217,7 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
                 kwargs["attn_mask"] = _PAD_ATTN_MASK
         q = args[0] if args else kwargs.get("input_tensor_q")
-        if concat_out and q is not None and int(q.shape[0]) > 1:
+        if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
             kwargs["output_heads_concat"] = True
             out = original_fn(*args, **kwargs)
             _SDPA_CONCAT_OUT_IDS.add(id(out))
@@ -317,6 +334,10 @@ class PplxBidirectionalAttention(Attention):
         _saved_rope = None
         _saved_dealloc = None
         _saved_mm = None
+        _saved_reshape = None
+        if concat_out:
+            _saved_reshape = ttnn.reshape
+            ttnn.reshape = _wrap_reshape_concat_out(_saved_reshape)
         if self._fused_norm_consts is not None:
             # QWEN_FUSED_ROTARY=1 also folds RoPE into the same pass (rot_mats = [cos, sin] for
             # this chunk; the single 32x32 tile-local rotation is transformation_mats["prefill"]).
@@ -399,6 +420,8 @@ class PplxBidirectionalAttention(Attention):
                 ttnn.deallocate = _saved_dealloc
             if _saved_mm is not None:
                 ttnn.experimental.minimal_matmul, ttnn.linear = _saved_mm
+            if _saved_reshape is not None:
+                ttnn.reshape = _saved_reshape
 
 
 PplxBidirectionalAttention.__name__ = "Attention"
