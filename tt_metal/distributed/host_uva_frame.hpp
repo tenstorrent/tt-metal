@@ -22,10 +22,17 @@ constexpr uint32_t kFrameGuardMagicShift = 16;
 
 // Armed by the sender in stage(), checked before the trailer is trusted. A consumer that
 // reuses it as an arrival flag clears it; the D2H ring gates slot reuse on credits instead.
-constexpr uint64_t tt_uva_frame_guard(uint32_t version) {
-    return (kFrameMagic << kFrameGuardMagicShift) | static_cast<uint64_t>(version);
+// [63:32] carries the sender's frame index and [31:0] the magic and version, which is what
+// the low half already held: a two-state flag cannot tell lap N from lap N+1.
+constexpr uint64_t tt_uva_frame_guard(uint32_t version, uint32_t seq = 0) {
+    return (static_cast<uint64_t>(seq) << 32) | (kFrameMagic << kFrameGuardMagicShift) |
+           static_cast<uint64_t>(version);
 }
-constexpr bool tt_uva_frame_armed(uint64_t guard) { return guard == tt_uva_frame_guard(kFrameVersion); }
+// Masked, so a reader that ignores the sequence behaves exactly as it did before there was one.
+constexpr bool tt_uva_frame_armed(uint64_t guard) {
+    return (guard & 0xFFFFFFFFull) == tt_uva_frame_guard(kFrameVersion);
+}
+constexpr uint32_t tt_uva_frame_seq(uint64_t guard) { return static_cast<uint32_t>(guard >> 32); }
 
 // Cycles on the sender's own clock; the host applies a measured ns/cycle rate. Low half is
 // the payload write and its barrier, high half the wait for a free slot ahead of it.
