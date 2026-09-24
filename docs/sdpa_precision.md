@@ -149,7 +149,7 @@ to an internal DRAM buffer. C/D retain FP32 numerator/denominator; B/E retain
 both BF16 components, unfinished local groups and global chunk parity. Only the
 last active contribution normalizes. A retains the existing ring streaming loop.
 
-Current ring scope is Blackhole, noncausal D128, K512 with Q128/Q192/Q256/Q320, batch/GQA, scalar
+Current ring scope is Blackhole, noncausal D64/D128/D256, K256/K384/K512 with Q128/Q192/Q256/Q320, batch/GQA, scalar
 logical lengths, and the existing `rear` joint strategy. Physical local primary
 Q/KV sequence extents must be tile-aligned; `logical_n` masks a possibly
 sub-tile global KV tail. Q shorter than local KV requires `is_cross=True`.
@@ -179,13 +179,11 @@ split-head dedup relays and phase-alignment pairs stay matched on every device. 
 grow with the pass count, and the legacy streamed-Q fallback never applies. The legacy (no
 `precision`) loop order is unchanged.
 
-Current exp-ring recipe scope is Blackhole, D128, Q128-Q320 in 32-row steps (as L1 allows; B/E need
-a multiple of 64) with K512, scalar `logical_n`, the default scale and 1-3 passes per core row. A
-device-tensor `logical_n` is rejected. An L1 overflow is
-rejected with the required and usable sizes. Two connected devices (1x2 `FABRIC_1D_RING`, two links)
-are qualified: B/C/D/E equal dense recipe attention bit-for-bit on the chip's KV in ring visiting
-order whenever every visited segment but the last is a whole number of K512 chunks, and otherwise
-match its error level.
+Current exp-ring recipe scope is Blackhole, D128, K512, Q128-Q320 in 32-row steps (as L1 allows;
+COMPENSATED/LOW_PRECISION currently need a multiple of 64 rows on exp ring), scalar `logical_n`, the
+default scale and up to three head-segments per core row. Multi-pass programs run pass-outer,
+ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
+legacy exp-ring L1 layout, which does not fit Q256/K512.
 
 `WanPipeline`, `WanTransformer3DModel`, `WanTransformerBlock` and `WanAttention`
 have opt-in `sdpa_precision` and `sdpa_kv_dtype` arguments that apply to both
