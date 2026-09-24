@@ -445,9 +445,9 @@ class CosyVoiceTTNN:
 
         The warm-up chunk below is required for correct audio: it allocates the
         synthesizer's carry buffers before `generate` captures its decode trace (see
-        `TtStreamingSynthesizer._carry_store`). The audio is checked against the batch
-        path by
-        `tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`.
+        `TtStreamingSynthesizer._carry_store`). Against the batch path,
+        `tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`
+        checks the tokens and the audio's peak, not its content.
 
         `synthesize` above runs the three stages strictly in order -- every token,
         then all the mel, then all the audio -- so the first sample of output exists
@@ -468,9 +468,11 @@ class CosyVoiceTTNN:
         are also collected and returned; a caller that only wants the callback should
         deallocate them.
 
-        Chunk boundaries are identical to `TtStreamingSynthesizer.synthesize`'s, so
-        the content equivalence that test proves carries over unchanged -- see
-        `StreamSession`.
+        Chunk boundaries are identical to `TtStreamingSynthesizer.synthesize`'s, but the
+        content check on that method (`tests/e2e/test_streaming.py`) does not carry over:
+        this path pauses the vocoder's prepared-weight check and keeps the flow's trace, since
+        the LLM's decode trace is live throughout (see `StreamSession`), and at some chunk
+        geometries its audio is wrong (`docs/VALIDATION.md`, *Open defects*).
         """
         import time
 
