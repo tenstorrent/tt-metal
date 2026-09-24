@@ -24,13 +24,13 @@ This page summarises how those changes affect the prefill KV cache against the G
 | #57454 as first posted: min PCC | 0.9094 (fail) | not run | 0.9083 (fail) |
 | #57454 now: min PCC | 0.9131 | 0.9121 | 0.9118 |
 | Base: first chunk / 256k prefill | 126.1 ms / 28.03 s | 164.2 ms / 16.59 s | 207.2 ms / 12.84 s |
-| #57454 now: first chunk / 256k prefill | 92.4 ms / 23.64 s | 121.6 ms / 14.08 s | 200.8 ms / 12.66 s |
+| #57454 now: first chunk / 256k prefill | 92.4 ms / 23.64 s | 121.5 ms / 14.07 s | 201.0 ms / 12.66 s |
 
-The "#57454 now" values were measured with equivalent local switches just before the change was committed. A rerun on
-the committed code is in progress, and this table will be updated with it.
+The "#57454 now" rows are the committed code (`993720c3d3c`) at chunk 8192, and equivalent local switches at chunk 2048
+and 4096. At chunk 8192 the committed code and the switched run are bit-identical (both 0.9118, overall 0.973620).
 
 ## More detail
 - [DETAILS.md](DETAILS.md): the test, how to read the metrics, each finding, and the perf cost of every variant tried.
-- [RUNS.md](RUNS.md): all 42 runs (8k and 256k context), with flags and tree sha.
+- [RUNS.md](RUNS.md): all 43 runs (8k and 256k context), with flags and tree sha.
 - [per_layer.csv](per_layer.csv): per-layer PCC and relative RMSE for every run.
 - Raw logs: https://gist.github.com/kmabeeTT/edde8493f9ff0d889185be0742705821
