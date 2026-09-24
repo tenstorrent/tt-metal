@@ -9,12 +9,27 @@
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
 #include "sfpi.h"
-#include "sfpu_compare_types.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
+
+/**
+ * @brief Relational comparison selected by the SFPU compare kernels.
+ *
+ * The kernel decides what the left and right operands are: the zero compares test `x OP 0`, the
+ * unary compares test `x OP scalar`, and the binary compares test `in0 OP in1`.
+ */
+enum class CompareOp : std::uint8_t
+{
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+};
 
 sfpi_inline void _calculate_comp_init_flag_(bool check, sfpi::vFloat& flag1, sfpi::vFloat& flag2, float init)
 {
