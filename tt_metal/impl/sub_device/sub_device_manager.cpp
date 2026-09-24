@@ -208,9 +208,16 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    const uint32_t num_core_types = MetalContext::instance(context_id_).hal().get_programmable_core_type_count();
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
         const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
+        for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
+            TT_FATAL(
+                sub_device.impl()->cores()[i].empty(),
+                "CoreType {} is not allowed in SubDevice",
+                static_cast<HalProgrammableCoreType>(i));
+        }
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
