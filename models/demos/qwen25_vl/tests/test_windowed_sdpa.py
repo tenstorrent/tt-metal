@@ -276,7 +276,14 @@ def test_windowed_sdpa_basic(
     covered = output[:, :, covered_lo:covered_hi, :]
     covered_standard = output_standard[:, :, covered_lo:covered_hi, :]
     max_diff = torch.max(torch.abs(covered - covered_standard)).item()
-    assert max_diff < 1e-2, f"Max difference {max_diff} exceeds tolerance"
+    # The two runs are different device schedules of the same kernel: the masked reference visits
+    # every K chunk with a bfp4 mask, the windowed run narrows the K range and stamps its own mask,
+    # so their flash-attention rescaling sequences differ and an element can land on the other side
+    # of a bf16 rounding boundary. Allow one bf16 ulp (rtol 2^-7) on top of the absolute 1e-2 gate;
+    # with the accurate exponential (#57180) a plain 1e-2 bound is below one ulp for |x| >= 2.
+    assert torch.allclose(
+        covered, covered_standard, rtol=2**-7, atol=1e-2
+    ), f"Max difference {max_diff} exceeds one bf16 ulp + 1e-2 (max |ref| {covered_standard.abs().max().item()})"
 
     # Assert shapes match
     assert output.shape == output_standard.shape, f"Shape mismatch: {output.shape} vs {output_standard.shape}"
