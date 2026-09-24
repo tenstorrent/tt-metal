@@ -9,6 +9,7 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
     to_tt_tensor,
     float_to_bf16_bits,
     bf16_bits_to_float,
@@ -46,7 +47,7 @@ Accuracy criteria
       One multiply/add-sub on the non-identity branch.
   elu, celu                                 : ULP ≤ 1 (excluding a narrow band)
       exp(x)-1 [or exp(x/alpha)-1] cancels near 0; characterized via
-      allclose in test_elu_allclose / test_celu_allclose below.
+      allclose in test_elu_celu_allclose below.
   softcap                                   : ULP ≤ 2 (post-FTZ) + PCC ≥ 0.9999
       tanh is a Sollya polynomial approximation. Blackhole only.
   rpow                                      : PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
@@ -293,69 +294,34 @@ def test_celu_op(device, alpha):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# elu (narrow cancellation band near 0)
+# elu / celu — allclose over sub-ranges (including the cancellation band)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    "low, high, expected_atol, expected_rtol",
+    "ttnn_op, low, high, expected_atol, expected_rtol",
     [
-        (-0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
-        (-88.0, 1.6 * 10**38, 0.0, 0.0),  # bf16 working range for elu
+        (ttnn.elu, -0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
+        (ttnn.elu, -88.0, 1.6 * 10**38, 0.0, 0.0),
+        (ttnn.celu, -1.6 * 10**38, -0.28515625, 0.001, 0.004),
+        (ttnn.celu, -0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
+        (ttnn.celu, 1.1663108012064884e-38, 1.6 * 10**38, 1e-6, 1e-6),
     ],
 )
-def test_elu_allclose(low, high, expected_atol, expected_rtol, device):
-    num_elements = math.prod(torch.Size([1, 3, 320, 320]))
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
+def test_elu_celu_allclose(ttnn_op, low, high, expected_atol, expected_rtol, device):
+    """Allclose check for elu/celu over sub-ranges, including the narrow
+    cancellation band near 0 that the ULP sweep in test_elu_op/test_celu_op
+    excludes."""
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
 
-    golden_function = ttnn.get_golden_function(ttnn.elu)
-    golden = golden_function(torch_input, device=device)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_tensor, device=device)
 
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    tt_in = to_tt_tensor(input_tensor, device)
 
-    tt_result = ttnn.elu(tt_in)
+    tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_allclose(expected_result=golden, actual_result=result, atol=expected_atol, rtol=expected_rtol)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# celu (narrow cancellation band near 0)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    "low, high, expected_atol, expected_rtol",
-    [
-        (-1.6 * 10**38, -0.28515625, 0.001, 0.004),
-        (-0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
-        (1.1663108012064884e-38, 1.6 * 10**38, 1e-6, 1e-6),
-    ],
-)
-def test_celu_allclose(low, high, expected_atol, expected_rtol, device):
-    num_elements = math.prod([1, 3, 320, 320])
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
-
-    golden_function = ttnn.get_golden_function(ttnn.celu)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.celu(tt_in)
-    result = ttnn.to_torch(tt_result)
     assert_allclose(expected_result=golden, actual_result=result, atol=expected_atol, rtol=expected_rtol)
 
 
@@ -448,7 +414,7 @@ def test_rpow_op(device, exponent):
 
     finite = golden_finite & result_finite & reliable
     assert_with_pcc(golden[finite], result[finite], pcc=0.99)
-    assert_allclose(golden[finite], result[finite], atol=1e-2, rtol=0.1)
+    assert_allclose(expected_result=golden[finite], actual_result=result[finite], atol=1e-2, rtol=0.1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
