@@ -10,6 +10,7 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
 )
+from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ResNet, ModulatedDeformConv2dPack
 
 
@@ -107,4 +108,45 @@ def create_resnet_parameters(model: ResNet, input_tensor, device=None):
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
     for key in parameters.conv_args.keys():
         parameters.conv_args[key].module = getattr(model, key)
+    return parameters
+
+
+def create_fpn_parameters(model: FPN, input_tensors):
+    """Preprocess FPN weights, recording each conv's input batch, height and width.
+
+    ``input_tensors`` are the NCHW backbone outputs the FPN will run on. A conv's shape
+    is that of the level it reads; the extra output convs read the last level.
+    """
+    level_shapes = [(t.shape[0], t.shape[2], t.shape[3]) for t in input_tensors]
+
+    def conv_parameters(conv, level):
+        batch, height, width = level_shapes[level]
+        return {
+            "conv": {
+                "weight": ttnn.from_torch(conv.weight, dtype=ttnn.bfloat16),
+                "bias": ttnn.from_torch(conv.bias.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
+                "height": height,
+                "width": width,
+                "batch": batch,
+            }
+        }
+
+    def preprocessor(module, name):
+        if not isinstance(module, FPN):
+            return {}
+        last_level = len(level_shapes) - 1
+        return {
+            "fpn": {
+                "lateral_convs": {
+                    str(i): conv_parameters(lateral.conv, i) for i, lateral in enumerate(module.lateral_convs)
+                },
+                "fpn_convs": {
+                    str(i): conv_parameters(fpn_conv.conv, min(i, last_level))
+                    for i, fpn_conv in enumerate(module.fpn_convs)
+                },
+            }
+        }
+
+    parameters = preprocess_model_parameters(initialize_model=lambda: model, custom_preprocessor=preprocessor)
+    parameters["model_args"] = model
     return parameters
