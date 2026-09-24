@@ -27,6 +27,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -163,16 +164,22 @@ def generate_unpack_unary_operand_combinations(
     return combinations
 
 
-UNPACK_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+# MxFp8R/P decode on UnpA/UnpB: one MxFp8* -> Float16_b pair each, kept off the
+# cross product. Encode of those two formats lives on test_pack_quasar.
+UNPACK_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        ]
+    )
+    + quasar_mx_smoke(DataFormat.MxFp8R, DataFormat.Float16_b)
+    + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS
