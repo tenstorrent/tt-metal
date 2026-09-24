@@ -25,9 +25,13 @@ MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 MODEL_PATH_ENV = "MINIMAX_H3_MODEL_PATH"
 ALLOW_DOWNLOAD_ENV = "TT_DIT_ALLOW_HF_DOWNLOAD"
 
-# Cheap partitions (~20 MB together) that the pipeline reads for any task: the scheduler configs,
-# the tokenizer, and the processor. Always fetched so a partition-scoped download still runs.
-_ALWAYS_PATTERNS = ("model_index.json", "scheduler/*", "audio_scheduler/*", "tokenizer/*", "processor/*")
+# Cheap assets (~20 MB together) that the pipeline reads for any task: the model index, the two
+# scheduler configs, the tokenizer, and the processor. Always fetched so a partition-scoped download
+# still runs, and required of a cached snapshot for the same reason: a snapshot that another tool
+# fetched with its own `allow_patterns` can hold every weight partition and still lack them.
+_ALWAYS_FILES = ("model_index.json",)
+_ALWAYS_DIRS = ("scheduler", "audio_scheduler", "tokenizer", "processor")
+_ALWAYS_PATTERNS = (*_ALWAYS_FILES, *(f"{name}/*" for name in _ALWAYS_DIRS))
 
 # Approximate on-disk cost per partition, for the pre-download log line.
 _PARTITION_GB = {
@@ -47,17 +51,39 @@ def _hf_cache_root() -> Path:
     return Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
 
 
-def _has_partitions(directory: Path, required: tuple[str, ...]) -> bool:
-    return directory.is_dir() and all((directory / name).is_dir() for name in required)
+def _missing_partitions(directory: Path, required: tuple[str, ...]) -> list[str]:
+    return [name for name in required if not (directory / name).is_dir()]
+
+
+def _missing_always_assets(directory: Path) -> list[str]:
+    missing = [name for name in _ALWAYS_FILES if not (directory / name).is_file()]
+    missing += [name for name in _ALWAYS_DIRS if not (directory / name).is_dir()]
+    return missing
+
+
+def _is_complete(directory: Path, required: tuple[str, ...]) -> bool:
+    """Whether `directory` holds every required partition and every always-fetched asset."""
+    return directory.is_dir() and not _missing_partitions(directory, required) and not _missing_always_assets(directory)
 
 
 def _cached_snapshot(required: tuple[str, ...]) -> Path | None:
-    """The newest cached snapshot that already holds every required partition, if any."""
-    snapshots = _hf_cache_root() / "hub" / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}" / "snapshots"
+    """A cached snapshot that already holds every required partition and the always-fetched assets.
+
+    The revision `refs/main` points at is preferred, then the most recently modified snapshot. A
+    partial snapshot (weights present, tokenizer absent) is passed over rather than returned, so the
+    caller falls through to a download that completes it instead of failing later at the tokenizer.
+    """
+    repo_dir = _hf_cache_root() / "hub" / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
+    snapshots = repo_dir / "snapshots"
     if not snapshots.is_dir():
         return None
-    for snapshot in sorted(snapshots.iterdir(), reverse=True):
-        if _has_partitions(snapshot, required):
+    candidates = sorted((s for s in snapshots.iterdir() if s.is_dir()), key=lambda s: s.stat().st_mtime, reverse=True)
+    main_ref = repo_dir / "refs" / "main"
+    if main_ref.is_file():
+        revision = main_ref.read_text().strip()
+        candidates.sort(key=lambda s: s.name != revision)  # stable: refs/main first, then by mtime
+    for snapshot in candidates:
+        if _is_complete(snapshot, required):
             return snapshot
     return None
 
@@ -84,6 +110,11 @@ def resolve_weights_dir(
     `weights_dir` (or `$MINIMAX_H3_MODEL_PATH`) wins when it is set; otherwise the HuggingFace cache
     is searched and then, with `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
     when nothing resolves and downloads are off.
+
+    An explicit directory is checked for the required partitions only: it is the caller's own layout,
+    and a partition-only directory is a legitimate way to run one component's tests. A cached or
+    downloaded snapshot must also hold the always-fetched assets, since a snapshot missing them can
+    be completed by the download this resolver gates.
     """
     if allow_download is None:
         allow_download = os.environ.get(ALLOW_DOWNLOAD_ENV) == "1"
@@ -95,7 +126,7 @@ def resolve_weights_dir(
         directory = Path(explicit)
         if not directory.is_dir():
             raise WeightsNotFoundError(f"{MODEL_PATH_ENV} points at {directory}, which is not a directory")
-        missing = [name for name in required if not (directory / name).is_dir()]
+        missing = _missing_partitions(directory, required)
         if missing:
             raise WeightsNotFoundError(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
         return directory
@@ -112,7 +143,7 @@ def resolve_weights_dir(
         )
 
     snapshot = _download(required)
-    missing = [name for name in required if not (snapshot / name).is_dir()]
+    missing = _missing_partitions(snapshot, required) + _missing_always_assets(snapshot)
     if missing:
         raise WeightsNotFoundError(f"downloaded MiniMax-H3 snapshot at {snapshot} is missing {missing}")
     return snapshot
