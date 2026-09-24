@@ -303,6 +303,8 @@ ADAPTER_PATHS = {
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    # ERNIE-4.5-21B-A3B: GQA (20/4) + 64-expert top-6 MoE with 2 shared experts; single rank on a 1x4 BH mesh.
+    "ernie45_d_p": "models.demos.ernie45_d_p.tt.runners.adapters.ernie45:Ernie45PrefillAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
