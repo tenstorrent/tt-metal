@@ -13,7 +13,9 @@
 // masked chunks (~55% L2 on every sub-K512 tail case).
 #define SDPA_RECIPE_RING 1
 #define LLK_ZEROFLAG_OUTLINE 1
-#if defined(WATCHER_ENABLED) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
+// Size-limited builds (odd Q chunks) size-optimize only the pack thread: exp-ring Q224
+// single-pass B 1.08 -> 0.87 ms, E_bf16 1.06 -> 0.77 ms on 1x2.
+#if defined(WATCHER_ENABLED) || (defined(SDPA_RECIPE_SIZE_OPTIMIZED) && defined(TRISC_PACK))
 #pragma GCC optimize("Os")
 #else
 #pragma GCC optimize("O2")

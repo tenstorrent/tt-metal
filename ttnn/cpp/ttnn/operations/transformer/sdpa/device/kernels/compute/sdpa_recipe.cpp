@@ -3,13 +3,14 @@
 
 // Named dense recipes share the same reader, writer and outer-loop contract.
 // Numerical choices are fixed by the host policy, not user-visible defines.
-#if defined(WATCHER_ENABLED) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
-// Watcher instrumentation (or the paired recipes' extra single-row tail group on
-// odd Q chunks) otherwise exceeds the kernel config buffer. Even-chunk release
-// builds keep the qualified scheduling.
+#if defined(WATCHER_ENABLED) || (defined(SDPA_RECIPE_SIZE_OPTIMIZED) && defined(TRISC_PACK))
+// Watcher instrumentation otherwise exceeds the kernel config buffer. For builds the
+// host marks size-limited (odd-chunk or tail-masked non-frozen paired recipes), only
+// the pack thread is size-optimized; unpack/math stay at O2 (dense Q224 B 2.08 -> 1.71 ms).
+// Even-chunk frozen-geometry release builds keep the qualified scheduling.
 #pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif defined(SDPA_RECIPE_ACCURATE)
+#elif defined(SDPA_RECIPE_ACCURATE) || defined(SDPA_RECIPE_SIZE_OPTIMIZED)
 #pragma GCC push_options
 #pragma GCC optimize("O2")
 #endif
