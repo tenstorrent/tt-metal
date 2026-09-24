@@ -45,7 +45,9 @@ const std::vector<int64_t> kCores = {4};
 const std::vector<int64_t> kRingPages = {8};
 const std::vector<int64_t> kIterations = {20000};
 const std::vector<int64_t> kWarmupPct = {10};
-const std::vector<int64_t> kVerify = {0};
+// Both: the verified case is the only correctness check this leg has, and the compare runs
+// on the device, so it cannot be the same case that reports bandwidth.
+const std::vector<int64_t> kVerify = {0, 1};
 
 // Fail rather than spin: the receiver kernel exits only after `iters` frames.
 constexpr auto kStall = std::chrono::seconds(30);
