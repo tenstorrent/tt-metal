@@ -578,11 +578,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 "Named ring recipe joint types must match their primary Q/K/V types");
         }
         TT_FATAL(
-            (q_shape[3] == 64 || q_shape[3] == 128) && tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
+            (q_shape[3] == 64 || q_shape[3] == 128 || q_shape[3] == 256) &&
+                tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
                 tensor_args.input_v->logical_shape()[3] == q_shape[3] && args.get_q_chunk_size() % 64 == 0 &&
                 args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 &&
                 (args.get_k_chunk_size() == 256 || args.get_k_chunk_size() == 384 || args.get_k_chunk_size() == 512),
-            "Named ring recipes require Q128/Q192/Q256/Q320, K256/K384/K512 and D64/D128");
+            "Named ring recipes require Q128/Q192/Q256/Q320, K256/K384/K512 and D64/D128/D256");
         TT_FATAL(
             !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
                 !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink &&

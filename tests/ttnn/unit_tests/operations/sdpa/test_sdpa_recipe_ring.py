@@ -48,7 +48,7 @@ def recipe_ring_device():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.parametrize("head_dim", [128, 64], ids=["d128", "d64"])
+@pytest.mark.parametrize("head_dim", [128, 64, 256], ids=["d128", "d64", "d256"])
 @pytest.mark.parametrize(
     "q_chunk,k_chunk",
     [(256, 512), (128, 512), (320, 512), (256, 256), (256, 384), (128, 256)],
@@ -102,8 +102,11 @@ def test_recipe_ring(
     record_property,
 ):
     mesh, subdevice, semaphores, ccl_column = recipe_ring_device
-    if head_dim != 128 and ((q_chunk, k_chunk) != (256, 512) or distribution == "uniform"):
+    # Reduced matrices: D64 at Q256/K512, D256 (Ideogram4) at its L1-limited Q128/K256.
+    if head_dim == 64 and ((q_chunk, k_chunk) != (256, 512) or distribution == "uniform"):
         pytest.skip("D64 ring runs a reduced continuation matrix")
+    if head_dim == 256 and ((q_chunk, k_chunk) != (128, 256) or distribution == "uniform"):
+        pytest.skip("D256 ring runs a reduced continuation matrix")
     if (q_chunk, k_chunk) != (256, 512) and (
         distribution == "uniform" or batch > 1 or valid_n or joint_kind == "replicated"
     ):
@@ -114,7 +117,10 @@ def test_recipe_ring(
 
     def generate(q_length, k_length, seed=20260919):
         values = make_inputs(k_length, distribution, q_length=q_length, heads=batch * heads, seed=seed)
-        values = [x.reshape(batch, heads, x.shape[2], 128)[..., :head_dim].contiguous() for x in values]
+        if head_dim > 128:
+            extra = make_inputs(k_length, distribution, q_length=q_length, heads=batch * heads, seed=seed + 7)
+            values = [torch.cat([x, y], dim=-1) for x, y in zip(values, extra)]
+        values = [x.reshape(batch, heads, x.shape[2], x.shape[-1])[..., :head_dim].contiguous() for x in values]
         values[1:] = [x[:, :kv_heads].contiguous() for x in values[1:]]
         return values
 

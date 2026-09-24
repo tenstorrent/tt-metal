@@ -43,15 +43,17 @@ and absolute errors; PCC alone is not an acceptance criterion. See the
 The current PR2 implementation supports Blackhole devices and uniform SPMD
 meshes, dense noncausal unmasked attention, and:
 
-- Q `[B, Hq, Q, 128]`, K/V `[B, Hkv, K, 128]`, with positive dimensions
-  and `Hq` divisible by `Hkv` (including grouped-query attention);
-- arbitrary positive sequence lengths; K512 blocks and a Q chunk from 128 to
-  320 rows in 32-row steps (see [Q blocking](#q-blocking));
+- Q `[B, Hq, Q, D]`, K/V `[B, Hkv, K, D]` with D = 64, 128 or 256 (dense and
+  joint; ring D64/D128; exp ring D128), positive dimensions and `Hq` divisible
+  by `Hkv` (including grouped-query attention);
+- arbitrary positive sequence lengths; K256/K384/K512 blocks and a Q chunk from
+  128 to 320 rows in 32-row steps (see [Q blocking](#q-blocking) and
+  [K blocking](#k-blocking));
 - standard 32x32 tiles, minimal sequence tile padding, interleaved DRAM
   inputs/output, and no padding in the other dimensions;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
 - a rectangular origin-based grid with at least one core per batch/query head;
-- `scale=None` or the default `1 / sqrt(128)` represented as FP32. A BF16-rounded
+- `scale=None` or the default `1 / sqrt(D)` represented as FP32. A BF16-rounded
   scale is a different value and is rejected; the kernel always uses the default.
 
 The default grid is the device's compute grid. The host assigns a per-head KV
@@ -74,9 +76,10 @@ complete for each local query. This is not sequence-parallel ring attention.
 ## Q blocking
 
 `q_chunk_size` may be 128 to 320 rows in 32-row steps; `k_chunk_size` stays 512.
-COMPENSATED and LOW_PRECISION pair query tile rows in their compensated state,
-so they need a multiple of 64 rows. Ring recipes also need a multiple of 64 so
-that every raw state plane stays a whole transfer page. The host rejects a
+COMPENSATED and LOW_PRECISION pair query tile rows in their compensated state and
+end an odd chunk (Q224/Q288) with a single-row group; those odd-chunk kernels are
+compiled with -Os to fit the kernel config buffer. Ring recipes need a multiple of
+64 rows so that every raw state plane stays a whole transfer page. The host rejects a
 layout that exceeds unreserved L1 before dispatch; at K512, Q320 fits FAST and
 the BFP8/BFP4 LOW_PRECISION storage choices but not B, C, D or BF16 E. Q224
 runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1). Ring adds its own
@@ -101,6 +104,14 @@ qualified on accuracy relative to K512 rather than bitwise. C/D are essentially
 K-invariant. COMPENSATED at K256 keeps less of its long-context advantage: on
 8192-key uniform attention it measures 1.48% L2 versus 1.04% at K512 and 0.93% at
 K384, still below FAST (2.0%). Prefer K384/K512 for COMPENSATED at long context.
+
+## Head dimensions
+
+D64 and D256 use the same recipe arithmetic as D128; the compensated state's row
+layout, PV subblock width and dataflow tile counts follow the head dim, and the
+default scale is `1 / sqrt(D)`. They are qualified on accuracy relative to the
+D128 recipe on the same generator. D256 is L1-limited (Ideogram4 uses Q128/K256).
+Input preparation for LOW_PRECISION accepts D64/D128/D256.
 
 ## Joint attention
 
