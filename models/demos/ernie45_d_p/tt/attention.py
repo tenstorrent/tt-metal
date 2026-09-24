@@ -132,12 +132,11 @@ class TtAttention:
             )
         else:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q,
-                cache.k[self.layer],
-                cache.v[self.layer],
-                cache.page_table,
-                start,
-                scale=self.scale,
+                input_tensor_q=q,
+                input_tensor_k=cache.k[self.layer],
+                input_tensor_v=cache.v[self.layer],
+                page_table_tensor=cache.page_table,
+                chunk_start_idx=start,
                 program_config=prog,
                 compute_kernel_config=COMPUTE_HIFI4,
             )
