@@ -4,7 +4,6 @@
 #include "tt_metal/distributed/d2h2h2d_socket.hpp"
 
 #include <chrono>
-#include <deque>
 #include <vector>
 
 #include <fmt/format.h>
@@ -25,9 +24,6 @@ struct D2H2H2DSocket::Impl {
     // Stamped at publish, read when the device reports the page drained. Per core, because
     // drained() reports per core and frames interleave across them.
     std::vector<std::chrono::steady_clock::time_point> published;
-    // Submit times awaiting their retire. H2HSocket pops tx_flight front-to-back per core,
-    // so one queue per core stays paired and ring_pages bounds its depth.
-    std::vector<std::deque<std::chrono::steady_clock::time_point>> submitted;
     HostRegion* region = nullptr;
 
     // Declaration order is teardown order and is load-bearing: the window must go before
@@ -61,7 +57,6 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
     im.cfg = cfg;
     if (cfg.collect_timing) {
         im.published.resize(cfg.cores);
-        im.submitted.resize(cfg.cores);
     }
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
 
@@ -151,6 +146,7 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
     mc.region_base = im.region->base();
     mc.region_bytes = im.region->pinned_bytes();
     mc.send_window = cfg.send_window;
+    mc.collect_timing = cfg.collect_timing;
     im.h2h = H2HSocket::create(mc, err);
     if (!im.h2h) {
         return nullptr;
@@ -172,9 +168,6 @@ uint32_t D2H2H2DSocket::poll() {
         if (im.cfg.collect_timing) {
             im.timing.d2h_issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
             im.timing.d2h_stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
-            if (t.core < im.submitted.size()) {
-                im.submitted[t.core].push_back(std::chrono::steady_clock::now());
-            }
         }
         return true;
     });
@@ -183,15 +176,6 @@ uint32_t D2H2H2DSocket::poll() {
         [&](uint32_t core, uint32_t pages) {
             im.d2h->retire(core, pages);
             im.counters.retired += pages;
-            if (im.cfg.collect_timing && core < im.submitted.size()) {
-                const auto now = std::chrono::steady_clock::now();
-                for (uint32_t k = 0; k < pages && !im.submitted[core].empty(); ++k) {
-                    const auto d = now - im.submitted[core].front();
-                    im.submitted[core].pop_front();
-                    im.timing.h2h_put_to_credit_ns.push_back(
-                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
-                }
-            }
         },
         [&](const DeliverTask& t) {
             if (!im.h2d->publish(t)) {
@@ -225,7 +209,15 @@ uint32_t D2H2H2DSocket::poll() {
 
 const L1MapNew& D2H2H2DSocket::l1() const { return impl_->l1; }
 const D2H2H2DSocket::Counters& D2H2H2DSocket::counters() const { return impl_->counters; }
-const D2H2H2DSocket::Timing& D2H2H2DSocket::timing() const { return impl_->timing; }
+const D2H2H2DSocket::Timing& D2H2H2DSocket::timing() const {
+    Impl& im = *impl_;
+    // Copied on read rather than mirrored per frame: H2HSocket owns both ends of this
+    // interval, and nothing here could close it -- the credit word is read only there.
+    if (im.cfg.collect_timing && im.h2h) {
+        im.timing.h2h_put_to_credit_ns = im.h2h->put_to_credit_ns();
+    }
+    return im.timing;
+}
 HostRegion& D2H2H2DSocket::region() const { return *impl_->region; }
 D2HLeg& D2H2H2DSocket::d2h() const { return *impl_->d2h; }
 H2HSocket& D2H2H2DSocket::h2h() const { return *impl_->h2h; }
