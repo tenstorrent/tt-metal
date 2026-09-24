@@ -26,6 +26,55 @@ COMPUTE_KERNEL = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm.cpp")
 COMPUTE_KERNEL_V2 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v2.cpp")  # dest-reuse, 6 passes/head
 WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_qkv_heads_norm.cpp")
 _BF16_TILE = _TILE_BYTES[ttnn.bfloat16]
+TILE = 32
+
+# Resident constants: per-core L1 shards holding the layer-independent inputs a core needs (its seq tile's cos and
+# sin tiles, the rotation tile, the 1/head_dim scaler and eps), built once per RoPE table and core plan and shared
+# by every layer. CBs 9 / 10 / 11 / 3 / 4 alias the shard, so the reader issues no reads for them and the first
+# unit reaches compute sooner. Keyed by the RoPE table buffers: prefill always starts at position 0 here, so a
+# table buffer's content is fixed by its shape.
+_RESIDENT_CACHE = {}
+
+
+def _resident_layout(head_dim_tiles):
+    """Tile offsets inside a resident shard: cos | sin | rotation | scaler | eps."""
+    wt = head_dim_tiles
+    return {"cos": 0, "sin": wt, "trans": 2 * wt, "scaler": 2 * wt + 1, "eps": 2 * wt + 2, "tiles": 2 * wt + 3}
+
+
+def _core_seq_tiles(per_core, head_groups, q_split, seq_tiles):
+    """Seq tile of each core's units, or None when some core's units span more than one seq tile."""
+    out, cursor = [], 0
+    for _, _, n in per_core:
+        tiles = {((u // q_split) // head_groups) % seq_tiles for u in range(cursor, cursor + n)}
+        if len(tiles) != 1:
+            return None
+        out.append(tiles.pop())
+        cursor += n
+    return out
+
+
+def _build_resident(device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, head_dim, eps):
+    import torch
+
+    # The shard of core i must land on the core that runs work list entry i: shard order follows the column-major
+    # enumeration of the core set, which is how _split_work_to_cores numbers cores.
+    order = [(int(c.x), int(c.y)) for c in ttnn.corerange_to_cores(used_cores, row_wise=False)]
+    if order != [(cx, cy) for cx, cy, _ in per_core]:
+        return None
+    lay = _resident_layout(head_dim // TILE)
+    cos, sin = ttnn.to_torch(rot_cos).float(), ttnn.to_torch(rot_sin).float()
+    trans = ttnn.to_torch(trans_mat).float().reshape(-1, TILE)[:TILE]
+    scaler = torch.full((TILE, TILE), 1.0 / head_dim)
+    eps_t = torch.full((TILE, TILE), float(eps))
+    rows = []
+    for s in core_seq:
+        r = slice(s * TILE, (s + 1) * TILE)
+        rows.append(torch.cat([cos[0, 0, r, :], sin[0, 0, r, :], trans, scaler, eps_t], dim=1))
+    host = torch.cat(rows, dim=0).reshape(1, 1, len(core_seq) * TILE, lay["tiles"] * TILE)
+    spec = ttnn.ShardSpec(used_cores, [TILE, lay["tiles"] * TILE], ttnn.ShardOrientation.COL_MAJOR)
+    mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
 
 
 def nlp_create_qkv_heads_norm_headsplit(
@@ -44,6 +93,8 @@ def nlp_create_qkv_heads_norm_headsplit(
     trans_mat: ttnn.Tensor | None = None,
     q_dtype: ttnn.DataType | None = None,
     kv_dtype: ttnn.DataType | None = None,
+    resident: bool = False,
+    norm_eps: float | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """``qkv_fused``: ``[B, 1, S, (num_heads + 2*num_kv_heads) * head_dim]`` TILE bf16/bfp8.
 
@@ -51,6 +102,10 @@ def nlp_create_qkv_heads_norm_headsplit(
     (and rotated when ``rot_cos``/``rot_sin``/``trans_mat`` are given). ``q_dtype`` /
     ``kv_dtype`` (default: input dtype) pick the output dtypes; the packer converts, so
     e.g. ``q_dtype=bfloat8_b`` hands SDPA its Q operand without a Typecast op.
+    ``resident`` (with rotary and ``norm_eps``): take cos/sin, the rotation tile, the scaler and eps from a cached
+    per-core L1 shard (see ``_RESIDENT_CACHE``) instead of reading them per call; falls back when a core's units
+    span more than one seq tile. The first cache miss copies the RoPE tables to the host, so it must not happen
+    inside a trace capture.
     """
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -98,6 +153,26 @@ def nlp_create_qkv_heads_norm_headsplit(
     used_cores = _core_ranges(per_core)
 
     Wt = plan.head_dim_tiles
+    res_tensor = None
+    if resident and fuse_rotary and norm_eps is not None and not use_v2:
+        core_seq = _core_seq_tiles(per_core, head_groups, q_split, plan.seq_tiles)
+        if core_seq is not None:
+            key = (
+                id(device),
+                rot_cos.buffer_address(),
+                rot_sin.buffer_address(),
+                trans_mat.buffer_address(),
+                tuple(rot_cos.shape),
+                plan.head_dim,
+                float(norm_eps),
+                tuple(per_core),
+            )
+            if key not in _RESIDENT_CACHE:
+                _RESIDENT_CACHE[key] = _build_resident(
+                    device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, plan.head_dim, norm_eps
+                )
+            res_tensor = _RESIDENT_CACHE[key]
+    res_lay = _resident_layout(Wt)
     group_q_tiles = heads_per_group * plan.q_heads_per_kv * Wt
     group_kv_tiles = heads_per_group * Wt
     sub_q_tiles = group_q_tiles // q_split
@@ -118,8 +193,6 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(16, out_tiles * 2, kv_dtype, _TILE_BYTES[kv_dtype]),  # normalised Q|K|V out (K|V when separate_q)
         cb(1, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_q tiles (resident)
         cb(2, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_k tiles (resident)
-        cb(3, 1, ttnn.bfloat16, _BF16_TILE),  # 1/head_dim scaler (resident)
-        cb(4, 1, ttnn.bfloat16, _BF16_TILE),  # eps (resident)
         cb(5, Wt, ttnn.bfloat16, _BF16_TILE),  # x^2
         cb(6, 1, ttnn.bfloat16, _BF16_TILE),  # mean-square (row values in col 0)
         cb(7, 1, ttnn.bfloat16, _BF16_TILE),  # rsqrt
@@ -127,11 +200,29 @@ def nlp_create_qkv_heads_norm_headsplit(
     ]
     if separate_q:
         cbs.append(cb(17, sub_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
-    if fuse_rotary:
+
+    def aliased(index, name, tiles):
+        return ttnn.cb_descriptor_from_sharded_tensor(
+            index, res_tensor, address_offset=res_lay[name] * _BF16_TILE, total_size=tiles * _BF16_TILE
+        )
+
+    if res_tensor is not None:
+        cbs += [aliased(3, "scaler", 1), aliased(4, "eps", 1)]
+    else:
         cbs += [
-            cb(9, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
-            cb(10, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # sin tiles
-            cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
+            cb(3, 1, ttnn.bfloat16, _BF16_TILE),  # 1/head_dim scaler (resident)
+            cb(4, 1, ttnn.bfloat16, _BF16_TILE),  # eps (resident)
+        ]
+    if fuse_rotary:
+        if res_tensor is not None:
+            cbs += [aliased(9, "cos", Wt), aliased(10, "sin", Wt), aliased(11, "trans", 1)]
+        else:
+            cbs += [
+                cb(9, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
+                cb(10, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # sin tiles
+                cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
+            ]
+        cbs += [
             cb(12, Wt, ttnn.bfloat16, _BF16_TILE),  # x @ T
             cb(13, Wt, ttnn.bfloat16, _BF16_TILE),  # (x @ T) * sin
             cb(14, Wt, ttnn.bfloat16, _BF16_TILE),  # x * cos
@@ -149,6 +240,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         int(fuse_rotary),
         int(cache_rot),
         q_split,
+        int(res_tensor is not None),
     ]
     for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -245,5 +337,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     io = [qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile]
     if fuse_rotary:
         io += [cos_t, sin_t, trans_t]
+    if res_tensor is not None:
+        io.append(res_tensor)
     ttnn.generic_op(io + [q_tensor, k_tensor, v_tensor], program_descriptor)
     return q_tensor, k_tensor, v_tensor

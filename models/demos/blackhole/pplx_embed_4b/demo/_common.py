@@ -471,6 +471,11 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
     # 12x10 grids slower (67.6). e2e 23.3 -> 22.4 ms (-3.9%, chip 4). Opt out: QWEN_SDPA_BS1_Q256=0.
+    # bs1: the fused heads op takes its layer-independent inputs (cos/sin, rotation tile, scaler, eps) from a per-core
+    # L1 shard aliased to its CBs and reads gamma after the first unit, so compute starts its first unit ~6 us sooner:
+    # 46.5 -> ~41 us/op standalone (median of 12), bit-identical. Opt out: QWEN_FUSED_RESIDENT_CONSTS=0.
+    if batch_size == 1:
+        os.environ.setdefault("QWEN_FUSED_RESIDENT_CONSTS", "1")
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
         # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead

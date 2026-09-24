@@ -94,7 +94,7 @@ def _wrap_create_qkv_heads_headsplit(original_fn):
     return wrapper
 
 
-def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_dtype=None):
+def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_dtype=None, norm_eps=None):
     """Route ``nlp_create_qkv_heads`` to the head-split + Q/K RMSNorm fused op.
 
     ``consts`` = (gamma_q_tiles, gamma_k_tiles, scaler, eps) built once per layer. The
@@ -110,6 +110,11 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
         rot_kwargs["q_dtype"] = q_dtype
     if kv_dtype is not None:
         rot_kwargs["kv_dtype"] = kv_dtype
+    # QWEN_FUSED_RESIDENT_CONSTS=1 (bs1 default): cos/sin, the rotation tile, scaler and eps come from a per-core L1
+    # shard shared by all layers (CBs alias it), and gamma is read after the first unit; the op falls back when a
+    # core's units span more than one seq tile.
+    if rot is not None and norm_eps is not None and os.getenv("QWEN_FUSED_RESIDENT_CONSTS", "0") == "1":
+        rot_kwargs.update(resident=True, norm_eps=norm_eps)
 
     @functools.wraps(original_fn)
     def wrapper(qkv_fused, *args, **kwargs):
@@ -255,6 +260,7 @@ class PplxBidirectionalAttention(Attention):
         # fused QKV activation replaces nlp_create_qkv_heads + q_norm + k_norm. Constants
         # (row-replicated gamma tiles, 1/head_dim scaler, eps) are built once per layer.
         self._fused_norm_consts = None
+        self._fused_norm_eps = None
         if os.getenv("QWEN_FUSED_HEADS_NORM", "0") == "1":
             names = (
                 "mesh_device",
@@ -274,6 +280,7 @@ class PplxBidirectionalAttention(Attention):
                 self._fused_norm_consts = make_norm_constants(
                     state_dict[qk], state_dict[kk], configuration.norm_eps, bound["mesh_device"]
                 )
+                self._fused_norm_eps = configuration.norm_eps
         # Ablation knob (DO NOT ENABLE): skipping the trained Q/K RMSNorm shaves
         # device time but collapses retrieval accuracy — the per-head Q/K norm is
         # load-bearing, not redundant. Kept gated/off as documentation of the
@@ -382,7 +389,7 @@ class PplxBidirectionalAttention(Attention):
                     ttnn.experimental.minimal_matmul = _wrap_matmul_out_bfp8(_saved_mm[0], self.wqkv)
                     ttnn.linear = _wrap_matmul_out_bfp8(_saved_mm[1], self.wqkv)
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_norm(
-                original_create_heads, self._fused_norm_consts, rot, q_dtype, kv_dtype
+                original_create_heads, self._fused_norm_consts, rot, q_dtype, kv_dtype, self._fused_norm_eps
             )
             _saved_norms = (self.q_norm, self.k_norm)
             self.q_norm = lambda x, mode, norm_config: x

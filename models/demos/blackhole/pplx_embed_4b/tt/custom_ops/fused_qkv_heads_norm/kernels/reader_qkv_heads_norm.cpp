@@ -32,7 +32,10 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
     constexpr uint32_t cache_rot = get_compile_time_arg_val(8);  // 1: cos/sin pushed only when the seq tile changes
     constexpr uint32_t q_split = get_compile_time_arg_val(9);    // 1, or 2: unit = half the Q heads + (K xor V)
-    constexpr auto in0_args = TensorAccessorArgs<10>();
+    // 1: scaler / eps / rotation / cos / sin CBs alias a per-core L1 shard that already holds them; the reader only
+    // reserves and pushes them, and reads gamma after the first unit is pushed (compute waits for it at first use).
+    constexpr uint32_t resident = get_compile_time_arg_val(10);
+    constexpr auto in0_args = TensorAccessorArgs<11>();
     constexpr auto gq_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto gk_args = TensorAccessorArgs<gq_args.next_compile_time_args_offset()>();
     constexpr auto sc_args = TensorAccessorArgs<gk_args.next_compile_time_args_offset()>();
@@ -68,8 +71,29 @@ void kernel_main() {
     constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
     constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
 
+    auto read_gamma = [&]() {
+        CircularBuffer cgq(cb_gq), cgk(cb_gk);
+        cgq.reserve_back(head_dim_tiles);
+        cgk.reserve_back(head_dim_tiles);
+        for (uint32_t i = 0; i < head_dim_tiles; ++i) {
+            noc.async_read(sgq, cgq, const_tile_bytes, {.page_id = i}, {.offset_bytes = i * const_tile_bytes});
+            noc.async_read(sgk, cgk, const_tile_bytes, {.page_id = i}, {.offset_bytes = i * const_tile_bytes});
+        }
+        noc.async_read_barrier();
+        cgq.push_back(head_dim_tiles);
+        cgk.push_back(head_dim_tiles);
+    };
+
     // Resident constants (never popped by compute).
-    {
+    if constexpr (resident) {
+        CircularBuffer csc(cb_scaler), ceps(cb_eps), ct(cb_trans);
+        csc.reserve_back(1);
+        csc.push_back(1);
+        ceps.reserve_back(1);
+        ceps.push_back(1);
+        ct.reserve_back(1);
+        ct.push_back(1);
+    } else {
         CircularBuffer cgq(cb_gq), cgk(cb_gk), csc(cb_scaler), ceps(cb_eps);
         cgq.reserve_back(head_dim_tiles);
         for (uint32_t i = 0; i < head_dim_tiles; ++i) {
@@ -139,7 +163,16 @@ void kernel_main() {
         if constexpr (fuse_rotary) {
             load_rot = !cache_rot || s_tile != last_s_tile;
         }
-        if (load_rot) {
+        if constexpr (resident) {
+            // cos/sin already sit in the aliased CBs (this core's units share one seq tile): push them to keep
+            // the per-unit wait/pop lockstep with compute; the CB is exactly Wt tiles, so it wraps onto itself.
+            CircularBuffer ccos(cb_cos), csin(cb_sin);
+            ccos.reserve_back(head_dim_tiles);
+            csin.reserve_back(head_dim_tiles);
+            noc.async_read_barrier();
+            ccos.push_back(head_dim_tiles);
+            csin.push_back(head_dim_tiles);
+        } else if (load_rot) {
             // cos/sin tiles for this seq tile (shared by every head in the unit). With cache_rot
             // they stay in the CB until the seq tile changes; the compute pops in lockstep.
             CircularBuffer ccos(cb_cos), csin(cb_sin);
@@ -167,5 +200,10 @@ void kernel_main() {
             noc.async_read_barrier();
         }
         cb.push_back(unit_tiles);
+        if constexpr (resident) {
+            if (w == 0) {
+                read_gamma();
+            }
+        }
     }
 }
