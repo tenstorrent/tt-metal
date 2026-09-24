@@ -13,6 +13,7 @@
 #include "tt_metal/distributed/host_uva_layout.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
