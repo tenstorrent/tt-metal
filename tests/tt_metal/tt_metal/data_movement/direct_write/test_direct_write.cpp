@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <optional>
-#include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -254,11 +253,6 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
     return pass;
 }
 
-// Measured on emu-quasar-2x3_DISPATCH; the suite itself is ported to Metal 2.0 and passes on Gen1.
-constexpr std::string_view kQuasarInlineWriteBroken =
-    "Skipping on Quasar: noc_inline_dw_write does not work here - posted writes leave the destination "
-    "L1 unchanged, non-posted writes never ack and hang the write barrier - see issue #55386";
-
 std::optional<CoreCoord> select_receiver_core(const CoreCoord& grid, const CoreCoord& sender_core) {
     if (grid.x >= 2 && sender_core != CoreCoord{1, 0}) {
         return CoreCoord{1, 0};
@@ -361,9 +355,6 @@ void multicast_test(distributed::MeshDevice& mesh_device, uint32_t test_id, Core
 }  // namespace unit_tests::dm::direct_write
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
-    if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
-    }
     const CoreCoord sender_core = {0, 0};
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
@@ -375,9 +366,6 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
-    if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
-    }
     const CoreCoord sender_core = {0, 0};
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
@@ -389,9 +377,6 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteMulticast) {
-    if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
-    }
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(this->device(), test_id);
 }
