@@ -26,9 +26,10 @@ constexpr uint32_t kTile = 32;
 constexpr uint32_t kBf16Tile = 2048;
 constexpr uint32_t kFrozenQTiles = 8;
 constexpr uint32_t kFrozenKTiles = 16;
-// Prefer the frozen, bit-for-bit qualified Q256/K512 geometry when its modeled cost is within
-// this fraction of the cheapest candidate: the cost model is not that precise.
-constexpr double kFrozenPreference = 0.02;
+// Prefer the frozen, bit-for-bit qualified Q256/K512 geometry whenever it fits and its modeled
+// cost is within this fraction of the cheapest candidate: the model is not that precise, and the
+// frozen geometry keeps the qualified digests.
+constexpr double kFrozenPreference = 0.05;
 // Ring layouts whose preferred (double-buffered Q) layout does not fit lose Q prefetch.
 constexpr double kFallbackPenalty = 1.03;
 
@@ -319,7 +320,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     // A chunk longer than the sequence only adds padding; the qualified sizes stay in range.
     const bool dense = p.op == RecipeOp::Dense || p.op == RecipeOp::Joint;
     const uint32_t q_cap = std::min(kRecipeSearchMaxQTiles, std::max(div_up(p.q_rows + p.joint_q_rows, kTile), 10u));
-    const uint32_t k_cap = std::min(kRecipeSearchMaxKTiles, std::max(div_up(p.k_rows + p.joint_k_rows, kTile), 16u));
+    const uint32_t k_cap = kRecipeSearchMaxKTiles;  // padded K blocks are costed, so short K picks short chunks
     const auto q_range = tile_range(p.fixed_q_tiles, kRecipeSearchMinQTiles, q_cap);
     const auto k_range = tile_range(p.fixed_k_tiles, 1, k_cap);
     for (auto qi = q_range.rbegin(); qi != q_range.rend(); ++qi) {  // ascending Q
