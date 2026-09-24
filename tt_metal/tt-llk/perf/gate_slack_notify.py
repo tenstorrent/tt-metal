@@ -12,6 +12,7 @@ import shlex
 
 
 _TOP_N = 5
+_SHORT_SHA = 11
 
 _BROADCAST = re.compile(r"<!(here|channel|everyone)(\||>)")
 
@@ -129,25 +130,47 @@ def verdict(
     return ("regressed", "") if exit_code != 0 else ("clean", "")
 
 
+def _subject(ctx):
+    """Headline, byline and scope: a PR when there is one, else the run."""
+    number = str(ctx.get("pr_number") or "").strip()
+    if number and number != "?":
+        pr = f"<{ctx['pr_url']}|#{number}>" if ctx.get("pr_url") else f"#{number}"
+        commit = (ctx.get("commit") or "")[:_SHORT_SHA]
+        author = _escape(ctx.get("author") or "unknown")
+        return (
+            f"on PR {pr}",
+            f"Author: `{author}`" + (f"  ·  `{commit}`" if commit else ""),
+            f"{ctx.get('arch') or '?'} · {ctx.get('run_types') or '?'}",
+        )
+    bits = [
+        b
+        for b in (
+            ctx.get("arch"),
+            ctx.get("mode"),
+            (ctx.get("commit") or "")[:_SHORT_SHA],
+        )
+        if b
+    ]
+    return (
+        "(nightly)",
+        " · ".join(bits) or "scheduled run",
+        ctx.get("run_types") or "?",
+    )
+
+
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
-    pr = (
-        f"<{ctx['pr_url']}|#{ctx['pr_number']}>"
-        if ctx.get("pr_url")
-        else f"#{ctx['pr_number']}"
-    )
-    author = _escape(ctx.get("author") or "unknown")
-    where = f"{ctx.get('arch') or '?'} · {ctx.get('run_types') or '?'}"
+    subject, byline, where = _subject(ctx)
     run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
 
     if status == "skipped":
         return "\n".join(
             [
-                f":warning: *LLK perf gate SKIPPED* on PR {pr}",
-                f"Author: `{author}`",
+                f":warning: *LLK perf gate SKIPPED* {subject}",
+                byline,
                 "",
                 ctx.get("reason") or "The gate compared nothing.",
-                "*A green check here does not mean the PR is clean.*",
+                "*A green check here does not mean anything was checked.*",
                 "",
                 f"{run_link}",
             ]
@@ -156,8 +179,8 @@ def build_text(status, rows, ctx):
     if status == "clean":
         return "\n".join(
             [
-                f":white_check_mark: *LLK perf gate passed* on PR {pr}",
-                f"Author: `{author}`  ·  {where}",
+                f":white_check_mark: *LLK perf gate passed* {subject}",
+                f"{byline}  ·  {where}",
                 "",
                 f"No point regressed. {run_link}",
             ]
@@ -165,8 +188,8 @@ def build_text(status, rows, ctx):
 
     worst = rows[:_TOP_N]
     lines = [
-        f":rotating_light: *LLK perf gate: regression* on PR {pr}",
-        f"Author: `{author}`  ·  {where}",
+        f":rotating_light: *LLK perf gate: regression* {subject}",
+        f"{byline}  ·  {where}",
         "",
         f"*{len(rows)} point(s) regressed.*",
     ]
@@ -180,7 +203,7 @@ def build_text(status, rows, ctx):
         lines.append(f"_… and {len(rows) - _TOP_N} more._")
     lines += [
         "",
-        f"The full table is in the PR comment. {run_link}",
+        f"The full table is in the report attached to the {run_link}.",
         "",
         "Reproduce the worst one locally:",
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
@@ -214,6 +237,8 @@ def main(argv=None):
     ap.add_argument("--run-types", default="")
     ap.add_argument("--run-url", default="")
     ap.add_argument("--baseline-sha", default="")
+    ap.add_argument("--commit", default="")
+    ap.add_argument("--mode", default="")
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
@@ -239,6 +264,8 @@ def main(argv=None):
         "pr_url": a.pr_url,
         "pr_title": a.pr_title,
         "author": a.author,
+        "commit": a.commit,
+        "mode": a.mode,
         "arch": a.arch,
         "run_types": a.run_types,
         "run_url": a.run_url,
