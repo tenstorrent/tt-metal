@@ -25,6 +25,13 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
 
     for (uint32_t r = start_row; r < end_row; r++) {
+        cb_wait_front(cb_output_idx, onetile);
+        auto output_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(get_read_ptr(cb_output_idx));
+        for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
+            for (uint32_t w = 1; w < TILE_WIDTH; ++w) {
+                output_l1_ptr[get_tilized_idx(h, w)] = 0U;
+            }
+        }
         write_tiles_by_row(cb_output_idx, output_addr_generator, r, onetile, tile_bytes, onetile);
     }
 }

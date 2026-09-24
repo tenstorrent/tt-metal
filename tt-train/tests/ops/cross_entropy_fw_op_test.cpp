@@ -126,6 +126,32 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
+TEST_F(CrossEntropyForwardTest, OutputTilePaddingIsZero) {
+    using namespace ttml;
+
+    constexpr uint32_t N = 1U, C = 1U, H = 5U, W = 37U;
+    auto input_tensor = xt::arange<float>(N * C * H * W);
+    input_tensor.reshape({N, C, H, W});
+    input_tensor /= 100.0F;
+    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+    auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+
+    auto result = ttml::metal::cross_entropy_fw(input, target);
+    // Expose the physical output tile's 31 padding columns as logical data. A normal host
+    // conversion trims to the [N, C, H, 1] logical shape and cannot observe this contract.
+    auto exposed_tile = result.reshape(ttnn::Shape{N, C, H, ttnn::TILE_WIDTH});
+    const auto exposed = core::to_xtensor(exposed_tile);
+
+    for (uint32_t h = 0; h < H; ++h) {
+        for (uint32_t w = 1; w < ttnn::TILE_WIDTH; ++w) {
+            EXPECT_EQ(exposed(0, 0, h, w), 0.0F) << "nonzero output padding at row " << h << ", column " << w;
+        }
+    }
+}
+
 // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
 TEST_F(CrossEntropyForwardTest, DISABLED_CrossEntropyForward_Large_Batch) {
     using namespace ttml;
