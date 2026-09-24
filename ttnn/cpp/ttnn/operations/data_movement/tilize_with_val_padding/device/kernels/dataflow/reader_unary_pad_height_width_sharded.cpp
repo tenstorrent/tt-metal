@@ -48,8 +48,14 @@ void kernel_main() {
     }
     read_addr += input_block_size;
     write_addr += input_block_size;
-    for (uint32_t i = 0; i < input_width_bytes >> 2; ++i) {
-        pad[i] = packed_pad_value;
+    {
+        // The pad row is CPU-filled here and then used as a NOC read source below. On Quasar the DM
+        // core's writes sit in L2 cache; scoped_lock releases (flushes) them so the NOC read sees the
+        // filled data instead of stale/zero L1. No-op on Wormhole/Blackhole.
+        auto pad_lock = pad.scoped_lock(0, input_width_bytes >> 2);
+        for (uint32_t i = 0; i < input_width_bytes >> 2; ++i) {
+            pad[i] = packed_pad_value;
+        }
     }
     for (uint32_t i = 0; i < num_padded_rows; ++i) {
         CoreLocalMem<uint32_t> dst(write_addr);
