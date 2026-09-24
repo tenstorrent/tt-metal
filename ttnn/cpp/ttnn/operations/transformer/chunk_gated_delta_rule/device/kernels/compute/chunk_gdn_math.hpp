@@ -1,22 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared math bodies for the chunk_gdn prep and scan compute kernels (and any future fused
-// kernel). The kernel .cpp files are thin: compile-arg reads, constexpr CB maps, and loops
-// calling prep_chunk / scan_step below. CB ids are passed in as plain uint32_t (via the
-// GdnPrepCbs / GdnScanCbs structs for the composition functions), so the same bodies run under
-// different CB maps.
+// Shared math functions for the chunk_gdn prep and scan compute kernels.
+// The kernel .cpp files are calling prep_chunk / scan_step below. CB ids are passed in as plain
+// uint32_t (via the GdnPrepCbs / GdnScanCbs structs for the composition functions), so the same
+// bodies run under different CB maps.
 //
-// THE BIT-EXACTNESS CONTRACT: the seven prep intermediates are rounded at *pack* time; the DRAM
-// round trip after that is a byte copy. A kernel composed from these bodies is bit-identical to
-// the phased path end-to-end iff it
-//   (1) reuses these math code bodies unchanged (no op reordering, loop merging, or moving of
-//       init call sites),
-//   (2) keeps the same pack-to-CB boundaries at the same CB data formats,
-//   (3) keeps HiFi4 / fp32-dest-acc / no-approx-mode and the same matmul ki-accumulation order,
-//   (4) keeps the same exp configuration.
-// Any deliberate violation (e.g. keeping T_inv in DEST unpacked) is a reviewed PCC-downgrade,
-// not a silent change.
 
 #pragma once
 
@@ -34,22 +23,19 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 
-// GDN_HOIST_RECONFIG (a per-kernel define, set by the fused factory on its producer compute
+// GDN_HOIST_RECONFIG (a per-kernel define, set by the fused factory on the producer compute
 // kernel only): hoist the packer/unpacker format reconfigs out of the WY hot path (invert16 /
-// invert_block — all-fp32 regions where the per-call reconfigs are redundant register writes).
-// Math ops, order, and pack boundaries are identical either way (bit-exact both settings; the
-// phased path measured byte-identical outputs WITH the hoist). It is a per-path PERF switch:
-// the hoist measured -15% on the fused producer's chunk rate but +22-37% on phased prep at
-// low items-per-core shapes (BH=12/T=512) — a timing sensitivity, not a correctness issue —
-// so only the fused producer opts in.
+// invert_block).
+// It is a per-path PERF switch: the hoist helps on the fused producer,
+// but hurts the phased kernel at some shapes.
 #ifdef GDN_HOIST_RECONFIG
 inline constexpr bool kGdnHoistReconfig = true;
 #else
 inline constexpr bool kGdnHoistReconfig = false;
 #endif
 
-// Sub-step device zones for the Tracy device profiler (design D16). Only in profiled builds where the
-// profiler header was included BEFORE this one; otherwise nothing (production binaries unchanged).
+// Sub-step device zones for the Tracy device profiler. Only in profiled builds where the
+// profiler header was included before this one.
 #if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
 #define GDN_ZONE(name) DeviceZoneScopedN(name)
 #else
@@ -62,8 +48,7 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
 // Output tiles per DST acquire. With fp32 accumulation DST holds 8 tiles and the math/pack half-sync
 // gives each side 4, so four independent output tiles ride one acquire/commit/wait/release round trip
-// instead of four (the per-tile handshake was ~half of the receiver step, design §10e). Bit-exact:
-// each output tile's math is unchanged, only the packing is batched.
+// instead of four.
 #ifndef GDN_DST_TILES
 #define GDN_DST_TILES 1  // the prep kernel keeps the per-tile form: its Ct=2 binary sits at the 70,656 B limit
 #endif
@@ -477,7 +462,7 @@ inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_push_back(o, Ct);
 }
 
-// OPT-A/B in-kernel L2-norm over K. rowsum_k: o[Mt,1(broadcast)] = sum over the full K dim of
+// In-kernel L2-norm over K. rowsum_k: o[Mt,1(broadcast)] = sum over the full K dim of
 // in[Mt,Kt], computed as in @ ones by reusing cb_ones tile 0 as the [K,1] contraction operand
 // (avoids a dedicated ones-column constant). Mirrors the `mm` helper's reconfig/matmul discipline.
 inline void rowsum_k(uint32_t in, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t cb_ones) {
@@ -565,7 +550,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     WAIT(cb.g, Ct);
     WAIT(cb.beta, Ct);
 
-    // ---- OPT-B: in-kernel L2-norm of q,k over K (fold q's scale). Consumes the raw reader q/k
+    // In-kernel L2-norm of q,k over K (fold q's scale). Consumes the raw reader q/k
     // and produces normalized q->cb.supd, k->cb.stmp (both free in Ct==1). The rest of the chunk
     // then reads Q/Kk instead of cb.q/cb.k. scr1/scr2/scr3 are free here (used only later). ----
     uint32_t Q = cb.q, Kk = cb.k;
@@ -650,7 +635,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
     // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
     // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
-    // merge off-diagonal blocks EXACTLY. This keeps every intermediate bounded, unlike a single
+    // merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
     // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
     mm(cb.kbeta, Kk, cb.scr1, Ct, Kt, Ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
     WAIT(cb.scr1, cc);
@@ -800,7 +785,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     // GDN_HOIST_RECONFIG). Formats are identical either way => bit-exact.
     constexpr bool H = true;
 
-    // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
+    // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse after the subtraction so the WY
     // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
     {
         GDN_ZONE("st_kdS");
