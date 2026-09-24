@@ -13,6 +13,8 @@ per chip and reduced with a single all_reduce.
 
 from __future__ import annotations
 
+import torch
+
 import ttnn
 from models.demos.ernie45_d_p.reference.ernie_ref import ErnieConfig, LayerWeights
 from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, COMPUTE_HIFI4, cache_name, replicate, shard
@@ -59,6 +61,24 @@ class TtRouter:
         return dense, idx, wts
 
 
+_SELECTORS = {}
+
+
+def expert_selectors(mesh, E: int, H: int):
+    """Per local slot j: sharded [1,1,E,H] with row (c*E/n + j) = 1 on chip c, else 0. Shared by all layers."""
+    key = (E, H)
+    if key not in _SELECTORS or _SELECTORS[key][0] is not mesh:  # new mesh (tests reopen it) -> rebuild
+        e_local = E // NUM_CHIPS
+        sels = []
+        for j in range(e_local):
+            m = torch.zeros(NUM_CHIPS, 1, E, H)
+            for c in range(NUM_CHIPS):
+                m[c, 0, c * e_local + j] = 1.0
+            sels.append(shard(mesh, m, 0, cache=cache_name("moe_selectors", f"E{E}_H{H}_slot{j:02d}")))
+        _SELECTORS[key] = (mesh, sels)
+    return _SELECTORS[key][1]
+
+
 class TtMoE:
     def __init__(self, mesh, cfg: ErnieConfig, layer: int, w: LayerWeights):
         self.mesh, self.cfg, self.layer = mesh, cfg, layer
@@ -81,10 +101,11 @@ class TtMoE:
             self.down.append(
                 shard(mesh, w.e_down[ids].transpose(1, 2).contiguous()[:, None], 0, cache=cache_name(nm, "down"))
             )
+        self.sel = expert_selectors(mesh, E, cfg.hidden_size)
 
     def routed_partial(self, x, dense_routing):
-        seq = x.shape[-2]
-        local = ttnn.mesh_partition(dense_routing, dim=3, cluster_axis=1)  # [1,1,S,16]: chip c's experts
+        # Per-slot routing weight broadcast to [S, H] via routing @ M_j (M_j row 16c+j = 1 on chip c):
+        # no tile-unaligned column slicing (mesh_partition / slice need 32-aligned widths).
         acc = None
         for j in range(self.e_local):
             g = ttnn.linear(x, self.gate[j], compute_kernel_config=COMPUTE_HIFI2)
@@ -94,7 +115,7 @@ class TtMoE:
             ttnn.deallocate(u)
             y = ttnn.linear(h, self.down[j], compute_kernel_config=COMPUTE_HIFI2)
             ttnn.deallocate(h)
-            wj = ttnn.slice(local, [0, 0, 0, j], [1, 1, seq, j + 1])
+            wj = ttnn.matmul(dense_routing, self.sel[j], compute_kernel_config=COMPUTE_HIFI4)
             yw = ttnn.mul(y, wj)
             ttnn.deallocate(y)
             ttnn.deallocate(wj)
@@ -105,7 +126,6 @@ class TtMoE:
                 ttnn.deallocate(acc)
                 ttnn.deallocate(yw)
                 acc = acc2
-        ttnn.deallocate(local)
         return acc
 
     def __call__(self, x, debug: dict | None = None):
