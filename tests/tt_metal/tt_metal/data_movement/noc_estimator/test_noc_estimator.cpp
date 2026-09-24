@@ -252,7 +252,55 @@ int main() {
 
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_near_pct("Test 9 latency", result.latency_cycles, 1465.0, 2.0);
+        expect_near_pct("Test 9 latency", result.latency_cycles, 1457.0, 2.0);
+    }
+
+    // Test 10: DRAM data is measured on both NoCs and each NoC returns its own latency
+    {
+        NocEstimatorParams params_noc0{
+            .mechanism = NocMechanism::UNICAST,
+            .pattern = NocPattern::ALL_FROM_ALL,
+            .memory = MemoryType::DRAM_INTERLEAVED,
+            .arch = Architecture::WORMHOLE_B0,
+            .num_transactions = 64,
+            .num_transactions_per_barrier = 64,
+            .transaction_size_bytes = 512,
+            .num_subordinates = 0,
+            .noc_index = 0};
+        NocEstimatorParams params_noc1 = params_noc0;
+        params_noc1.noc_index = 1;
+
+        NocEstimate result_noc0 = estimate_noc_performance(params_noc0);
+        NocEstimate result_noc1 = estimate_noc_performance(params_noc1);
+        std::cout << "Test 10 - Wormhole DRAM interleaved all from all per NoC (512 bytes, 64 txns):\n";
+        std::cout << "  NOC_0 latency: " << result_noc0.latency_cycles << " cycles\n";
+        std::cout << "  NOC_1 latency: " << result_noc1.latency_cycles << " cycles\n\n";
+        expect_near_pct("Test 10 NOC_0 latency", result_noc0.latency_cycles, 9082.0, 2.0);
+        expect_near_pct("Test 10 NOC_1 latency", result_noc1.latency_cycles, 28611.0, 2.0);
+    }
+
+    // Test 11: L1 reads are only measured on NOC_1, so the default NoC uses that data
+    {
+        NocEstimatorParams params_noc0{
+            .mechanism = NocMechanism::UNICAST,
+            .pattern = NocPattern::ONE_FROM_ONE,
+            .memory = MemoryType::L1,
+            .arch = Architecture::WORMHOLE_B0,
+            .num_transactions = 4,
+            .num_transactions_per_barrier = 4,
+            .transaction_size_bytes = 2048,
+            .num_subordinates = 0,
+            .noc_index = 0};
+        NocEstimatorParams params_noc1 = params_noc0;
+        params_noc1.noc_index = 1;
+
+        NocEstimate result_noc0 = estimate_noc_performance(params_noc0);
+        NocEstimate result_noc1 = estimate_noc_performance(params_noc1);
+        std::cout << "Test 11 - Wormhole L1 one from one on default NoC (2048 bytes, 4 txns):\n";
+        std::cout << "  NOC_0 latency: " << result_noc0.latency_cycles << " cycles\n";
+        std::cout << "  NOC_1 latency: " << result_noc1.latency_cycles << " cycles\n\n";
+        expect_near_pct("Test 11 NOC_0 latency", result_noc0.latency_cycles, 592.0, 2.0);
+        expect_near_pct("Test 11 NOC_1 latency", result_noc1.latency_cycles, 592.0, 2.0);
     }
 
     if (g_failures > 0) {

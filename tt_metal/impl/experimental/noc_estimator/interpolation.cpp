@@ -6,11 +6,13 @@
 #include <algorithm>
 #include <limits>
 #include <set>
+#include <cstdint>
 
 namespace tt::tt_metal::experimental::noc_estimator {
 
 // Quadratic interpolation for better accuracy when possible
-double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size) {
+double interpolate_latency(
+    const LatencyData& data, const std::vector<std::uint32_t>& sizes, std::uint32_t transaction_size) {
     const std::size_t count = std::min(sizes.size(), data.latencies.size());
     if (count == 0) {
         return 0.0;
@@ -78,8 +80,8 @@ double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>&
 }
 
 struct InterpolationBounds {
-    std::map<std::string, uint32_t> lower;
-    std::map<std::string, uint32_t> upper;
+    std::map<std::string, std::uint32_t> lower;
+    std::map<std::string, std::uint32_t> upper;
 };
 
 static InterpolationBounds find_bounds(const GroupKey& target, const std::map<GroupKey, LatencyData>& entries) {
@@ -88,10 +90,10 @@ static InterpolationBounds find_bounds(const GroupKey& target, const std::map<Gr
 
     for (const auto& [name, _] : target_values) {
         bounds.lower[name] = 0;
-        bounds.upper[name] = std::numeric_limits<uint32_t>::max();
+        bounds.upper[name] = std::numeric_limits<std::uint32_t>::max();
     }
 
-    std::map<std::string, std::set<uint32_t>> available_values;
+    std::map<std::string, std::set<std::uint32_t>> available_values;
 
     for (const auto& [key, _] : entries) {
         if (!key.matches_non_numeric(target)) {
@@ -131,8 +133,8 @@ static InterpolationBounds find_bounds(const GroupKey& target, const std::map<Gr
 
 double interpolate_latency_nd(
     const GroupKey& key,
-    uint32_t transaction_size,
-    const std::vector<uint32_t>& sizes,
+    std::uint32_t transaction_size,
+    const std::vector<std::uint32_t>& sizes,
     const std::map<GroupKey, LatencyData>& entries) {
     InterpolationBounds bounds = find_bounds(key, entries);
     auto target_values = NumericFields::extract(key);
@@ -159,7 +161,7 @@ double interpolate_latency_nd(
     double result = 0.0;
 
     for (std::size_t corner = 0; corner < num_corners; corner++) {
-        std::map<std::string, uint32_t> corner_values;
+        std::map<std::string, std::uint32_t> corner_values;
         double corner_weight = 1.0;
 
         for (std::size_t i = 0; i < n; i++) {
@@ -195,7 +197,7 @@ static constexpr std::size_t RELAX_PARAM_COUNT = 4;
 
 // Check if two keys match, ignoring parameters where mask bit is set
 // All other parameters must match exactly
-static bool matches_with_mask(const GroupKey& a, const GroupKey& b, uint32_t ignore_mask) {
+static bool matches_with_mask(const GroupKey& a, const GroupKey& b, std::uint32_t ignore_mask) {
     // Check exact match for non-relaxable parameters
     if (a.memory != b.memory || a.mechanism != b.mechanism || a.pattern != b.pattern || a.arch != b.arch) {
         return false;
@@ -219,27 +221,40 @@ static bool matches_with_mask(const GroupKey& a, const GroupKey& b, uint32_t ign
 
 double find_with_relaxation(
     const GroupKey& key,
-    uint32_t transaction_size,
-    const std::vector<uint32_t>& sizes,
+    std::uint32_t transaction_size,
+    const std::vector<std::uint32_t>& sizes,
     const std::map<GroupKey, LatencyData>& entries,
     std::string& relaxed_param) {
+    auto find_match = [&](std::uint32_t mask) -> const GroupKey* {
+        for (const auto& [k, _] : entries) {
+            if (matches_with_mask(key, k, mask)) {
+                return &k;
+            }
+        }
+        return nullptr;
+    };
+
     // Try each relaxation level (progressively ignore more parameters)
-    uint32_t ignore_mask = 0;
+    std::uint32_t ignore_mask = 0;
     for (std::size_t level = 0; level < RELAX_PARAM_COUNT; level++) {
         ignore_mask |= (1 << level);
 
-        for (const auto& [k, data] : entries) {
-            if (matches_with_mask(key, k, ignore_mask)) {
-                relaxed_param = RELAX_PARAM_NAMES[level];
-                GroupKey relaxed_key = k;
-                relaxed_key.num_transactions = key.num_transactions;
-                relaxed_key.num_subordinates = key.num_subordinates;
+        // Prefer an entry on the requested NoC, only fall back to the other NoC if there is none
+        const GroupKey* match = find_match(ignore_mask & ~1u);
+        if (match == nullptr) {
+            match = find_match(ignore_mask);
+        }
 
-                if (entries.contains(relaxed_key)) {
-                    return interpolate_latency(entries.at(relaxed_key), sizes, transaction_size);
-                }
-                return interpolate_latency_nd(relaxed_key, transaction_size, sizes, entries);
+        if (match != nullptr) {
+            relaxed_param = RELAX_PARAM_NAMES[level];
+            GroupKey relaxed_key = *match;
+            relaxed_key.num_transactions = key.num_transactions;
+            relaxed_key.num_subordinates = key.num_subordinates;
+
+            if (entries.contains(relaxed_key)) {
+                return interpolate_latency(entries.at(relaxed_key), sizes, transaction_size);
             }
+            return interpolate_latency_nd(relaxed_key, transaction_size, sizes, entries);
         }
     }
 

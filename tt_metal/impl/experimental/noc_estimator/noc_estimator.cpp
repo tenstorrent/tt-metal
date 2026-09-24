@@ -11,13 +11,14 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <cstdint>
 
 namespace tt::tt_metal::experimental::noc_estimator {
 
 static constexpr const char* YAML_PATH_SUFFIX = "tt_metal/impl/experimental/noc_estimator/latencies/noc_latencies.yaml";
 
 static std::map<GroupKey, LatencyData> g_entries;
-static std::vector<uint32_t> g_transaction_sizes;
+static std::vector<std::uint32_t> g_transaction_sizes;
 static std::once_flag g_init_once;
 
 static bool initialize_from_yaml(const std::string& yaml_path) {
@@ -58,7 +59,7 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
     double num_transactions_d = static_cast<double>(params.num_transactions);
 
     // Calculate the number of iterations needed to process all transactions
-    uint32_t num_iterations = 1;
+    std::uint32_t num_iterations = 1;
 
     if (params.num_transactions > params.num_transactions_per_barrier) {
         num_iterations =
@@ -76,8 +77,13 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
         std::string relaxed_param;
         result.latency_cycles =
             find_with_relaxation(key, params.transaction_size_bytes, g_transaction_sizes, g_entries, relaxed_param);
+        // Some patterns are only measured on one NoC, so a query on the default NoC falling back
+        // to the other one is expected and not worth a warning
+        bool expected_noc_fallback = relaxed_param == "noc_index" && params.noc_index == DEFAULT_NOC_INDEX;
         if (result.latency_cycles > 0) {
-            std::cerr << "Warning: Used fallback (relaxed " << relaxed_param << ")\n";
+            if (!expected_noc_fallback) {
+                std::cerr << "Warning: Used fallback (relaxed " << relaxed_param << ")\n";
+            }
         } else {
             throw std::runtime_error("No match found for the given parameters, even with relaxation.");
         }
