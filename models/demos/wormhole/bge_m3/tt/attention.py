@@ -462,7 +462,14 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
 def _sdpa_exp_approx(seq_len, mesh_device=None):
     if mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return False
-    return seq_len % 128 == 0
+    # Wormhole always uses the approximate exponential. Until #57180 the standard SDPA kernel ran the
+    # approximation for every setting, so the sequences that asked for the accurate exponential
+    # (lengths that are not a multiple of 128, i.e. every padded short input) never got it, and the
+    # sparse-embedding gates in tests/pcc/test_generator_vllm.py were calibrated on the approximation.
+    # Once the accurate path became real those gates moved 2-3% against the published references.
+    # Keep the numerics the model was tuned on; switching to the accurate exponential is a deliberate
+    # re-baseline for the owner to make, not a side effect.
+    return True
 
 
 def _sdpa_compute_grid(mesh_device):
