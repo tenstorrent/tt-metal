@@ -136,5 +136,5 @@ def test_recipe_rejects_unsupported_head_dim(device):
         pytest.skip("Named recipes initially target Blackhole")
     # Tile-aligned head dims are supported (see test_sdpa_recipe_geometry.py); padded ones are not.
     host = [x[..., :80].contiguous() for x in make_inputs(512, "normal", q_length=256)]
-    with pytest.raises(RuntimeError, match="tile-aligned head dims|tile-aligned head dim"):
+    with pytest.raises(RuntimeError, match="tile-aligned head dim|sequence-axis tile padding"):
         run([upload(device, host)], "D", (1, 1), 256, 512)

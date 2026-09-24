@@ -91,7 +91,7 @@ def test_sdpa_input_preparation(device, is_query, dtype, distribution, length):
 def test_sdpa_input_preparation_rejects_unsupported(device, invalid):
     if not is_blackhole():
         pytest.skip("SDPA preparation initially targets Blackhole")
-    shape = (1, 1, 256, 96 if invalid == "dimension" else 128)  # D64/D128/D256 are supported
+    shape = (1, 1, 256, 80 if invalid == "dimension" else 128)  # any tile-aligned head dim is supported
     if invalid == "rank":
         shape = shape[1:]
     source = ttnn.from_torch(
