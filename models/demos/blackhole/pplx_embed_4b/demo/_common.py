@@ -476,6 +476,10 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # 46.5 -> ~41 us/op standalone (median of 12), bit-identical. Opt out: QWEN_FUSED_RESIDENT_CONSTS=0.
     if batch_size == 1:
         os.environ.setdefault("QWEN_FUSED_RESIDENT_CONSTS", "1")
+        # compute v3: every norm / RoPE phase runs once per unit over its 4 Q + 1 K heads instead of once per head
+        # (9 phase set-ups per unit instead of 45), bit-identical to v1. Heads op 41.7 -> 28.7 us in-model; e2e
+        # 16.474 -> 16.135 ms (3 alternating A/B pairs, chip 0). Opt out: QWEN_FUSED_COMPUTE_V3=0.
+        os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
         # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead

@@ -871,3 +871,33 @@ block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one shar
 11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the
 S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either). Both landed as bs1
 defaults; the neutral-alone item is kept because it is free with the concat change and removes 72 ops.
+
+## 51. bs1 fused heads op (head split + Q/K RMSNorm + RoPE): what bounds it, and what the fixes ran into (2026-09-24)
+
+8× p150b host, chip 0; standalone numbers are device kernel time of the op at the bs1 shapes (64 cores, 2 units per
+core, a unit = 4 Q + 1 K head normalised + 1 V head copied), median of 12 calls.
+
+**Ablation (scratch kernels, not in the repo).** Full op 39.5 µs; compute only (reader/writer skip the unit tiles)
+36.6; data movement only (compute passes the CBs through) 11.3; handshakes only 8.5, of which 7.5 is the gamma read
+(64 cores reading the same 8 tiles; 1.0 without it). So the op is compute-bound: the unit traffic overlaps except for
+the first unit in and the last out (~3 µs). RoPE is 8.4 µs of compute (36.6 vs 28.2 norm-only). Compute also waits
+~5 µs for gamma at its first head (compute-only 36.5 → 31.1 without the gamma read).
+
+**Gamma in L1 interleaved instead of DRAM: nothing in the model.** Compute-only standalone 36.5 → 33.0, but the full
+op 41.5 → 40.9 standalone and 41.5 → 41.3 in-model: in the full op the gamma read competes with every core's unit
+reads, and where gamma lives does not change that. Per-core DRAM copies of gamma: 36.5 → 34.2 compute-only, not
+pursued. Reverted.
+
+**Compute v3 and the kernel-config buffer.** Batching the phases across heads first ran each phase over the Q heads
+and then the K head (two template instantiations): standalone 41.8 → 30.6 µs, bit-identical once every phase moved
+the CBs' full capacity (the first version sized the CBs for 4 heads, used 4 + 1 per unit, and the second unit's
+indexed accesses ran past the CB ends: Q PCC 0.79, K inf; it only showed in non-resident mode, where the static-CB
+neighbours differ). In the model it bought **nothing** (e2e 16.510 vs 16.511 ms): the compute binary grew 24.0 →
+34.9 KB, and with SDPA's ~39 KB next the two programs no longer fit Blackhole's 69 KB per-core kernel-config buffer
+(`bh_hal_tensix.cpp`), so the dispatcher could not stage SDPA while the heads op ran: +3 µs gap before the op and
++2 after it per layer ate the 7 µs saved. Runtime head counts and CB ids made the binary bigger (36.0 KB: the
+inlined LLK calls no longer constant-fold); `#pragma GCC optimize("Os")` made it 11.9 KB but the op slower than v1
+(44.6 µs). Running the unit's Q and K heads as one chunk (one instantiation, compile-time CB ids) gave 21.6 KB and
+29.6 µs standalone; in-model 28.7 µs, the gap before the op back to 0.34 µs (after it: 2.1 µs, still open).
+Lesson: on Blackhole a model-local kernel's binary size is part of its cost; check `TENSIX COMPUTE n MAX KERNEL
+SIZE` and the op-to-op latency around the op, not only its kernel time.

@@ -24,6 +24,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 READER_KERNEL = os.path.join(_HERE, "kernels", "reader_qkv_heads_norm.cpp")
 COMPUTE_KERNEL = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm.cpp")
 COMPUTE_KERNEL_V2 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v2.cpp")  # dest-reuse, 6 passes/head
+COMPUTE_KERNEL_V3 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v3.cpp")  # phases batched across heads
 WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_qkv_heads_norm.cpp")
 _BF16_TILE = _TILE_BYTES[ttnn.bfloat16]
 TILE = 32
@@ -112,6 +113,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     device = qkv_fused.device()
     fuse_rotary = rot_cos is not None
     use_v2 = os.getenv("QWEN_FUSED_COMPUTE_V2", "0") == "1"
+    # v3: v1's math with every phase run over a chunk of heads (a unit's Q heads, then its K heads), so each phase's
+    # reconfig / init / CB handshakes are paid once per chunk; intermediate CBs hold a chunk. Bit-identical to v1.
+    use_v3 = os.getenv("QWEN_FUSED_COMPUTE_V3", "0") == "1" and not use_v2
     # cos/sin tiles depend only on the seq tile; consecutive units of a core share it across the
     # head groups, so with the v2 compute they are read once per seq tile instead of once per unit.
     cache_rot = fuse_rotary and use_v2
@@ -180,6 +184,8 @@ def nlp_create_qkv_heads_norm_headsplit(
     unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles
     tile_size = _TILE_BYTES[out_dtype]
     out_tiles = kv_parts * group_kv_tiles if separate_q else unit_tiles
+    # intermediate CBs hold one head (v1) or all of a unit's Q and K heads (v3)
+    nh = (sub_q_tiles + group_kv_tiles) // Wt if use_v3 else 1
 
     def cb(index, tiles, dtype, tsize):
         return ttnn.CBDescriptor(
@@ -193,10 +199,10 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(16, out_tiles * 2, kv_dtype, _TILE_BYTES[kv_dtype]),  # normalised Q|K|V out (K|V when separate_q)
         cb(1, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_q tiles (resident)
         cb(2, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_k tiles (resident)
-        cb(5, Wt, ttnn.bfloat16, _BF16_TILE),  # x^2
-        cb(6, 1, ttnn.bfloat16, _BF16_TILE),  # mean-square (row values in col 0)
-        cb(7, 1, ttnn.bfloat16, _BF16_TILE),  # rsqrt
-        cb(8, Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
+        cb(5, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x^2
+        cb(6, nh, ttnn.bfloat16, _BF16_TILE),  # mean-square (row values in col 0)
+        cb(7, nh, ttnn.bfloat16, _BF16_TILE),  # rsqrt
+        cb(8, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
     ]
     if separate_q:
         cbs.append(cb(17, sub_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
@@ -223,10 +229,10 @@ def nlp_create_qkv_heads_norm_headsplit(
                 cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
             ]
         cbs += [
-            cb(12, Wt, ttnn.bfloat16, _BF16_TILE),  # x @ T
-            cb(13, Wt, ttnn.bfloat16, _BF16_TILE),  # (x @ T) * sin
-            cb(14, Wt, ttnn.bfloat16, _BF16_TILE),  # x * cos
-            cb(15, Wt, ttnn.bfloat16, _BF16_TILE),  # normalised head awaiting rotary
+            cb(12, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x @ T
+            cb(13, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # (x @ T) * sin
+            cb(14, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x * cos
+            cb(15, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # normalised head(s) awaiting rotary
         ]
 
     reader_ct = [
@@ -309,7 +315,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=COMPUTE_KERNEL_V2 if use_v2 else COMPUTE_KERNEL,
+                kernel_source=COMPUTE_KERNEL_V2 if use_v2 else (COMPUTE_KERNEL_V3 if use_v3 else COMPUTE_KERNEL),
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=used_cores,
                 compile_time_args=compute_ct,
