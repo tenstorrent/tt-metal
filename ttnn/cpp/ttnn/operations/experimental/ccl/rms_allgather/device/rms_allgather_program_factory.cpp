@@ -659,7 +659,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)ex_global_cb_index};
 
     namespace rh = ttnn::kernel_lib::host;
-    const rh::ReduceHardwareConfig reduce_hardware{mesh_device->arch(), fp32_dest_acc_en, false};
+    const rh::ReduceHardwareConfig reduce_hardware{mesh_device->arch(), fp32_dest_acc_en, false, math_fidelity};
     const auto make_stats_call = [&](uint32_t tiles, float scalar, compute_kernel_lib::ReduceInputPolicy policy) {
         auto plan = rh::make_reduce_plan(
             rh::ReduceBlockSpec::tiled(

@@ -401,6 +401,7 @@ def create_program_descriptor(
             arch=input_tensor.device().arch(),
             fp32_dest_acc_en=fp32_dest,
             dst_full_sync_en=False,
+            math_fidelity=math_fidelity or ttnn.MathFidelity.HiFi4,
         ),
         algorithm=planner.ReduceAlgorithm.REDUCE_TILE,
     )

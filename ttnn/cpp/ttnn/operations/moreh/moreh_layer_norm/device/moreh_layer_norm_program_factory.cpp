@@ -189,7 +189,10 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     auto moment_sequence = reduce_host::make_reduce_sequence_plan(
         moment_calls,
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
-        {.arch = device->arch(), .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en});
+        {.arch = device->arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .math_fidelity = math_fidelity});
     moment_sequence.calls.back().accumulation_index = num_blocks - 1;
     const auto* auxiliary = moment_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t in1_t = moment_sequence.auxiliary.tiles.size();

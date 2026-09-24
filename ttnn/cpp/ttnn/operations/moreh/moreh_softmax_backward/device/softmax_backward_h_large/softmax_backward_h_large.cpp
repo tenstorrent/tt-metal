@@ -90,7 +90,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
         {.arch = device.arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en});
+         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
+         .math_fidelity = compute_kernel_config.math_fidelity});
     reduce_sequence.calls.back().accumulation_index = num_blocks - 1;
     const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();

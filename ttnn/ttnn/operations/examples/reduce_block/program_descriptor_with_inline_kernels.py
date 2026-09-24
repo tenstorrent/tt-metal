@@ -251,11 +251,12 @@ def _logical_input_shape(dim, Ht, Wt, NC, partial_elems):
     return (NC, height, width)
 
 
-def _hardware(input_tensor, fp32_dest):
+def _hardware(input_tensor, fp32_dest, fidelity):
     return _PLANNER.ReduceHardwareConfig(
         arch=input_tensor.device().arch(),
         fp32_dest_acc_en=fp32_dest,
         dst_full_sync_en=False,
+        math_fidelity=fidelity,
     )
 
 
@@ -275,6 +276,7 @@ def _make_sequence_plan(
     Wt,
     NC,
     fp32_dest,
+    fidelity,
     input_cb_ids,
     reduce_math,
     scalar,
@@ -328,7 +330,7 @@ def _make_sequence_plan(
             accumulator_cb_id=CB_ACCUMULATOR,
             output_cb_id=CB_OUT,
         ),
-        hardware=_hardware(input_tensor, fp32_dest),
+        hardware=_hardware(input_tensor, fp32_dest, fidelity),
     )
 
 
@@ -420,6 +422,7 @@ def create_program_descriptor(
         raise ValueError("reconfiguration policy is selected by the host planner")
 
     fp32_dest = accum == "fp32"
+    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     sequence = _make_sequence_plan(
         input_tensor,
         output_tensor,
@@ -428,6 +431,7 @@ def create_program_descriptor(
         Wt=Wt,
         NC=NC,
         fp32_dest=fp32_dest,
+        fidelity=fidelity,
         input_cb_ids=[CB_IN],
         reduce_math=_PLANNER.ReduceMath.AVG,
         scalar=None,
@@ -435,7 +439,6 @@ def create_program_descriptor(
         policy=policy,
         row_stride=row_stride,
     )
-    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     kernels = _planned_kernels(
         sequence, kernel_iters=kernel_iters, fidelity=fidelity, fp32_dest=fp32_dest, avg_post_op=avg_post_op
     )
@@ -494,6 +497,7 @@ def create_accumulate_program_descriptor(
         raise ValueError("acc_unpack_to_dest requires accum='fp32'")
 
     fp32_dest = accum == "fp32"
+    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     reduce_math = _PLANNER.ReduceMath.AVG if mean else _PLANNER.ReduceMath.SUM
     scalar = None if mean else 1.0
     input_cb_ids = _input_cb_ids(num_chunks)
@@ -505,6 +509,7 @@ def create_accumulate_program_descriptor(
         Wt=Wt,
         NC=NC,
         fp32_dest=fp32_dest,
+        fidelity=fidelity,
         input_cb_ids=input_cb_ids,
         reduce_math=reduce_math,
         scalar=scalar,
@@ -513,7 +518,6 @@ def create_accumulate_program_descriptor(
         row_stride=row_stride,
     )
 
-    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     compute_cfg = ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest)
     if acc_unpack_to_dest:
         modes = [ttnn.UnpackToDestMode.Default] * 64

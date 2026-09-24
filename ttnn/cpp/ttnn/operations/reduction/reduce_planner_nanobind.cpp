@@ -102,16 +102,25 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::class_<host::ReduceHardwareConfig>(planner, "ReduceHardwareConfig")
         .def(
             "__init__",
-            [](host::ReduceHardwareConfig* self, tt::ARCH arch, bool fp32_dest_acc_en, bool dst_full_sync_en) {
+            [](host::ReduceHardwareConfig* self,
+               tt::ARCH arch,
+               bool fp32_dest_acc_en,
+               bool dst_full_sync_en,
+               tt::tt_metal::MathFidelity math_fidelity) {
                 new (self) host::ReduceHardwareConfig{
-                    .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
+                    .arch = arch,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .math_fidelity = math_fidelity};
             },
             nb::arg("arch"),
             nb::arg("fp32_dest_acc_en"),
-            nb::arg("dst_full_sync_en"))
+            nb::arg("dst_full_sync_en"),
+            nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi4)
         .def_rw("arch", &host::ReduceHardwareConfig::arch)
         .def_rw("fp32_dest_acc_en", &host::ReduceHardwareConfig::fp32_dest_acc_en)
-        .def_rw("dst_full_sync_en", &host::ReduceHardwareConfig::dst_full_sync_en);
+        .def_rw("dst_full_sync_en", &host::ReduceHardwareConfig::dst_full_sync_en)
+        .def_rw("math_fidelity", &host::ReduceHardwareConfig::math_fidelity);
 
     nb::class_<host::ReduceChunkPlan>(planner, "ReduceChunkPlan")
         .def_ro("reduce_axis_tiles", &host::ReduceChunkPlan::reduce_axis_tiles)

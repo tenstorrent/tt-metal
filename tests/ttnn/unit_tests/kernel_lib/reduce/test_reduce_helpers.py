@@ -621,6 +621,7 @@ def _repeated_input_cb_plan(input_tensor, output):
         arch=input_tensor.device().arch(),
         fp32_dest_acc_en=False,
         dst_full_sync_en=False,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
     )
     configs = [
         (
@@ -654,7 +655,7 @@ def _repeated_input_cb_plan(input_tensor, output):
     )
     assert len(plan) == plan.call_count == len(plan.calls) == 2
     assert plan.calls[0].input_cb_id == plan.calls[1].input_cb_id == CB_INPUT
-    # The two three-tile calls jointly clear the sequence's four-tile threshold.
+    # Two odd nine-tile calls clear Blackhole's HiFi3 row cutoff of 16 tiles.
     assert plan.calls[0].plan.algorithm == planner.ReduceAlgorithm.ACCUMULATE_VIA_ADD
     assert plan.calls[0].accumulation_mode == planner.ReduceAccumulationMode.INTERMEDIATE
     assert plan.calls[1].accumulation_mode == planner.ReduceAccumulationMode.FINAL
@@ -1546,10 +1547,10 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
     """One call binds physical CBs for an additive full path and a masked native tail."""
     block = _PLANNER.ReduceBlockSpec(
         32,
-        256,
+        320,
         ttnn.bfloat16,
         ttnn.float32,
-        resident_input_tiles=8,
+        resident_input_tiles=10,
         resident_output_tiles=1,
         allow_empty_auxiliary=True,
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
@@ -1585,9 +1586,9 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
         if not use_tail:
             # Full work must neither require nor interpret words after its zero marker.
             runtime_args += list(full_runtime_suffix)
-        width = 17 if use_tail else 256
+        width = 17 if use_tail else 320
         values = (torch.arange(32 * width).reshape(32, width) % 7 - 3).to(torch.bfloat16)
-        physical = torch.full((32, 256), 128, dtype=torch.bfloat16)
+        physical = torch.full((32, 320), 128, dtype=torch.bfloat16)
         physical[:, :width] = values
         source = ttnn.from_torch(
             physical,
@@ -1721,7 +1722,7 @@ def test_reduce_resident_hw_row_tail(device, algorithm):
 
 def test_reduce_plan_sequence_repeated_input_cb(device):
     """Two independently scheduled calls reduce the same reusable input CB into one accumulator."""
-    input_shape = (TILE, 3 * TILE)
+    input_shape = (TILE, 9 * TILE)
     output_shape = (TILE, TILE)
     memory_config = _sharded_memory_config(input_shape)
     input_tensor = ttnn.from_torch(

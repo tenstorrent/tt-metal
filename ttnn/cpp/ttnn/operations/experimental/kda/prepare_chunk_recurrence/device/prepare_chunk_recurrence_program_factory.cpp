@@ -123,7 +123,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {arch, reduce_fp32, reduce_full_sync},
+        {arch, reduce_fp32, reduce_full_sync, reduce_fidelity},
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
     const auto reduce_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();

@@ -232,7 +232,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         output.dtype(),
         unpack_fp32_active,
-        {device->arch(), fp32_dest_acc_en, operation_attributes.compute_kernel_config.dst_full_sync_en});
+        {device->arch(),
+         fp32_dest_acc_en,
+         operation_attributes.compute_kernel_config.dst_full_sync_en,
+         operation_attributes.compute_kernel_config.math_fidelity});
     const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reduce_auxiliary_args =
         rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
@@ -552,7 +555,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         unpack_fp32_active,
-        {device->arch(), fp32_dest_acc_en, operation_attributes.compute_kernel_config.dst_full_sync_en});
+        {device->arch(),
+         fp32_dest_acc_en,
+         operation_attributes.compute_kernel_config.dst_full_sync_en,
+         operation_attributes.compute_kernel_config.math_fidelity});
     const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reduce_auxiliary_args =
         rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();

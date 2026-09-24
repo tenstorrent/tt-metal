@@ -198,7 +198,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         use_large_kernel ? dfb_length : Wt,
         input_tensor.dtype(),
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
-        {arch, fp32_dest_acc_en, dst_full_sync_en},
+        {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
         (use_large_kernel ? compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile
                           : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop));
     if (!use_large_kernel) {

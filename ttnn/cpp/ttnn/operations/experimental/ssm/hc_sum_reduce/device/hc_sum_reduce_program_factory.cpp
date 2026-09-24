@@ -63,7 +63,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         ReduceOpDim::H,
         1.0F,
         ReduceFp32Mode::Fast,
-        {.arch = tensor_args.input.device()->arch()},
+        {.arch = tensor_args.input.device()->arch(), .math_fidelity = operation_attributes.math_fidelity},
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     reduce_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::NONE;
     std::vector<uint32_t> reader_compile_time_args;

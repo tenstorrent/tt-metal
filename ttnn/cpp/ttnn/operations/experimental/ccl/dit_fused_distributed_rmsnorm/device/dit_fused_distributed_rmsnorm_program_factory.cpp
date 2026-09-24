@@ -1062,7 +1062,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             ReduceOpDim::W,
             scalar,
             ReduceFp32Mode::Fast,
-            {device->arch(), fp32_dest_acc_en, false},
+            {device->arch(), fp32_dest_acc_en, false, math_fidelity},
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
         return plan;

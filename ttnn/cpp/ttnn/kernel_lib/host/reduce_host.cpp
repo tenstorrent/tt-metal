@@ -229,7 +229,39 @@ bool add_is_legal(
     return dim != ReduceOpDim::HW || !scalar_has_2d_partial;
 }
 
-std::uint32_t add_threshold(ReduceOpDim dim) { return dim == ReduceOpDim::W ? 4U : 8U; }
+// Blackhole P150b library-add/native crossover measurements, 2026-09-23.
+// BF16 input, FP32 output, both DEST accumulation modes; first sustained >1% win.
+// Dense sweeps refine HiFi2 ROW to 30 and HiFi4 ROW to 10; other entries use the
+// measured power-of-two grid. See reduce_accumulate/README.md for provenance.
+constexpr std::uint32_t LOFI_ROW_CUTOFF = 64;
+constexpr std::uint32_t LOFI_COL_CUTOFF = 32;
+constexpr std::uint32_t LOFI_SCALAR_CUTOFF = 16;
+constexpr std::uint32_t HIFI2_ROW_CUTOFF = 30;
+constexpr std::uint32_t HIFI2_COL_CUTOFF = 16;
+constexpr std::uint32_t HIFI2_SCALAR_CUTOFF = 8;
+constexpr std::uint32_t HIFI3_ROW_CUTOFF = 16;
+constexpr std::uint32_t HIFI3_COL_CUTOFF = 8;
+constexpr std::uint32_t HIFI3_SCALAR_CUTOFF = 8;
+constexpr std::uint32_t HIFI4_ROW_CUTOFF = 10;
+constexpr std::uint32_t HIFI4_COL_CUTOFF = 4;
+constexpr std::uint32_t HIFI4_SCALAR_CUTOFF = 4;
+
+std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardware) {
+    // Do not transfer Blackhole measurements to architectures not covered by the sweep.
+    if (hardware.arch != tt::ARCH::BLACKHOLE) {
+        return dim == ReduceOpDim::W ? 4U : 8U;
+    }
+    const auto for_dim = [dim](std::uint32_t row, std::uint32_t col, std::uint32_t scalar) {
+        return dim == ReduceOpDim::W ? row : (dim == ReduceOpDim::H ? col : scalar);
+    };
+    switch (hardware.math_fidelity) {
+        case tt::tt_metal::MathFidelity::LoFi: return for_dim(LOFI_ROW_CUTOFF, LOFI_COL_CUTOFF, LOFI_SCALAR_CUTOFF);
+        case tt::tt_metal::MathFidelity::HiFi2: return for_dim(HIFI2_ROW_CUTOFF, HIFI2_COL_CUTOFF, HIFI2_SCALAR_CUTOFF);
+        case tt::tt_metal::MathFidelity::HiFi3: return for_dim(HIFI3_ROW_CUTOFF, HIFI3_COL_CUTOFF, HIFI3_SCALAR_CUTOFF);
+        case tt::tt_metal::MathFidelity::HiFi4: return for_dim(HIFI4_ROW_CUTOFF, HIFI4_COL_CUTOFF, HIFI4_SCALAR_CUTOFF);
+        default: TT_THROW("Reduce planner: unsupported math fidelity");
+    }
+}
 
 // Reduction-axis tile count as the two planning paths derive it, without planning. The sequence
 // planner sums this across accumulated calls to test the additive threshold once for the sequence.
@@ -377,9 +409,10 @@ ReducePlan make_tiled_plan(
 
     const bool add_legal = add_is_legal(block, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
                            !(dim == ReduceOpDim::H && input_policy == ReduceInputPolicy::WaitAndPopPerTile);
-    const auto automatic_algorithm = add_legal && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim)
-                                         ? ReduceAlgorithm::AccumulateViaAdd
-                                         : ReduceAlgorithm::ReduceTile;
+    const auto automatic_algorithm =
+        add_legal && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim, hardware)
+            ? ReduceAlgorithm::AccumulateViaAdd
+            : ReduceAlgorithm::ReduceTile;
     TT_FATAL(
         !forced_algorithm.has_value() || *forced_algorithm != ReduceAlgorithm::AccumulateViaAdd || add_legal,
         "Reduce planner: AccumulateViaAdd was forced for an unsupported tiled reduction");

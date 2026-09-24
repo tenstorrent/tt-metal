@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/tensor/spec/layout/layout.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tile.hpp>
@@ -80,6 +81,8 @@ struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
+    // Must match the enclosing compute kernel. Defaults to Metal's ComputeConfig fidelity.
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 };
 
 struct ReduceChunkPlan {

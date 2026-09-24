@@ -121,7 +121,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     auto reduce_sequence = rh::make_reduce_sequence_plan(
         reductions,
         {reduce_scalar_cb_id, accumulator_cb_id, output_cb_id},
-        {device->arch(), fp32_dest_acc_en, dst_full_sync_en});
+        {device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity});
     reduce_sequence.calls.back().accumulation_index = num_reduce_calls - 1;
 
     std::vector<uint32_t> reader_compile_time_args = {

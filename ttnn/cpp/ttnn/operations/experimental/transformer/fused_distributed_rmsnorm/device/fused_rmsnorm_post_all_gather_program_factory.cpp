@@ -190,7 +190,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         ReduceOpDim::W,
         1.0F / (input_tensor.logical_shape()[-1] * num_devices),
         ReduceFp32Mode::Fast,
-        {device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+        {device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
     const rh::ReduceCallPlan reduce_call{

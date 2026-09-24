@@ -341,7 +341,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                                                 1.0F / reduce_divisor,
                                                 1.0F / (num_cores_per_batch * num_cores_per_group),
                                                 im_data_format,
-                                                {device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+                                                {device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
                                                 compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                                                 // Masking leaves input/mask unpack formats active. The new
                                                 // mean call consumes intermediates and its planned auxiliary.

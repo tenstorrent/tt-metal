@@ -64,13 +64,99 @@ ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
 }
 }  // namespace
 
+TEST(ReduceHostPlanner, FidelitySelectsBlackholeAdditiveCrossover) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    using Algorithm = compute_kernel_lib::ReduceAlgorithm;
+    using Policy = compute_kernel_lib::ReduceInputPolicy;
+    struct Crossover {
+        MathFidelity fidelity;
+        std::array<uint32_t, 3> tiles;  // W, H, HW
+    };
+    // Sustained >1% library-add wins from the Blackhole sweep, including the dense row sweeps.
+    const std::array cases{
+        Crossover{MathFidelity::LoFi, {64, 32, 16}},
+        Crossover{MathFidelity::HiFi2, {30, 16, 8}},
+        Crossover{MathFidelity::HiFi3, {16, 8, 8}},
+        Crossover{MathFidelity::HiFi4, {10, 4, 4}},
+    };
+    const std::array dims{ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW};
+    for (const auto& [fidelity, cutoffs] : cases) {
+        for (const bool fp32 : {false, true}) {
+            const ReduceHardwareConfig hardware{tt::ARCH::BLACKHOLE, fp32, false, fidelity};
+            for (size_t d = 0; d < dims.size(); ++d) {
+                for (const uint32_t tiles : {cutoffs[d] - 1, cutoffs[d], cutoffs[d] + 1}) {
+                    SCOPED_TRACE(
+                        ::testing::Message() << fidelity << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
+                    auto block = ReduceBlockSpec::tiled(
+                        dims[d] == ReduceOpDim::H ? tiles * 32 : 32,
+                        dims[d] == ReduceOpDim::H ? 32 : tiles * 32,
+                        DataType::BFLOAT16,
+                        DataType::FLOAT32);
+                    for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::AVG}) {
+                        const ReduceCallConfig call{
+                            block, math, dims[d], std::nullopt, ReduceFp32Mode::Fast, Policy::BulkWaitBulkPop};
+                        const auto sequence = make_reduce_sequence_plan({{0, call}}, {1, 2, 16}, hardware);
+                        EXPECT_EQ(
+                            sequence.calls[0].plan.algorithm,
+                            tiles >= cutoffs[d] ? Algorithm::AccumulateViaAdd : Algorithm::ReduceTile);
+                        // Explicit choices bypass the performance heuristic in both directions.
+                        for (const auto forced : {Algorithm::ReduceTile, Algorithm::AccumulateViaAdd}) {
+                            EXPECT_EQ(
+                                make_reduce_sequence_plan({{0, call}}, {1, 2, 16}, hardware, forced)
+                                    .calls[0]
+                                    .plan.algorithm,
+                                forced);
+                        }
+                    }
+                    // Fidelity must not override the additive path's eligibility restrictions.
+                    EXPECT_EQ(
+                        make_reduce_plan(
+                            block, ReduceOpMath::MAX, dims[d], ReduceFp32Mode::Fast, hardware, Policy::BulkWaitBulkPop)
+                            .algorithm,
+                        Algorithm::ReduceTile);
+                }
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, BlackholeCutoffsDoNotChangeWormholeSelection) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi2, MathFidelity::HiFi3, MathFidelity::HiFi4}) {
+        const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, true, false, fidelity};
+        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
+            const uint32_t cutoff = dim == ReduceOpDim::W ? 4 : 8;
+            for (const auto tiles : {cutoff - 1, cutoff}) {
+                const auto block = ReduceBlockSpec::tiled(
+                    dim == ReduceOpDim::H ? tiles * 32 : 32,
+                    dim == ReduceOpDim::H ? 32 : tiles * 32,
+                    DataType::BFLOAT16,
+                    DataType::FLOAT32);
+                EXPECT_EQ(
+                    make_reduce_plan(
+                        block,
+                        ReduceOpMath::SUM,
+                        dim,
+                        ReduceFp32Mode::Fast,
+                        hardware,
+                        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop)
+                        .algorithm,
+                    tiles >= cutoff ? compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
+                                    : compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+            }
+        }
+    }
+}
+
 TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
-            const auto block = ReduceBlockSpec::tiled(9 * 32, 4 * 32, dtype, DataType::FLOAT32);
+            const auto block = ReduceBlockSpec::tiled(9 * 32, 10 * 32, dtype, DataType::FLOAT32);
             for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(
                     block,
@@ -1191,7 +1277,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(short_plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
 
     const auto threshold_plan = make_reduce_plan(
-        make_block(Shape{1, 1, 32, 4 * 32}),
+        make_block(Shape{1, 1, 32, 10 * 32}),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         0.25F,
@@ -1203,7 +1289,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
 
     const auto tile_bytes = tt::tt_metal::tile_size(DataType::BFLOAT16);
     const auto streaming_plan = make_reduce_plan(
-        make_block(Shape{1, 1, 32, 8 * 32}),
+        make_block(Shape{1, 1, 32, 10 * 32}),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
@@ -1444,11 +1530,11 @@ TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
         }
         return reductions;
     };
-    const ReduceSequenceCbIds cb_ids{.auxiliary_cb_id = 8U, .accumulator_cb_id = 9U, .output_cb_id = 10U};
+    const ReduceSequenceCbIds cb_ids{.auxiliary_cb_id = 20U, .accumulator_cb_id = 21U, .output_cb_id = 22U};
 
-    // Two tiles along W is below the W threshold of four, so one such call on its own uses ReduceTile.
+    // Five tiles along W is below the HiFi4 W threshold of ten, so one such call on its own uses ReduceTile.
     const auto single = make_reduce_plan(
-        make_block(Shape{1, 1, 32, 2 * 32}),
+        make_block(Shape{1, 1, 32, 5 * 32}),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
@@ -1457,16 +1543,16 @@ TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     EXPECT_EQ(single.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
 
-    // Accumulating two of them reduces four tiles for one finalization, so the sequence clears the threshold.
-    const auto pooled = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 2 * 32}, 2), cb_ids, hardware);
+    // Accumulating two of them reduces ten tiles for one finalization, so the sequence clears the threshold.
+    const auto pooled = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 5 * 32}, 2), cb_ids, hardware);
     ASSERT_EQ(pooled.calls.size(), 2U);
     for (const auto& call : pooled.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
     }
 
-    // Four single-tile calls also clear it, and the sequence stays homogeneous.
-    const auto pooled_singles = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 32}, 4), cb_ids, hardware);
-    ASSERT_EQ(pooled_singles.calls.size(), 4U);
+    // Ten single-tile calls also clear it, and the sequence stays homogeneous.
+    const auto pooled_singles = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 32}, 10), cb_ids, hardware);
+    ASSERT_EQ(pooled_singles.calls.size(), 10U);
     for (const auto& call : pooled_singles.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
     }
@@ -1478,9 +1564,9 @@ TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
     }
 
-    // H uses a threshold of eight; four calls of two row tiles each reach it.
+    // HiFi4 H uses a threshold of four; two calls of two row tiles each reach it.
     std::vector<ReduceCbConfig> col_reductions;
-    for (std::uint32_t i = 0; i < 4; ++i) {
+    for (std::uint32_t i = 0; i < 2; ++i) {
         col_reductions.push_back(
             {i,
              ReduceCallConfig{
@@ -1492,7 +1578,7 @@ TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
                  .input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop}});
     }
     const auto col_sequence = make_reduce_sequence_plan(col_reductions, cb_ids, hardware);
-    ASSERT_EQ(col_sequence.calls.size(), 4U);
+    ASSERT_EQ(col_sequence.calls.size(), 2U);
     for (const auto& call : col_sequence.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
     }

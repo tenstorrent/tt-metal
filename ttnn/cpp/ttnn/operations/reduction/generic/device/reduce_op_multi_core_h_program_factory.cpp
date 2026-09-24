@@ -166,7 +166,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const auto planned_fp32_mode = planned_sfpu && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en
                                        ? ReduceFp32Mode::Accurate
                                        : ReduceFp32Mode::Fast;
-    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, dst_full_sync_en};
+    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity};
     auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),

@@ -564,7 +564,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     };
 
     const ttnn::kernel_lib::host::ReduceHardwareConfig reduce_hardware{
-        device->arch(), fp32_dest_acc_en, dst_full_sync_en};
+        device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity};
     const auto make_group_plan = [&](uint32_t rows, uint32_t factor) {
         return use_welford ? GroupNormReducePlans{}
                            : make_interleaved_groupnorm_reduce_plans(

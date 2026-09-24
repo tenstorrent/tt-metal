@@ -124,7 +124,10 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
         reductions,
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
-        {.arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en});
+        {.arch = arch,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .math_fidelity = math_fidelity});
     reduce_sequence.calls.back().accumulation_index = num_blocks - 1;
     const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();

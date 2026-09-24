@@ -96,7 +96,10 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     // ---- DataflowBuffers ----
     namespace reduce_host = ttnn::kernel_lib::host;
     const reduce_host::ReduceHardwareConfig reduce_hardware{
-        .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_fidelity = math_fidelity};
     auto max_plan = reduce_host::make_reduce_plan(
         reduce_host::ReduceBlockSpec::tiled(
             32,

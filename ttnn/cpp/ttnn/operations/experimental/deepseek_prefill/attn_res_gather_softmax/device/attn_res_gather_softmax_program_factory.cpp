@@ -343,7 +343,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {target_device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+        {target_device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
         compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
 
     std::vector<uint32_t> reader_ct_args = {Wt, static_cast<uint32_t>(fuse_add)};

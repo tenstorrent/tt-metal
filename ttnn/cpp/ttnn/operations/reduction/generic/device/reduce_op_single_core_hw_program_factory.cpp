@@ -109,7 +109,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         ReduceOpDim::HW,
         operation_attributes.scaler,
         ReduceFp32Mode::Fast,
-        {a.device().arch(), fp32_dest_acc_en, false},
+        {a.device().arch(), fp32_dest_acc_en, false, math_fidelity},
         Ht,
         Wt,
         NC,

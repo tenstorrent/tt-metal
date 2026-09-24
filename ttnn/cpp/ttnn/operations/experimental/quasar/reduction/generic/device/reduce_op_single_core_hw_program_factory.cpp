@@ -84,7 +84,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     namespace rh = ttnn::kernel_lib::host;
-    const rh::ReduceHardwareConfig hardware{a.device().arch(), fp32_dest_acc_en, false};
+    const rh::ReduceHardwareConfig hardware{a.device().arch(), fp32_dest_acc_en, false, math_fidelity};
     auto plan_reduction = [&](uint32_t local_Wt) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),

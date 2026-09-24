@@ -69,7 +69,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
         ReduceFp32Mode::Fast,
         {.arch = device.arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en},
+         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
+         .math_fidelity = compute_kernel_config.math_fidelity},
         op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop
                                                  : compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
 

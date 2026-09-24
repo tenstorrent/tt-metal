@@ -95,7 +95,10 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWLar
 
     namespace reduce_host = ttnn::kernel_lib::host;
     const reduce_host::ReduceHardwareConfig reduce_hardware{
-        .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_fidelity = math_fidelity};
     const auto max_plan = reduce_host::make_reduce_plan(
         reduce_host::ReduceBlockSpec::tiled(
             32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),

@@ -510,7 +510,7 @@ ProgramDescriptor build_ring_program_descriptor(
         tt::tt_metal::ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {q.device()->arch(), false, false},
+        {q.device()->arch(), false, false, math_fidelity},
         compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
 
     rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})

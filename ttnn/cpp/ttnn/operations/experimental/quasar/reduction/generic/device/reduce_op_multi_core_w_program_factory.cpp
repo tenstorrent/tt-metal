@@ -92,7 +92,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
 
     namespace rh = ttnn::kernel_lib::host;
-    const rh::ReduceHardwareConfig hardware{device->arch(), fp32_dest_acc_en, false};
+    const rh::ReduceHardwareConfig hardware{device->arch(), fp32_dest_acc_en, false, math_fidelity};
     auto plan_reduction = [&](uint32_t local_Ht) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),
