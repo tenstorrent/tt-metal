@@ -473,6 +473,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # 12x10 grids slower (67.6). e2e 23.3 -> 22.4 ms (-3.9%, chip 4). Opt out: QWEN_SDPA_BS1_Q256=0.
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
+        # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead
+        # of once per Q head, and one 512-token K chunk then beats two of 256. SDPA 49.7 -> 35.9 us/call in-model;
+        # e2e 17.19 -> 16.70 ms (-2.8%, 3 alternating 30-it A/B pairs, chip 0); fixed-512 STS-B 0.8121 -> 0.8133.
+        # Opt out: QWEN_SDPA_GQA_PACK=0 (k 256 then; packed with k 256 is bit-identical to unpacked).
+        if os.getenv("QWEN_SDPA_GQA_PACK", "1") == "1":
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK", "1")
+            os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
     # bs1 legacy 2D-multicast matmul blocks (8x8 grid, DRAM width-sharded bfp4 weights), from a
     # standalone in0_block_w x out_subblock sweep at M=512 on the model's operand placement:

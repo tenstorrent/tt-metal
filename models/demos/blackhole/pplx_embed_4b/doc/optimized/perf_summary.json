@@ -233,5 +233,25 @@
       "after": 17.218
     },
     "stsb_bs1_eval_accuracy_tt": 0.8161
+  },
+  "bs1_sdpa_gqa_pack_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of bs1_resid_sharded_every_layer_20260924",
+    "sdpa_us_per_call_in_model": {
+      "before": 49.7,
+      "after": 35.9
+    },
+    "device_ms_one_traced_replay": {
+      "before": 16.911,
+      "after": 16.426
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 17.189,
+      "after": 16.702
+    },
+    "stsb": {
+      "fixed512_batch1_before": 0.8121,
+      "fixed512_batch1_after": 0.8133,
+      "bs1_bucketed_eval_accuracy_tt": 0.8161
+    }
   }
 }

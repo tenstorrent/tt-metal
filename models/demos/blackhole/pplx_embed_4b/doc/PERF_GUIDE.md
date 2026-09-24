@@ -47,7 +47,7 @@ Shipped defaults at ISL 512:
 | batch | knobs |
 |---|---|
 | all | `QWEN_FUSED_HEADS_NORM=1` (head split + Q/K RMSNorm + RoPE in one generic op), `QWEN_FUSED_Q_BFP8=force`, `QWEN_FUSED_KV_BFP8=1`, `QWEN_QKV_OUT_BFP8=1`, `QWEN_FUSED_ADD_NORM=1`, `QWEN_MM_MAX_DIVISOR=38` |
-| 1 | `QWEN_SDPA_Q_CHUNK=256 QWEN_SDPA_K_CHUNK=256`; legacy 2D matmuls on 12×8: `QWEN_QKV_GRID_X=12`, `QWEN_LEGACY_GRID_{FF13,FF2,WO}=12,8`, `QWEN_LEGACY_TIGHT_PER_CORE_N=1`, `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>` (2×2 FF1/FF3, 2×1 FF2/WO, 1×4 QKV); `QWEN_SDPA_CONCAT_OUT_BS1=1` (SDPA writes `[1,1,S,H·d]` at bs1 too, model-local concat gone), `QWEN_BS1_RESID_SHARDED=1` (residual adds write the norm's 10×8 block-shard layout; the I2S before each norm is a no-op) |
+| 1 | `QWEN_SDPA_Q_CHUNK=256 QWEN_SDPA_K_CHUNK=256`; legacy 2D matmuls on 12×8: `QWEN_QKV_GRID_X=12`, `QWEN_LEGACY_GRID_{FF13,FF2,WO}=12,8`, `QWEN_LEGACY_TIGHT_PER_CORE_N=1`, `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>` (2×2 FF1/FF3, 2×1 FF2/WO, 1×4 QKV); `QWEN_SDPA_CONCAT_OUT_BS1=1` (SDPA writes `[1,1,S,H·d]` at bs1 too, model-local concat gone), `QWEN_BS1_RESID_SHARDED=1` (residual adds write the norm's 10×8 block-shard layout; the I2S before each norm is a no-op); `QWEN_SDPA_GQA_PACK=1` + `QWEN_SDPA_K_CHUNK=512` (SDPA `pack_gqa_heads`: one K/V stream per KV head) |
 | >1 | `QWEN_SDPA_CONCAT_OUT=1` (SDPA writes `[B,1,S,H·d]`, no concat pass), `QWEN_SDPA_K_CHUNK=512`, `QWEN_FUSE_SWIGLU=1` at bs8/16 |
 | 8 | `QWEN_SDPA_GRID=12,8 QWEN_SDPA_Q_CHUNK=512`, `QWEN_MM_BLOCK_FF2=16,8,8 QWEN_MM_BLOCK_QKV=8,4,8 QWEN_MM_BLOCK_WO=16,8,8`, `QWEN_FUSED_ADD_NORM_MIN_ROWS=4096 QWEN_FUSED_ADD_NORM_R=5` |
 | 16 | `QWEN_SDPA_GRID=12,10`, `QWEN_MM_BLOCK_FF13=4,20,8 QWEN_MM_SUBBLOCK_FF13=1,4`, `QWEN_FUSED_ADD_NORM_R=5` |

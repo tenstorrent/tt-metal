@@ -209,6 +209,10 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     # bs1 as well (QWEN_SDPA_CONCAT_OUT_BS1=1): the q256 8x8 SDPA drains faster into [1, 1, S, H*d]
     # (standalone 57.3 -> 54.1 us) and the 4.6 us model-local concat op disappears.
     concat_out_bs1 = os.getenv("QWEN_SDPA_CONCAT_OUT_BS1", "1") == "1"
+    # bs1 (QWEN_SDPA_GQA_PACK=1): SDPA's pack_gqa_heads schedules the 4 Q heads sharing a KV head as one head
+    # of 4*S rows, so each KV head's K/V streams once down one 8-core chain instead of once per Q head.
+    # Unmasked non-causal calls only (the serving pad mask takes the unpacked call).
+    gqa_pack = os.getenv("QWEN_SDPA_GQA_PACK", "0") == "1"
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
@@ -217,6 +221,20 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
                 kwargs["attn_mask"] = _PAD_ATTN_MASK
         q = args[0] if args else kwargs.get("input_tensor_q")
+        k = args[1] if len(args) > 1 else kwargs.get("input_tensor_k")
+        if (
+            gqa_pack
+            and not causal
+            and kwargs.get("attn_mask") is None
+            and q is not None
+            and int(q.shape[0]) == 1
+            and int(q.shape[1]) > int(k.shape[1])
+            and int(q.shape[1]) % int(k.shape[1]) == 0
+            # q chunks must not span two heads (the op validates this for the concat layout); the Generator's
+            # warm-up shapes (S=128 at q_chunk 256) take the unpacked call
+            and int(q.shape[2]) % getattr(kwargs.get("program_config"), "q_chunk_size", 32) == 0
+        ):
+            kwargs["pack_gqa_heads"] = True
         if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
             kwargs["output_heads_concat"] = True
             out = original_fn(*args, **kwargs)
