@@ -756,6 +756,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (operation_attributes.output_heads_concat) {
+        defines_map["OUT_HEADS_CONCAT"] = "1";  // writer lays the output out as [B, 1, Sq, NQH*vDH]
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());

@@ -32,6 +32,10 @@ struct SDPAParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+    // Write the output straight into the [B, 1, Sq, NQH * vDH] ("concatenated heads") tile layout instead of
+    // [B, NQH, Sq, vDH]. Same tiles, different tile ids: saves the concat_heads pass before the output
+    // projection. Interleaved output only.
+    bool output_heads_concat = false;
 };
 
 struct SDPAInputs {

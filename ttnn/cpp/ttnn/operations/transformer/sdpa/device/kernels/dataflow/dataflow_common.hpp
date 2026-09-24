@@ -1571,9 +1571,10 @@ void write_block(
     const uint32_t cols,
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride_tiles = 0) {  // tile-id distance between output rows; 0 = cols (dense rows)
     uint32_t barrier_count = 0;
-    uint32_t tile_id = out_tile_id;
+    const uint32_t row_stride = row_stride_tiles ? row_stride_tiles : cols;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
@@ -1581,8 +1582,8 @@ void write_block(
     uint32_t tile_offset = 0;
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
+            const uint32_t tile_id = out_tile_id + row * row_stride + col;
             noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
-            ++tile_id;
             tile_offset += tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
@@ -1612,9 +1613,10 @@ void write_block_row_grouped(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t sbh,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride_tiles = 0) {  // tile-id distance between output rows; 0 = cols (dense rows)
     constexpr uint32_t default_trid = 0;
-    uint32_t tile_id = out_tile_id;
+    const uint32_t row_stride = row_stride_tiles ? row_stride_tiles : cols;
     uint32_t barrier_count = 0;
 
     const uint32_t num_full_groups = total_rows / sbh;
@@ -1631,8 +1633,8 @@ void write_block_row_grouped(
             if (row < write_rows) {
                 for (uint32_t col = 0; col < cols; ++col) {
                     uint32_t tile_offset = (r * cols + col) * tile_bytes;
+                    const uint32_t tile_id = out_tile_id + row * row_stride + col;
                     noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
-                    ++tile_id;
                     if (++barrier_count == barrier_threshold) {
                         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
                         barrier_count = 0;
