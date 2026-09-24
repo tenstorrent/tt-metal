@@ -131,6 +131,7 @@ struct H2HSocket::Impl {
     uint64_t in_flight = 0;
     uint64_t tx_queued = 0;
     uint32_t rr = 0;
+    PassStats stats{};
 
     // Per (my core, peer host). Two DIFFERENT counts that must not share storage: what we
     // have posted to that peer, and what we have credited back to it.
@@ -403,6 +404,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         return 0;
     }
     im.harvest_credits();
+    ++im.stats.passes;
+    const uint64_t posts_before = im.stats.posts;
 
     // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
     // test(), is the license. test() is still required: it is what returns the request slot.
@@ -515,6 +518,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         im.dirty[host] = true;
         (void)im.tx_payload.push_back(t.core, f);
         ++im.in_flight;
+        ++im.stats.posts;
         im.tx_queue.pop_front(c);
         --im.tx_queued;
         ++progress;
@@ -527,7 +531,15 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
     // After the starts and before the next pass's retire loop: that gap is what makes an
     // acked frame mean "in the peer's window" rather than "handed to MPI" -- see tt_uva_quiet().
+    // Conditional: poll() is the spin loop, so an unconditional clock read would tax every
+    // pass of a run that asked for none, and the split says which half of a pass to go after.
+    const auto flush_t0 =
+        im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     im.flush_dirty();
+    if (im.cfg.collect_timing) {
+        im.stats.flush_ns += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - flush_t0).count());
+    }
 
     // Harvest arrivals. The peer puts the trailer in a pass AFTER the payload it describes,
     // with a flush between, so an armed guard means those bytes are already visible.
@@ -582,6 +594,9 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             im.next_slot[c] = (slot + 1) % im.cfg.ring_pages;
             ++progress;
         }
+    }
+    if (im.stats.posts == posts_before) {
+        ++im.stats.starved;
     }
     return progress;
 }
@@ -639,6 +654,8 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
 }
 
 const std::vector<uint64_t>& H2HSocket::put_to_credit_ns() const { return impl_->put_to_credit_ns; }
+
+const H2HSocket::PassStats& H2HSocket::pass_stats() const { return impl_->stats; }
 
 // Frames THIS core put that a far device has pulled -- the done array, not the credit one.
 // Cumulative for the socket's lifetime: D2HLeg::credit() turns it into bytes, which is what
