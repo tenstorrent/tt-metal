@@ -203,15 +203,20 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(2);  // head_dim_tiles
     constexpr uint32_t fuse_rotary = get_compile_time_arg_val(3);
     constexpr uint32_t separate_q = get_compile_time_arg_val(4);  // Q -> cb_qsep (own dtype), K|V -> cb_out
+    constexpr uint32_t q_split = get_compile_time_arg_val(8);     // 1, or 2: unit = half the Q heads + (K xor V)
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
+    const uint32_t work_unit_start = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
+    constexpr uint32_t sub_q_heads = q_heads_per_group / q_split;
     constexpr uint32_t group_q_tiles = q_heads_per_group * Wt;
+    constexpr uint32_t sub_q_tiles = sub_q_heads * Wt;
     constexpr uint32_t group_kv_tiles = heads_per_group * Wt;
-    constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
+    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
     constexpr uint32_t cb_qout = separate_q ? cb_qsep : cb_out;
-    constexpr uint32_t kv_base = separate_q ? 0 : group_q_tiles;  // K|V offset inside cb_out
-    constexpr uint32_t out_tiles = separate_q ? 2 * group_kv_tiles : unit_tiles;
+    constexpr uint32_t kv_base = separate_q ? 0 : sub_q_tiles;  // K|V offset inside cb_out
+    constexpr uint32_t out_tiles = separate_q ? kv_parts * group_kv_tiles : unit_tiles;
     constexpr uint32_t cb_qnorm = fuse_rotary ? cb_norm : cb_qout;
     constexpr uint32_t cb_knorm = fuse_rotary ? cb_norm : cb_out;
 
@@ -227,26 +232,33 @@ void kernel_main() {
     }
 
     for (uint32_t w = 0; w < num_work_units; ++w) {
+        const uint32_t sub = (q_split == 1) ? 0 : ((work_unit_start + w) % q_split);
+        const bool has_k = (q_split == 1) || sub == 0;
+        const bool has_v = (q_split == 1) || sub == 1;
+        const uint32_t v_in_off = sub_q_tiles + (has_k ? group_kv_tiles : 0);
+        const uint32_t v_out_off = kv_base + (has_k ? group_kv_tiles : 0);
         in.wait_front(unit_tiles);
         out.reserve_back(out_tiles);
         if constexpr (separate_q) {
-            qout.reserve_back(group_q_tiles);
+            qout.reserve_back(sub_q_tiles);
         }
         if constexpr (fuse_rotary) {
             CircularBuffer ccos(cb_cos), csin(cb_sin);
             ccos.wait_front(Wt);
             csin.wait_front(Wt);
         }
-        for (uint32_t h = 0; h < q_heads_per_group; ++h) {
+        for (uint32_t h = 0; h < sub_q_heads; ++h) {
             norm_head<Wt, cb_qnorm>(h * Wt, h * Wt, cb_gq);
             if constexpr (fuse_rotary) {
                 rotary_head<Wt, cb_qout>(h * Wt);
             }
         }
-        for (uint32_t h = 0; h < heads_per_group; ++h) {
-            norm_head<Wt, cb_knorm>(group_q_tiles + h * Wt, kv_base + h * Wt, cb_gk);
-            if constexpr (fuse_rotary) {
-                rotary_head<Wt, cb_out>(kv_base + h * Wt);
+        if (has_k) {
+            for (uint32_t h = 0; h < heads_per_group; ++h) {
+                norm_head<Wt, cb_knorm>(sub_q_tiles + h * Wt, kv_base + h * Wt, cb_gk);
+                if constexpr (fuse_rotary) {
+                    rotary_head<Wt, cb_out>(kv_base + h * Wt);
+                }
             }
         }
         if constexpr (fuse_rotary) {
@@ -255,24 +267,26 @@ void kernel_main() {
             csin.pop_front(Wt);
         }
         // V passes through
-        reconfig_data_format(cb_in, cb_in);
-        pack_reconfig_data_format(cb_out);
-        copy_init(cb_in);
-        for (uint32_t t0 = 0; t0 < group_kv_tiles; t0 += Wt) {
-            const uint32_t n = (group_kv_tiles - t0 < Wt) ? (group_kv_tiles - t0) : Wt;
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < n; ++j) {
-                copy_tile(cb_in, group_q_tiles + group_kv_tiles + t0 + j, j);
+        if (has_v) {
+            reconfig_data_format(cb_in, cb_in);
+            pack_reconfig_data_format(cb_out);
+            copy_init(cb_in);
+            for (uint32_t t0 = 0; t0 < group_kv_tiles; t0 += Wt) {
+                const uint32_t n = (group_kv_tiles - t0 < Wt) ? (group_kv_tiles - t0) : Wt;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < n; ++j) {
+                    copy_tile(cb_in, v_in_off + t0 + j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < n; ++j) {
+                    pack_tile(j, cb_out, v_out_off + t0 + j);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < n; ++j) {
-                pack_tile(j, cb_out, kv_base + group_kv_tiles + t0 + j);
-            }
-            tile_regs_release();
         }
         if constexpr (separate_q) {
-            qout.push_back(group_q_tiles);
+            qout.push_back(sub_q_tiles);
         }
         out.push_back(out_tiles);
         in.pop_front(unit_tiles);

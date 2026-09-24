@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from loguru import logger
 
 import ttnn
@@ -205,6 +207,13 @@ class DistributedNorm(LightweightModule):
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
+
+        # TT_PREFILL_LN_L1=1: write the interleaved prefill norm output to L1 even when the residual
+        # stream lives in DRAM (batched prefill). The next consumer is the QKV / FF1 / FF3 matmul,
+        # which then reads its in0 from L1; the tensor is short-lived. Opt-in probe.
+        if mode != Mode.DECODE and os.getenv("TT_PREFILL_LN_L1", "0") == "1":
+            norm_config = dict(norm_config or {})
+            norm_config.setdefault("output_mem_config", ttnn.L1_MEMORY_CONFIG)
 
         if self.norm is not None:
             x = self.norm(

@@ -121,6 +121,10 @@ class RMSNorm(LightweightModule):
         # traced on P150 it drops 764 -> 692 us (-11%) with this config, while the
         # 2560-wide norms are insensitive (260 -> 256 us). Accuracy must be re-validated.
         _lofi_approx = os.getenv("QWEN_NORM_LOFI_APPROX", "0") == "1"
+        # QWEN_NORM_FP32_ACC=0: keep HiFi2 but drop the fp32 destination accumulation (the
+        # BGE-M3 B16 LayerNorm probe: -28% standalone on the kernel, PCC-gated there).
+        if os.getenv("QWEN_NORM_FP32_ACC", "1") == "0":
+            fp32_dest_acc_en = False
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi if _lofi_approx else ttnn.MathFidelity.HiFi2,
             math_approx_mode=_lofi_approx,
@@ -182,7 +186,9 @@ class RMSNorm(LightweightModule):
 
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
-        memory_config = sharded_output_config if out_sharded else None
+        # Interleaved path: honour an explicit output placement (e.g. L1 for a DRAM-resident
+        # residual stream, TT_PREFILL_LN_L1); the sharded path keeps handling it on its S2I.
+        memory_config = sharded_output_config if out_sharded else (output_mem_config if not in_sharded else None)
         distributed = self.is_distributed and self.is_distributed(mode)
         weight = self.weight_distributed if distributed else self.weight
 

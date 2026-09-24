@@ -71,6 +71,13 @@ def nlp_create_qkv_heads_norm_headsplit(
     if plan.num_kv_heads % head_groups != 0:
         raise ValueError(f"num_kv_heads ({plan.num_kv_heads}) must be divisible by head_groups ({head_groups})")
     heads_per_group = plan.num_kv_heads // head_groups
+    # Q split: 2 halves the unit (half the group's Q heads plus K *or* V) so small shapes fill more
+    # cores. bs1: 128 units of 24 tiles -> 256 units of 12 tiles. 1 = one unit per (block, group).
+    q_split = int(os.getenv("QWEN_HEADSPLIT_Q_SPLIT", "1"))
+    if q_split not in (1, 2) or (heads_per_group * plan.q_heads_per_kv) % q_split != 0:
+        raise ValueError(f"QWEN_HEADSPLIT_Q_SPLIT={q_split} must be 1 or 2 and divide the group's Q heads")
+    if q_split != 1 and use_v2:
+        raise ValueError("QWEN_FUSED_COMPUTE_V2 does not support QWEN_HEADSPLIT_Q_SPLIT != 1")
 
     out_dtype = qkv_fused.dtype
     q_dtype = q_dtype or out_dtype
@@ -85,7 +92,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config)
 
     grid = device.compute_with_storage_grid_size()
-    num_cores, per_core = _split_work_to_cores(plan.num_blocks_total * head_groups, int(grid.x), int(grid.y))
+    num_cores, per_core = _split_work_to_cores(plan.num_blocks_total * head_groups * q_split, int(grid.x), int(grid.y))
     if num_cores == 0:
         raise RuntimeError("nlp_create_qkv_heads_norm_headsplit: nothing to do")
     used_cores = _core_ranges(per_core)
@@ -93,9 +100,11 @@ def nlp_create_qkv_heads_norm_headsplit(
     Wt = plan.head_dim_tiles
     group_q_tiles = heads_per_group * plan.q_heads_per_kv * Wt
     group_kv_tiles = heads_per_group * Wt
-    unit_tiles = group_q_tiles + 2 * group_kv_tiles
+    sub_q_tiles = group_q_tiles // q_split
+    kv_parts = 2 if q_split == 1 else 1  # K and V in one unit, or K xor V per half
+    unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles
     tile_size = _TILE_BYTES[out_dtype]
-    out_tiles = 2 * group_kv_tiles if separate_q else unit_tiles
+    out_tiles = kv_parts * group_kv_tiles if separate_q else unit_tiles
 
     def cb(index, tiles, dtype, tsize):
         return ttnn.CBDescriptor(
@@ -117,7 +126,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(8, Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
     ]
     if separate_q:
-        cbs.append(cb(17, group_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
+        cbs.append(cb(17, sub_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
     if fuse_rotary:
         cbs += [
             cb(9, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
@@ -139,6 +148,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         heads_per_group,
         int(fuse_rotary),
         int(cache_rot),
+        q_split,
     ]
     for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -151,6 +161,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         int(cache_rot),
         head_groups,
         plan.seq_tiles,
+        q_split,
     ]
     writer_ct = [
         plan.seq_tiles,
@@ -163,6 +174,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         heads_per_group,
         plan.seq_tiles,
         int(separate_q),
+        q_split,
     ]
     for t in (q_tensor, k_tensor, v_tensor):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())

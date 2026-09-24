@@ -31,7 +31,8 @@ void kernel_main() {
     constexpr uint32_t head_groups = get_compile_time_arg_val(5);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
     constexpr uint32_t cache_rot = get_compile_time_arg_val(8);  // 1: cos/sin pushed only when the seq tile changes
-    constexpr auto in0_args = TensorAccessorArgs<9>();
+    constexpr uint32_t q_split = get_compile_time_arg_val(9);    // 1, or 2: unit = half the Q heads + (K xor V)
+    constexpr auto in0_args = TensorAccessorArgs<10>();
     constexpr auto gq_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto gk_args = TensorAccessorArgs<gq_args.next_compile_time_args_offset()>();
     constexpr auto sc_args = TensorAccessorArgs<gk_args.next_compile_time_args_offset()>();
@@ -63,7 +64,9 @@ void kernel_main() {
     constexpr uint32_t group_kv_tiles = heads_per_group * head_dim_tiles;
     constexpr uint32_t q_tiles_total = num_kv_heads * q_heads_per_kv * head_dim_tiles;
     constexpr uint32_t kv_tiles_total = num_kv_heads * head_dim_tiles;
-    constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
+    constexpr uint32_t sub_q_tiles = group_q_tiles / q_split;
+    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
 
     // Resident constants (never popped by compute).
     {
@@ -97,8 +100,12 @@ void kernel_main() {
     uint32_t last_s_tile = 0xFFFFFFFFu;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const uint32_t work_unit = work_unit_start + w;
-        const uint32_t block = work_unit / head_groups;          // (batch, seq_tile) pair
-        const uint32_t group = work_unit - block * head_groups;  // which head group
+        const uint32_t sub = work_unit % q_split;  // which Q half (0 also carries K, 1 carries V)
+        const uint32_t rest = work_unit / q_split;
+        const uint32_t block = rest / head_groups;          // (batch, seq_tile) pair
+        const uint32_t group = rest - block * head_groups;  // which head group
+        const bool has_k = (q_split == 1) || sub == 0;
+        const bool has_v = (q_split == 1) || sub == 1;
         const uint32_t s_tile = block % seq_tiles;
         const uint32_t batch = block / seq_tiles;
         const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
@@ -108,17 +115,25 @@ void kernel_main() {
 
         cb.reserve_back(unit_tiles);
         uint32_t l1_write_offset = 0;
-        for (uint32_t i = 0; i < group_q_tiles; ++i) {
-            noc.async_read(s0, cb, tile_size_bytes, {.page_id = q_base_tile + i}, {.offset_bytes = l1_write_offset});
+        const uint32_t q_sub_base_tile = q_base_tile + sub * sub_q_tiles;
+        for (uint32_t i = 0; i < sub_q_tiles; ++i) {
+            noc.async_read(
+                s0, cb, tile_size_bytes, {.page_id = q_sub_base_tile + i}, {.offset_bytes = l1_write_offset});
             l1_write_offset += tile_size_bytes;
         }
-        for (uint32_t i = 0; i < group_kv_tiles; ++i) {
-            noc.async_read(s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
-            l1_write_offset += tile_size_bytes;
+        if (has_k) {
+            for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
+            }
         }
-        for (uint32_t i = 0; i < group_kv_tiles; ++i) {
-            noc.async_read(s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
-            l1_write_offset += tile_size_bytes;
+        if (has_v) {
+            for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
+            }
         }
         bool load_rot = false;
         if constexpr (fuse_rotary) {
