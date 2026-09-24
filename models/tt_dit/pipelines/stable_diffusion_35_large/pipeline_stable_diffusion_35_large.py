@@ -41,10 +41,13 @@ TILE_SIZE = 32
 _VAE_SCALE_FACTOR = 8
 
 _DEFAULT_CHECKPOINT = "stabilityai/stable-diffusion-3.5-large"
-# SD35_VAE_FOLD=1 runs VAE preprocessing + decoder + uint8 conversion as one trace (A/B switch).
 
 
 def _vae_fold() -> bool:
+    """SD35_VAE_FOLD=1: run VAE preprocessing + decoder + uint8 conversion as one trace.
+
+    Read at call time so a host process can set it per worker after import.
+    """
     return os.environ.get("SD35_VAE_FOLD", "0") == "1"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
