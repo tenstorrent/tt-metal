@@ -340,6 +340,11 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
         while (frames < total_frames_ && ok) {
             for (uint32_t c = 0; c < cores_; ++c) {
                 while (core[c].published < iters_) {
+                    // Before the slot is touched, not after: at ring_pages in flight the
+                    // next slot is still the device's, and the verify store below would hit it.
+                    if (core[c].published - core[c].drained >= ring_pages_) {
+                        break;
+                    }
                     DeliverTask t;
                     t.core = c;
                     t.slot = static_cast<uint32_t>(core[c].published % ring_pages_);
