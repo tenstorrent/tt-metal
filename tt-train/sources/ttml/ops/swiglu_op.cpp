@@ -135,7 +135,7 @@ autograd::TensorPtr swiglu(
                                    dropout_prob,
                                    use_per_device_seed,
                                    dropout_seed,
-                                   dropout_scaler]() mutable {
+                                   dropout_scaler]() {
         auto dL_dout = out->get_grad();
 
         if (dropout_prob > 0.0F) {
@@ -143,23 +143,19 @@ autograd::TensorPtr swiglu(
                 ttnn::experimental::dropout(dL_dout, dropout_prob, dropout_scaler, dropout_seed, use_per_device_seed);
         }
 
-        ttnn::Tensor linear1 = std::move(saved_linear1_for_bw);
-        ttnn::Tensor gate = std::move(saved_gate_for_bw);
-        ttnn::Tensor gated = std::move(saved_gated_for_bw);
-
         // W2 grad: use saved gated directly — no recompute
         {
-            auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(gated), true, false);
+            auto dL_dW2 =
+                ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(saved_gated_for_bw), true, false);
             w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
         }
-        gated.deallocate();
         // dL/d(prod) = dL_dout @ w2 (no transpose — w2 is [D, H])
         auto dL_dprod = ttnn_fixed::matmul(dL_dout, w2->get_value());
         dL_dout.deallocate();
 
         // Fused elemwise BW kernel: reads (linear1, gate, dL_dprod) once, produces (dL_dlinear1, dL_dgate)
-        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_elemwise_bw(linear1, gate, dL_dprod, linear1);
-        gate.deallocate();
+        auto [dL_dlinear1, dL_dgate] =
+            ttml::metal::swiglu_elemwise_bw(saved_linear1_for_bw, saved_gate_for_bw, dL_dprod);
         dL_dprod.deallocate();
 
         // Input grads: dL @ w (no transpose — w1,w3 are [H, D])
