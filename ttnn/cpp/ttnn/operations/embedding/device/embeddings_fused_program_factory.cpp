@@ -116,40 +116,19 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t dfb_num_entries;
 
     if (use_chunked_processing) {
+        // Chunk size divides the row, so every push matches the buffer.
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
-        const uint32_t block_bytes = num_tiles_per_block * weights_single_tile_size;
-        // Staging, the output copy, the index page, and any cached rows.
-        uint32_t block_buffer_bytes = block_bytes + TILE_HEIGHT * input_element_size_bytes;
-        if (!output_sharded) {
-            block_buffer_bytes += num_tiles_per_block * output_single_tile_size;
-        }
-        if (embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY) {
-            const uint32_t cache_pages = embeddings_type == EmbeddingsType::PADDED ? 1u : 2u;
-            block_buffer_bytes += round_up_to_mul32(weight_page_size) * cache_pages;
-        }
-        const uint32_t l1_room =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        if (block_buffer_bytes <= l1_room) {
-            // The buffer is the whole block, so the short last chunk lands on the end.
-            tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
-            num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
-            last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
-            buffering = 1;
-            dfb_num_entries = num_tiles_per_block;
-        } else {
-            // Same-sized chunks, and the chunk size divides the row.
-            tiles_per_chunk = chunk_cap;
-            for (uint32_t divisor = chunk_cap; divisor > 0; --divisor) {
-                if (num_tiles_per_block % divisor == 0) {
-                    tiles_per_chunk = divisor;
-                    break;
-                }
+        tiles_per_chunk = chunk_cap;
+        for (uint32_t divisor = chunk_cap; divisor > 0; --divisor) {
+            if (num_tiles_per_block % divisor == 0) {
+                tiles_per_chunk = divisor;
+                break;
             }
-            num_chunks = num_tiles_per_block / tiles_per_chunk;
-            last_chunk_tiles = tiles_per_chunk;
-            buffering = 2 * tiles_per_chunk * weights_single_tile_size <= max_l1_budget_bytes ? 2 : 1;
-            dfb_num_entries = buffering * tiles_per_chunk;
         }
+        num_chunks = num_tiles_per_block / tiles_per_chunk;
+        last_chunk_tiles = tiles_per_chunk;
+        buffering = 2 * tiles_per_chunk * weights_single_tile_size <= max_l1_budget_bytes ? 2 : 1;
+        dfb_num_entries = buffering * tiles_per_chunk;
     } else {
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
