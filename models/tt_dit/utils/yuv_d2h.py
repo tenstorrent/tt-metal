@@ -37,20 +37,6 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
-# Persistent output buffer for the C++ planar-concat fast path
-_PLANAR_OUT_BUF: np.ndarray | None = None
-_PLANAR_OUT_SHAPE: tuple[int, int] | None = None
-
-
-def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
-    global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
-    shape = (T, row_stride)
-    if _PLANAR_OUT_SHAPE != shape:
-        _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
-        _PLANAR_OUT_SHAPE = shape
-    return _PLANAR_OUT_BUF
-
-
 def _bt601_yuv_coefficients():
     """BT.601 coefficients for input in [-1, 1] -> limited-range uint8 (Y 16-235, CbCr 16-240)."""
     return ttnn.experimental.yuv_bt601_coefficients()
@@ -181,7 +167,7 @@ def _yuv_planar_d2h(
         )
         out_Hu, out_Wu = out_H // 2, out_W // 2
         out_row = out_H * out_W + 2 * out_Hu * out_Wu
-        out = _get_planar_out_buf(T, out_row)
+        out = np.empty((T, out_row), dtype=np.uint8)
         return _planar_concat_cpp_impl(
             [t[1] for t in triples],
             [t[2] for t in triples],
