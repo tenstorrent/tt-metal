@@ -10,7 +10,9 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_binary_comp.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -103,31 +105,30 @@ struct zero_comp_traits {
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
- *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
+ *         <eq/ne/lt/gt/ge/le>
  */
-template <SfpuType COMP_MODE>
+template <CompareOp COMP_MODE>
 inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v) {
     static_assert(
-        COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
-            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
-            COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
-        "_zero_comp_pred_: COMP_MODE must be one of the six comparison-to-zero SfpuType modes "
-        "(equal_zero/not_equal_zero/less_than_zero/greater_than_zero/less_than_equal_zero/greater_than_equal_zero)");
+        COMP_MODE == CompareOp::eq || COMP_MODE == CompareOp::ne || COMP_MODE == CompareOp::lt ||
+            COMP_MODE == CompareOp::gt || COMP_MODE == CompareOp::le || COMP_MODE == CompareOp::ge,
+        "_zero_comp_pred_: COMP_MODE must be one of the six CompareOp modes "
+        "(eq/ne/lt/gt/le/ge)");
     // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
     // reinterprets are free (no instruction).
     const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
 
-    if constexpr (COMP_MODE == SfpuType::equal_zero) {
+    if constexpr (COMP_MODE == CompareOp::eq) {
         return mag == 0;  // ±0
-    } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+    } else if constexpr (COMP_MODE == CompareOp::ne) {
         return mag != 0;
-    } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+    } else if constexpr (COMP_MODE == CompareOp::lt) {
         return (v < 0) && (mag != 0);  // sign set and nonzero -> excludes -0.0
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+    } else if constexpr (COMP_MODE == CompareOp::gt) {
         return (v >= 0) && (mag != 0);  // sign clear and nonzero
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+    } else if constexpr (COMP_MODE == CompareOp::ge) {
         return (v < 0) && (mag != 0);   // strict-negative (ltz) lanes; loop defaults 1 and writes 0 here -> gtez
-    } else {                            // less_than_equal_zero
+    } else {                            // le
         return (v >= 0) && (mag != 0);  // strict-positive (gtz) lanes; loop defaults 1 and writes 0 here -> ltez
     }
 }
@@ -141,9 +142,9 @@ inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v)
  * explicit OR-combine. ±0 (magnitude 0) is in neither strict set, so it keeps the default 1 (true)
  * for both, matching IEEE.
  */
-template <SfpuType COMP_MODE>
+template <CompareOp COMP_MODE>
 inline constexpr bool _zero_comp_writes_zero_() {
-    return COMP_MODE == SfpuType::greater_than_equal_zero || COMP_MODE == SfpuType::less_than_equal_zero;
+    return COMP_MODE == CompareOp::ge || COMP_MODE == CompareOp::le;
 }
 
 /**
@@ -181,7 +182,7 @@ inline void init_zero_comp() {
  * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32×16 face).
  * @note Requires @ref init_zero_comp to have programmed @c ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, DataFormat FMT, SfpuType COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, DataFormat FMT, CompareOp COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_zero_comp() {
     constexpr bool is_int_fmt = FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 ||
                                 FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8;
@@ -208,6 +209,26 @@ inline void calculate_zero_comp() {
         traits::store(result);
     }
 }
+
+// SfpuType-selected entry point, kept for existing callers. It forwards to the CompareOp version above.
+template <bool APPROXIMATION_MODE, DataFormat FMT, SfpuType COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_zero_comp() {
+    calculate_zero_comp<APPROXIMATION_MODE, FMT, _sfpu_type_to_compare_op_<COMP_MODE>(), ITERATIONS>();
+}
+
+// Op class for comparing a float tile in Dest against zero: x OP 0 ? 1.0 : 0.0. Same name and leading
+// template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    CompareOp COMP_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct ZeroComp : SfpuUnaryOp<ZeroComp<APPROXIMATION_MODE, COMP_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_zero_comp<APPROXIMATION_MODE, DataFormat::Float32, COMP_MODE, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_zero_comp(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

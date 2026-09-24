@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -380,12 +382,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFlo
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_binary_pow(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-    const uint in0_offset = dst_index_in0 * dst_tile_size_sfpi;
-    const uint in1_offset = dst_index_in1 * dst_tile_size_sfpi;
-    const uint out_offset = dst_index_out * dst_tile_size_sfpi;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const std::uint32_t in0_offset = dst_index_in0 * dst_tile_size_sfpi;
+    const std::uint32_t in1_offset = dst_index_in1 * dst_tile_size_sfpi;
+    const std::uint32_t out_offset = dst_index_out * dst_tile_size_sfpi;
 
     // Unrolled for fp32 only. The bf16 body runs slower (measured +17% at unroll 4).
     // On BH, this unroll is perf-neutral.
@@ -419,6 +422,17 @@ inline void sfpu_binary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
 }
+
+// Op class for elementwise pow(in0, in1) of two float tiles in Dest.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct BinaryPow : SfpuBinaryOp<BinaryPow<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

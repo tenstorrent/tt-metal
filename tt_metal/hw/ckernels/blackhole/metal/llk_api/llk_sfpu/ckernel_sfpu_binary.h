@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
@@ -181,8 +182,8 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
+            constexpr std::int32_t kInfBits = 0x7F800000;
+            constexpr std::int32_t kAbsMask = 0x7FFFFFFF;
             v_if((bits & kAbsMask) > kInfBits) { result = nan; }
             v_endif;
             v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
@@ -278,6 +279,32 @@ inline void sfpu_binary_init() {
         _init_log_<APPROXIMATION_MODE>();
     }
 }
+
+// Op class for the elementwise float binary ops selected by BINOP (e.g. ADD, SUB, RSUB, MUL, DIV, XLOGY,
+// NEXTAFTER). MUL and DIV run their dedicated kernels; the others run calculate_sfpu_binary.
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    bool is_fp32_dest_acc_en = false,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    int ITERATIONS = 8>
+struct BinaryFloat
+    : SfpuBinaryOp<BinaryFloat<APPROXIMATION_MODE, BINOP, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (BINOP == BinaryOp::MUL) {
+            calculate_sfpu_binary_mul<APPROXIMATION_MODE, BINOP, ITERATIONS, is_fp32_dest_acc_en>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else if constexpr (BINOP == BinaryOp::DIV) {
+            calculate_sfpu_binary_div<APPROXIMATION_MODE, BINOP, ITERATIONS, is_fp32_dest_acc_en>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_sfpu_binary<APPROXIMATION_MODE, BINOP, ITERATIONS, is_fp32_dest_acc_en, dst_rounding_mode>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_binary_init<APPROXIMATION_MODE, BINOP>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
