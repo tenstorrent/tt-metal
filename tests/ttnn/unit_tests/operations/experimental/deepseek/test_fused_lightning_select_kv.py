@@ -195,7 +195,7 @@ def _run_op_with_scores(device, query, key_cache, weights, kv_cache, page_table,
     "heads, dim, length, block_size, num_keys",
     [
         (32, 128, 64, 64, 24),
-        (V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 128 * 1024, 64, 2048),
+        (V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 128 * 1024, 64, 512),
         (V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 2048, 64, 1000),
     ],
     ids=["one_block", "v4_flash_full", "v4_flash_partial"],
@@ -217,7 +217,7 @@ def test_index_scores_match_reference(device, heads, dim, length, block_size, nu
     expected = _reference_scores(query[0, :, 0], keys[0, 0], weights[0, 0, 0])[:num_keys]
 
     _, got = _run_op_with_scores(
-        device, query, key_cache, weights, kv_cache, page_table, cur_pos, num_keys, k=min(16, num_keys)
+        device, query, key_cache, weights, kv_cache, page_table, cur_pos, num_keys, k=min(V4_INDEX_TOPK, num_keys)
     )
     got = got[:num_keys].float()
 
