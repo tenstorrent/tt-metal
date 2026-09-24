@@ -165,10 +165,25 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
 
 // The whole pipeline. Each leg is non-blocking and refuses rather than waits, so a full
 // queue anywhere propagates back to the device as an unacked FIFO page.
+namespace {
+// Only read when collect_timing is set: poll() is the spin loop, and two clock reads per
+// leg would otherwise be charged to runs that asked for no timing.
+inline uint64_t ns_since(std::chrono::steady_clock::time_point t0) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+}
+}  // namespace
+
 uint32_t D2H2H2DSocket::poll() {
     Impl& im = *impl_;
     uint32_t progress = 0;
+    const bool t = im.cfg.collect_timing;
+    const auto zero = std::chrono::steady_clock::time_point{};
+    if (t) {
+        ++im.timing.poll_calls;
+    }
 
+    const auto d2h_t0 = t ? std::chrono::steady_clock::now() : zero;
     progress += im.d2h->poll([&](const SendTask& t) {
         if (!im.h2h->submit(t)) {
             return false;
@@ -182,7 +197,11 @@ uint32_t D2H2H2DSocket::poll() {
         }
         return true;
     });
+    if (t) {
+        im.timing.d2h_poll_ns += ns_since(d2h_t0);
+    }
 
+    const auto h2h_t0 = t ? std::chrono::steady_clock::now() : zero;
     progress += im.h2h->poll(
         [&](uint32_t core, uint32_t pages) {
             im.d2h->retire(core, pages);
@@ -198,8 +217,12 @@ uint32_t D2H2H2DSocket::poll() {
             }
             return true;
         });
+    if (t) {
+        im.timing.h2h_poll_ns += ns_since(h2h_t0);
+    }
 
     // A drained page is what frees the peer's slot, so the credit follows the device.
+    const auto h2d_t0 = t ? std::chrono::steady_clock::now() : zero;
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
         if (const uint32_t pages = im.h2d->drained(c); pages != 0) {
             im.h2h->consumed(c, pages);
@@ -221,6 +244,9 @@ uint32_t D2H2H2DSocket::poll() {
         }
         // Publish the inbound credit to our own sender, so tt_uva_sync() can see it.
         im.d2h->credit(c, im.h2h->credit_total(c));
+    }
+    if (t) {
+        im.timing.h2d_drain_ns += ns_since(h2d_t0);
     }
     return progress;
 }
