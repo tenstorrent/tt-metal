@@ -2099,3 +2099,106 @@ class TestFormatSamplingParamsLanes:
         it broadcasts to max_batch_size, not to the active lane count."""
         out = self._fmt(temperature=[1.0, 1.0], top_k=8, top_p=1.0, enable_log_probs=True)
         assert all(out.enable_log_probs), "enable_log_probs should cover every lane"
+
+
+# --- Test: reset_params device-upload caching ---
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+class TestResetParamsUploadCaching:
+    """reset_params() only re-derives and re-uploads k_tensor / p_tensor / temp_tensor /
+    _greedy_col when the incoming (k, p, temp) differ from the last-applied
+    _applied_param_snapshot (mirrors the identical caching pattern in tt_penalties.py).
+    Decode calls reset_params once per token with unchanged params for most of a
+    generation, so this skip is load-bearing for steady-state decode cost.
+    """
+
+    def _count_device_writes(self, monkeypatch, original_copy, tt_sampling, k, p, temp):
+        calls = []
+
+        def counting_copy(*args, **kwargs):
+            calls.append(1)
+            return original_copy(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", counting_copy)
+        tt_sampling.reset_params(k, p, temp)
+        monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", original_copy)
+        return len(calls)
+
+    def test_repeated_identical_params_skip_upload(self, mesh_device, monkeypatch):
+        args = make_sampling_args(mesh_device)
+        tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=None, args=args)
+        original_copy = ttnn.copy_host_to_device_tensor
+        try:
+            k = torch.full((BATCH_SIZE,), 3, dtype=torch.int64)
+            p = torch.full((BATCH_SIZE,), 0.9)
+            temp = torch.full((BATCH_SIZE,), 0.8)
+
+            first = self._count_device_writes(monkeypatch, original_copy, tt_sampling, k, p, temp)
+            assert first == 4, "first reset_params call has no prior snapshot and must write all 4 device tensors"
+
+            second = self._count_device_writes(
+                monkeypatch, original_copy, tt_sampling, k.clone(), p.clone(), temp.clone()
+            )
+            assert second == 0, "identical params on the next call must skip the device upload entirely"
+        finally:
+            del tt_sampling
+            safe_sync(mesh_device)
+
+    def test_genuine_param_change_still_writes(self, mesh_device, monkeypatch):
+        args = make_sampling_args(mesh_device)
+        tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=None, args=args)
+        original_copy = ttnn.copy_host_to_device_tensor
+        try:
+            k = torch.full((BATCH_SIZE,), 3, dtype=torch.int64)
+            p = torch.full((BATCH_SIZE,), 0.9)
+            temp = torch.full((BATCH_SIZE,), 0.8)
+            self._count_device_writes(monkeypatch, original_copy, tt_sampling, k, p, temp)
+
+            # Only temperature changes; k and p repeat exactly.
+            changed_temp = torch.full((BATCH_SIZE,), 0.5)
+            changed = self._count_device_writes(
+                monkeypatch, original_copy, tt_sampling, k.clone(), p.clone(), changed_temp
+            )
+            assert changed == 4, "a real change in even one of k/p/temp must still trigger the full upload"
+        finally:
+            del tt_sampling
+            safe_sync(mesh_device)
+
+    def test_force_argmax_skips_upload_independent_of_snapshot(self, mesh_device, monkeypatch):
+        """When every lane is force-argmax-eligible, the upload is skipped by the
+        `not self._force_argmax_sampling` gate even on the very first call (before any
+        snapshot exists to compare against), and writing resumes once a later call takes
+        the batch back out of force-argmax."""
+        args = make_sampling_args(mesh_device)
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
+        tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=None, args=args)
+        original_copy = ttnn.copy_host_to_device_tensor
+        try:
+            greedy_k = torch.ones(BATCH_SIZE, dtype=torch.int64)
+            greedy_p = torch.zeros(BATCH_SIZE)
+            greedy_temp = torch.ones(BATCH_SIZE)
+
+            first = self._count_device_writes(monkeypatch, original_copy, tt_sampling, greedy_k, greedy_p, greedy_temp)
+            assert tt_sampling.force_argmax_sampling
+            assert first == 0, "force-argmax params must skip the upload even with no prior snapshot"
+
+            sampled_k = torch.full((BATCH_SIZE,), 3, dtype=torch.int64)
+            sampled_p = torch.full((BATCH_SIZE,), 0.9)
+            sampled_temp = torch.full((BATCH_SIZE,), 0.8)
+            second = self._count_device_writes(
+                monkeypatch, original_copy, tt_sampling, sampled_k, sampled_p, sampled_temp
+            )
+            assert not tt_sampling.force_argmax_sampling
+            assert (
+                second == 4
+            ), "leaving force-argmax must write, even though no snapshot was ever recorded while skipping"
+        finally:
+            del tt_sampling
+            safe_sync(mesh_device)
