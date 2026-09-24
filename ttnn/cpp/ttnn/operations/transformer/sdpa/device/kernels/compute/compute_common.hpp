@@ -127,8 +127,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Postcondition: out_cb has rows produced
     // If do_eltwise_max == true, prev_cb has rows produced.
 
-    constexpr uint32_t num_tiles = rows * cols;
-
 #if defined REDUCE_GRANULARITY
     constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
     constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows / REDUCE_GRANULARITY) : 1;
@@ -1008,7 +1006,6 @@ ALWI void matmul_blocks(
     const uint32_t& M,
     const uint32_t& N,
     const uint32_t& K,
-    const uint32_t& num_blocks,
     const uint32_t& in0_num_subblocks,
     const uint32_t& in1_num_subblocks,
     const uint32_t& in0_block_w,
@@ -1124,9 +1121,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     reconfig_data_format(in1_cb, out_cb);
     matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    constexpr uint32_t output_num_tiles = M * N;
-    constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
     pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
@@ -1487,13 +1481,11 @@ enum SDPAType {
  * @param qk_subblock_h - QK matmul subblock height
  * @param qk_in0_num_subblocks - QK input0 subblocks
  * @param qk_in1_num_subblocks - QK input1 subblocks
- * @param qk_num_blocks - QK number of blocks
  * @param out_in0_block_w - Output matmul block width
  * @param out_subblock_w - Output matmul subblock width
  * @param out_subblock_h - Output matmul subblock height
  * @param out_in0_num_subblocks - Output input0 subblocks
  * @param out_in1_num_subblocks - Output input1 subblocks
- * @param out_num_blocks - Output number of blocks
  * @param iter_q_start - Query iteration start
  * @param iter_q_end - Query iteration end
  * @param q_num_chunks - Total query chunks
@@ -1566,13 +1558,11 @@ void sdpa_inner_loop(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
@@ -1749,7 +1739,6 @@ void sdpa_inner_loop(
                 Sq_chunk_t,
                 Sk_chunk_t,
                 DHt,
-                qk_num_blocks,
                 qk_in0_num_subblocks,
                 qk_in1_num_subblocks,
                 qk_in0_block_w,
@@ -1912,7 +1901,6 @@ void sdpa_inner_loop(
                 Sq_chunk_t,
                 vDHt,
                 Sk_chunk_t,
-                out_num_blocks,
                 out_in0_num_subblocks,
                 out_in1_num_subblocks,
                 out_in0_block_w,
@@ -2140,13 +2128,11 @@ void sdpa_standard(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
@@ -2203,13 +2189,11 @@ void sdpa_standard(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         iter_q_start,
         iter_q_end,
         q_num_chunks,
@@ -2275,13 +2259,11 @@ void sdpa_joint(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t local_q_start,
     const uint32_t local_q_end,
     const uint32_t k_num_chunks,
@@ -2328,13 +2310,11 @@ void sdpa_joint(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         local_q_start,  // iter_q_start
         local_q_end,    // iter_q_end
         0,              // q_num_chunks (not used)
@@ -2401,13 +2381,11 @@ void sdpa_ring(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t global_q_start,
     const uint32_t global_q_end,
     const uint32_t q_num_chunks,
@@ -2479,13 +2457,11 @@ void sdpa_ring(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
         q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)

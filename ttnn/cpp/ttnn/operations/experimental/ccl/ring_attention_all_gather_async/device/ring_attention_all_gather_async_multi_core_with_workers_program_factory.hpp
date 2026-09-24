@@ -19,7 +19,6 @@ namespace ttnn::experimental::prim {
 // These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
-inline constexpr uint32_t kNumSendersPerLink = 2;
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
 inline constexpr uint32_t kWriterForwardKernelIdx = 1;
 inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
@@ -146,8 +145,6 @@ constexpr uint32_t kWriterBackwardKernelOffset = 3;
 // dispatch, or every layer gathers the slot of whichever layer took the cache miss.
 constexpr uint32_t kReaderAccessorWordsPerInput = 2;
 constexpr uint32_t kReaderMetadataSlotIdOffset = 0;
-constexpr uint32_t kReaderMetadataKvActualOffset = 1;
-constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
 constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
 constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
 
