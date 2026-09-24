@@ -8,7 +8,7 @@
 
 namespace tt::tt_metal::distributed {
 
-class SDMeshCommandQueue final : public MeshCommandQueueBase {
+class SDMeshCommandQueue : public MeshCommandQueueBase {
 private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;

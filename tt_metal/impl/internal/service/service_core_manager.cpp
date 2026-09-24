@@ -49,7 +49,7 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
         cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
         "Service core claims are only supported on Blackhole and UBB Galaxy clusters.");
     TT_FATAL(
-        env_.get_rtoptions().get_fast_dispatch(),
+        env_.get_rtoptions().get_fast_dispatch() || env_.get_rtoptions().get_emule_fast_dispatch(),
         "Service cores can only be claimed while Fast Dispatch is active. "
         "Call initialize_fast_dispatch() before claim().");
 
@@ -121,7 +121,7 @@ std::optional<CoreCoord> ServiceCoreManagerImpl::get_safe_compute_grid(ChipId de
 
 std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* device) const {
     TT_FATAL(
-        env_.get_rtoptions().get_fast_dispatch(),
+        env_.get_rtoptions().get_fast_dispatch() || env_.get_rtoptions().get_emule_fast_dispatch(),
         "get_claimable_cores() requires Fast Dispatch to be active. "
         "Call initialize_fast_dispatch() first.");
     auto available = ctx_.get_dispatch_core_manager().get_available_dispatch_cores(device->id());

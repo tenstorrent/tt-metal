@@ -47,7 +47,10 @@ class PrefetcherPipeFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override { MeshDispatchFixture::SetUp(); }
 
-    bool is_fast_dispatch() const { return MetalContext::instance().rtoptions().get_fast_dispatch(); }
+    bool is_fast_dispatch() const {
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        return rtoptions.get_fast_dispatch() || rtoptions.get_emule_fast_dispatch();
+    }
 
     bool is_quasar() const { return this->arch_ == tt::ARCH::QUASAR; }
 

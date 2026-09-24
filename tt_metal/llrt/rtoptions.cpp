@@ -56,6 +56,7 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
+    TT_METAL_EMULE_FAST_DISPATCH,             // Emulated mode: fast-dispatch command-queue semantics
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
@@ -543,6 +544,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->using_slow_dispatch = true;
             this->fast_dispatch = false;
             break;
+
+        // TT_METAL_EMULE_FAST_DISPATCH
+        // With TT_METAL_EMULE_MODE: give the mesh command queues fast-dispatch semantics (non-blocking
+        // launches, events, sub-device scoped waits, trace). Dispatch itself stays slow dispatch.
+        // Default: Disabled
+        // Usage: export TT_METAL_EMULE_FAST_DISPATCH=1
+        case EnvVarID::TT_METAL_EMULE_FAST_DISPATCH: this->emule_fast_dispatch = is_env_enabled(value); break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -1956,6 +1964,15 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+
+    if (this->emule_fast_dispatch) {
+        TT_FATAL(
+            this->runtime_target_device_ == tt::TargetDevice::Emule,
+            "TT_METAL_EMULE_FAST_DISPATCH=1 requires TT_METAL_EMULE_MODE=1");
+        TT_FATAL(
+            std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
+            "TT_METAL_EMULE_FAST_DISPATCH=1 and TT_METAL_SLOW_DISPATCH_MODE are mutually exclusive");
     }
 
     // Set inspector log path

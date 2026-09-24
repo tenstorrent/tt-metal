@@ -306,6 +306,9 @@ class RunTimeOptions {
 
     bool fast_dispatch = true;
 
+    // Emulated mode only: fast-dispatch command-queue semantics; get_fast_dispatch() stays false.
+    bool emule_fast_dispatch = false;
+
     bool skip_eth_cores_with_retrain = false;
 
     // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
@@ -805,6 +808,7 @@ public:
     bool get_fast_dispatch() const { return fast_dispatch; }
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+    bool get_emule_fast_dispatch() const { return emule_fast_dispatch; }
 
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }

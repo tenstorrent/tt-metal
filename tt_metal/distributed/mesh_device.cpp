@@ -76,6 +76,9 @@
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -1699,6 +1702,13 @@ bool MeshDeviceImpl::initialize_impl(
             }
         }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+#ifdef TT_METAL_USE_EMULE
+            if (MetalContext::instance(context_id_).rtoptions().get_emule_fast_dispatch()) {
+                mesh_command_queues_.push_back(emule::create_mesh_command_queue(
+                    pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                continue;
+            }
+#endif
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
                 pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
         }
