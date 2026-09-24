@@ -319,11 +319,12 @@ the two outputs agree element by element (`TtConv1d._verify_prepared`,
 inside a trace and takes the op's own preparation. The flow estimator's convolutions have to
 stay prepared, since they run inside the CFM trace; its nine geometries matched torch at every
 length from 97 to 2659 in steps of 61, at batch 2 with the 512 KB reservation, on p150a.
-Reported upstream for Wormhole as
-[tenstorrent/tt-metal#55545](https://github.com/tenstorrent/tt-metal/issues/55545); the
-Blackhole cases are not in that report. `scripts/repro_conv1d_wormhole.py` reproduces the
-Wormhole case without the model, and `scripts/probe_prepared_weights.py` is the check to run
-once it is fixed.
+Reported upstream as
+[tenstorrent/tt-metal#55545](https://github.com/tenstorrent/tt-metal/issues/55545): the Wormhole
+case in the issue body, the Blackhole cases in a comment on it.
+`scripts/repro_conv1d_wormhole.py` reproduces the Wormhole case without the model, and with
+`IN_C = OUT_C` set to 80 or 256 the Blackhole ones (the comment has the arguments);
+`scripts/probe_prepared_weights.py` is the check to run once it is fixed.
 
 ### `ttnn.cumsum` accuracy in fp32
 
