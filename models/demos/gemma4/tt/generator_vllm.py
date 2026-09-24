@@ -8,6 +8,13 @@ from collections import defaultdict
 
 import torch
 from loguru import logger
+from vllm.model_executor.models.gemma4_mm import (
+    Gemma4DummyInputsBuilder,
+    Gemma4MultiModalProcessor,
+    Gemma4ProcessingInfo,
+)
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
@@ -6040,3 +6047,31 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             self._spec_release_session()
         finally:
             super().release_persistent_capture()
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Gemma4MultiModalProcessor,
+    info=Gemma4ProcessingInfo,
+    dummy_inputs=Gemma4DummyInputsBuilder,
+)
+class Gemma4VisionForConditionalGeneration(Gemma4ForCausalLM, SupportsMultiModal):
+    """Gemma4 served as text + image.
+
+    A SEPARATE class rather than making ``Gemma4ForCausalLM`` multimodal. The
+    plugin registers that name for every Gemma4 arch and its text-only-ness is
+    load-bearing: without ``SupportsMultiModal`` vLLM leaves ``multimodal_config``
+    unpopulated and the request path stays text-only, which is what the dFlash,
+    MTP and baseline profiles serve. Flipping it globally would put a multimodal
+    processor in front of all of them.
+
+    Selected per deployment through the generic ``TT_MODEL_CLASS_OVERRIDES``
+    mechanism, exactly as the speculative profiles are.
+
+    Registering the processor is what was missing for images to reach the tower
+    at all: vLLM rejected image content with "Model class Gemma4ForCausalLM has
+    no registered multimodal processor" (HTTP 400) even with the tower built and
+    the weights loaded. The processor itself is upstream's
+    (``vllm.model_executor.models.gemma4_mm``) -- the same arrangement
+    tt_transformers uses for Gemma3 -- so image preprocessing and placeholder
+    handling stay vLLM's, and only the encode stays ours.
+    """
