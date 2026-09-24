@@ -179,7 +179,7 @@ SHAPES = [
     # The Wormhole compute grid is 8x9 = 72 cores against Blackhole's 12x10, so none of the H3
     # blockings above apply here: the AGMM worker grid is 8x8 (force_transpose=True reserves the
     # last row for the in0 mux -- `agmm_worker_grid`) rather than 12x9, and `grid_89_configs` holds
-    # no H3 entry at all. M = 4768 is the 5 s @ 768P per-device packed length, the same anchor the
+    # no H3 entry at all. M = 4736 is the 5 s @ 768P per-device packed length, the same anchor the
     # Blackhole rows use; (K, N) are fixed by the architecture and TP=4, which is the reason the model
     # keys `AGMM_BLOCK_SIZES` on (K, N) alone -- an assumption the duration entries below disprove
     # on this grid.
