@@ -66,11 +66,12 @@ constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 // Idle-eth drainers: two sockets per drainer, the linked cores' profiler frames and the sync's records. The routers'
 // own zones are well under 1 MB/s, so 1 MiB of host FIFO (a single 2 MiB-aligned carve of the host channel) is
-// generous for the frames. The sync records come ~0.5 us apart through a glide, 32 B each, ~70 MB/s at the peak,
-// and while the host's sync thread is away nothing drains and the pusher's 512-record ring overflows; that thread
-// has been seen away for 75 ms at a stretch, so the sync FIFO holds a quarter second of the peak.
+// generous for the frames. The sync stream runs ~3.6 MB/s (a drainer anchor every poll, the pusher's instants),
+// bursting to ~70 MB/s through a glide. A record the sync thread has not read when the device laps it is lost, and
+// the clock model bridges the lost instants with a line; that thread has been seen blocked for 3.3 s in a single page
+// fault while the host process freed memory, so the sync FIFO holds half a minute of the steady stream.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
-constexpr uint32_t kEthSyncFifoBytes = 16u << 20;
+constexpr uint32_t kEthSyncFifoBytes = 128u << 20;
 constexpr uint32_t kEthRingBytes = 8192;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
 constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
