@@ -185,10 +185,11 @@ ProgramDescriptor recipe_compute_program(
     if (policy.selection.recipe == Recipe::A) {
         compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
     }
-    if (!fp32 && policy.selection.recipe != Recipe::A &&
-        (q_tiles % 2 != 0 || !recipe_legacy_geometry(q_tiles, k_tiles, d_tiles))) {
-        // The single-row tail group of an odd chunk (and the unrolled loops of new geometries)
-        // does not fit the kernel config buffer at -O2; only the pack thread is size-optimized.
+    if (policy.selection.recipe != Recipe::A &&
+        ((!fp32 && q_tiles % 2 != 0) || !recipe_legacy_geometry(q_tiles, k_tiles, d_tiles))) {
+        // The single-row tail group of an odd BF16 chunk, and the loops of geometries outside the
+        // previously qualified set (all of B-E; e.g. BALANCED D96 with joint tails), do not fit the
+        // kernel config buffer at the default optimization; only the pack thread is size-optimized.
         compute.defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
     }
     program.kernels.push_back(std::move(compute));
