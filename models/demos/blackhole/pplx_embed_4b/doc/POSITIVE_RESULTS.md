@@ -9,7 +9,7 @@ best of 10 iterations, same-chip sequential A/B for every landing (chips 4 / 7 /
 
 | batch | H200 | start of effort | cold best (best of 10) | × H200 | sustained (median of iterations 5–9) | × H200 | 3× target |
 |---|---|---|---|---|---|---|---|
-| 1 | 5.437 ms | 25.9 ms | **17.5** | 3.22× | 17.7 | 3.26× | 16.3 |
+| 1 | 5.437 ms | 25.9 ms | **17.3** | 3.18× | 17.7 | 3.26× | 16.3 |
 | 8 | 33.081 | 156.4 | **115.3** | 3.49× | 121.0 | 3.66× | 99.2 |
 | 16 | 67.225 | 290.9 | **221.0** | 3.29× | 228.2 | 3.39× | 201.7 |
 | 32 | 139.150 | 557.8 | **425.5** | 3.06× | 451.1 | 3.24× | 417.5 |
@@ -53,7 +53,7 @@ sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
 | 213530d | bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 | see below | **17.7** / 123.4 / 228.3 / 438.1 |
 | 9441a6c | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
 | sdpa concat-out | SDPA writes `[B, 1, S, H·d]` directly (`output_heads_concat`), concat pass gone at bs>1 | tile-id remap in the SDPA writer; bit-identical; SDPA +3–7% vs concat −68…−350 µs | 17.7 / **115.4** / **221.9** / **430.1** (same-chip A/B arms) |
-| bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout (the 72 I2S ops become no-ops) | from Gio's B1 shard-layout idea; bit-identical; the residual item is neutral alone, −0.3 ms median together (NEGATIVE_RESULTS §50) | **17.5** / 115.3 / 221.0 / 425.5 |
+| bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout, so all 72 I2S ops become no-ops | from Gio's B1 shard-layout idea; bit-identical. The residual item first read neutral because the fused-kernel support check ran before the bs1 branch and sent every other layer down the stock path; with the branch first: best 17.5 → 17.3, median 17.7 → 17.5 on top of the concat item (NEGATIVE_RESULTS §50) | **17.3** / 115.3 / 221.0 / 425.5 |
 
 ## The optimizations, by mechanism
 

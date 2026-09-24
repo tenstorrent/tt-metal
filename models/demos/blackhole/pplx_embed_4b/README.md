@@ -1077,7 +1077,9 @@ layout the prefill RMSNorm reads (`QWEN_BS1_RESID_SHARDED=1`, `tt/decoder_fusion
 interleaved-to-sharded op before each norm is a no-op (`ttnn.add` takes one sharded and one interleaved input;
 the decoder's input-layout assert accepts a sharded L1 residual). Same chip (4), 10 iterations: best 17.6 → 17.5,
 median 17.85 → 17.5; 30-iteration run: cold 17.5, sustained 17.7 (was 17.6 / 18.3). STS-B 0.8161 unchanged.
-The residual item alone is neutral (the 80-core sharded-output add gives back what the 72 I2S ops cost).
+The residual item first read neutral: the fused-kernel support check ran before the bs1 branch and a
+sharded input fails it, so every other layer fell back to the stock path. With the branch evaluated first all
+72 I2S ops are gone: cold 17.3 / sustained 17.7, STS-B 0.8161.
 
 ## 6. Profiling
 

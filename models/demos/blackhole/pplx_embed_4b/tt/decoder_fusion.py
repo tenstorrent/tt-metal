@@ -119,9 +119,22 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
     def forward(x, *args, **kwargs):
         mode = kwargs.get("mode", args[4] if len(args) > 4 else "decode")  # (current_pos, rot_g, rot_l, user_id, mode)
         is_prefill = mode == Mode.PREFILL or mode == "prefill"
-        if not is_prefill or not supported(x, x):
+        if not is_prefill:
             return orig_forward(x, *args, **kwargs)
         rows = int(x.padded_shape[-2]) * int(x.padded_shape[-3]) * int(x.padded_shape[0])
+        if (
+            rows < _MIN_ROWS
+            and model_args is not None
+            and os.getenv("QWEN_BS1_RESID_SHARDED", "1") == "1"
+            and os.getenv("QWEN_FUSED_ADD_NORM_SPLIT", "0") != "1"
+        ):
+            # Before supported(): from layer 1 on the residual arrives block-sharded, which the fused add+norm
+            # kernels do not take; this path only needs ttnn.add, which does.
+            return _forward_resid_sharded(
+                layer, orig_forward, model_args, next_attn_consts is not None, x, args, kwargs
+            )
+        if not supported(x, x):
+            return orig_forward(x, *args, **kwargs)
         fuse = None
         if rows >= _MIN_ROWS:
             # QWEN_FUSED_ADD_NORM_R >= 2: split every row over R cores (multi-wave row-split kernel). With
@@ -144,10 +157,6 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                     a, b, *consts, R=R, sum_dtype=dt, memory_config=mc
                 )
         if fuse is None:
-            if model_args is not None and os.getenv("QWEN_BS1_RESID_SHARDED", "1") == "1":
-                return _forward_resid_sharded(
-                    layer, orig_forward, model_args, next_attn_consts is not None, x, args, kwargs
-                )
             return orig_forward(x, *args, **kwargs)
         if is_first:
             stash.clear()

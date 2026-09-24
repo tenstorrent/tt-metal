@@ -867,3 +867,12 @@ block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one shar
 11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the
 S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either). Both landed as bs1
 defaults; the neutral-alone item is kept because it is free with the concat change and removes 72 ops.
+
+**Follow-up, same day — the residual item had only reached every other layer.** `_wrap_layer` ran the fused
+add+norm kernels' `supported(x, x)` check before the bs1 branch; a block-sharded input fails it, so layers 1, 3,
+5, … took the stock path and re-interleaved the residual (the re-profile still showed 36 I2S ops: 18 layers × 2).
+That is why "alone" read neutral. With the bs1 branch evaluated first, all 72 I2S are gone: same chip, 10
+iterations, best 17.3 / 17.4 (two runs), median 17.5, against 17.5 / 17.7 with the concat item alone;
+30-iteration run cold **17.3**, sustained 17.7; STS-B 0.8161. Lesson: when a wrapper chain has a capability
+check, an op that changes the residual's layout must be routed before it, and a per-op profile (op counts per
+layer) is the quickest way to see a change that lands on only half the layers.
