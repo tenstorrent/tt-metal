@@ -118,19 +118,19 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
         {
             // Even dest face: consume this SrcB face a band at a time, then rewind so the odd face rereads it.
-            emit_row_bands(
-                [](auto band)
-                {
-                    constexpr std::uint8_t ADDR_MODE = (decltype(band)::value == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_5 : ADDR_MOD_7;
-                    TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MODE, 0);
-                });
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
+            {
+                const std::uint8_t addr_mod = (row == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_5 : ADDR_MOD_7;
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
+            }
             // Odd dest face: same SrcB face again, then jump to the next face-row.
-            emit_row_bands(
-                [](auto band)
-                {
-                    constexpr std::uint8_t ADDR_MODE = (decltype(band)::value == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_6 : ADDR_MOD_7;
-                    TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MODE, 0);
-                });
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
+            {
+                const std::uint8_t addr_mod = (row == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_6 : ADDR_MOD_7;
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
+            }
         }
 
         // Release this column's SrcA tile and rewind both read counters; KEEP the held SrcB.

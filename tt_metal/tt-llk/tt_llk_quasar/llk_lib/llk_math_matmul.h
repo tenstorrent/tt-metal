@@ -431,21 +431,35 @@ inline void _llk_math_matmul_emit_traversal_()
 {
     constexpr std::uint32_t FACE_PAIRS = IS_2X ? MATMUL_2X_FACE_PAIRS : MATMUL_FULL_FACE_PAIRS;
 
-    emit_unrolled<FACE_PAIRS>(
-        [](auto pair)
+#pragma GCC unroll 8
+    for (std::uint32_t pair = 0; pair < FACE_PAIRS; ++pair)
+    {
+        // Walk the face; the last band is replaced by the transition below.
+#pragma GCC unroll 4
+        for (std::uint32_t band = 0; band + 1 < MATMUL_BANDS_PER_FACE; ++band)
         {
-            constexpr std::uint32_t P = decltype(pair)::value;
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        }
 
-            // Walk the face; the last band is replaced by the transition below.
-            emit_unrolled<MATMUL_BANDS_PER_FACE - 1>([](auto) { TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); });
-
-            if constexpr (P + 1 < FACE_PAIRS)
+        if (pair + 1 < FACE_PAIRS)
+        {
+            // The addrmod is an "n" immediate, so each arm carries a literal rather than the indexed value.
+            const std::uint8_t transition =
+                IS_2X ? MATMUL_2X_FACE_TRANSITIONS[pair] : _llk_math_matmul_face_transition_(pair, MAX_NUM_FACES_C_DIM, MAX_NUM_FACES_R_DIM);
+            switch (transition)
             {
-                constexpr std::uint8_t TRANSITION =
-                    IS_2X ? MATMUL_2X_FACE_TRANSITIONS[P] : _llk_math_matmul_face_transition_(P, MAX_NUM_FACES_C_DIM, MAX_NUM_FACES_R_DIM);
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, TRANSITION, 0);
+                case ADDR_MOD_1:
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                    break;
+                case ADDR_MOD_2:
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                    break;
+                default:
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                    break;
             }
-        });
+        }
+    }
 }
 
 /**
@@ -507,9 +521,13 @@ inline void _llk_math_matmul_load_half_face_replay_(const _llk_math_matmul_execu
         {
             for (std::uint32_t pair = 0; pair < face_pairs; pair++)
             {
-                // Walk the face's single dest row group, then take this pair's transition. The last
-                // pair's transition comes from the MOP.
-                emit_unrolled<BANDS_PER_GROUP - 1>([](auto) { TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); });
+            // Walk the face's single dest row group, then take this pair's transition. The last
+            // pair's transition comes from the MOP.
+#pragma GCC unroll 4
+                for (std::uint32_t band = 0; band + 1 < BANDS_PER_GROUP; ++band)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                }
 
                 if (pair + 1 < face_pairs)
                 {
@@ -709,27 +727,24 @@ inline void _llk_math_matmul_di_load_replay_()
     load_replay_buf<0, replay_buf_len>(
         []
         {
-            emit_unrolled<BLOCKS>(
-                [](auto block)
-                {
-                    constexpr std::uint32_t B = decltype(block)::value;
-                    // Held as scalars, not as the struct: a nested lambda can read an integral
-                    // constant without capturing it, but reading a member odr-uses the object.
-                    constexpr std::uint32_t SRC_B = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[B].src_b;
-                    constexpr std::uint32_t SRC_A = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[B].src_a;
-                    constexpr std::uint32_t DEST  = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[B].dest;
+#pragma GCC unroll 8
+            for (std::uint32_t block = 0; block < BLOCKS; ++block)
+            {
+                const std::uint32_t src_b = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[block].src_b;
+                const std::uint32_t src_a = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[block].src_a;
+                const std::uint32_t dest  = _llk_math_matmul_di_blocks_<ENABLE_2X_FORMAT>()[block].dest;
 
-                    emit_unrolled<MATMUL_BANDS_PER_FACE>(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t N = decltype(band)::value;
-                            // The traversal's final MVMULDI comes from the MOP, so stop one short.
-                            if constexpr (B + 1 < BLOCKS || N + 1 < MATMUL_BANDS_PER_FACE)
-                            {
-                                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, SRC_B + N * MATMUL_DI_BAND_STEP, SRC_A, 0x0, DEST + N * MATMUL_DI_BAND_STEP);
-                            }
-                        });
-                });
+#pragma GCC unroll 4
+                for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
+                {
+                    // The traversal's final MVMULDI comes from the MOP, so stop one short.
+                    if (block + 1 < BLOCKS || row + ELTWISE_MATH_ROWS < MAX_FACE_R_DIM)
+                    {
+                        const std::uint32_t step = row / MATMUL_DI_ADDR_UNIT_ROWS;
+                        TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, src_b + step, src_a, 0x0, dest + step);
+                    }
+                }
+            }
         });
 }
 

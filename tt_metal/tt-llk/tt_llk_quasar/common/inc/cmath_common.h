@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <type_traits>
-#include <utility>
 
 #include "ckernel_trisc_common.h"
 
@@ -18,51 +17,30 @@ constexpr static std::uint32_t ELTWISE_MATH_ROWS = ckernel::arch::fpu_rows;
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
 
-namespace detail
-{
-template <std::uint32_t SCALE, typename EmitOne, std::size_t... I>
-inline void emit_unrolled_impl(EmitOne&& emit, std::index_sequence<I...>)
-{
-    (emit(std::integral_constant<std::uint32_t, static_cast<std::uint32_t>(I) * SCALE> {}), ...);
-}
-} // namespace detail
-
 /**
- * @brief Emits COUNT instructions, passing each iteration index as a compile-time constant.
+ * @brief First row of each FPU issue across a span of NUM_ROWS rows.
  *
- * Use this wherever an instruction count follows an architecture parameter. Expanding a pack is what
- * makes the index a constant expression at the TTI_* call: INSTRUCTION_WORD uses the @c "n" asm
- * constraint, which rejects any operand the compiler cannot fold, so a plain @c for loop compiles only
- * as long as the optimiser happens to unroll it and breaks at -O0.
+ * An FPU issue and a MOV* both cover ELTWISE_MATH_ROWS rows, so a 16-row face is two entries on the
+ * base part and four on a narrow-FPU part. One loop body then serves every width.
  *
- * @tparam COUNT: Number of instructions to emit.
- * @tparam SCALE: Multiplier applied to the index before it is handed to @p emit. Defaults to 1.
+ * A TTI_* row or addrmod operand is an "n" immediate. Mark the consuming loop `#pragma GCC unroll 4`
+ * so each `row` is a constant by the time the instruction is encoded.
+ *
+ * @tparam NUM_ROWS: Rows to cover. Must be a positive multiple of ELTWISE_MATH_ROWS.
  */
-template <std::uint32_t COUNT, std::uint32_t SCALE = 1, typename EmitOne>
-inline void emit_unrolled(EmitOne&& emit)
+template <std::uint32_t NUM_ROWS>
+constexpr auto fpu_row_offsets()
 {
-    detail::emit_unrolled_impl<SCALE>(std::forward<EmitOne>(emit), std::make_index_sequence<COUNT> {});
-}
+    static_assert(NUM_ROWS > 0 && NUM_ROWS % ELTWISE_MATH_ROWS == 0, "an FPU row band must divide the row span it covers");
 
-/**
- * @brief Emits one instruction per FPU row band over a span of NUM_ROWS rows.
- *
- * An FPU issue (MVMUL) and a MOV* both cover ELTWISE_MATH_ROWS rows, so covering a 16-row face takes
- * two instructions on the base part and four on a narrow-FPU part. Expressing that as a count keeps a
- * single body correct at any width, instead of one hand-unrolled instruction list per part.
- *
- * @p emit is called once per band with the band's first row as a @c std::integral_constant. The band
- * index has to reach TTI_* as a compile-time constant: INSTRUCTION_WORD uses the @c "n" asm constraint,
- * which rejects any operand the compiler cannot fold. Expanding a pack makes that a language guarantee;
- * a plain @c for loop only survives because @c -O3 happens to unroll it, and fails to build at -O0.
- *
- * @tparam NUM_ROWS: Rows to cover. Defaults to one face.
- */
-template <std::uint32_t NUM_ROWS = ckernel::FACE_R_DIM, typename EmitOne>
-inline void emit_row_bands(EmitOne&& emit)
-{
-    static_assert(NUM_ROWS % ELTWISE_MATH_ROWS == 0, "an FPU row band must divide the row span it covers");
-    emit_unrolled<NUM_ROWS / ELTWISE_MATH_ROWS, ELTWISE_MATH_ROWS>(std::forward<EmitOne>(emit));
+    std::array<std::uint32_t, NUM_ROWS / ELTWISE_MATH_ROWS> rows {};
+
+    for (std::uint32_t i = 0; i < rows.size(); ++i)
+    {
+        rows[i] = i * ELTWISE_MATH_ROWS;
+    }
+
+    return rows;
 }
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
@@ -247,12 +225,11 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
-    emit_row_bands(
-        [addrmod](auto band)
-        {
-            constexpr std::uint32_t ROW = decltype(band)::value;
-            TTI_MOVD2A(0, ROW, addrmod, ckernel::arch::mov_fpu_rows, ROW);
-        });
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        TTI_MOVD2A(0, row, addrmod, ckernel::arch::mov_fpu_rows, row);
+    }
 }
 
 inline void move_d2b_fixed_face(const std::uint8_t addrmod)
@@ -263,12 +240,11 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
-    emit_row_bands(
-        [addrmod](auto band)
-        {
-            constexpr std::uint32_t ROW = decltype(band)::value;
-            TTI_MOVD2B(0, ROW, addrmod, ckernel::arch::mov_fpu_rows, 0, ROW);
-        });
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        TTI_MOVD2B(0, row, addrmod, ckernel::arch::mov_fpu_rows, 0, row);
+    }
 }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest>

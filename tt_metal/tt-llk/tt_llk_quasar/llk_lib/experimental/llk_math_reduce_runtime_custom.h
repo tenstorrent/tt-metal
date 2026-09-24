@@ -48,34 +48,13 @@ inline void reduce_block_max_row_transpose_face_row(const std::uint32_t face_r_d
     TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
 
     // Write the transposed column back to DEST (SrcB rows 32-47 -> DEST rows 0..face_r_dim-1).
-    if constexpr (ELTWISE_MATH_ROWS == 8)
+    // The runtime shape gates emission; the MOV row operand still has to be an immediate, hence the unroll.
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
     {
-        // Quasar: 8-row MOVB2D. A 16-row face needs 2 moves; an <=8-row face needs 1.
-        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0); // rows 0-7
-        if (face_r_dim > 8)
+        if (face_r_dim > row)
         {
-            TTI_MOVB2D(
-                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // rows 8-15
-        }
-    }
-    else if constexpr (ELTWISE_MATH_ROWS == 4)
-    {
-        // (4-row FPU): 4-row MOVB2D -> up to 4 moves for a 16-row face.
-        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 0); // rows 0-3
-        if (face_r_dim > 4)
-        {
-            TTI_MOVB2D(
-                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 4, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 4); // rows 4-7
-        }
-        if (face_r_dim > 8)
-        {
-            TTI_MOVB2D(
-                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 8); // rows 8-11
-        }
-        if (face_r_dim > 12)
-        {
-            TTI_MOVB2D(
-                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12); // rows 12-15
+            TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + row, ADDR_MOD_0, ckernel::arch::mov_fpu_rows, p_movb2d::BCAST_OFF, row);
         }
     }
 }

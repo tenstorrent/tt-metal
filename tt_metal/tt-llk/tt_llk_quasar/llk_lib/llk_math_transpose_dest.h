@@ -62,29 +62,27 @@ inline void _llk_math_transpose_dest_emit_face_read_()
 {
     constexpr std::uint32_t LAST_BAND = ckernel::FACE_R_DIM - ELTWISE_MATH_ROWS;
 
-    emit_row_bands(
-        [](auto band)
-        {
-            constexpr std::uint32_t ROW      = decltype(band)::value;
-            constexpr std::uint8_t ADDR_MODE = (!EN_32BIT_DEST && ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
-            TTI_MOVD2B(p_mov::DEST_NORM, SRCB_ROW_BASE + ROW, ADDR_MODE, ckernel::arch::mov_fpu_rows, p_movd2b::TRANSPOSE_ON, DEST_ROW_BASE + ROW);
-        });
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        const std::uint8_t addr_mod = (!EN_32BIT_DEST && row == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+        TTI_MOVD2B(p_mov::DEST_NORM, SRCB_ROW_BASE + row, addr_mod, ckernel::arch::mov_fpu_rows, p_movd2b::TRANSPOSE_ON, DEST_ROW_BASE + row);
+    }
 
     if constexpr (EN_32BIT_DEST)
     {
-        emit_row_bands(
-            [](auto band)
-            {
-                constexpr std::uint32_t ROW      = decltype(band)::value;
-                constexpr std::uint8_t ADDR_MODE = (ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
-                TTI_MOVD2B(
-                    p_mov::DEST_32B_LOW,
-                    SRCB_ROW_BASE + ckernel::FACE_R_DIM + ROW,
-                    ADDR_MODE,
-                    ckernel::arch::mov_fpu_rows,
-                    p_movd2b::TRANSPOSE_ON,
-                    DEST_ROW_BASE + ROW);
-            });
+#pragma GCC unroll 4
+        for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+        {
+            const std::uint8_t addr_mod = (row == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+            TTI_MOVD2B(
+                p_mov::DEST_32B_LOW,
+                SRCB_ROW_BASE + ckernel::FACE_R_DIM + row,
+                addr_mod,
+                ckernel::arch::mov_fpu_rows,
+                p_movd2b::TRANSPOSE_ON,
+                DEST_ROW_BASE + row);
+        }
     }
 }
 
@@ -98,29 +96,27 @@ inline void _llk_math_transpose_dest_emit_face_write_()
 {
     constexpr std::uint32_t LAST_BAND = ckernel::FACE_R_DIM - ELTWISE_MATH_ROWS;
 
-    emit_row_bands(
-        [](auto band)
-        {
-            constexpr std::uint32_t ROW      = decltype(band)::value;
-            constexpr std::uint8_t ADDR_MODE = (!EN_32BIT_DEST && ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
-            TTI_MOVB2D(p_mov::DEST_NORM, SRCB_ROW_BASE + ROW, ADDR_MODE, ckernel::arch::mov_fpu_rows, p_movb2d::BCAST_OFF, DEST_ROW_BASE + ROW);
-        });
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        const std::uint8_t addr_mod = (!EN_32BIT_DEST && row == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+        TTI_MOVB2D(p_mov::DEST_NORM, SRCB_ROW_BASE + row, addr_mod, ckernel::arch::mov_fpu_rows, p_movb2d::BCAST_OFF, DEST_ROW_BASE + row);
+    }
 
     if constexpr (EN_32BIT_DEST)
     {
-        emit_row_bands(
-            [](auto band)
-            {
-                constexpr std::uint32_t ROW      = decltype(band)::value;
-                constexpr std::uint8_t ADDR_MODE = (ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
-                TTI_MOVB2D(
-                    p_mov::DEST_32B_LOW,
-                    SRCB_ROW_BASE + ckernel::FACE_R_DIM + ROW,
-                    ADDR_MODE,
-                    ckernel::arch::mov_fpu_rows,
-                    p_movb2d::BCAST_OFF,
-                    DEST_ROW_BASE + ROW);
-            });
+#pragma GCC unroll 4
+        for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+        {
+            const std::uint8_t addr_mod = (row == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+            TTI_MOVB2D(
+                p_mov::DEST_32B_LOW,
+                SRCB_ROW_BASE + ckernel::FACE_R_DIM + row,
+                addr_mod,
+                ckernel::arch::mov_fpu_rows,
+                p_movb2d::BCAST_OFF,
+                DEST_ROW_BASE + row);
+        }
     }
 }
 

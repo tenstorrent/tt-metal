@@ -116,51 +116,45 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // Read F0/F2 hi16 from DEST → SrcB[0:15]
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
+            // Read F0/F2 hi16 from DEST → SrcB[0:15]
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                    // Read F0/F2 lo16 from DEST → SrcB[16:31]
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
+                // Read F0/F2 lo16 from DEST → SrcB[16:31]
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, LO16_SRC + row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                    // Write hi16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, ROW);
-                        });
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + ROW);
-                        });
+                // Write hi16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, row);
+                    }
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + row);
+                    }
 
-                    // Write lo16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, ROW);
-                        });
-                    // dst += 2 * face_r_dim on the last band, F0 → F2
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW      = decltype(band)::value;
-                            constexpr std::uint8_t ADDR_MODE = ROW == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
-                            TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MODE, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + ROW);
-                        });
+                // Write lo16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + row, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, row);
+                    }
+                // dst += 2 * face_r_dim on the last band, F0 → F2
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        const std::uint8_t addr_mod = row == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + row, addr_mod, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + row);
+                    }
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -176,50 +170,44 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                    emit_row_bands<ckernel::arch::dest_row_group>(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
-                    emit_row_bands<ckernel::arch::dest_row_group>(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
+            // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::arch::dest_row_group>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::arch::dest_row_group>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
-                    // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON).
-                    // The source row stays put: a row broadcast replays the same SrcB row into every dest row.
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, ROW + 1);
-                        });
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + ROW + 1);
-                        });
+                // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON).
+                // The source row stays put: a row broadcast replays the same SrcB row into every dest row.
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, row + 1);
+                    }
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + row + 1);
+                    }
 
-                    // Write lo16 to DEST F0,F2/F1,F3 from SrcB[8:15] (row broadcast ON)
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, ROW + 1);
-                        });
-                    // dst += face_r_dim on the last band, F0 → F1
-                    emit_row_bands(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW      = decltype(band)::value;
-                            constexpr std::uint8_t ADDR_MODE = ROW == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
-                            TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MODE, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + ROW + 1);
-                        });
+                // Write lo16 to DEST F0,F2/F1,F3 from SrcB[8:15] (row broadcast ON)
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, row + 1);
+                    }
+                // dst += face_r_dim on the last band, F0 → F1
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+                    {
+                        const std::uint8_t addr_mod = row == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, addr_mod, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + row + 1);
+                    }
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -236,19 +224,17 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                    emit_row_bands<ckernel::arch::dest_row_group>(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
-                    emit_row_bands<ckernel::arch::dest_row_group>(
-                        [](auto band)
-                        {
-                            constexpr std::uint32_t ROW = decltype(band)::value;
-                            TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
-                        });
+            // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::arch::dest_row_group>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
+#pragma GCC unroll 4
+                    for (const auto row : fpu_row_offsets<ckernel::arch::dest_row_group>())
+                    {
+                        TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + row, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                    }
 
                     // Write hi16 and lo16 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, 0 + 1);

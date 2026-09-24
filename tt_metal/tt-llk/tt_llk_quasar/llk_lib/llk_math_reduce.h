@@ -96,12 +96,11 @@ inline void _reduce_row_transpose_fpu_()
     TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12);
 
     // Step 5: Write cached lo16 from SrcA back to dest lo16 address space.
-    emit_row_bands(
-        [](auto band)
-        {
-            constexpr std::uint32_t ROW = decltype(band)::value;
-            TTI_MOVA2D(p_mov::DEST_32B_LOW, ROW, ADDR_MOD_0, ckernel::arch::mov_fpu_rows, ROW);
-        });
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, row, ADDR_MOD_0, ckernel::arch::mov_fpu_rows, row);
+    }
 
     _reduce_row_transpose_alu_cfg_exit_();
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
@@ -382,7 +381,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     // The base count assumes the two-instruction B->A copy of a wide FPU; a narrower one needs one
-    // MOVB2A per row band. Must stay in lockstep with the emit_row_bands call in the replay body below.
+    // MOVB2A per row band. Must stay in lockstep with the row loop in the replay body below.
     constexpr std::uint32_t B2A_EXTRA  = (ckernel::FACE_R_DIM / ELTWISE_MATH_ROWS) - 2;
     const std::uint32_t replay_buf_len = 6 + B2A_EXTRA + tensor_shape.total_num_faces() - 1 +
                                          (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
@@ -427,13 +426,12 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
             // Following will move 1x16 pool result to SrcB to be transposed into 16 rows
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, scratch_dst_addr);
 
-            // copy over all 16 rows from B to A, one FPU row band per MOVB2A
-            emit_row_bands(
-                [](auto band)
-                {
-                    constexpr std::uint32_t ROW = decltype(band)::value;
-                    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + ROW, ADDR_MOD_0, ckernel::arch::mov_fpu_rows, p_movb2a::SRCB_ROW32_OFFSET + ROW);
-                });
+        // copy over all 16 rows from B to A, one FPU row band per MOVB2A
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+            {
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + row, ADDR_MOD_0, ckernel::arch::mov_fpu_rows, p_movb2a::SRCB_ROW32_OFFSET + row);
+            }
 
             // zero out scratch in dest
             TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0, ADDR_MOD_0, scratch_dst_addr);
