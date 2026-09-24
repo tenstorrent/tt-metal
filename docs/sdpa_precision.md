@@ -78,8 +78,9 @@ complete for each local query. This is not sequence-parallel ring attention.
 `q_chunk_size` may be 128 to 320 rows in 32-row steps; `k_chunk_size` stays 512.
 COMPENSATED and LOW_PRECISION pair query tile rows in their compensated state and
 end an odd chunk (Q224/Q288) with a single-row group; those odd-chunk kernels are
-compiled with -Os to fit the kernel config buffer. Ring recipes need a multiple of
-64 rows so that every raw state plane stays a whole transfer page. The host rejects a
+compiled with -Os to fit the kernel config buffer. Ring recipes accept the same
+32-row steps: at an odd tile count the BF16 maxima plane of the raw state checkpoint
+is half a transfer page and its last page is moved partially. The host rejects a
 layout that exceeds unreserved L1 before dispatch; at K512, Q320 fits FAST and
 the BFP8/BFP4 LOW_PRECISION storage choices but not B, C, D or BF16 E. Q224
 runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1). Ring adds its own
@@ -179,8 +180,8 @@ split-head dedup relays and phase-alignment pairs stay matched on every device. 
 grow with the pass count, and the legacy streamed-Q fallback never applies. The legacy (no
 `precision`) loop order is unchanged.
 
-Current exp-ring recipe scope is Blackhole, D128, K512, Q128-Q320 in 32-row steps (as L1 allows;
-COMPENSATED/LOW_PRECISION currently need a multiple of 64 rows on exp ring), scalar `logical_n`, the
+Current exp-ring recipe scope is Blackhole, D128, K512, Q128-Q320 in 32-row steps (as L1 allows),
+scalar `logical_n`, the
 default scale and up to three head-segments per core row. Multi-pass programs run pass-outer,
 ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
 legacy exp-ring L1 layout, which does not fit Q256/K512.

@@ -22,16 +22,27 @@ struct StateTransfer {
                             : q_tiles * d_tiles * 4096;
     }
 
+    // Transfer pages per plane. An odd Q tile count leaves the BF16 maxima plane half a page long; its
+    // last page is transferred partially (plane_bytes % page_bytes bytes), never past the plane.
+    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
+    static constexpr uint32_t plane_pages(uint32_t plane) {
+        return (plane_bytes<fp32, q_tiles, d_tiles>(plane) + page_bytes - 1) / page_bytes;
+    }
+
     // Host-side page count for a runtime Q chunk; matches pages<fp32, q_tiles>.
     static constexpr uint32_t page_count(bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4) {
-        return q_tiles * (d_tiles * 4096 + 2048 + 4096 + (fp32 ? 0 : d_tiles * 4096)) / page_bytes;
+        const uint32_t numerator = q_tiles * d_tiles * 4096;
+        const uint32_t maxima = q_tiles * 2048;
+        const uint32_t denominator = q_tiles * 4096;
+        const uint32_t local = fp32 ? 0 : q_tiles * d_tiles * 4096;
+        const auto ceil_pages = [](uint32_t bytes) { return (bytes + page_bytes - 1) / page_bytes; };
+        return ceil_pages(numerator) + ceil_pages(maxima) + ceil_pages(denominator) + ceil_pages(local);
     }
 
     template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t pages =
-        (plane_bytes<fp32, q_tiles, d_tiles>(0) + plane_bytes<fp32, q_tiles, d_tiles>(1) +
-         plane_bytes<fp32, q_tiles, d_tiles>(2) + plane_bytes<fp32, q_tiles, d_tiles>(3)) /
-        page_bytes;
+        plane_pages<fp32, q_tiles, d_tiles>(0) + plane_pages<fp32, q_tiles, d_tiles>(1) +
+        plane_pages<fp32, q_tiles, d_tiles>(2) + plane_pages<fp32, q_tiles, d_tiles>(3);
 
     template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr bool page_aligned =

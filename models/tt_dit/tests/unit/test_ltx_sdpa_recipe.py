@@ -52,7 +52,7 @@ def test_legacy_program_configs_are_the_tuned_objects():
     assert attention._cross_program_config(1, 2) is attention.sdpa_program_config
 
 
-def test_recipe_ring_chunks_keep_even_tiles_and_fall_back():
+def test_recipe_ring_chunks_keep_tuned_tiles_and_fall_back():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
     assert _chunks(attention._ring_program_config(9728)) == (256, 256)  # Q96 < 128 -> Q256; K256 kept
     assert _chunks(attention._ring_program_config(38912)) == (192, 512)  # 6 tiles, even -> kept
@@ -61,10 +61,10 @@ def test_recipe_ring_chunks_keep_even_tiles_and_fall_back():
     assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (11, 10)
 
 
-def test_recipe_ring_rejects_odd_tile_q_chunk():
+def test_recipe_ring_keeps_odd_tile_q_chunk():
     attention = _bare_attention(ttnn.SDPAPrecision.ACCURATE)
     attention.ring_sdpa_program_config = _pc(224, 384, WORKER_GRID)  # 7 tiles: odd
-    assert _chunks(attention._ring_program_config(1234)) == (256, 384)
+    assert _chunks(attention._ring_program_config(1234)) == (224, 384)
 
 
 def test_recipe_dense_and_cross_chunks():

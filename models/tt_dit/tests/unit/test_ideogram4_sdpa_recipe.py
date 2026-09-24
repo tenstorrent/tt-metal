@@ -62,9 +62,9 @@ def test_recipe_keeps_tuned_d256_q128_k256_dense_and_ring(precision):
     assert not dense.exp_approx_mode and not ring.exp_approx_mode  # left unset for the recipe
 
 
-def test_recipe_ring_rejects_odd_tile_q_chunk_dense_keeps_it():
+def test_recipe_ring_and_dense_keep_odd_tile_q_chunk():
     block = _bare_block(ttnn.SDPAPrecision.ACCURATE)
-    assert _chunks(block._recipe_sdpa_program_config(_pc(160, 256), ring=True)) == (256, 256)
+    assert _chunks(block._recipe_sdpa_program_config(_pc(160, 256), ring=True)) == (160, 256)  # 5 tiles: odd OK
     assert _chunks(block._recipe_sdpa_program_config(_pc(160, 256), ring=False)) == (160, 256)
     assert _chunks(block._recipe_sdpa_program_config(_pc(64, 128), ring=False)) == (256, 512)
 

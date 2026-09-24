@@ -198,7 +198,7 @@ class MochiAttention(Module):
 
     @staticmethod
     def _recipe_program_config(program_config: ttnn.SDPAProgramConfig, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """Same grid, tuned chunks kept where the recipe supports them (ring needs even Q tiles)."""
+        """Same grid, tuned chunks kept where the recipe supports them."""
         return recipe_program_config(program_config, ring=ring)
 
     def _sdpa_kwargs(self) -> dict:

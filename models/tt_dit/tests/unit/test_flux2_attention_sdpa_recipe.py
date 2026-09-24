@@ -62,8 +62,8 @@ def test_recipe_ring_program_config_keeps_tuned_chunks(blackhole, sp, tp, seq_le
 def test_recipe_ring_program_config_falls_back(blackhole):
     attention = _bare_attention(FAST)
     attention.ring_sdpa_chunk_size_map = {(True, 4, 8): {-1: (224, 1024)}}
-    # 7 Q tiles is odd (ring needs even), K1024 is unsupported.
-    assert _chunks(attention.get_ring_sdpa_program_config(4096)) == (256, 512)
+    # 7 Q tiles (odd) is kept on ring; K1024 is unsupported.
+    assert _chunks(attention.get_ring_sdpa_program_config(4096)) == (224, 512)
 
 
 def test_recipe_dense_program_config():
@@ -73,7 +73,7 @@ def test_recipe_dense_program_config():
     dense = Attention._recipe_program_config(tuned, ring=False)
     assert _chunks(dense) == (224, 512)  # joint SDPA accepts odd tile counts
     assert dense.exp_approx_mode is None
-    assert _chunks(Attention._recipe_program_config(tuned, ring=True)) == (256, 512)
+    assert _chunks(Attention._recipe_program_config(tuned, ring=True)) == (224, 512)  # ring: odd tiles too
 
 
 def test_legacy_kwargs_read_compute_config_at_call_time():

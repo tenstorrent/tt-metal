@@ -709,7 +709,13 @@ void kernel_main() {
         }
     }();
 
+#ifdef SDPA_RECIPE_RING
+    // Recipes allow odd Q tile counts with a 2-row QK subblock: push ceil(Sq / sbh) subblocks with a
+    // clamped tail (flooring never pushed the last Q row).
+    constexpr uint32_t q_num_subblocks = (Sq_chunk_t + qk_subblock_h - 1) / qk_subblock_h;
+#else
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+#endif
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
     constexpr uint32_t q_heads_per_k = NH / NHK;
     static_assert(!has_sliding_window || !gqa_mcast_enabled, "Sliding windows use direct per-core K/V reads");
@@ -1145,7 +1151,12 @@ void kernel_main() {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                 const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+#ifdef SDPA_RECIPE_RING
+                                const uint32_t sb_row_end =
+                                    std::min(sb_row_start + qk_subblock_h, q_slice.d2_start + Sq_chunk_t);
+#else
                                 const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+#endif
                                 Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                                 read_block(
                                     q_gen,
