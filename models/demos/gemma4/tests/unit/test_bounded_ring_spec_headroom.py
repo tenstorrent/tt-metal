@@ -65,14 +65,25 @@ def test_every_candidate_query_keeps_its_full_window(monkeypatch):
             assert (base + j) % ring not in slots or slots[(base + j) % ring] == base + j
 
 
-def test_the_headroom_is_opt_in_and_warns_when_absent(monkeypatch, caplog):
-    """It must NOT reserve silently: doubling the ring doubles the bounded pool
-    for every sliding layer (50 on 31B) and OOMs the shipped P150x8 config
-    during KV allocation. So it warns, names the knob, and leaves the ring
-    alone -- wrong tokens are worse than a warning, and a server that cannot
-    boot is worse than both."""
+def test_an_absent_headroom_refuses_instead_of_reserving_or_warning(monkeypatch, expect_error):
+    """It must not reserve silently, and it must not continue either.
+
+    Not reserving: doubling the ring doubles the bounded pool for every sliding
+    layer (50 on 31B) and OOMs the shipped P150x8 config during KV allocation,
+    so it cannot be switched on by default.
+
+    Not continuing: this test used to assert that it warns and proceeds, on the
+    grounds that "a server that cannot boot is worse" than wrong tokens. That
+    judgement was wrong and tt-metal#57701 is the report -- a server on an exact
+    ring produces plausible, wrong text with one startup warning as the only
+    trace, which is worse than a boot failure that names the remedy.
+
+    The ring itself is still left alone; the guard refuses rather than mutating
+    a process-wide value the model and trace paths also read.
+    """
     monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
+    with expect_error(RuntimeError, "exact-window ring"):
+        gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
     assert SPEC_RING_HEADROOM_ENV not in os.environ
     assert bounded_ring_modulo(WINDOW) == WINDOW
 

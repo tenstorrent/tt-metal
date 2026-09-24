@@ -2321,57 +2321,83 @@ def _spec_first_slot(empty_slots):
         return None
 
 
+# Opt out of the tt-metal#57701 guard: speculate on a ring that cannot hold the
+# candidates. Only safe when no request passes ``ring - verify_width``.
+_ALLOW_UNSAFE_SPEC_RING_ENV = "GEMMA4_ALLOW_UNSAFE_SPEC_RING"
+
+
 def _reserve_spec_ring_headroom(sliding_window, verify_width, where):
-    """Reserve bounded-ring headroom for speculative candidate writes.
+    """Refuse to speculate on a bounded ring that cannot hold the candidates.
 
     A ring of exactly ``sliding_window`` is correct for plain decode, but a
     packed verify writes candidates at p+1..p+K BEFORE attention runs, and slot
-    (p+j)%W holds position p+j-W, which is still inside the live window. Those
-    writes evict history that an earlier candidate query in the SAME forward
-    still needs, and masking future candidates cannot bring it back.
+    (p+j)%ring holds position p+j-ring, which is still inside the live window.
+    Those writes evict history an earlier candidate query in the SAME forward
+    still needs, and masking future candidates cannot bring it back. Every
+    sliding layer is affected -- 50 of 60 on 31B -- so the committed tokens come
+    from a shortened window from the first generated token of any prompt past
+    ``ring - verify_width`` (tt-metal#57701).
 
-    The ring must stay a power of two (chunk starts must be multiples of both
-    the ring and SDPA's q_chunk_size), so the smallest legal ring larger than
-    the window is twice the window -- which also clears any K up to the window.
-    Set through the env because the ring is read process-wide by
-    ``bounded_ring_modulo`` from the model and trace paths, which do not know
-    whether speculation is on. ``setdefault`` leaves an operator's own value
-    alone.
+    The ring is safe only when it has room for the candidates beyond the window:
+    ``ring - window >= verify_width``. That is checked against the ACTUAL ring
+    rather than against the presence of the env var, because headroom set too
+    small is still unsafe.
 
-    Only the demo used to set this, so a SERVER ran bounded sliding plus
-    speculation on an exact-window ring and corrupted from the first token at
-    K>1 (tt-metal#56048 review 3).
+    Why this raises instead of reserving the headroom itself: the ring must stay
+    a power of two (chunk starts must be multiples of both the ring and SDPA's
+    q_chunk_size), so the smallest legal headroom DOUBLES it, and the bounded
+    pool is sized ``(ring/block)*max_batch`` for every sliding layer. That
+    doubling OOMs the shipped P150x8 config during KV allocation, so it cannot
+    be switched on by default -- it needs ``GEMMA4_MAX_TOKENS_ALL_USERS``
+    lowered to pay for it. Reserving silently would trade wrong tokens for a
+    failed allocation.
+
+    Why it raises instead of disabling speculation: the block rails declare
+    ``output_tokens_per_step`` at CONFIG time and the scheduler reserves that
+    width before this runs, so a model that quietly stopped speculating would
+    return one token against a reserved block and trip the width check.
+
+    This previously logged a warning and continued, which is what tt-metal#57701
+    reports: a server speculating on an exact ring produces plausible, wrong
+    text with a startup warning as the only trace. A boot failure that names the
+    remedy is the better trade.
     """
-    from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
+    from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
 
     if sliding_window is None:
         return
     window = int(sliding_window)
     if window <= 0 or window % _RING_HEADROOM_BLOCK:
         return
-    if os.environ.get(SPEC_RING_HEADROOM_ENV):
+    width = int(verify_width or 0)
+    if width <= 1:
         return
-    # NOT reserved automatically. The ring must stay a power of two, so the
-    # smallest legal headroom DOUBLES it, and the bounded pool is sized
-    # (ring/block)*max_batch for EVERY sliding layer -- 50 of them on 31B. That
-    # doubling OOMs the shipped P150x8 config during KV allocation, so it
-    # cannot be switched on by default; fitting it needs the full-attention
-    # pool (GEMMA4_MAX_TOKENS_ALL_USERS) reduced to pay for it.
-    #
-    # Warn instead of proceeding silently: on an exact-window ring a packed
-    # verify writes candidates at p+1..p+K into slots still holding live
-    # window positions, so drafts corrupt from the first token at K>1
-    # (tt-metal#56048 review 3). Loud, with the knob named, beats wrong tokens.
+
+    ring = bounded_ring_modulo(window)
+    if ring is not None and int(ring) - window >= width:
+        return  # headroom covers every candidate write
+
     blocks = window // _RING_HEADROOM_BLOCK
-    logger.warning(
-        f"{where}: bounded sliding with an EXACT-window ring ({window}) and "
-        f"speculation (verify width {verify_width}). A packed verify writes "
-        f"candidates at p+1..p+{verify_width} into slots that still hold live "
-        f"window positions, which corrupts drafts at width > 1. Set "
-        f"{SPEC_RING_HEADROOM_ENV}={blocks} to double the ring, and lower "
-        "GEMMA4_MAX_TOKENS_ALL_USERS to pay for it -- the bounded pool is "
-        "sized per sliding layer and doubling it OOMs the default config."
+    message = (
+        f"{where}: bounded sliding KV on an exact-window ring ({window}) cannot "
+        f"hold a verify of width {width}. A packed verify writes candidates at "
+        f"p+1..p+{width} into slots that still hold live window positions, so "
+        f"every sliding layer attends a shortened window and the committed "
+        f"tokens are wrong from the first one past position {window - width} "
+        f"(tt-metal#57701). Remedies, in order of preference: set "
+        f"{SPEC_RING_HEADROOM_ENV}={blocks} to double the ring AND lower "
+        f"GEMMA4_MAX_TOKENS_ALL_USERS to pay for it (the bounded pool is sized "
+        f"per sliding layer, so doubling it OOMs the default config; needs "
+        f"tt-metal#57655 so the page tables follow the ring); or serve without "
+        f"bounded sliding KV; or run as a plain baseline without speculation. "
+        f"To accept the corruption knowingly -- short contexts only, where no "
+        f"request passes position {window - width} -- set "
+        f"{_ALLOW_UNSAFE_SPEC_RING_ENV}=1."
     )
+    if os.environ.get(_ALLOW_UNSAFE_SPEC_RING_ENV, "").lower() in ("1", "true", "yes"):
+        logger.warning(f"{message} PROCEEDING because {_ALLOW_UNSAFE_SPEC_RING_ENV} is set.")
+        return
+    raise RuntimeError(message)
 
 
 class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
