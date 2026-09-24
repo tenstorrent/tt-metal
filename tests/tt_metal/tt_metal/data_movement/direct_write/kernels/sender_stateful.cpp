@@ -6,8 +6,7 @@
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
 
-// with_state is always passed the value: Gen1 reuses the latched one, Quasar has no value register
-// in its inline-write state and issues whatever it is given.
+// Quasar's inline-write state holds no value, so with_state is always passed one.
 void kernel_main() {
     constexpr uint32_t test_id = get_arg(args::test_id);
     constexpr uint32_t num_writes = get_arg(args::num_writes);

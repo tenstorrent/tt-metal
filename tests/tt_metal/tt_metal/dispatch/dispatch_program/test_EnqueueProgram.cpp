@@ -488,9 +488,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         const std::filesystem::path kernel_path{
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"};
 
-        // Gen2 has no RISCV_0/RISCV_1 split, so the two DM kernels become two single-threaded
-        // KernelSpecs sharing one work unit, each writing its own result region. The same source
-        // serves all three kernels; it branches on COMPILE_FOR_DM / COMPILE_FOR_TRISC.
+        // Gen2 has no RISCV_0/RISCV_1 split, so each DM kernel is its own KernelSpec.
         auto make_spec = [&](const std::string& name,
                              const std::map<std::string, std::string>& defines,
                              uint32_t num_args,
@@ -653,9 +651,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         const CoreRange ranges[] = {core_range_0, core_range_1};
         const uint32_t num_args_per_range[] = {num_runtime_args_for_cr0, num_runtime_args_for_cr1};
 
-        // A vararg count is fixed per kernel, so rather than one kernel binary reading a different
-        // count per core (the Gen1 shape, via CR1_START_Y), each range gets its own kernels. The
-        // per-node override that would preserve the shared binary is deprecated.
+        // A vararg count is fixed per kernel, so each range gets its own kernels.
         std::vector<KernelSpec> kernel_specs;
         std::vector<WorkUnitSpec> work_units;
         for (size_t r = 0; r < 2; r++) {
@@ -667,7 +663,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                 gen2_kernels[r].push_back(name);
 
                 auto defines_map = make_defines(compute ? "COMPUTE" : "DATA_MOVEMENT", rta_bases[role]);
-                // Each kernel covers exactly one range, so the shared-binary discriminators are unused.
                 defines_map.erase("NUM_RUNTIME_ARGS_CR1");
                 defines_map.erase("CR1_START_Y");
                 defines_map["NUM_RUNTIME_ARGS"] = std::to_string(num_args_per_range[r]);
@@ -771,8 +766,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                     run_args.kernel_run_args.push_back(std::move(kernel_run_args));
                 }
             }
-            // Update rather than re-set on later iterations, matching the in-place CRTA update the
-            // Gen1 path exercises via GetCommonRuntimeArgs.
             if (iter == 0) {
                 SetProgramRunArgs(program_, run_args);
             } else {
@@ -914,8 +907,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
     return {unique_args_addr, common_args_addr};
 }
 
-// This test only needs two disjoint ranges, but {1, 1}-{2, 2} and {3, 3}-{4, 4} do not fit every
-// target: Quasar's worker grid is 2x1. Fall back to a single core each when the grid is too small.
+// Quasar's 2x1 worker grid can't fit the desired ranges, so fall back to a single core each.
 std::pair<CoreRange, CoreRange> two_disjoint_core_ranges(const distributed::MeshDevice& mesh_device) {
     const CoreRange desired_0{{1, 1}, {2, 2}};
     const CoreRange desired_1{{3, 3}, {4, 4}};
@@ -1000,8 +992,6 @@ bool test_increment_runtime_args_sanity(
     if (mesh_device->arch() == ARCH::QUASAR) {
         using namespace tt::tt_metal::experimental;
 
-        // Mirror the Gen1 selection below: the requested processor class decides both the kernel and
-        // the hardware config, so a DM caller exercises a DM engine rather than a compute one.
         const bool is_compute = processor.processor_class == HalProcessorClassType::COMPUTE;
         const std::filesystem::path kernel_source =
             is_compute
@@ -1014,8 +1004,6 @@ bool test_increment_runtime_args_sanity(
             hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
         }
 
-        // One kernel per config, each targeting that config's cores, so a work unit is needed per
-        // kernel rather than one shared across them.
         std::vector<KernelSpec> kernel_specs;
         std::vector<WorkUnitSpec> work_units;
         for (size_t i = 0; i < program_configs.size(); i++) {
@@ -1129,9 +1117,7 @@ bool test_increment_runtime_args_sanity(
         processor);
 }
 
-// Gen2 has no Metal 1.0 DataMovementKernel, so programs are built from a ProgramSpec instead.
-// Gen2 also assigns DM threads automatically, so a Gen1 processor_id is not expressible here: every
-// processor_id the caller asks for maps onto the same single-threaded DM kernel.
+// Gen2 assigns DM threads itself, so processor_id has no effect here.
 Program make_gen2_program(
     distributed::MeshDevice& mesh_device,
     const std::string& name,
@@ -1169,9 +1155,7 @@ Program make_gen2_program(
     return MakeProgramFromSpec(mesh_device, spec);
 }
 
-// {2, 2}-{6, 6} does not exist on every target, and the usable grid does not always start at the
-// origin: Quasar's compute cores begin at logical y = 1. Take the cores from the device, using the
-// same source verify_kernel_coordinates derives its sub-device origin from.
+// Quasar's grid is smaller than {2, 2}-{6, 6} and starts at logical y = 1, so take the cores from the device.
 CoreRangeSet my_coordinates_cores(const distributed::MeshDevice& mesh_device, SubDeviceId sub_device_id) {
     const CoreRangeSet workers = mesh_device.worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     const CoreRange desired{{2, 2}, {6, 6}};
@@ -1906,8 +1890,7 @@ TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
     for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-        // This test is about updating args across iterations, so it only needs two disjoint ranges.
-        // Keep the original split where the grid is tall enough; Quasar's 2x1 grid has no row 5.
+        // Quasar's 2x1 grid has no row 5.
         const auto [cr0, cr1] = worker_grid_size.y > 5
                                     ? std::pair{
                                           CoreRange({0, 0}, {worker_grid_size.x - 1, 3}),
@@ -2151,10 +2134,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute)
 
 namespace stress_tests {
 
-// Gen2 equivalent of the randomized program bodies below, which build their programs with
-// CreateKernel and so cannot run on Quasar. The random choice of which riscs get a kernel carries
-// over, with data movement and compute standing in for the Gen1 brisc/ncrisc/trisc split. A dataflow
-// buffer needs one producer and one consumer, so only the draws that take both a DM and a compute
+// A dataflow buffer needs one producer and one consumer, so only draws with both a DM and a compute
 // kernel get buffers.
 Program make_gen2_random_program(
     distributed::MeshDevice& mesh_device,
@@ -2177,8 +2157,6 @@ Program make_gen2_random_program(
     };
     std::vector<KernelPlan> plans;
     bool want_dm = use_max_loop || rand() % 2 == 0;
-    // The Gen1 body runs a kernel on both brisc and ncrisc; Gen2 assigns DM threads itself, so this
-    // is simply a second DM kernel.
     const bool want_second_dm = use_max_loop || rand() % 2 == 0;
     bool want_compute = use_max_loop || rand() % 2 == 0;
     if (!want_dm && !want_second_dm && !want_compute) {
@@ -2198,8 +2176,6 @@ Program make_gen2_random_program(
         plans.push_back(KernelPlan{.name = KernelSpecName{"compute_0"}, .is_compute = true});
     }
 
-    // One producer and one consumer per node, so the first DM kernel produces and the compute kernel
-    // consumes; any second DM kernel just checks its runtime args.
     const bool has_dfbs = (want_dm || want_second_dm) && want_compute;
     bool producer_assigned = false;
     for (KernelPlan& plan : plans) {
@@ -2213,8 +2189,7 @@ Program make_gen2_random_program(
             producer_assigned = true;
         }
     }
-    // Only the Gen1 data-movement flavor checked semaphores, and only one kernel may, since the
-    // check leaves the value non-zero for the next dispatch to reset.
+    // Only one kernel may check semaphores, since the check leaves the value non-zero.
     for (KernelPlan& plan : plans) {
         if (!plan.is_compute) {
             plan.checks_sems = true;
@@ -2280,8 +2255,7 @@ Program make_gen2_random_program(
         if (plan.is_compute) {
             hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
         } else {
-            // Implicit sync would take a transaction id per DFB out of a pool of 24, and nothing is
-            // ever pushed through these buffers for it to synchronize.
+            // Implicit sync takes a transaction id per DFB from a pool of 24.
             hw_config = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
         }
 
@@ -2350,8 +2324,7 @@ Program make_gen2_random_program(
 
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     const bool is_quasar = this->arch_ == tt::ARCH::QUASAR;
-    // Half of what the single-CQ variant uses: the dispatch loop below repeats per command queue, so
-    // the emulator pays for every workload twice.
+    // Half the single-CQ budget, since the dispatch loop below repeats per command queue.
     uint32_t NUM_WORKLOADS = is_quasar ? 25 : 100;
     uint32_t MAX_LOOP = is_quasar ? 16 : 100;
     // Smaller page size for architectures with more DFB slots so all test CBs still fit in L1
@@ -2381,7 +2354,6 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         distributed::MeshWorkload& workload = workloads.back();
 
         if (is_quasar) {
-            // The first program takes the maximum of everything, to be sure that case compiles and runs.
             const bool use_max = i == 0;
             workload.add_program(
                 this->device_range_,
@@ -2654,10 +2626,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     auto device = this->devices_.at(0);
     const bool is_quasar = device->arch() == ARCH::QUASAR;
-    // Quasar only runs on the emulator, where the Gen1 counts would take days, dominated by the
-    // largest program's million-iteration spin loop. A dispatch there costs 2.6s to 5.4s depending on
-    // how loaded the emulator is, and a session is capped at 1800s with a third of that spent booting,
-    // so these counts keep the shape of the test and still fit a session at the slow end.
+    // Quasar only runs on the emulator, where a session is capped at 1800s.
     uint32_t NUM_WORKLOADS = is_quasar ? 50 : 100;
     uint32_t MAX_LOOP = is_quasar ? 16 : 100;
     // Smaller page size for architectures with more DFB slots so all test CBs still fit in L1
@@ -2687,7 +2656,6 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         }
 
         if (is_quasar) {
-            // The first program takes the maximum of everything, to be sure that case compiles and runs.
             const bool use_max = i == 0;
             workload.add_program(
                 this->device_range_,

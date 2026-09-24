@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 data-movement variant of increment_runtime_arg.cpp: takes the counts and result bases as
-// named compile-time args and reads the runtime args as positional varargs. The compute variant is in
-// test_kernels/compute/increment_runtime_arg_2_0.cpp.
+// Metal 2.0 data-movement variant of increment_runtime_arg.cpp.
 
 #include <cstdint>
 

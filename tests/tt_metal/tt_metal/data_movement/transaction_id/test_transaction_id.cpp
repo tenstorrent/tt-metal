@@ -42,8 +42,6 @@ struct TransactionIdConfig {
     //  1. Posted flag
 };
 
-// The master issues transactions to two subordinates, so the three cores have to be distinct. A grid
-// with fewer than three cores collapses them onto each other, which corrupts the expected data.
 inline bool three_distinct_cores(const CoreCoord& master, const CoreCoord& sub0, const CoreCoord& sub1) {
     return master != sub0 && master != sub1 && sub0 != sub1;
 }
