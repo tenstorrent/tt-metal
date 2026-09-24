@@ -548,12 +548,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         ``paged_fill_cache`` requires ``modulo <= effective_block_size * cols``.
         For sliding layers the kernel's block_size is the cache's declared
         ``shape[2]`` (typically 64) — not the HMA-scaled effective size used
-        for full-attn views. Floor at ``cdiv(sliding_window, block_size)``.
+        for full-attn views. The modulo is the RING (``bounded_ring_modulo``),
+        which is the window plus any speculative headroom, so the floor is
+        ``cdiv(ring, block_size)``; sizing it from the bare window fails the
+        kernel check as soon as headroom is configured.
         """
         if not self._bounded_sliding_kv_cache or kv_cache is None:
             return None
-        sliding_window = getattr(self._text_config(), "sliding_window", None)
-        if sliding_window is None:
+        ring = self._bounded_ring_size()
+        if ring is None:
             return None
         try:
             block_size = int(kv_cache[0][0].shape[2])
@@ -563,7 +566,17 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         from models.tt_transformers.tt.common import num_blocks_in_seq
 
-        return num_blocks_in_seq(int(sliding_window), block_size)
+        return num_blocks_in_seq(int(ring), block_size)
+
+    def _bounded_ring_size(self) -> int | None:
+        """The bounded sliding ring in positions: the window plus the configured headroom."""
+        sliding_window = getattr(self._text_config(), "sliding_window", None)
+        if sliding_window is None:
+            return None
+        from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+        ring = bounded_ring_modulo(int(sliding_window))
+        return None if ring is None else int(ring)
 
     def _get_prefill_user_page_table(
         self,
@@ -1620,7 +1633,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if shrunk:
             logger.info(
                 "Gemma4 vLLM: bounded sliding — sized {}/{} sliding KV buffers "
-                "to {} blocks (sliding_window/block_size * max_batch={}), "
+                "to {} blocks (ring/block_size * max_batch={}), "
                 "matching metal demo (avoids full-ISL sliding DRAM OOM).",
                 shrunk,
                 len(sliding_idxs),
@@ -1768,15 +1781,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
         With hybrid groups OFF, vLLM hands every layer the same full-ISL
         block table (global IDs into ``num_blocks≈max_model_len/block_size``).
-        Bounded mode allocates only ``sliding_window/block_size * B`` physical
-        blocks per sliding layer (see :meth:`_shrink_bounded_sliding_kv_specs`),
-        so those global IDs would OOB. Rebuild each sliding row with dense
-        local IDs — same layout as ``build_hybrid_page_tables`` in the metal
-        demo: user ``u`` owns ``[u*W, (u+1)*W)`` where ``W=sliding_window/block_size``.
+        Bounded mode allocates only ``ring/block_size * B`` physical blocks per
+        sliding layer (see :meth:`_shrink_bounded_sliding_kv_specs`), so those
+        global IDs would OOB. Rebuild each sliding row with dense local IDs —
+        same layout as ``build_hybrid_page_tables`` in the metal demo: user
+        ``u`` owns ``[u*W, (u+1)*W)`` where ``W=ring/block_size`` and the ring
+        is ``bounded_ring_modulo(sliding_window)``: the window, plus the
+        speculative headroom when ``GEMMA4_SPEC_RING_HEADROOM_BLOCKS`` is set.
 
         Tables are sized to exactly ``W`` columns so ``cache_position_modulo``
         shape checks pass on short prompts without retaining vLLM's full-ISL
-        width (unused under modulo wrap).
+        width (unused under modulo wrap). The pool, the modulo and these
+        columns must all follow the same ring: ``paged_fill_cache`` requires
+        ``modulo <= block_size * columns``.
 
         Full-attention layers are left alone.
         """
@@ -1811,9 +1828,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             except (TypeError, IndexError, AttributeError):
                 return page_tables_per_layer
 
-        if sliding_window % block_size != 0:
+        ring = self._bounded_ring_size()
+        if ring is None or ring % block_size != 0:
             return page_tables_per_layer
-        target_cols = int(sliding_window) // block_size
+        target_cols = int(ring) // block_size
 
         # Ring slots must follow the *request*, not its row in the current
         # page-table tensor. The plugin compacts decode rows onto the occupied
