@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -177,5 +178,31 @@ template <bool APPROXIMATION_MODE>
 inline void div_floor_init() {
     div_trunc_init<APPROXIMATION_MODE>();
 }
+
+// Op class for an elementwise floor division of two int32 tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct DivInt32Floor : SfpuBinaryOp<DivInt32Floor<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { div_floor_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an elementwise truncating division of two int32 tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct DivInt32Trunc : SfpuBinaryOp<DivInt32Trunc<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { div_trunc_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

@@ -9,6 +9,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -161,6 +162,84 @@ inline void calculate_clamped_logical_right_shift(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise left shift of one tile by another.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryLeftShift : SfpuBinaryOp<BinaryLeftShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_left_shift<
+            APPROXIMATION_MODE,
+            ITERATIONS,
+            INSTRUCTION_MODE,
+            false /* SIGN_MAGNITUDE_FORMAT */>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
+
+// Op class for an elementwise arithmetic right shift of one tile by another.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryRightShift : SfpuBinaryOp<BinaryRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_binary_right_shift<
+            APPROXIMATION_MODE,
+            ITERATIONS,
+            INSTRUCTION_MODE,
+            false /* SIGN_MAGNITUDE_FORMAT */>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
+
+// Op class for an elementwise logical right shift of one tile by another.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct LogicalRightShift
+    : SfpuBinaryOp<LogicalRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_logical_right_shift<
+            APPROXIMATION_MODE,
+            ITERATIONS,
+            INSTRUCTION_MODE,
+            false /* SIGN_MAGNITUDE_FORMAT */>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
+
+// Op class for an elementwise logical right shift of one tile by another, with shift amounts >= 32 clamped to 31.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct ClampedLogicalRightShift
+    : SfpuBinaryOp<ClampedLogicalRightShift<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_clamped_logical_right_shift<
+            APPROXIMATION_MODE,
+            ITERATIONS,
+            INSTRUCTION_MODE,
+            false /* SIGN_MAGNITUDE_FORMAT */>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

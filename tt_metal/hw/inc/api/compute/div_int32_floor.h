@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_div_int32_floor.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,33 +30,17 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_div_int32_floor,
-        (APPROX, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void div_int32_floor_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::DivInt32Floor<APPROX>::run(idst0, idst1, odst)));
 }
-ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_div_int32_trunc,
-        (APPROX, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void div_int32_trunc_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::DivInt32Trunc<APPROX>::run(idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
-ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
+ALWI void div_int32_floor_tile_init() { MATH((sfpu::DivInt32Floor<APPROX>::init())); }
+ALWI void div_int32_trunc_tile_init() { MATH((sfpu::DivInt32Trunc<APPROX>::init())); }
 
 }  // namespace ckernel

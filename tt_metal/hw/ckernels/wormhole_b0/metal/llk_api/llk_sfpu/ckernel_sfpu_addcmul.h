@@ -8,6 +8,7 @@
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -61,4 +62,23 @@ inline void calculate_addcmul(
         sfpi::dst_reg += 2;
     }
 }
+
+// Op class for elementwise addcmul: out = in0 + value * in1 * in2.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = 8>
+struct Addcmul : SfpuTernaryOp<Addcmul<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out,
+        const std::uint32_t value) {
+        calculate_addcmul<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value);
+    }
+};
+
 }  // namespace ckernel::sfpu

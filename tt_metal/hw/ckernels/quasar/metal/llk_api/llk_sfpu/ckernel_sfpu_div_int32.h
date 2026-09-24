@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 
@@ -48,5 +49,18 @@ template <bool APPROXIMATION_MODE>
 inline void div_init() {
     _init_reciprocal_<false>();
 }
+
+// Op class for an elementwise division of two int32 tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct DivInt32 : SfpuBinaryOp<DivInt32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { div_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

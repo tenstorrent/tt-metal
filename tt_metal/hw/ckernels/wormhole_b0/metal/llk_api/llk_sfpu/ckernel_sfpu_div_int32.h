@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -50,5 +51,16 @@ template <bool APPROXIMATION_MODE>
 inline void div_init() {
     sfpu_reciprocal_init<false>();
 }
+
+// Op class for an elementwise division of two int32 tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct DivInt32 : SfpuBinaryOp<DivInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { div_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

@@ -10,6 +10,8 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -52,5 +54,23 @@ void calculate_rsub_scalar_int32(std::uint32_t scalar) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise integer reverse subtract of two tiles: out = in1 - in0.
+template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32, int ITERATIONS = 8>
+struct RsubInt : SfpuBinaryOp<RsubInt<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_rsub_int<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
+
+// Op class for an elementwise int32 reverse subtract with a scalar: y = scalar - x.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct RsubInt32Scalar : SfpuUnaryOp<RsubInt32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
+        calculate_rsub_scalar_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
+    }
+};
 
 }  // namespace ckernel::sfpu

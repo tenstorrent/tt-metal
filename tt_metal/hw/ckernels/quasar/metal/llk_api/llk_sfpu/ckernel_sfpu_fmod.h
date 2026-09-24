@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -66,6 +67,17 @@ inline void calculate_fmod() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise fmod by the scalar denominator that init() loads.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Fmod : SfpuUnaryOp<Fmod<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_fmod<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
+        init_fmod<APPROXIMATION_MODE>(value, recip);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

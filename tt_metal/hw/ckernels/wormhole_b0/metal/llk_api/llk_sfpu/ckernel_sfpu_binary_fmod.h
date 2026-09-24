@@ -4,21 +4,23 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
 // FMOD = a - trunc(a / b) * b
 // Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_binary_remainder.h)
 sfpi_inline void calculate_fmod_int32_body(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
     // Load signed inputs
     sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
@@ -113,7 +115,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
 // Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
 // this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_fmod_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
@@ -122,10 +125,11 @@ sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_i
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_binary_fmod(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        constexpr uint dst_tile_size_sfpi = 32;
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
@@ -145,5 +149,28 @@ template <bool APPROXIMATION_MODE>
 inline void fmod_binary_init() {
     sfpu_reciprocal_init<false>();
 }
+
+// Op class for an elementwise fmod of two int32 tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct FmodInt32 : SfpuBinaryOp<FmodInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_fmod_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { fmod_int32_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an elementwise fmod of two float tiles.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+struct BinaryFmod : SfpuBinaryOp<BinaryFmod<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary_fmod<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { fmod_binary_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

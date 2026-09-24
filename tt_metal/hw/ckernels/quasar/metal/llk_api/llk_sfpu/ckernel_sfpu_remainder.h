@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -137,6 +138,30 @@ inline void calculate_remainder() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise remainder by the scalar denominator that init() loads.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Remainder : SfpuUnaryOp<Remainder<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_remainder<APPROXIMATION_MODE, ITERATIONS>();
+    }
+
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
+        init_remainder<APPROXIMATION_MODE>(value, recip);
+    }
+};
+
+// Op class for an elementwise unsigned remainder by a uint32 scalar divisor.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct RemainderUint32Scalar : SfpuUnaryOp<RemainderUint32Scalar<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t scalar) {
+        calculate_remainder_uint32_scalar<APPROXIMATION_MODE, ITERATIONS>(scalar);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { remainder_uint32_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

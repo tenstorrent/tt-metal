@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -67,5 +68,30 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
         }
     }
 }
+
+// Op class for an elementwise bitwise AND/OR/XOR of each element with a scalar.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    UnaryBitwiseOp BITWISE_OP,
+    DataFormat DATA_FORMAT = DataFormat::Int32,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct UnaryBitwise : SfpuUnaryOp<UnaryBitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t value) {
+        calculate_sfpu_unary_bitwise<APPROXIMATION_MODE, BITWISE_OP, DATA_FORMAT, ITERATIONS>(value);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() {
+        if constexpr (BITWISE_OP == UnaryBitwiseOp::AND) {
+            bitwise_and_init();
+        } else if constexpr (BITWISE_OP == UnaryBitwiseOp::OR) {
+            bitwise_or_init();
+        } else {
+            bitwise_xor_init();
+        }
+    }
+};
+
 }  // namespace sfpu
 }  // namespace ckernel

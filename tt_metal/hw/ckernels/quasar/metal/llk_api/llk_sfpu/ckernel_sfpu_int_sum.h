@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -75,6 +76,29 @@ inline void add_int([[maybe_unused]] const uint dst_offset) {
         dst_reg++;
     }
 }
+
+// Op class for an int32 column sum within a tile.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct SumIntCol : SfpuUnaryOp<SumIntCol<APPROXIMATION_MODE, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_sum_int_col<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an int32 row sum within a tile.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct SumIntRow : SfpuUnaryOp<SumIntRow<APPROXIMATION_MODE, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_sum_int_row<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an elementwise int32 add of a tile and the tile dst_offset tiles after it in Dest.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct AddIntDstOffset : SfpuUnaryOp<AddIntDstOffset<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t dst_offset) {
+        add_int<APPROXIMATION_MODE, ITERATIONS>(dst_offset);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "llk_defs.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_converter.h"
 
@@ -61,4 +62,26 @@ inline void calculate_addcmul(
         sfpi::dst_reg += 2;
     }
 }
+
+// Op class for elementwise addcmul: out = in0 + value * in1 * in2.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = 8,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Addcmul : SfpuTernaryOp<Addcmul<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out,
+        const std::uint32_t value) {
+        calculate_addcmul<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value);
+    }
+};
+
 }  // namespace ckernel::sfpu

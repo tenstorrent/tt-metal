@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "llk_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -56,6 +57,20 @@ inline void calculate_sfpu_binary_bitwise(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise bitwise AND/OR/XOR of two tiles.
+template <
+    bool APPROXIMATION_MODE,
+    BinaryBitwiseOp BITWISE_OP,
+    InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
+    int ITERATIONS = 8>
+struct BinaryBitwise : SfpuBinaryOp<BinaryBitwise<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary_bitwise<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

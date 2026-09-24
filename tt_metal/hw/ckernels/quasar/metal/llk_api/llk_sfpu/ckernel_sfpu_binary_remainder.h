@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_div_int32_floor.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_rounding_ops.h"
@@ -312,4 +313,50 @@ template <bool APPROXIMATION_MODE>
 inline void remainder_binary_init() {
     sfpi::vConstFloatPrgm0 = 2.0f;
 }
+
+// Op class for an elementwise remainder of two int32 tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct RemainderInt32 : SfpuBinaryOp<RemainderInt32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_remainder_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { remainder_int32_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an elementwise remainder of two uint32 tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct RemainderUint32 : SfpuBinaryOp<RemainderUint32<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_remainder_uint32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { remainder_uint32_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for an elementwise remainder of two float tiles.
+// Same name and leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = false,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryRemainder
+    : SfpuBinaryOp<BinaryRemainder<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>, SLOT> {
+    static_assert(SLOT == trisc::DstTileShape::Tile32x32, "the kernel assumes 32x32 Dest tiles");
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary_remainder<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { remainder_binary_init<APPROXIMATION_MODE>(); }
+};
+
 }  // namespace ckernel::sfpu
