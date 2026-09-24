@@ -107,9 +107,16 @@ def _construct_attention(head_dim, precision, kv_dtype=None):
     )
 
 
-def test_attention_rejects_recipe_for_d64():
-    with pytest.raises(ValueError, match="D128"):
-        _construct_attention(64, ttnn.SDPAPrecision.ACCURATE)
+def test_attention_rejects_recipe_for_unsupported_head_dim():
+    with pytest.raises(ValueError, match="head_dim"):
+        _construct_attention(96, ttnn.SDPAPrecision.ACCURATE)
+
+
+@pytest.mark.parametrize("head_dim", [64, 128, 256])
+def test_attention_accepts_recipe_head_dims(head_dim):
+    # Validation passes; construction then reaches the (absent) mesh device.
+    with pytest.raises(AttributeError):
+        _construct_attention(head_dim, ttnn.SDPAPrecision.ACCURATE)
 
 
 def test_attention_rejects_low_precision_kv_without_low_precision_recipe():
@@ -119,19 +126,28 @@ def test_attention_rejects_low_precision_kv_without_low_precision_recipe():
         _construct_attention(128, ttnn.SDPAPrecision.ACCURATE, ttnn.bfloat8_b)
 
 
-@pytest.mark.parametrize("precision", [ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.LOW_PRECISION])
-def test_motif_rejects_any_recipe(precision):
+@pytest.mark.parametrize(
+    ("precision", "kv_dtype"),
+    [(ttnn.SDPAPrecision.ACCURATE, None), (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b)],
+)
+def test_motif_accepts_d64_recipes(precision, kv_dtype):
     assert MOTIF_6B_CONFIG.head_dim == 64
-    with pytest.raises(ValueError, match="Motif"):
-        MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, precision, None)
-    with pytest.raises(ValueError, match="Motif"):
-        MotifTransformer(
-            config=MOTIF_6B_CONFIG,
-            latents_height=128,
-            latents_width=128,
-            mesh_device=None,
-            ccl_manager=None,
-            parallel_config=None,
-            sdpa_precision=precision,
-        )
+    MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, precision, kv_dtype)
     MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, None)  # legacy path is untouched
+    with pytest.raises(ValueError, match="LOW_PRECISION"):
+        MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, ttnn.SDPAPrecision.ACCURATE, ttnn.bfloat8_b)
+    with pytest.raises(ValueError, match="LOW_PRECISION"):
+        MotifTransformer.validate_sdpa_recipe(MOTIF_6B_CONFIG, None, ttnn.bfloat8_b)
+
+
+@pytest.mark.parametrize(
+    ("sp_factor", "ring", "expected"),
+    [(1, False, (128, 512)), (2, True, (128, 512)), (4, True, (128, 256))],
+    ids=["joint_k1024_to_k512", "ring_sp2_kept", "ring_sp4_kept"],
+)
+def test_motif_tuned_chunks_map_to_recipe_chunks(sp_factor, ring, expected):
+    k_chunk = MotifTransformer.get_k_chunk_size(sp_factor)
+    attention = _bare_attention(
+        ttnn.SDPAPrecision.ACCURATE, q_chunk=MotifTransformer.Q_CHUNK_SIZE, k_chunk=k_chunk
+    )
+    assert _chunks(attention._sdpa_program_config(ring=ring)) == expected
