@@ -213,8 +213,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim,
-    const bool post1) {
+    const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -236,11 +235,9 @@ inline void _llk_unpack_AB_custom_mm_run_(
     if (kt_dim & 1) {
         const std::uint32_t first_half_iterations = (ct_dim + 1) >> 1;
         const std::uint32_t second_half_iterations = ct_dim >> 1;
-        if (post1) {
-            lltt::replay(1, 1 + first_half_iterations * 3);
-        } else {
-            lltt::replay(0, 2 + first_half_iterations * 3);
-        }
+        // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
+        // while post0's last instruction is a hazard NOP.
+        lltt::replay(0, 2 + first_half_iterations * 3);
         if (second_half_iterations > 0) {
             lltt::replay(32 - second_half_iterations * 3, second_half_iterations * 3);
         }
@@ -266,8 +263,7 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim,
-    const bool post1) {
+    const std::uint32_t ct_dim) {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -287,5 +283,5 @@ inline void _llk_unpack_AB_custom_mm_(
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, post1);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
