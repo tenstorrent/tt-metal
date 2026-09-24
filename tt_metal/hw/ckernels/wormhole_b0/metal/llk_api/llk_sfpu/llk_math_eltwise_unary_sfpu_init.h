@@ -248,7 +248,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else {
         // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
         // get the full generic unary SFPU init (config reg + ADDR_MOD_7 + op-specific ADDR_MOD_6 via
-        // eltwise_unary_sfpu_configure_addrmod<OP>, which has a default valid for any SfpuType + counter
+        // _llk_math_eltwise_unary_sfpu_legacy_addrmod_<OP>, which has a default valid for any SfpuType + counter
         // reset). Keeps the bare no-arg delegate instantiable across the whole SfpuType set.
         _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     }

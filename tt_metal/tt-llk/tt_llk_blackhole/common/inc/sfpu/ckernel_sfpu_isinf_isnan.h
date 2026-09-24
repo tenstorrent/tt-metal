@@ -7,11 +7,12 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu_compare_types.h"
 
 namespace ckernel::sfpu
 {
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
+template <FiniteCheck CHECK, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_()
 {
     // SFPU microcode
@@ -20,7 +21,7 @@ inline void _calculate_sfpu_isinf_isnan_()
         sfpi::vFloat in  = sfpi::dst_reg[0];
         sfpi::vFloat res = 0.0f;
 
-        if constexpr (operation == SfpuType::isinf)
+        if constexpr (CHECK == FiniteCheck::isinf)
         {
             v_if (sfpi::is_inf(in))
             {
@@ -28,7 +29,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isposinf)
+        else if constexpr (CHECK == FiniteCheck::isposinf)
         {
             v_if (sfpi::is_pos(in) && sfpi::is_inf(in))
             {
@@ -36,7 +37,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isneginf)
+        else if constexpr (CHECK == FiniteCheck::isneginf)
         {
             v_if (sfpi::is_neg(in) && sfpi::is_inf(in))
             {
@@ -44,7 +45,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isnan)
+        else if constexpr (CHECK == FiniteCheck::isnan)
         {
             v_if (sfpi::is_nan(in))
             {
@@ -52,7 +53,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isfinite)
+        else if constexpr (CHECK == FiniteCheck::isfinite)
         {
             v_if (sfpi::is_finite(in))
             {
@@ -64,6 +65,44 @@ inline void _calculate_sfpu_isinf_isnan_()
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
+}
+
+/**
+ * @brief Map a legacy SfpuType isinf/isnan selector to its FiniteCheck.
+ *
+ * @tparam operation: Legacy selector, values = <isinf/isposinf/isneginf/isnan/isfinite>
+ */
+template <SfpuType operation>
+constexpr FiniteCheck _sfpu_type_to_finite_check_()
+{
+    if constexpr (operation == SfpuType::isinf)
+    {
+        return FiniteCheck::isinf;
+    }
+    else if constexpr (operation == SfpuType::isposinf)
+    {
+        return FiniteCheck::isposinf;
+    }
+    else if constexpr (operation == SfpuType::isneginf)
+    {
+        return FiniteCheck::isneginf;
+    }
+    else if constexpr (operation == SfpuType::isnan)
+    {
+        return FiniteCheck::isnan;
+    }
+    else
+    {
+        static_assert(operation == SfpuType::isfinite, "SfpuType is not an isinf/isnan operation");
+        return FiniteCheck::isfinite;
+    }
+}
+
+// SfpuType-selected entry point, kept for existing callers. It forwards to the FiniteCheck version above.
+template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_sfpu_isinf_isnan_()
+{
+    _calculate_sfpu_isinf_isnan_<_sfpu_type_to_finite_check_<operation>(), APPROXIMATION_MODE, ITERATIONS>();
 }
 
 } // namespace ckernel::sfpu
