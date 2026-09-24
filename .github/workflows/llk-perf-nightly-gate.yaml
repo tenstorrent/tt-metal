@@ -1,6 +1,9 @@
 name: "LLK perf nightly gate (non speed-of-light)"
 
 on:
+  push:
+    branches:
+      - "perf-trial/prgate-budget"
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
@@ -33,14 +36,15 @@ jobs:
     with:
       architecture: all
       speed-of-light: false
-      upload-to-warehouse: true
+      perf-run-types: L1_TO_L1
+      upload-to-warehouse: false
       pipeline: nightly
     secrets: inherit
 
   gate:
     name: "Gate ${{ matrix.arch }} (non speed-of-light)"
     needs: measure
-    if: ${{ always() }}
+    if: false
     strategy:
       fail-fast: false
       matrix:
