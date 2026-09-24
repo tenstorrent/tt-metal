@@ -300,8 +300,8 @@ static std::vector<Tensor> run_recipe_segments(
             mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
         TT_FATAL(
             mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
-                mask.dtype() == DataType::BFLOAT4_B,
-            "SDPA recipe attn_mask must be BF16, BFP8 or BFP4");
+                mask.dtype() == DataType::BFLOAT4_B || (mask.dtype() == DataType::FLOAT32 && policy.fp32_destination),
+            "SDPA recipe attn_mask must be BF16, BFP8 or BFP4 (FP32 for FP32-state recipes)");
         const auto& ms = mask.logical_shape();
         TT_FATAL(ms.rank() == 4, "SDPA recipe attn_mask must be rank four");
         TT_FATAL(
@@ -385,6 +385,11 @@ static std::vector<Tensor> run_recipe_segments(
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
         auto& defines = program.kernels.front().defines;
         defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        if (mask_format == tt::DataFormat::Float32) {
+            // Unpack the FP32 mask straight to DST so the L1 add sees the exact FP32 values.
+            auto& config = std::get<ComputeConfigDescriptor>(program.kernels.front().config);
+            config.unpack_to_dest_mode[kRecipeMaskCb] = UnpackToDestMode::UnpackToDestFp32;
+        }
         const bool already = std::any_of(
             defines.begin(), defines.end(), [](const auto& d) { return d.first == "SDPA_RECIPE_SIZE_OPTIMIZED"; });
         if (policy.recurrent_state == RecurrentState::CompensatedBF16 && !already) {

@@ -10,6 +10,7 @@
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
@@ -63,10 +64,16 @@ ttnn::Tensor scaled_dot_product_attention(
             input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
         // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
         // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
+        // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
+        // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
         std::optional<ttnn::Tensor> recipe_mask = attn_mask;
         if (attn_mask) {
             const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
-            recipe_mask = ttnn::multiply(*attn_mask, 1.0f / recipe_scale);
+            recipe_mask = ttnn::multiply(
+                policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32
+                    ? ttnn::typecast(*attn_mask, DataType::FLOAT32)
+                    : *attn_mask,
+                1.0f / recipe_scale);
         }
         return numeric::run_recipe(
             input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config, recipe_mask);

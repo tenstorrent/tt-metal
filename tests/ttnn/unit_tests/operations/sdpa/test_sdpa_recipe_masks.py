@@ -248,8 +248,8 @@ def test_mask_timing(device, variant, record_property):
     q, k, v = qkv(1, 10, 4096, 4096, 128, seed=1)
     inputs = upload(device, (q, k, v), variant)
     tt_mask = upload_mask(device, key_padding(1, 4096, 4096, (4000,), float("-inf")))
-    grid = tuple(device.compute_with_storage_grid_size())
-    grid = (grid[0], grid[1])
+    size = device.compute_with_storage_grid_size()
+    grid = (size.x, size.y)
 
     def run(mask):
         return ttnn.transformer.scaled_dot_product_attention(
