@@ -289,7 +289,9 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 90
+      # Run 35932286172 was still progressing at 90 min; allow both modes.
+      # Provisional until a complete QB2 run establishes runtime plus margin.
+      timeout: 135
       tier: 1
       release_ready: false
   owner_id: U088413NP0Q

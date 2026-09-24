@@ -400,13 +400,17 @@ class QwenAdapter(TransformersAdapter):
             )
         finally:
             model._unbind_gdn_prefill_scratch(previous)
-        self.generator.warmup_model_decode(
-            self.kv_cache,
-            self.enable_trace,
-            self.capacity,
-            self.page_table.shape[1],
-            can_sample_on_device=True,
-        )
+        # Compile the complete sampling sweep and stage both decode variants
+        # before recording them, as TransformersAdapter does. Direct traced
+        # warmup can first encounter a penalty sampling program inside capture.
+        for enable_trace in (False, True) if self.enable_trace else (False,):
+            self.generator.warmup_model_decode(
+                self.kv_cache,
+                enable_trace,
+                self.capacity,
+                self.page_table.shape[1],
+                can_sample_on_device=True,
+            )
 
     def prefill(self, admitted):
         if any(s.request.prefill_chunk_ends for s in admitted):

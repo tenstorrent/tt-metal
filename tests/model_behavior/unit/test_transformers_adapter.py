@@ -141,6 +141,64 @@ def test_qwen_opens_mesh_with_gdn_scratch_and_linear_fabric(monkeypatch, backend
     assert closed == ["adapter", mesh]
 
 
+@pytest.mark.parametrize("backend", ["qwen3.6-27b", "qwen3.6-35b-a3b"])
+@pytest.mark.parametrize("warmup_mode", ["eager", "traced"])
+def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, backend, warmup_mode):
+    from models.common.warmup.warmup_utils import WarmupForwardMixin
+
+    monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
+    bound = []
+    prefill_captures = []
+    model = SimpleNamespace(
+        _bind_gdn_prefill_scratch=lambda: bound.append(True) or "batched-state",
+        _unbind_gdn_prefill_scratch=lambda previous: bound.pop(),
+        capture_prefill_trace_chunked=lambda *args, **kwargs: prefill_captures.append(kwargs),
+    )
+
+    class CompileCheckedGenerator(WarmupForwardMixin):
+        def __init__(self):
+            self.model = [model]
+            self.mesh_device = object()
+            self.compiled = set()
+            self.prepared_variants = set()
+            self.captures = 0
+            self.replays = 0
+
+        def _prepare_decode_trace_variant(self):
+            raise AssertionError("Stage decode through decode_forward with the batched GDN state bound")
+
+        def decode_forward(self, **kwargs):
+            assert not bound, "Decode must use the restored batched GDN state"
+            key = repr(kwargs["sampling_params"])
+            if kwargs["enable_trace"]:
+                assert key in self.compiled, "Cannot compile a new sampling configuration during trace capture"
+                self.replays += 1
+            else:
+                assert kwargs["prepare_trace"]
+                self.compiled.add(key)
+                self.prepared_variants.add(kwargs["sampling_params"] is not None)
+
+        def precapture_decode_trace_variants(self, params, *args):
+            assert {repr(param) for param in params} <= self.compiled, "Compile every sampling variant before capture"
+            assert self.prepared_variants == {False, True}
+            self.captures += 1
+            return True
+
+    adapter = adapters.QwenAdapter.__new__(adapters.QwenAdapter)
+    adapter.profile = PROFILES[backend]
+    adapter.enable_trace = warmup_mode == "traced"
+    adapter.capacity = 32
+    adapter.kv_cache = object()
+    adapter.page_table = torch.zeros(32, 128, dtype=torch.int32)
+    adapter.generator = CompileCheckedGenerator()
+    adapter.warmup()
+
+    assert prefill_captures == [dict(chunk_size=2048, capture_chunk_trace=True)]
+    assert len(adapter.generator.compiled) == 6  # Four penalty/logprob combinations, greedy, and host sampling.
+    assert adapter.generator.captures == int(adapter.enable_trace)
+    assert adapter.generator.replays == (6 if adapter.enable_trace else 0)
+
+
 def test_vocab_oracle_preserves_tp_and_dp_domains():
     assert vocabulary_groups((1, 8), 0, 1) == [list(range(8))]
     assert vocabulary_groups((8, 4), 0, 1) == [[0, 4, 8, 12, 16, 20, 24, 28]]

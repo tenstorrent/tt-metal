@@ -14,8 +14,8 @@ checks that mapping and the matching sweep workflow selectors. Tier 1 sweeps run
 on Wednesdays and Saturdays; tier 2 sweeps run on Saturdays. Both also support
 manual runs. The jobs remain `release_ready: false`.
 Changes to these entries still run through the PR's `Verify changed tests` gate.
-The 45/60/90-minute job limits are provisioning estimates; Gemma 26B on Wormhole
-uses a conservative 120 minutes based on local eager/traced runtime. These are
+The 45/60/90-minute job limits are provisioning estimates; Gemma 26B uses
+120 minutes on Wormhole and 135 minutes on Blackhole QuietBox 2. These are
 provisional until representative runs on each physical CI SKU establish the
 policy's measured runtime plus approximately 15% allowance.
 
@@ -47,7 +47,7 @@ measured accelerator usage; tier 3 receives no additional jobs or budget.
 | `sweep_tier1` | `wh_n150` | 30 | Llama 8B: 45 | 75 |
 | `sweep_tier1` | `bh_p150` | 30 | Llama 8B: 45 | 75 |
 | `sweep_tier1` | `wh_galaxy_perf` | 55 | Llama 70B: 60; GPT-OSS: 90 | 205 |
-| `sweep_tier1` | `bh_quietbox_2` | 0 | Gemma 26B: 90; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 360 |
+| `sweep_tier1` | `bh_quietbox_2` | 0 | Gemma 26B: 135; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 405 |
 | `sweep_tier1` | `bh_galaxy` | 0 | GPT-OSS: 90 | 90 |
 | `sweep_tier2` | `wh_llmbox_perf` | 60 | Llama 8B: 45; Gemma 26B: 120 | 225 |
 | `sweep_tier2` | `bh_quietbox_2` | 30 | Llama 8B: 45 | 75 |
@@ -59,6 +59,13 @@ submesh. These establish functional coverage and a provisioning starting point;
 they are not timings from physical N150 or T3K CI runners. GPT-OSS's Galaxy runs
 required a partial rerun after an intermittent failure and do not establish a
 clean full-sweep timing. No local Blackhole/Qwen timings are available.
+
+The [Gemma QB2 job in run 35932286172](https://github.com/tenstorrent/tt-metal/actions/runs/35932286172/job/107423930554)
+completed its eager phase in approximately 66 minutes, including model
+initialization and kernel compilation. Traced setup took another six minutes. The job was
+still progressing through traced cases when its 90-minute limit expired.
+The completed eager cases suggest approximately 114 minutes for both modes;
+135 minutes is a provisional allowance, not a measured full-run limit.
 
 Per-SKU measurements are still pending in
 [the PR validation run](https://github.com/tenstorrent/tt-metal/actions/runs/35842732749).
@@ -100,6 +107,13 @@ parent mesh so fabric neighbors are initialized, then gives the model a `1x8`
 submesh. Reserve the whole Galaxy for that run; model weights and requests still
 use only the eight-chip submesh. Native eight-chip CI machines open directly.
 
+Qwen compiles the complete decode sampling sweep eagerly before traced warmup.
+This prepares the penalty, logprob, greedy and host-sampling configurations
+before decode trace capture. A CPU regression checks this order through the
+shared warmup mixin. The Qwen QB2 jobs in run 35932286172 reached a fatal program
+cache miss during the first traced sampling configuration, then timed out.
+Their 90-minute limits remain unchanged; the warmup correction needs a QB2 rerun.
+
 For Gemma, install `models/demos/gemma4/requirements.txt` first. For GPT-OSS,
 `--model-behavior-skip-model-load` selects its existing factory's prebuilt TT
 weight-cache path, matching CI's read-only NAS setup. Use it only with a complete
@@ -118,7 +132,7 @@ the outer job limit still bounds the full sweep.
 
 Use `eager` or `traced` to run one mode. The model and mesh are recreated between
 modes. Without an explicit backend, hardware scenarios skip. CPU checks need
-pytest, pytest-timeout, torch, and PyYAML, but no TT runtime or weights:
+pytest, pytest-timeout, torch, PyYAML, and loguru, but no TT runtime or weights:
 
 ```bash
 python -m pytest --confcutdir=tests/model_behavior tests/model_behavior/unit
