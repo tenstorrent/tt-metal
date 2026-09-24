@@ -94,7 +94,10 @@ def create_tt_model(
     # Multi-user decode tuning wedges the mesh; see
     # dram_sharded.decode_tuning_enabled. 31B batch-32 hung 6 of 11 runs and
     # batch-8 3 of 3, at iterations 31/118/166 -- a race, not a fixed-capacity
-    # overflow. Only batch-1 has ever been measured clean, so the gate keeps
+    # overflow. 12B batch-8 with tuning on has also wedged in the same state
+    # (sharded-LN mcast receivers in noc_semaphore_wait, peers in the next
+    # reduce-scatter), with pipelined decode reads on, so the gate stays
+    # model-wide. Only batch-1 has ever been measured clean, so the gate keeps
     # tuning for one user and drops it for every multi-user decode; 2..7 users
     # are untested and are gated off with the rest. Set before the model is
     # built so every decode gate reads the same answer.
