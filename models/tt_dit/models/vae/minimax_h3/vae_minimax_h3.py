@@ -984,7 +984,7 @@ class MiniMaxH3Vae:
         place, which the seam gate catches loudly -- but only because something finally reads them.
         """
         from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
-        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
+        from .stitch_device_minimax_h3 import DeviceTileStitcher
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
             chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
@@ -1115,7 +1115,7 @@ class MiniMaxH3Vae:
     def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
         """The gather stitch factored along the mesh: each device blends only what it reads back. Tile ``(k, r, c)``
         lands on device ``(r, k * grid_cols + c)``; `StripTileStitcher` does the column and row stages. Same bits."""
-        from .stitch_device_minimax_h3 import StripTileStitcher, unpatchify_device
+        from .stitch_device_minimax_h3 import StripTileStitcher
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
             chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
@@ -1369,7 +1369,7 @@ class MiniMaxH3Vae:
         Tiles are placed grid-aligned -- ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)`` -- so a
         tile's up/left neighbours are its mesh-axis neighbours; the host only applies the reference trims.
         """
-        from .stitch_device_minimax_h3 import NeighborTileBlender, unpatchify_device
+        from .stitch_device_minimax_h3 import NeighborTileBlender
 
         assert self.ccl_manager is not None, "the neighbour exchange needs a CCLManager"
 

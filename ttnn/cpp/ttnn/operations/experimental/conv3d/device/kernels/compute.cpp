@@ -110,7 +110,12 @@ void matmul_blocks_split(
     const uint32_t subblock_w,
     const bool transpose) {
     matmul_block_init(
-        in0_hi_cb, in1_hi_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+        in0_hi_cb,
+        in1_hi_cb,
+        transpose /*transpose*/,
+        subblock_w /*ct_dim*/,
+        subblock_h /*rt_dim*/,
+        in0_block_w /*kt_dim*/);
 
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
@@ -572,7 +577,8 @@ void kernel_main() {
                                         // Split the tilized batch into hi/lo, then three K passes into one
                                         // fp32 DST accumulation against W_hi and W_lo.
                                         cb_weight_lo_tiled_cb.wait_front(weight_tiles);
-                                        split_operand_block<batch_tiles>(cb_vol2col_tiled, cb_x_hi_tiled, cb_x_lo_tiled);
+                                        split_operand_block<batch_tiles>(
+                                            cb_vol2col_tiled, cb_x_hi_tiled, cb_x_lo_tiled);
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
                                         cb_x_hi_tiled_cb.wait_front(batch_tiles);
                                         cb_x_lo_tiled_cb.wait_front(batch_tiles);

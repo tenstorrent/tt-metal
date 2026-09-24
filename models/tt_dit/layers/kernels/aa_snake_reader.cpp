@@ -82,7 +82,8 @@ void kernel_main() {
     const uint32_t p_hi = (static_cast<uint32_t>(r_hi + HALO) + K - 1) / K;
     for (uint32_t p = p_lo; p < p_hi; ++p) {
         const int32_t first = static_cast<int32_t>(p * K) - HALO;  // unpadded index of the page's first stick
-        const uint32_t dst = static_cast<uint32_t>(static_cast<int32_t>(PAGE) + (first - x_lo) * static_cast<int32_t>(STICK));
+        const uint32_t dst =
+            static_cast<uint32_t>(static_cast<int32_t>(PAGE) + (first - x_lo) * static_cast<int32_t>(STICK));
         noc.async_read(x_acc, x_cb, PAGE, {.page_id = b * X_PAGES + p, .offset_bytes = 0}, {.offset_bytes = dst});
     }
     noc.async_read_barrier();
@@ -90,7 +91,10 @@ void kernel_main() {
         experimental::set_read_state<STICK>(noc, stage);
         for (int32_t r = x_lo; r < r_lo; ++r) {
             experimental::read_with_state(
-                noc, x_cb, stage + static_cast<uint32_t>(r_lo - x_lo) * STICK, {.offset_bytes = PAGE + (r - x_lo) * STICK});
+                noc,
+                x_cb,
+                stage + static_cast<uint32_t>(r_lo - x_lo) * STICK,
+                {.offset_bytes = PAGE + (r - x_lo) * STICK});
         }
         for (int32_t r = r_hi; r < x_hi; ++r) {
             experimental::read_with_state(

@@ -180,7 +180,9 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.config.operand_split) {
-        TT_FATAL(tensor_args.weight_lo_tensor.has_value(), "operand_split needs weight_lo_tensor (the W - bf16(W) residual).");
+        TT_FATAL(
+            tensor_args.weight_lo_tensor.has_value(),
+            "operand_split needs weight_lo_tensor (the W - bf16(W) residual).");
         const auto& weight_lo = tensor_args.weight_lo_tensor.value();
         TT_FATAL(
             input_tensor_a.dtype() == DataType::FLOAT32,

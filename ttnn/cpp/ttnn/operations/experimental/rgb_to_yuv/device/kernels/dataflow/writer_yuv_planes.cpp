@@ -132,7 +132,11 @@ void kernel_main() {
         }
         for (uint32_t row = 0; row < rows; row++) {
             noc.async_write(
-                rowbuf, dst, row_bytes, {.offset_bytes = row * rowpage}, {.page_id = first_row + row, .offset_bytes = 0});
+                rowbuf,
+                dst,
+                row_bytes,
+                {.offset_bytes = row * rowpage},
+                {.page_id = first_row + row, .offset_bytes = 0});
         }
         // The row buffer is reused by the next plane: wait until these writes have left L1.
         noc.async_writes_flushed();
@@ -146,7 +150,7 @@ void kernel_main() {
         const uint32_t byte_off_out = tt * TILE_W;
 
         if constexpr (wide) {
-            write_plane_wide(sy, 2 * g, 2, W, y_tiles, row_bytes_y);   // Y: rows 2g, 2g+1
+            write_plane_wide(sy, 2 * g, 2, W, y_tiles, row_bytes_y);  // Y: rows 2g, 2g+1
             write_plane_wide(su, g, 1, W2, uv_tiles, row_bytes_uv);   // Cb: row g
             write_plane_wide(sv, g, 1, W2, uv_tiles, row_bytes_uv);   // Cr: row g
         } else {

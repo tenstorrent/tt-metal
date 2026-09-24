@@ -239,9 +239,9 @@ DECODE_STAGE_LATENT_HW = (48, 84)  # the served 15 s chunk: a 4x7 tile grid on t
 def _stub_decoder_vae(mesh_device, stitch_exchange: str):
     """A `MiniMaxH3Vae` whose decoder is a fixed projection of its tokens: the stitch and readback, no weights. The
     projection ties a tile's pixels to the tile, not its device, since the two exchanges place tiles differently."""
-    from .common import weights_subdir
     from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
     from ....parallel.manager import CCLManager
+    from .common import weights_subdir
 
     weights_dir = weights_subdir("vae")
     if weights_dir is None:

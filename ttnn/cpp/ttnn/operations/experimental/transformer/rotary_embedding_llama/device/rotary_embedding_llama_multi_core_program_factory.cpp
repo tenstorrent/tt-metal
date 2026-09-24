@@ -173,8 +173,9 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // ------------------------------------------------------------------
-    // The RMS prologue's fp32 DFBs (x^2, the rsqrt scale) feed the FPU through the source registers. Metal 2.0 wants that
-    // said for every fp32 DFB a compute kernel is bound to under a 32-bit Dest, whether or not the kernel touches it.
+    // The RMS prologue's fp32 DFBs (x^2, the rsqrt scale) feed the FPU through the source registers. Metal 2.0 wants
+    // that said for every fp32 DFB a compute kernel is bound to under a 32-bit Dest, whether or not the kernel touches
+    // it.
     ComputeUnpackModes rms_unpack_modes;
     if (fp32_dest_acc_en) {
         rms_unpack_modes.emplace(XX_DFB, UnpackMode::UnpackToSrc);
@@ -186,11 +187,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // into sfpu_precision_mode=Approximate, which the legacy descriptor discarded (Precise). All DFBs
     // are bfloat16, so they need no unpack_modes entry; the RMS prologue's fp32 DFBs get theirs above.
     // ------------------------------------------------------------------
-    ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{
-            .fpu_math_fidelity = math_fidelity,
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .unpack_modes = std::move(rms_unpack_modes)};
+    ComputeHardwareConfig compute_hw_config = ComputeGen1Config{
+        .fpu_math_fidelity = math_fidelity,
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .unpack_modes = std::move(rms_unpack_modes)};
     if (device->arch() == tt::ARCH::QUASAR) {
         // Gen2 copies the fields the Gen1 config sets (gen2_hardware_configs.md shape 4).
         // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
@@ -218,14 +218,20 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .num_entries = head_dim_t,
         .data_format_metadata = tt::DataFormat::Float32};
     DataflowBufferSpec ex2pe_dfb{
-        .unique_id = EX2PE_DFB, .entry_size = fp32_tile_size, .num_entries = 1, .data_format_metadata = tt::DataFormat::Float32};
+        .unique_id = EX2PE_DFB,
+        .entry_size = fp32_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float32};
     DataflowBufferSpec xn_dfb{
         .unique_id = XN_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = head_dim_t,
         .data_format_metadata = input_cb_data_format};
     DataflowBufferSpec scaler_dfb{
-        .unique_id = SCALER_DFB, .entry_size = bf16_tile_size, .num_entries = 1, .data_format_metadata = tt::DataFormat::Float16_b};
+        .unique_id = SCALER_DFB,
+        .entry_size = bf16_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float16_b};
 
     // ------------------------------------------------------------------
     // Kernels
@@ -243,7 +249,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
                  .dfb_spec_name = TRANS_MAT_DFB,
                  .accessor_name = "trans_mat",
                  .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
+             DFBBinding{
+                 .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
              TensorBinding{.tensor_parameter_name = COS_PARAM, .accessor_name = "cos"},
@@ -315,11 +322,14 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER},
              // RMS prologue: scaler from the reader; xx / ex2pe / xn are compute-only (self-loop).
-             DFBBinding{.dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = XX_DFB, .accessor_name = "xx", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = EX2PE_DFB, .accessor_name = "ex2pe", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = XN_DFB, .accessor_name = "xn", .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args =

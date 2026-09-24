@@ -9,13 +9,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from models.tt_dit.layers.audio_pack import (
-    conv1d_same,
-    downsample2x_ref,
-    kaiser_taps,
-    packed_weight,
-    upsample2x_ref,
-)
+from models.tt_dit.layers.audio_pack import conv1d_same, downsample2x_ref, kaiser_taps, packed_weight, upsample2x_ref
 
 BANDS = [(8, 4), (16, 2)]  # (channels, pack) -> 32-wide packed rows
 

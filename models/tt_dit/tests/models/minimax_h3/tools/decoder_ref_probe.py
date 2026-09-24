@@ -17,9 +17,9 @@ from loguru import logger
 
 import ttnn
 
-from ..common import DECODE_LATENT_FRAMES, LATENT_TILE, build_visual_decoder, load_config, weights_subdir
 from .....models.vae.minimax_h3.decoder_minimax_h3 import unpatchify
 from .....models.vae.minimax_h3.vae_minimax_h3 import prepare_decoder_state
+from ..common import DECODE_LATENT_FRAMES, LATENT_TILE, build_visual_decoder, load_config, weights_subdir
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 

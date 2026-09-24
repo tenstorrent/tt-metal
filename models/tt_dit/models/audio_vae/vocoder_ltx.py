@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 
+from ...layers.audio_aa_snake import FusedActivation1d
 from ...layers.audio_ops import (
     ConvTranspose1dViaConv3d,
     Snake,
@@ -30,7 +31,6 @@ from ...layers.audio_ops import (
     channel_factor,
     partition_channel,
 )
-from ...layers.audio_aa_snake import FusedActivation1d
 from ...layers.audio_pack import PackedActivation1d, PackedConv1d
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
