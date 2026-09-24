@@ -277,6 +277,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=google/gemma-4-26B-A4B-it
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    # Cached tensor uploads stalled on QB2; use the validated memcpy path.
+    if [ "{sku}" = "bh_quietbox_2" ]; then
+      export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    fi
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
       --model-behavior-backend=gemma-4-26b-a4b --model-behavior-execution=both \
       --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
@@ -289,8 +293,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      # Run 35932286172 was still progressing at 90 min; allow both modes.
-      # Provisional until a complete QB2 run establishes runtime plus margin.
+      # Both modes took 101m 27s on physical QB2; allow for CI setup variation.
       timeout: 135
       tier: 1
       release_ready: false
@@ -305,6 +308,8 @@
     export HF_MODEL=Qwen/Qwen3.6-27B
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
     export MESH_DEVICE=P150x4
+    # Cached tensor uploads stalled on QB2; use the validated memcpy path.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
       --model-behavior-backend=qwen3.6-27b --model-behavior-execution=both \
       --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
@@ -327,6 +332,8 @@
     export HF_MODEL=Qwen/Qwen3.6-35B-A3B
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B
     export MESH_DEVICE=P150x4
+    # Keep the same transfer path as the validated QB2 model sweeps.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
       --model-behavior-backend=qwen3.6-35b-a3b --model-behavior-execution=both \
       --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \

@@ -15,9 +15,10 @@ on Wednesdays and Saturdays; tier 2 sweeps run on Saturdays. Both also support
 manual runs. The jobs remain `release_ready: false`.
 Changes to these entries still run through the PR's `Verify changed tests` gate.
 The 45/60/90-minute job limits are provisioning estimates; Gemma 26B uses
-120 minutes on Wormhole and 135 minutes on Blackhole QuietBox 2. These are
-provisional until representative runs on each physical CI SKU establish the
-policy's measured runtime plus approximately 15% allowance.
+120 minutes on Wormhole and 135 minutes on Blackhole QuietBox 2. Physical
+QuietBox measurements are recorded below. Limits on other SKUs remain
+provisional until representative CI runs establish the policy's measured
+runtime plus approximately 15% allowance.
 
 | Backend option | Checkpoint | CI SKUs | Physical request slots |
 | --- | --- | --- | --- |
@@ -58,16 +59,33 @@ full eager/traced sweep on a one-chip Wormhole Galaxy submesh, and approximately
 submesh. These establish functional coverage and a provisioning starting point;
 they are not timings from physical N150 or T3K CI runners. GPT-OSS's Galaxy runs
 required a partial rerun after an intermittent failure and do not establish a
-clean full-sweep timing. No local Blackhole/Qwen timings are available.
+clean full-sweep timing.
 
 The [Gemma QB2 job in run 35932286172](https://github.com/tenstorrent/tt-metal/actions/runs/35932286172/job/107423930554)
 completed its eager phase in approximately 66 minutes, including model
 initialization and kernel compilation. Traced setup took another six minutes. The job was
 still progressing through traced cases when its 90-minute limit expired.
-The completed eager cases suggest approximately 114 minutes for both modes;
-135 minutes is a provisional allowance, not a measured full-run limit.
+The completed eager cases suggested approximately 114 minutes for both modes.
 
-Per-SKU measurements are still pending in
+On 2026-09-24, complete runs on a physical four-device Blackhole QuietBox
+at commit `1c757af2bfa` produced these results. Counts exclude the 68 CPU tests,
+which also passed in each run.
+
+| Model | Eager + traced passed / skipped | Wall time | TT weight cache at start |
+| --- | --- | --- | --- |
+| Qwen 3.6 27B | 36 / 20 | 17m 30s | Existing cache from traced smoke run |
+| Qwen 3.6 35B-A3B | 36 / 20 | 23m 40s | Created during this run |
+| Gemma 4 26B-A4B | 42 / 14 | 101m 27s | Created during this run |
+
+These runs used TT-KMD 2.9.0, firmware 19.13.2.0, `OMP_NUM_THREADS=8`, and
+`TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0`. The kernel cache was shared across
+the sequential runs. Gemma exceeded the old 90-minute limit and finished
+33m 33s below the 135-minute limit. Retain 135 minutes to allow for differences
+in CI setup and cache state. These are physical QuietBox measurements, but do
+not establish runtime on every CI runner or validate the default pinned upload
+path.
+
+Representative CI measurements are still pending in
 [the PR validation run](https://github.com/tenstorrent/tt-metal/actions/runs/35842732749).
 After successful representative runs, record the model/SKU, cache conditions,
 both-mode wall time, run link and margin here; size each timeout to approximately
@@ -112,7 +130,17 @@ This prepares the penalty, logprob, greedy and host-sampling configurations
 before decode trace capture. A CPU regression checks this order through the
 shared warmup mixin. The Qwen QB2 jobs in run 35932286172 reached a fatal program
 cache miss during the first traced sampling configuration, then timed out.
-Their 90-minute limits remain unchanged; the warmup correction needs a QB2 rerun.
+Both Qwen models completed the full eager and traced suites on physical QB2
+with the correction. Their 90-minute limits remain unchanged.
+
+The Qwen and Gemma behavior sweeps on QB2 set
+`TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0` before pytest starts. A cached Qwen
+embedding loaded into host memory in about 0.6 seconds but stalled on upload
+with the default pinned-memory cache. Disabling that cache selected the memcpy
+path and completed the upload in about 0.14 seconds. This is a scoped workaround;
+the native cause is unresolved. It preserves weight-cache reads and creation.
+Gemma's Wormhole sweep keeps its existing transfer settings. Set the same
+variable when reproducing these QB2 suites manually.
 
 For Gemma, install `models/demos/gemma4/requirements.txt` first. For GPT-OSS,
 `--model-behavior-skip-model-load` selects its existing factory's prebuilt TT
@@ -122,9 +150,9 @@ cache. Trace reservations come from `models/model_trace_region_sizes.yaml`.
 
 Gemma retains prefill traces for 128 and 1024 tokens on both supported SKUs.
 Longer prefills execute eagerly; decode uses traces. Wormhole reserves 160 MiB
-(140.16 MiB measured). Blackhole uses the demo's 256 MB reservation, pending a
-complete CI run. Its previous 70 MB limit failed with 164,265,984 bytes already
-needed during prefill trace capture.
+(140.16 MiB measured). Blackhole uses the demo's 256 MB reservation, which passed
+the complete physical QB2 suite. Its previous 70 MB limit failed with
+164,265,984 bytes already needed during prefill trace capture.
 
 The command's `--timeout` includes model loading and warmup for the first test
 in each mode. There is no shorter module timeout overriding it. CI sets one hour;
