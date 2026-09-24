@@ -112,23 +112,40 @@ run-name: >-
      (inputs.run-unit-tests || inputs.run-integration-tests || inputs.run-e2e-tests) && inputs.run-multi-user-isolation-tests && ',' || '',
      inputs.run-multi-user-isolation-tests && 'multi-user' || '') }}]
 
-permissions:
-  packages: write
-  contents: write
-
 jobs:
-  # A scheduled run covers every suite, thus it carries no inputs to check.
+  # Preflight for every run. It resolves the Galaxy SKU list once, for the two
+  # SKU-dependent suites, and on a dispatch it refuses a selection that would
+  # start a build and then run nothing.
   check-selection:
-    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
     steps:
-      - name: Make sure at least one suite is selected
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/resolve-galaxy-skus
+          sparse-checkout-cone-mode: true
+      - id: skus
+        uses: ./.github/actions/resolve-galaxy-skus
+        with:
+          wormhole: ${{ inputs.wormhole }}
+          blackhole: ${{ inputs.blackhole }}
+          event-name: ${{ github.event_name }}
+      - name: Make sure the selection can run
+        if: ${{ github.event_name != 'schedule' }}
+        env:
+          SKUS: ${{ steps.skus.outputs.enabled-skus }}
         run: |
           if [[ "${{ inputs.run-unit-tests }}" != "true" \
              && "${{ inputs.run-integration-tests }}" != "true" \
              && "${{ inputs.run-e2e-tests }}" != "true" \
              && "${{ inputs.run-multi-user-isolation-tests }}" != "true" ]]; then
             echo "::error::No suite selected. Enable at least one of run-unit-tests, run-integration-tests, run-e2e-tests or run-multi-user-isolation-tests."
+            exit 1
+          fi
+          if [[ -z "$SKUS" ]] && { [[ "${{ inputs.run-e2e-tests }}" == "true" ]] || [[ "${{ inputs.run-multi-user-isolation-tests }}" == "true" ]]; }; then
+            echo "::error::run-e2e-tests and run-multi-user-isolation-tests need a Galaxy SKU. Enable wormhole or blackhole."
             exit 1
           fi
 
@@ -192,7 +209,7 @@ jobs:
       model: ${{ inputs.integration-model || 'all' }}
 
   galaxy-e2e-tests:
-    needs: [check-harbor, build-artifact]
+    needs: [check-harbor, check-selection, build-artifact]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-e2e-tests) && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
@@ -200,26 +217,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      # For scheduled runs: hardcode the full list of SKUs you want active.
-      # For workflow_dispatch: derive from checkboxes.
-      enabled-skus: >-
-        ${{
-          github.event_name == 'schedule'
-            && 'wh_galaxy,bh_galaxy'
-            || (
-              inputs.wormhole && inputs.blackhole
-                && 'wh_galaxy,bh_galaxy'
-                || (
-                  inputs.wormhole
-                    && 'wh_galaxy'
-                    || (
-                      inputs.blackhole
-                        && 'bh_galaxy'
-                        || ''
-                    )
-                )
-            )
-        }}
+      enabled-skus: ${{ needs.check-selection.outputs.enabled-skus }}
       test-selection: ${{ inputs.e2e-test-selection || 'all' }}
 
 
@@ -233,23 +231,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-wheel.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-wheel.outputs.wheel-artifact-name }}
       extra-tag: ${{ inputs.extra-tag || 'in-service' }}
-      # For scheduled runs: both Galaxies. For workflow_dispatch: derive from checkboxes,
-      # as the e2e suite does.
-      enabled-skus: >-
-        ${{
-          github.event_name == 'schedule'
-            && 'wh_galaxy,bh_galaxy'
-            || (
-              inputs.wormhole && inputs.blackhole
-                && 'wh_galaxy,bh_galaxy'
-                || (
-                  inputs.wormhole
-                    && 'wh_galaxy'
-                    || (
-                      inputs.blackhole
-                        && 'bh_galaxy'
-                        || ''
-                    )
-                )
-            )
-        }}
+      enabled-skus: ${{ needs.check-selection.outputs.enabled-skus }}

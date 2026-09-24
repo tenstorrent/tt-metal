@@ -53,12 +53,16 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      # The matrix JSON carries single quotes (the -k expressions in test_args), so it
+      # goes through env, never through a quoted shell literal.
       - name: Apply runner labels (extra-tag)
         id: apply-runner-labels
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          EXTRA_TAG: ${{ inputs.extra-tag }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          UPDATED=$(echo "$MATRIX" | jq -c --arg tag "${{ inputs.extra-tag }}" \
-            'map(.runs_on |= map(if . == "in-service" then $tag else . end))')
+          UPDATED=$(jq -c --arg tag "$EXTRA_TAG" \
+            'map(.runs_on |= map(if . == "in-service" then $tag else . end))' <<<"$MATRIX")
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$UPDATED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

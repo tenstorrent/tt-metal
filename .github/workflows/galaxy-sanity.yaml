@@ -52,6 +52,24 @@ run-name: >-
   Tests[sanity${{ (github.event_name == 'schedule' || inputs.run-health-tests) && ',health' || '' }}]
 
 jobs:
+  # One place for the wormhole / blackhole -> SKU mapping the health suite needs.
+  select-skus:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/resolve-galaxy-skus
+          sparse-checkout-cone-mode: true
+      - id: skus
+        uses: ./.github/actions/resolve-galaxy-skus
+        with:
+          wormhole: ${{ inputs.wormhole }}
+          blackhole: ${{ inputs.blackhole }}
+          event-name: ${{ github.event_name }}
+
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
@@ -80,7 +98,7 @@ jobs:
 
   # Health suite, from the former "(Galaxy) Health" pipeline. Same plain build as sanity.
   galaxy-health-test:
-    needs: [check-harbor, build-artifact]
+    needs: [check-harbor, select-skus, build-artifact]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-health-tests) && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-health-impl.yaml
@@ -88,21 +106,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: >-
-        ${{
-          github.event_name == 'schedule'
-            && 'wh_galaxy,bh_galaxy'
-            || (
-              inputs.wormhole && inputs.blackhole
-                && 'wh_galaxy,bh_galaxy'
-                || (
-                  inputs.wormhole
-                    && 'wh_galaxy'
-                    || (
-                      inputs.blackhole
-                        && 'bh_galaxy'
-                        || ''
-                    )
-                )
-            )
-        }}
+      enabled-skus: ${{ needs.select-skus.outputs.enabled-skus }}
