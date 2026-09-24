@@ -3464,7 +3464,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
     step with the owner, when the owner was prefilled together with another
     request, when the runner samples on host, or when a proposal declines
     (see ``propose_draft_tokens``). The row then continues as plain decode,
-    which is what the block rail does at batch size above one.
+    which is what the block rail does at batch size above one. A step the
+    owner is not part of leaves its session alone: the scheduler keeps the
+    drafts of a request it did not schedule and sends them on that request's
+    next step, which the retained proposal must still answer.
 
     Identity: the request that owns the pending taps or the live session is
     known by its state slot (``empty_slots`` at prefill, moved by
@@ -3692,11 +3695,22 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             self._spec_release_decoder()
         self._spec_active = False
 
-    def _dflash_leave_speculation(self, why):
-        if self._spec_pending is not None or self._spec_active:
+    def _dflash_owner_in(self, slots):
+        return any(self._dflash_owns(self._dflash_live_owner, slot) for slot in slots)
+
+    def _dflash_leave_speculation(self, why, slots=None):
+        """Drop the pending taps and end the live session.
+
+        ``slots`` are the state slots this step serves. When given and none of
+        them owns the live session, the session is kept for the owner's next
+        step (see the class docstring).
+        """
+        keep = self._spec_active and slots is not None and not self._dflash_owner_in(slots)
+        if self._spec_pending is not None or (self._spec_active and not keep):
             logger.info(f"Gemma4DFlash speculative contract: leaving speculation ({why})")
         self._dflash_drop_pending()
-        self._dflash_end_session()
+        if not keep:
+            self._dflash_end_session()
         self._dflash_disarm_taps()
 
     def _dflash_disarm_taps(self):
@@ -3767,6 +3781,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         if not continues:
             self._dflash_drop_pending()
         speculable = rows == 1 and self._dflash_prompt_speculable(end)
+        if speculable and cached > 0 and not continues:
+            # Another prefill replaced this request's earlier taps. This chunk's
+            # taps alone would seed the drafter as if they were the whole prompt.
+            speculable = False
         if speculable and cached > 0 and align_num_cached_tokens_to_sdpa([cached])[0] != cached:
             # The generator re-prefills the tokens between the aligned start and
             # the chunk start, so their taps would appear twice and shift every
@@ -3946,7 +3964,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             )
 
         if len(live) != 1:
-            self._dflash_leave_speculation("several live rows")
+            self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
             return plain()
         row = live[0]
         if kwargs.get("sampling_params") is None:
@@ -3975,24 +3993,25 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         slot = self._dflash_slot_of(row, kwargs)
         if self._spec_active:
             if not self._dflash_owns(self._dflash_live_owner, slot):
-                # Another request's session; its owner is not in this step.
-                self._dflash_end_session()
-            else:
-                retained = self._dflash_retained
-                if (
-                    retained is not None
-                    and not retained.consumed
-                    and retained.anchor_token == anchor
-                    and (position is None or retained.anchor_position == position)
-                ):
-                    # The scheduler sent no drafts for this proposal (it drops
-                    # them near max_model_len). The replay's first id is still
-                    # the answer, and the next propose commits one token.
-                    retained.consumed = True
-                    self._dflash_note_step(row, kwargs, page_tables_per_layer)
-                    return retained.posterior[0]
-                self._dflash_end_session()
+                # Another request's session; its owner is not in this step and
+                # keeps it. This row's taps cannot bootstrap past it.
+                self._dflash_drop_pending()
                 return None
+            retained = self._dflash_retained
+            if (
+                retained is not None
+                and not retained.consumed
+                and retained.anchor_token == anchor
+                and (position is None or retained.anchor_position == position)
+            ):
+                # The scheduler sent no drafts for this proposal (it drops
+                # them near max_model_len). The replay's first id is still
+                # the answer, and the next propose commits one token.
+                retained.consumed = True
+                self._dflash_note_step(row, kwargs, page_tables_per_layer)
+                return retained.posterior[0]
+            self._dflash_end_session()
+            return None
         if self._spec_pending is None:
             return None
         if not self._dflash_owns(self._dflash_pending_owner, slot):
@@ -4101,7 +4120,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
                 ids[row, 0] = int(token)
                 return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         else:
-            self._dflash_leave_speculation("several live rows")
+            self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
         ids[:, 0] = self._dflash_plain_argmax(args, kwargs, page_tables_per_layer, rows)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
 
@@ -4254,12 +4273,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
         live = self._dflash_live_rows(positions, rows)
         if len(live) != 1:
-            self._dflash_leave_speculation("several live rows at proposal")
+            self._dflash_leave_speculation("several live rows at proposal", live)
             return self._dflash_decline(rows, k)
         row = live[0]
         if not self._spec_active or not self._dflash_owns(self._dflash_live_owner, row):
-            if self._spec_active:
-                self._dflash_end_session()
             return self._dflash_decline(rows, k)
         retained = self._dflash_retained
         if retained is not None and not retained.consumed:

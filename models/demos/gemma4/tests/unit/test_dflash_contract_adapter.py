@@ -530,6 +530,47 @@ def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model):
     assert proposal.num_valid.tolist() == [0]
 
 
+_PAD = [-1] * 6
+
+
+@pytest.mark.parametrize(
+    "anchors, positions, keys",
+    [
+        ([0, 40], [-1, 9], [0, 20]),
+        ([0, 40, 41], [-1, 9, 12], [0, 20, 30]),
+    ],
+    ids=["one-other-request", "two-other-requests"],
+)
+def test_a_step_without_the_owner_keeps_its_outstanding_proposal(model, anchors, positions, keys):
+    """The scheduler keeps the drafts of a request it did not schedule and sends
+    them on its next step, so that step must still find the proposal."""
+    _start_solo(model)
+    out = _ordinary(model, anchors, positions, keys, result="device")
+    assert out == "device"
+    committed = [_PAD] + [[a] + [-1] * 5 for a in anchors[1:]]
+    proposal = _propose(model, committed, [_PAD] + [[p + 1] + [-1] * 5 for p in positions[1:]])
+    assert proposal.num_valid.tolist() == [0] * len(anchors)
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
+def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(model):
+    _start_solo(model)
+    out = _verify(
+        model,
+        [_PAD, [40, 0, 0, 0, 0, 0]],
+        [_PAD, [9, 10, 11, 12, 13, 14]],
+        [0, 0],
+        keys=[0, 20],
+        result=DeviceResult(_tensor([0, 600])),
+    )
+    assert int(out.argmax_ids[1, 0]) == 600
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
 # -- device-resident decode inputs after drafter-served steps ---------------------
 
 
@@ -668,10 +709,18 @@ def test_a_solo_prefill_of_another_request_replaces_the_pending_taps(model):
     _prefill(model, prompt_len=64, key=20, slot=1)
     assert all(tap.releases == 1 for tap in first)
     assert model._spec_pending[1] == 64 and model._dflash_pending_owner[0] == 1
-    # The first request's next chunk starts over from its own rows.
+
+
+def test_a_chunk_whose_earlier_taps_were_replaced_stores_nothing(model):
+    """Its own taps cover only the chunk and would seed the drafter as if they
+    were the whole prompt, so the request decodes plain."""
+    _prefill(model, prompt_len=1024, key=10, slot=0)
+    _prefill(model, prompt_len=64, key=20, slot=1)
     _prefill(model, prompt_len=2048, key=10, slot=0, start=1024)
-    assert model._dflash_pending_owner[0] == 0
-    assert [tap.tag for tap in model._spec_pending[0]] == [(3, 0), (3, 1)]
+    assert model._spec_pending is None and model._dflash_pending_owner is None
+    assert model.model[0].tap_layers is None
+    out = _ordinary(model, [3], [2048], [10], result="device")
+    assert out == "device" and _names(model, "bootstrap") == []
 
 
 def test_an_unaligned_chunk_start_stores_nothing(model):
