@@ -86,19 +86,16 @@ void kernel_main() {
     constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
-    // Gamma/beta land in dfb_x; untilize always reads dfb_out_id rather than dfb_in_id.
+    // dfb_in holds the whole tilized input and is never popped, so it cannot take the output;
+    // the final pack goes to c_30 and untilize reads from there.
     constexpr int dfb_untilize_in_id = dfb_out_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
 #else
         dfb_out0_id;
-#endif
-#else
-    // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
-    constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
-    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
-#endif
+#endif  // READER_REPACK
+#endif  // UNTILIZE_OUT
 
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
