@@ -497,10 +497,6 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        # Exact except on -0.0, where WH's bit-pattern compare diverges by design. A
-        # 0-ULP budget would fail a kernel that is behaving as specified.
-        MathOperation.Sign,
-        MathOperation.Heaviside,
         # Past the usable ceiling on every float column, so the tolerance they would
         # replace is the tighter bound. Measurements are on their YAML rows.
         MathOperation.GeluTanh,
@@ -508,6 +504,10 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.SfpuElwmul,
     }
 )
+# Sign and Heaviside are not here, despite the -0.0 divergence: WH's bit-pattern compare
+# reads -0.0 as negative, so a 0-ULP budget on a cell where that lane is in play would
+# fail a kernel behaving as specified. The whole-format sweep measures each cell
+# separately, and both carry a budget on the cells where that lane is not in play.
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
@@ -518,7 +518,7 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
-    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 48, sorted(
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 55, sorted(
         op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     )
     saw_ulp = set()
@@ -538,7 +538,11 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     )
     # And specifically the input-keyed ones: the loop that left `input_format` unset
     # sent exactly these to TOLERANCE_CONTRACT, so they are the regression's witnesses.
-    assert _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT <= saw_ulp
+    # Less the documented tolerance-only ops, which are input-keyed as well now that
+    # every input format is swept -- they are excused above, by name.
+    assert (
+        _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT - ONLY_EVER_TOLERANCE <= saw_ulp
+    )
 
 
 def test_enrolled_ops_is_sorted_and_stable():
