@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling.tt_penalties import TTPenalties
 from models.common.sampling.tt_sampling import TTSampling
 
 # TEST NOTES:
@@ -2201,4 +2202,77 @@ class TestResetParamsUploadCaching:
             ), "leaving force-argmax must write, even though no snapshot was ever recorded while skipping"
         finally:
             del tt_sampling
+            safe_sync(mesh_device)
+
+
+# --- Test: TTPenalties reset_params device-upload caching ---
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+class TestPenaltiesResetParamsUploadCaching:
+    """TTPenalties.reset_params()'s _applied_param_snapshot skips re-uploading
+    presence/frequency/repetition/inverse_repetition when params are unchanged —
+    the same caching pattern (and its original source) as
+    TestResetParamsUploadCaching above for TTSampling.
+    """
+
+    def _count_device_writes(self, monkeypatch, original_copy, tt_penalties, presence, frequency, repetition):
+        calls = []
+
+        def counting_copy(*args, **kwargs):
+            calls.append(1)
+            return original_copy(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", counting_copy)
+        tt_penalties.reset_params(presence, frequency, repetition)
+        monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", original_copy)
+        return len(calls)
+
+    def _read_presence(self, tt_penalties):
+        return ttnn.to_torch(tt_penalties.presence_penalties).float().reshape(-1)[:BATCH_SIZE]
+
+    def test_repeated_identical_params_skip_upload_and_buffer_stays_correct(self, mesh_device, monkeypatch):
+        args = make_sampling_args(mesh_device)
+        tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
+        original_copy = ttnn.copy_host_to_device_tensor
+        try:
+            presence = [0.6] * BATCH_SIZE
+            frequency = [0.3] * BATCH_SIZE
+            repetition = [1.2] * BATCH_SIZE
+
+            first = self._count_device_writes(monkeypatch, original_copy, tt_penalties, presence, frequency, repetition)
+            assert first == 4, "first reset_params call has no prior snapshot and must write all 4 device buffers"
+            assert torch.allclose(self._read_presence(tt_penalties), torch.full((BATCH_SIZE,), 0.6), atol=0.01)
+
+            second = self._count_device_writes(
+                monkeypatch, original_copy, tt_penalties, list(presence), list(frequency), list(repetition)
+            )
+            assert second == 0, "identical params on the next call must skip the device upload entirely"
+            # The skip must leave the buffer holding the value from the last real write, not reset it.
+            assert torch.allclose(self._read_presence(tt_penalties), torch.full((BATCH_SIZE,), 0.6), atol=0.01)
+        finally:
+            del tt_penalties
+            safe_sync(mesh_device)
+
+    def test_genuine_param_change_still_writes_and_updates_buffer(self, mesh_device, monkeypatch):
+        args = make_sampling_args(mesh_device)
+        tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
+        original_copy = ttnn.copy_host_to_device_tensor
+        try:
+            presence = [0.6] * BATCH_SIZE
+            frequency = [0.3] * BATCH_SIZE
+            repetition = [1.2] * BATCH_SIZE
+            self._count_device_writes(monkeypatch, original_copy, tt_penalties, presence, frequency, repetition)
+
+            # Only presence changes; frequency and repetition repeat exactly.
+            changed_presence = [0.9] * BATCH_SIZE
+            changed = self._count_device_writes(
+                monkeypatch, original_copy, tt_penalties, changed_presence, list(frequency), list(repetition)
+            )
+            assert (
+                changed == 4
+            ), "a real change in even one of presence/frequency/repetition must still trigger the full upload"
+            assert torch.allclose(self._read_presence(tt_penalties), torch.full((BATCH_SIZE,), 0.9), atol=0.01)
+        finally:
+            del tt_penalties
             safe_sync(mesh_device)
