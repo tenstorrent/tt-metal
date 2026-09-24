@@ -31,30 +31,30 @@ namespace {
 class TopologyMapperUtilsTest : public ::testing::Test {
 protected:
     static void verify_bidirectional_consistency(const TopologyMappingResult& result) {
-        for (const auto& [node, asic] : result.fabric_node_to_asic) {
-            ASSERT_TRUE(result.asic_to_fabric_node.contains(asic))
-                << "ASIC " << asic.get() << " not found in reverse mapping";
-            EXPECT_EQ(result.asic_to_fabric_node.at(asic), node)
-                << "Bidirectional mapping inconsistent for ASIC " << asic.get();
+        for (const auto& [node, asic] : result.fabric_node_to_physical) {
+            ASSERT_TRUE(result.physical_to_fabric_node.contains(asic))
+                << "ASIC " << asic << " not found in reverse mapping";
+            EXPECT_EQ(result.physical_to_fabric_node.at(asic), node)
+                << "Bidirectional mapping inconsistent for ASIC " << asic;
         }
-        for (const auto& [asic, node] : result.asic_to_fabric_node) {
-            ASSERT_TRUE(result.fabric_node_to_asic.contains(node)) << "Node not found in forward mapping";
-            EXPECT_EQ(result.fabric_node_to_asic.at(node), asic) << "Bidirectional mapping inconsistent for node";
+        for (const auto& [asic, node] : result.physical_to_fabric_node) {
+            ASSERT_TRUE(result.fabric_node_to_physical.contains(node)) << "Node not found in forward mapping";
+            EXPECT_EQ(result.fabric_node_to_physical.at(node), asic) << "Bidirectional mapping inconsistent for node";
         }
     }
 };
 
 void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.hostname_to_asics[desc.host_name].insert(tt::tt_metal::node_id_from_asic_descriptor(desc));
     }
 }
 
-std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> unset_asic_ranks(
+std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> unset_asic_ranks(
     const tt::tt_metal::PhysicalSystemDescriptor& psd, MeshId mesh = MeshId{0}) {
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> ranks;
-    for (const auto& [asic_id, _] : psd.get_asic_descriptors()) {
-        ranks[mesh][asic_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> ranks;
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        ranks[mesh][tt::tt_metal::node_id_from_asic_descriptor(desc)] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
     }
     return ranks;
 }
@@ -77,8 +77,8 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_for_host_g
 void verify_each_rank_on_one_host(
     const TopologyMappingResult& result,
     const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
-    const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
-    std::map<tt::tt_metal::AsicID, std::string> asic_to_host;
+    const std::map<std::string, std::set<tt::tt_metal::PhysicalNodeId>>& hostname_to_asics) {
+    std::map<tt::tt_metal::PhysicalNodeId, std::string> asic_to_host;
     for (const auto& [hostname, asics] : hostname_to_asics) {
         for (const auto& asic : asics) {
             asic_to_host[asic] = hostname;
@@ -86,11 +86,11 @@ void verify_each_rank_on_one_host(
     }
     std::map<MeshHostRankId, std::set<std::string>> hosts_per_rank;
     for (const auto& [node, rank] : fabric_node_id_to_mesh_rank) {
-        auto node_it = result.fabric_node_to_asic.find(node);
-        ASSERT_NE(node_it, result.fabric_node_to_asic.end())
+        auto node_it = result.fabric_node_to_physical.find(node);
+        ASSERT_NE(node_it, result.fabric_node_to_physical.end())
             << "Fabric node (mesh=" << node.mesh_id.get() << ", chip=" << node.chip_id << ") was not mapped";
         auto host_it = asic_to_host.find(node_it->second);
-        ASSERT_NE(host_it, asic_to_host.end()) << "Mapped ASIC " << node_it->second.get() << " has no host";
+        ASSERT_NE(host_it, asic_to_host.end()) << "Mapped ASIC " << node_it->second << " has no host";
         hosts_per_rank[rank].insert(host_it->second);
     }
     for (const auto& [rank, hosts] : hosts_per_rank) {
@@ -151,10 +151,14 @@ groupings {
 )delimiter")};
 }
 
-std::vector<std::set<uint64_t>> mapped_asic_footprints(const TopologyMappingResult& mapping) {
+// The solve is keyed on addresses, but these tests assert on the mock's own ASIC labels, which is
+// what makes the expectations readable. Translate back through the descriptor to keep them that way.
+std::vector<std::set<uint64_t>> mapped_asic_footprints(
+    const TopologyMappingResult& mapping, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
     std::map<MeshId, std::set<uint64_t>> per_mesh;
-    for (const auto& [fabric_node, asic] : mapping.fabric_node_to_asic) {
-        per_mesh[fabric_node.mesh_id].insert(*asic);
+    for (const auto& [fabric_node, asic] : mapping.fabric_node_to_physical) {
+        per_mesh[fabric_node.mesh_id].insert(*node_index.node_id_to_asic_id.at(asic));
     }
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(per_mesh.size());
@@ -224,9 +228,9 @@ TopologyMappingResult map_sp4_blitz_pipeline(const std::filesystem::path& mgd_pa
         }
     }
     if (!config.pinnings.empty()) {
-        for (const auto& [asic_id, unused] : psd.get_asic_descriptors()) {
-            (void)unused;
-            config.asic_positions[asic_id] = std::make_pair(psd.get_tray_id(asic_id), psd.get_asic_location(asic_id));
+        for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+            config.asic_positions[tt::tt_metal::node_id_from_asic_descriptor(desc)] =
+                std::make_pair(desc.tray_id, desc.asic_location);
         }
     }
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
@@ -238,7 +242,13 @@ TopologyMappingResult map_sp4_blitz_pipeline(const std::filesystem::path& mgd_pa
                                             ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
                                             : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
     return map_multi_mesh_to_physical(
-        psd, pgd, mgd, config, /*pinnings=*/{}, /*asic_id_to_mesh_rank=*/{}, fabric_ranks_from_mesh_graph(mesh_graph));
+        psd,
+        pgd,
+        mgd,
+        config,
+        /*pinnings=*/{},
+        /*physical_node_id_to_mesh_rank=*/{},
+        fabric_ranks_from_mesh_graph(mesh_graph));
 }
 
 }  // namespace
@@ -256,9 +266,9 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoLinked1x2Meshes_OnFour
     config.disable_rank_bindings = true;
     const auto mapping = map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
-    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 4u);
+    EXPECT_EQ(mapping.fabric_node_to_physical.size(), 4u);
     EXPECT_THAT(
-        mapped_asic_footprints(mapping),
+        mapped_asic_footprints(mapping, psd),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 }
 
@@ -376,7 +386,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     const auto mapping =
         map_multi_mesh_to_physical(psd, pgd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
-    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 4u);
+    EXPECT_EQ(mapping.fabric_node_to_physical.size(), 4u);
     verify_bidirectional_consistency(mapping);
     verify_each_rank_on_one_host(mapping, fabric_ranks.at(MeshId{0}), config.hostname_to_asics);
 }
@@ -395,10 +405,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4) {
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     const auto mapping_result = map_sp4_blitz_pipeline(mgd_path);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
-    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), chip_count(mesh_graph));
+    EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
-    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_asic) {
-        hosts.insert(psd.get_host_name_for_asic(asic_id));
+    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
+        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
     }
     EXPECT_GE(hosts.size(), 1u);
     EXPECT_LE(hosts.size(), 4u);
@@ -419,10 +429,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4_11Stage) 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     const auto mapping_result = map_sp4_blitz_pipeline(mgd_path);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
-    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), chip_count(mesh_graph));
+    EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
-    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_asic) {
-        hosts.insert(psd.get_host_name_for_asic(asic_id));
+    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
+        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
     }
     EXPECT_GE(hosts.size(), 1u);
     EXPECT_LE(hosts.size(), 5u);
@@ -443,10 +453,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4_32Stage) 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     const auto mapping_result = map_sp4_blitz_pipeline(mgd_path);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
-    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), chip_count(mesh_graph));
+    EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
-    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_asic) {
-        hosts.insert(psd.get_host_name_for_asic(asic_id));
+    for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
+        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
     }
     EXPECT_EQ(hosts.size(), 8u);
 }
@@ -513,7 +523,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipelin
     config.disable_rank_bindings = true;
     const auto mapping_result = map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
-    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), 32u);
+    EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), 32u);
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
