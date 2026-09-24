@@ -980,23 +980,15 @@ std::vector<Tensor> atanh_bw(
 
     Tensor grad_a =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(ttnn::eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(grad, output_mem_config), ttnn::eqz(input, output_mem_config)),
-        0.f,
-        grad_a,
+    // |input| == 1 is the only singular point. There, a zero gradient is the 0/0 indeterminate form
+    // (NaN in torch); any other zero gradient is an ordinary 0.
+    Tensor singular = ttnn::logical_or(
+        ttnn::eq(input, 1, std::nullopt, output_mem_config),
+        ttnn::eq(input, -1, std::nullopt, output_mem_config),
+        std::nullopt,
         output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(
-            ttnn::logical_or(
-                ttnn::eq(input, 1, std::nullopt, output_mem_config),
-                ttnn::eq(input, -1, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            ttnn::nez(grad, output_mem_config)),
-        t_inf,
-        grad_a,
-        output_mem_config);
+    grad_a = where(ttnn::logical_and(singular, ttnn::eqz(grad, output_mem_config)), t_nan, grad_a, output_mem_config);
+    grad_a = where(ttnn::logical_and(singular, ttnn::nez(grad, output_mem_config)), t_inf, grad_a, output_mem_config);
     grad_a = where(
         ttnn::logical_and(ttnn::eq(grad_a, t_inf, std::nullopt, output_mem_config), ttnn::ltz(grad, output_mem_config)),
         -t_inf,
