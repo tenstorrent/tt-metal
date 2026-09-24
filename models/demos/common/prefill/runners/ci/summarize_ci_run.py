@@ -1,15 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-"""Render the two end-of-run matrices for the disaggregated-prefill CI leg from the durable per-rank
-ranklogs (mpirun --output-filename), which survive the teardown race that truncates forwarded stdout:
-
-  * per-layer x per-cache PCC vs golden  -- from the producer ranks' "slot .. layer .. PCC" lines
-  * per-rank x per-chunk start/end time  -- from the runner ranks' CHUNK_START / CHUNK_COMPUTE lines
-
-Each producer rank validates only its own host's layers, so the PCC rows are the union across ranklogs.
-Runner timing is meaningful only with PREFILL_SYNC_PER_CHUNK=1 (else CHUNK_COMPUTE is never emitted). The
-measured request is the last --real-chunks chunks per rank; any earlier chunks are the discarded warmup.
-"""
 import argparse
 import os
 import re
@@ -140,7 +130,6 @@ def _cell_metrics(kept, disp):
 
 
 def _publish(lines, name):
-    """Print the perf block, and when named also drop it where the CI publish step globs for it."""
     title = f"disaggregated prefill perf -- {name or 'run'}"
     if name:
         home = os.environ.get("TT_METAL_HOME")
@@ -151,7 +140,7 @@ def _publish(lines, name):
 
             emit_summary("perf", name, title, lines)
             return
-        except Exception as exc:  # publishing is a reporting nicety; never lose the block over it
+        except Exception as exc:
             print(f"perf summary not published ({exc})")
     print(title)
     print("\n".join(lines))
@@ -199,7 +188,6 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks):
         if sa is None or sb is None or sb <= sa:
             out.append(f"  throughput {lbl:>14} ({span}): {'-':>12}")
             continue
-        # start->start spans (d - first) inter-chunk intervals, i.e. that many chunks dispatched in dt.
         dt = sb - sa
         tokens = (d - first) * chunk_size
         out.append(f"  throughput {lbl:>14} ({span}): {tokens / dt:>12,.1f} tok/s  ({dt:.3f} s)")

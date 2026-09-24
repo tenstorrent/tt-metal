@@ -18,6 +18,17 @@
 namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_topk_operation(nb::module_& mod) {
+    mod.def(
+        "_sampling_topk_would_route_to_large_indices",
+        &ttnn::operations::reduction::topk::detail::sampling_topk_would_route_to_large_indices,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("k"),
+        R"doc(Return whether the canonical sampling top-k call will use the Blackhole large-indices route.
+
+        This is an internal model helper. It accepts an on-device, four-dimensional tensor and models
+        ``ttnn.topk(input_tensor, k, dim=-1, largest=True, stable=False)`` without custom tensors, grids,
+        or memory configuration.)doc");
+
     const auto* doc =
         R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.

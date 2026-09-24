@@ -52,7 +52,7 @@ void kernel_main() {
     copy_init(cb_in0.get_id());
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {

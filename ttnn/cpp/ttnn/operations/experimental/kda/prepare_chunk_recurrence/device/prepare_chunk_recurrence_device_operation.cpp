@@ -3,10 +3,13 @@
 
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -119,6 +122,26 @@ PrepareChunkRecurrenceOperation::tensor_return_value_t PrepareChunkRecurrenceOpe
         outputs.push_back(create_device_tensor(spec, in.q.device()));
     }
     return outputs;
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<PrepareChunkRecurrenceOperation::tensor_return_value_t>
+PrepareChunkRecurrenceOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    constexpr double chunk = tt::constants::TILE_HEIGHT;
+    constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
+    const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_matrix_flops = instances * (4.0 * chunk * chunk * key_dim + inverse_flops),
+        .fpu_multiply_ops = instances * (10.0 * chunk * key_dim + chunk * value_dim),
+        .fpu_add_ops = instances * (2.0 * chunk + (chunk - 1.0) * key_dim + chunk * key_dim + chunk * chunk),
+        .fpu_reduction_ops = instances * 2.0 * chunk * (key_dim - 1.0),
+    };
+    const std::array<const Tensor*, 5> inputs = {&in.q, &in.k, &in.v, &in.g, &in.beta};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> prepare_chunk_recurrence(

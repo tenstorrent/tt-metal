@@ -55,6 +55,12 @@ BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enabl
 bool is_per_core_allocation(const BufferShardingArgs& args);
 }  // namespace experimental::per_core_allocation
 
+namespace experimental::range_lockstep_allocation {
+BufferShardingArgs& set_range_lockstep_allocation(BufferShardingArgs& args, bool enable);
+bool is_range_lockstep_allocation(const BufferShardingArgs& args);
+bool is_range_lockstep_allocation(const Buffer& buffer);
+}  // namespace experimental::range_lockstep_allocation
+
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
@@ -171,6 +177,12 @@ public:
     friend BufferShardingArgs& experimental::per_core_allocation::set_per_core_allocation(BufferShardingArgs&, bool);
     friend bool experimental::per_core_allocation::is_per_core_allocation(const BufferShardingArgs&);
 
+    // range_lockstep_allocation is experimental functionality
+    // access is through experimental::range_lockstep_allocation free functions
+    friend BufferShardingArgs& experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+        BufferShardingArgs&, bool);
+    friend bool experimental::range_lockstep_allocation::is_range_lockstep_allocation(const BufferShardingArgs&);
+
 private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
     std::optional<ShardSpecBuffer> shard_spec_;
@@ -178,6 +190,9 @@ private:
     // per_core_allocation is experimental functionality
     // access is through experimental::per_core_allocation free functions
     bool per_core_allocation_ = false;
+    // range_lockstep_allocation is experimental functionality
+    // access is through experimental::range_lockstep_allocation free functions
+    bool range_lockstep_allocation_ = false;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -313,6 +328,7 @@ private:
     friend const std::unordered_map<CoreCoord, DeviceAddr>& experimental::per_core_allocation::get_per_core_addresses(
         const Buffer&);
     friend void experimental::per_core_allocation::copy_per_core_addresses(Buffer&, const Buffer&);
+    friend bool experimental::range_lockstep_allocation::is_range_lockstep_allocation(const Buffer&);
 
     void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
 
@@ -343,6 +359,9 @@ private:
     // Per-core allocation state
     bool per_core_allocation_ = false;
     std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses_;
+
+    // Lockstep only across the cores this buffer occupies, rather than every core on the device.
+    bool range_lockstep_allocation_ = false;
 
     // The root buffer is the buffer that owns the underlying device memory.
     // The root buffer is populated only when the buffer was created with a view method.

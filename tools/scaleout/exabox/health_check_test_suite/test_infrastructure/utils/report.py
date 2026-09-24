@@ -18,6 +18,14 @@ from __future__ import annotations
 EXCLUDED_CHECKS = frozenset({"snapshot_capture"})
 
 
+# Reset *operation* steps (`tt-smi -r`/`-glx_reset` iterations, CPLD auto-recover):
+# a means to get the node testable, not a verdict. A node the resets can't fix still
+# fails via the tests phase / final snapshot, so these don't gate the verdict.
+# `post_reset_state_stable` is a real post-reset check, not a reset op.
+def is_reset_op_check(name: str) -> bool:
+    return name.startswith("reset_") or name == "cpld_auto_recover"
+
+
 def normalize_health_report(report: dict) -> dict:
     """Judge health on post-reset state: drop the pre-reset ``snapshot`` and promote
     the last post-reset re-snapshot in its place."""
@@ -43,10 +51,11 @@ def normalize_health_report(report: dict) -> dict:
 
 
 def has_actionable_failure(report: dict) -> bool:
-    """True if any non-excluded check FAILs in the (normalized) report."""
+    """True if any non-excluded, non-reset-op check FAILs in the (normalized) report."""
     for phase in report.get("phases", {}).values():
         for check in phase.get("checks", []):
-            if check.get("name") in EXCLUDED_CHECKS:
+            name = check.get("name", "")
+            if name in EXCLUDED_CHECKS or is_reset_op_check(name):
                 continue
             if check.get("status") == "FAIL":
                 return True

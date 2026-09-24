@@ -50,6 +50,9 @@ struct SumReduceScalarConfig {
     bool dst_full_sync = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
+    bool use_constant_input = false;
+    uint16_t constant_input_bits = 0;
+    bool expect_exact_zero = false;
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
@@ -132,8 +135,15 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     SetRuntimeArgs(program, sum_reduce_kernel, core, {config.num_tiles, std::bit_cast<uint32_t>(config.scaler)});
 
     uint32_t byte_size = config.num_tiles * tile_byte_size;
-    auto packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    std::vector<uint32_t> packed_input;
+    if (config.use_constant_input) {
+        const uint32_t packed_value =
+            (static_cast<uint32_t>(config.constant_input_bits) << 16) | config.constant_input_bits;
+        packed_input.assign(byte_size / sizeof(uint32_t), packed_value);
+    } else {
+        packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+            0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    }
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, packed_input, /*blocking=*/true);
@@ -153,12 +163,14 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     auto u16_src_vec = u16_from_u32_vector(packed_input);
 
     float golden_scalar = 0.0f;
-    for (uint16_t packed : u16_src_vec) {
-        golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+    if (!config.expect_exact_zero) {
+        for (uint16_t packed : u16_src_vec) {
+            golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+        }
+        // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
+        // collapse), so it multiplies the result twice.
+        golden_scalar *= config.scaler * config.scaler;
     }
-    // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
-    // collapse), so it multiplies the result twice.
-    golden_scalar *= config.scaler * config.scaler;
 
     // The reduced scalar lives in element [0] of the output tile, in the output CB's
     // format: raw fp32 with native fp32 DEST, otherwise the low bfloat16 of word 0.
@@ -190,6 +202,9 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     const float rel_tol = (config.math_fidelity == MathFidelity::LoFi) ? 0.05f : 0.01f;
     const float abs_tol = 0.01f;
     const float tolerance = std::max(rel_tol * std::abs(golden_scalar), abs_tol);
+    if (config.expect_exact_zero) {
+        return device_scalar == 0.0f;
+    }
     return std::abs(device_scalar - golden_scalar) < tolerance;
 }
 
@@ -309,3 +324,20 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<bool>& info) {
         return info.param ? "SumReduceScalar_Scaler_2_fp32dest" : "SumReduceScalar_Scaler_0p5";
     });
+
+class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
+
+TEST_F(SumReduceScalarZeroFlagTest, RestoresDefaultAfterCopyBeforeDenormalScaler) {
+    auto& mesh_device = *devices_[0];
+    constexpr uint16_t largest_finite_bfloat16 = 0x7f7f;
+    const float denormal_scaler = static_cast<float>(std::bit_cast<bfloat16>(uint16_t{1}));
+
+    ASSERT_TRUE(run_sum_reduce_scalar_test(
+        mesh_device,
+        {.num_tiles = 1,
+         .tile_height = 32,
+         .scaler = denormal_scaler,
+         .use_constant_input = true,
+         .constant_input_bits = largest_finite_bfloat16,
+         .expect_exact_zero = true}));
+}

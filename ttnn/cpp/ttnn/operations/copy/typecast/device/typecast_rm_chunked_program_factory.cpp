@@ -224,7 +224,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         return KernelSpec{
             .unique_id = id,
             .source = path,
-            .compiler_options = {.defines = unary_defines},
+            .compiler_options = {.defines = unary_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{

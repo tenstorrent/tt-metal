@@ -10,6 +10,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -91,6 +92,23 @@ ReduceAffineTransformsOperation::tensor_return_value_t ReduceAffineTransformsOpe
     auto specs = compute_output_specs(a, in);
     return {create_device_tensor(specs[0], in.a.device()), create_device_tensor(specs[1], in.a.device())};
 }
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceAffineTransformsOperation::tensor_return_value_t>
+ReduceAffineTransformsOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const double compositions = static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0);
+    const KdaFpuWork work{
+        .fpu_matrix_flops = compositions * (2.0 * key_dim * key_dim * key_dim + 2.0 * key_dim * key_dim * value_dim),
+        .fpu_add_ops = compositions * key_dim * value_dim,
+    };
+    const std::array<const Tensor*, 2> inputs = {&in.a, &in.b};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,

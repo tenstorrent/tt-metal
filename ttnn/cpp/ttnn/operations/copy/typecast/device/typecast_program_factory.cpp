@@ -164,7 +164,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         return KernelSpec{
             .unique_id = id,
             .source = kComputeSource,
-            .compiler_options = {.defines = typecast_defines},
+            .compiler_options = {.defines = typecast_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
@@ -327,7 +327,8 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = make_typecast_defines(input_dtype, output_dtype)},
+        .compiler_options =
+            {.defines = make_typecast_defines(input_dtype, output_dtype), .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},

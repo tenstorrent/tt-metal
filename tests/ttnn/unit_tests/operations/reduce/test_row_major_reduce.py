@@ -767,3 +767,28 @@ def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, 
 
     with expect_error(RuntimeError, "block-float formats only exist in TILE layout"):
         ttnn_op(tt_input, dim=dim, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+# A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense readers and the
+# tilize into the tile path both step by H_logical, so every slice after the first reads pad rows.
+# reduce refuses instead of returning a plausible wrong answer.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 7, 7, 2048),  # resnet50 global pool: H 7 -> 32, 7 slices
+        (1, 3, 3, 45),  # partial channel tile as well: W 45 -> 64
+        (2, 5, 5, 128),  # batch > 1
+        (1, 4, 40, 64),  # H_logical > tile height: 40 -> 64
+    ],
+)
+def test_rm_reduce_padded_h_slices_rejected(device, reduce_op, dim, shape, expect_error):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).float()
+
+    tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).pad_to_tile(0.0).to(device)
+    assert list(tt_input.padded_shape)[-2] != list(tt_input.shape)[-2], "shape has no padded-H coverage"
+
+    with expect_error(RuntimeError, "only supported when N and C fold to a single"):
+        _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True)

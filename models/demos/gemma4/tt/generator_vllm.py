@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import (
+    SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
     align_num_cached_tokens_to_sdpa,
     max_batched_prefill_users,
@@ -230,6 +231,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
+        # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so Generator
+        # cannot derive the resume offset alignment and must be told it. Same pin
+        # align_num_cached_tokens_to_sdpa applies locally.
+        "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
         "supports_sample_on_device": True,
     }
 

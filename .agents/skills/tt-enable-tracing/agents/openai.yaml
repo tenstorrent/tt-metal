@@ -1,4 +1,0 @@
-interface:
-  display_name: "TT Enable Tracing"
-  short_description: "Add and debug TTNN trace replay"
-  default_prompt: "Use $tt-enable-tracing to make this TTNN path trace-safe, add trace capture/replay, verify repeated replay correctness, and report warmed trace performance evidence."

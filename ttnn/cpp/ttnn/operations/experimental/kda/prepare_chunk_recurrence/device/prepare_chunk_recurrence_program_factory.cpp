@@ -26,53 +26,6 @@ using namespace tt::constants;
 namespace ttnn::experimental::prim {
 namespace m2 = tt::tt_metal::experimental;
 
-uint32_t prepare_chunk_recurrence_cb_size_bytes(
-    uint32_t chunk_size, uint32_t key_dim, uint32_t value_dim, DataType gate_dtype, uint32_t output_bf16_mask) {
-    const uint32_t Ct = chunk_size / TILE_HEIGHT;
-    const uint32_t Kt = key_dim / TILE_WIDTH;
-    const uint32_t Vt = value_dim / TILE_WIDTH;
-    const uint32_t cc = Ct * Ct;
-    const uint32_t ck = Ct * Kt;
-    const uint32_t cv = Ct * Vt;
-    const uint32_t kv = Kt * Vt;
-    const uint32_t kc = Kt * Ct;
-    const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
-    const auto format = [&](uint32_t index) {
-        return (output_bf16_mask & (1U << index)) ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
-    };
-    uint32_t bytes = 0;
-    const auto add = [&](uint32_t tiles, uint32_t buffers = 1, tt::DataFormat data_format = tt::DataFormat::Float32) {
-        bytes += tiles * buffers * tt::tile_size(data_format);
-    };
-    constexpr auto bf16 = tt::DataFormat::Float16_b;
-    add(ck, 2, bf16);
-    add(ck, 2, bf16);
-    add(cv, 2, bf16);
-    add(ck, 2, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
-    add(Ct, 2);
-    add(cc);
-    add(cc);
-    add(cc);
-    add(ck);
-    add(ck);
-    add(ck);
-    add(cc);
-    add(cc, 2, format(6));
-    add(cv, 2, format(0));
-    add(ck, 2, format(1));
-    add(ck, 2, format(2));
-    add(cc, 2, format(3));
-    add(kv, 2);
-    add(Kt, 2, format(5));
-    add(kc, 2, format(4));
-    add(kv);
-    add(kv);
-    add(kv);
-    add(scratch);
-    add(kv, 2);
-    return bytes;
-}
-
 ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::create_program_artifacts(
     const PrepareChunkRecurrenceParams& attrs, const PrepareChunkRecurrenceInputs& in, std::vector<Tensor>& outputs) {
     const auto& q = in.q.mesh_tensor();
@@ -85,7 +38,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
 
     const uint32_t num_heads = attrs.num_heads;
     const uint32_t num_chunks = attrs.num_chunks;
-    constexpr uint32_t chunk_size = TILE_HEIGHT;
     constexpr uint32_t Ct = 1;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
@@ -110,6 +62,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
+    const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
     const m2::DFBSpecName scan_decay_dfb{"scan_decay"};
     const m2::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
@@ -125,6 +78,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
+    const m2::DFBSpecName inverse_n3_dfb{"inverse_n3"};
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
     const m2::TensorParamName Q_TENSOR{"q"};
@@ -164,6 +118,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
+        make_dfb(block_masks_dfb, 2, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(scan_decay_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
@@ -177,23 +132,12 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
         make_dfb(anchor_decay_dfb, kv, fp32),
-        make_dfb(normalized_q_dfb, kv, fp32),
-        make_dfb(normalized_k_dfb, kv, fp32),
+        make_dfb(normalized_q_dfb, ck, fp32),
+        make_dfb(normalized_k_dfb, std::max(ck, 2U), fp32),
+        make_dfb(inverse_n3_dfb, 1, fp32),
         make_dfb(workspace_3_dfb, scratch, fp32),
         make_dfb(workspace_2_dfb, kv * 2, fp32),
     };
-    TT_FATAL(
-        prepare_chunk_recurrence_cb_size_bytes(
-            chunk_size, attrs.key_dim, attrs.value_dim, in.g.dtype(), attrs.output_bf16_mask) ==
-            [&] {
-                uint32_t bytes = 0;
-                for (const auto& spec : dfb_specs) {
-                    bytes += spec.entry_size * spec.num_entries;
-                }
-                return bytes;
-            }(),
-        "KDA prep CB size estimator is out of sync with its program factory");
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -209,6 +153,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -263,6 +208,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[scan_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[centered_inverse_decay_dfb] = UnpackMode::UnpackToSrc;
@@ -278,6 +224,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[inverse_n3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
@@ -296,6 +243,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::PRODUCER},
@@ -312,6 +260,8 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{inverse_n3_dfb, "inverse_n3", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{inverse_n3_dfb, "inverse_n3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},

@@ -203,7 +203,7 @@ def test_kv_cache_table(
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_kv_cache_table(
@@ -217,7 +217,7 @@ def test_kimi_kv_cache_table(
     """
     Readback test for the Kimi (non-balanced / sequential) KV chunk address table.
 
-    Runs Kimi MLA (variant kimi_k2_6) to fill a sequentially laid-out KVPE cache,
+    Runs Kimi MLA (variant kimi_k2_7) to fill a sequentially laid-out KVPE cache,
     builds the table with create_kv_chunk_address_table_kimi, then reads every chunk
     back through the table and checks it against the gathered cache. The sequential
     gather is already position-continuous, so no chunk reorder is needed.

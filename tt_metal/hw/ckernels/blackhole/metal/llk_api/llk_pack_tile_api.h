@@ -11,6 +11,30 @@
  * LLK PACK
  *************************************************************************/
 
+// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
+// already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
+// (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
+template <
+    PackMode pack_mode = PackMode::Default,
+    bool zero_output = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
+inline void llk_pack_init_impl(
+    const std::uint32_t pack_src_reg_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const std::uint32_t num_tiles,
+    const bool is_input_8bit_format) {
+    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+}
+
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr) {
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+}
+
 template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
@@ -20,22 +44,24 @@ inline void llk_pack_init(
     const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
 
+    // For pack with tilize enabled, check if the original input format is 8-bit.
+    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
     bool is_input_8bit_format = false;
     if constexpr (pack_mode == PackMode::Tilize) {
-        // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
-        const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
-        is_input_8bit_format = IS_8BIT_FORMAT(src_format);
+        is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
-    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_src_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_tile_c_dim(output_id),
+        get_output_num_faces(output_id),
+        num_tiles,
+        is_input_8bit_format);
 }
 
 // input_operand is only consumed by the Blackhole tilize workaround. Keep the common non-tilize API
@@ -77,7 +103,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         llk::san::IGNORE,
         llk::san::IGNORE);
 
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>

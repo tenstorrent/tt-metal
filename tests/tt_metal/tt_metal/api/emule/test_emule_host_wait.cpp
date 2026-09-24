@@ -106,6 +106,87 @@ TEST_F(EmuleHostWait, HostFedPollQuiescesToHostWaitAndPumpsToCompletion) {
     EXPECT_EQ(entries.load(), 1u);
 }
 
+// A peer-fed socket can be causally downstream of the host-fed source. The external host root is
+// sufficient to suspend the whole chain; requiring every poller to be host-fed would misdiagnose
+// a normal pipeline as a device-only deadlock.
+TEST_F(EmuleHostWait, HostFedPollWithCausalD2DPollResumes) {
+    std::atomic<bool> host_ready{false};
+    std::atomic<bool> downstream_ready{false};
+
+    spawn_fiber(
+        [&host_ready, &downstream_ready] {
+            auto& sched = FiberScheduler::instance();
+            while (!host_ready.load(std::memory_order_acquire)) {
+                sched.note_socket_poll_wait(/*waiting=*/true, /*host_fed=*/true);
+                sched.yield();
+            }
+            sched.note_socket_poll_wait(/*waiting=*/false, /*host_fed=*/true);
+            downstream_ready.store(true, std::memory_order_release);
+        },
+        2,
+        "h2d_pipeline_source");
+    spawn_fiber(polling_body(&downstream_ready, /*host_fed=*/false, nullptr), 3, "d2d_pipeline_receiver");
+
+    auto& sched = FiberScheduler::instance();
+    ASSERT_EQ(sched.run_persistent(), RunOutcome::HostWait);
+    ASSERT_EQ(sched.pump(), RunOutcome::HostWait) << "a dry pump must preserve the causal host wait";
+
+    host_ready.store(true, std::memory_order_release);
+    ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+}
+
+// A later host page may be absent while the current page still has runnable work deferred to
+// quiescence. The spin-release HostWait path must service that work before handing control back;
+// otherwise every D2H pump suspends on the next-page H2D poll and strands the current-page producer.
+TEST_F(EmuleHostWait, DeferredProducerRunsBeforeDownstreamHostWait) {
+    std::atomic<bool> next_host_page_ready{false};
+    std::atomic<bool> current_page_published{false};
+
+    spawn_fiber(polling_body(&next_host_page_ready, /*host_fed=*/true, nullptr), 4, "next_page_h2d_receiver_poll");
+    spawn_fiber(
+        polling_body(&current_page_published, /*host_fed=*/false, nullptr), 5, "current_page_d2d_receiver_poll");
+    spawn_fiber(
+        [&current_page_published] {
+            auto& sched = FiberScheduler::instance();
+            sched.quiescence_park();
+            current_page_published.store(true, std::memory_order_release);
+        },
+        6,
+        "current_page_deferred_producer");
+
+    auto& sched = FiberScheduler::instance();
+    ASSERT_EQ(sched.run_persistent(), RunOutcome::HostWait);
+    EXPECT_TRUE(current_page_published.load(std::memory_order_acquire))
+        << "HostWait stranded runnable current-page work behind a next-page host poll";
+
+    // Complete the future host dependency so the process-global scheduler registry is clean.
+    next_host_page_ready.store(true, std::memory_order_release);
+    ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+}
+
+// The existential host root must not become a sticky exemption. Once it clears, an unrelated
+// peer-fed poll remains a genuine d2d-only deadlock and must retain the peer diagnostic.
+TEST_F(EmuleHostWait, D2DPollStillDeadlocksAfterHostPollClears) {
+    arm_fast_watchdog();
+    EXPECT_DEATH(
+        {
+            std::atomic<bool> host_ready{false};
+            std::atomic<bool> peer_never_ready{false};
+            spawn_fiber(polling_body(&host_ready, /*host_fed=*/true, nullptr), 4, "h2d_pipeline_source");
+            spawn_fiber(polling_body(&peer_never_ready, /*host_fed=*/false, nullptr), 5, "d2d_pipeline_receiver");
+
+            auto& sched = FiberScheduler::instance();
+            if (sched.run_persistent() != RunOutcome::HostWait) {
+                std::exit(2);
+            }
+            host_ready.store(true, std::memory_order_release);
+            (void)sched.pump();
+            std::exit(3);
+        },
+        "spin-polling a d2d socket");
+    disarm_fast_watchdog();
+}
+
 // A d2d sender is a PEER, so dying on this regex proves the attribution, not just the outcome.
 TEST_F(EmuleHostWait, PeerFedPollIsNamedAsPeerFedInTheDump) {
     arm_fast_watchdog();

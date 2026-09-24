@@ -10,6 +10,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -103,6 +104,23 @@ AffineExclusiveScanOperation::tensor_return_value_t AffineExclusiveScanOperation
     const operation_attributes_t& a, const tensor_args_t& in) {
     return {ttnn::create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
 }
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<AffineExclusiveScanOperation::tensor_return_value_t>
+AffineExclusiveScanOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const double transitions = static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0);
+    const KdaFpuWork work{
+        .fpu_matrix_flops = transitions * 2.0 * key_dim * key_dim * value_dim,
+        .fpu_add_ops = transitions * key_dim * value_dim,
+    };
+    const std::array<const Tensor*, 3> inputs = {&in.a, &in.b, &in.initial_state};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 Tensor affine_exclusive_scan(
     const Tensor& a,
     const Tensor& b,

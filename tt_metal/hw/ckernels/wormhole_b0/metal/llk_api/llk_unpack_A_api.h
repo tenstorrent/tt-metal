@@ -3,8 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+// llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
+// folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
+// required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
+#include "debug/llk_unpack_dummy.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -82,7 +87,7 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);

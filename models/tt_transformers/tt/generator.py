@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from collections import defaultdict
 
@@ -31,6 +32,7 @@ from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
+    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -171,9 +173,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._defer_trace_recording = False
         self._pending_decode_trace = None
 
-    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses).
+    # A subclass dict replaces this one rather than merging into it, so a default
+    # of True would be claimed by every subclass that declares nothing at all.
     model_capabilities = {
-        "supports_prefix_caching": True,
+        "supports_prefix_caching": False,
     }
 
     def _any_trace_captured(self):
@@ -242,6 +246,78 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             skip_sequence_lengths=skip_sequence_lengths,
             sampling_parameters_sweeped=sampling_parameters_sweeped,
         )
+
+        # Only models that accept a nonzero ``start_pos`` can ever take the
+        # resumed path, so only they should reserve trace region for it. Both
+        # prefix caching and a prompt split across engine steps produce one.
+        resumes_prefill = self.model_capabilities.get("supports_prefix_caching", False) or self.model_capabilities.get(
+            "supports_chunked_prefill", False
+        )
+        if enable_trace and resumes_prefill:
+            self._warmup_prefill_resumed_sweep(kv_cache=kv_cache)
+
+    def _warmup_prefill_resumed_sweep(self, kv_cache):
+        """Capture the resumed-prefill ("sp1") traces, batch 1, one per traced length.
+
+        The sweep above never passes ``start_pos``, so it only ever captures the
+        ``sp0`` half of the prefill trace key. A resumed prefill -- prefix caching,
+        or a prompt split across engine steps -- takes the ``sp1`` half, which
+        would otherwise be captured lazily on whichever request happens to resume
+        first, allocating trace region nobody sized for. Reserving them here makes
+        the requirement a function of configuration instead of traffic.
+
+        Mirrors the phase-2 warmup in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Resumed prefill needs a page table, so there is nothing to capture.
+            return
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+
+        for model_id in range(self.data_parallel):
+            model_args = self.model_args[model_id]
+            for prefill_seq_len in model_args.trace_prefill_supported_seq_lens:
+                # A nonzero probe: ``can_enable_trace`` reads this argument only to
+                # test it against zero, and a model that refuses a resumed prefill
+                # refuses it for every offset. The declaration alone is not enough,
+                # because the model args can reject what the capability allows.
+                if not model_args.can_enable_trace(prefill_seq_len, 1):
+                    continue
+                # The offset a real request will be floored to for this length, so
+                # the captured program config is the one those replays need.
+                num_cached = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+                # Only the suffix after the offset is padded into the bucket, so
+                # the prompt has to clear the offset by a full bucket to land on
+                # this key. ``capped_warmup_seq_len`` is the ceiling the rest of
+                # warmup uses: past it the call would be split into chunks and
+                # capture something else.
+                total_seq_len = self._resumed_warmup_prompt_len(
+                    prefill_seq_len, num_cached, model_args.capped_warmup_seq_len
+                )
+                suffix = total_seq_len - num_cached
+                if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
+                    logger.warning(
+                        f"Skipping resumed prefill warmup for sequence length {prefill_seq_len}: "
+                        f"offset {num_cached} leaves no suffix padding back to it within "
+                        f"{model_args.capped_warmup_seq_len} tokens. Its trace is captured on first use."
+                    )
+                    continue
+
+                num_blocks = num_blocks_in_seq(total_seq_len, block_size)
+                logger.info(
+                    f"Warming up resumed prefill for sequence length: {prefill_seq_len}, " f"num_cached: {num_cached}"
+                )
+                self.prefill_forward_text(
+                    tokens=torch.zeros(1, total_seq_len, dtype=torch.long),
+                    prompt_lens=torch.tensor([total_seq_len], dtype=torch.long),
+                    empty_slots=[0],
+                    page_table=torch.zeros(1, num_blocks, dtype=torch.int32),
+                    start_pos=[num_cached],
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                )
 
     def finalize_deferred_traces(self):
         """Record the decode trace that this call deferred.
@@ -948,6 +1024,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert len(num_cached_per_user) == len(
             prompt_lens
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        if start_pos is not None:
+            num_cached_per_user = self._align_resume_offsets(num_cached_per_user, prompt_lens, kv_cache)
+            # The per-user loop below re-reads the offset from ``start_pos``, so the
+            # aligned list has to replace it: otherwise the padded length computed
+            # here would not match the token slice the kernel receives.
+            start_pos = num_cached_per_user
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
@@ -1388,6 +1470,136 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
+
+    def _traced_sdpa_q_chunk_size(self, prefill_seq_len, model_id=0):
+        """q_chunk_size a traced prefill of this length is captured with, or None.
+
+        The traced path hands the op a ``chunk_start_idx`` device tensor that is
+        refreshed per replay, so the captured program config cannot be derived
+        from the offset. It is built with ``chunk_start_idx=0`` instead, which is
+        what this reproduces.
+        """
+        get_config = getattr(self.model_args[model_id], "get_attn_sdpa_program_config", None)
+        if get_config is None:
+            return None
+        # Deliberately unguarded: a model whose program config this signature does
+        # not describe must say so by not exposing the method. Swallowing the error
+        # here would drop back to block-only alignment and reinstate the wrong
+        # prefix reads this exists to prevent.
+        return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
+
+    def _resume_offset_alignment(self, prefill_seq_len, block_size, model_id=0):
+        """Multiple a resume offset must land on for this padded suffix length.
+
+        The paged ops need ``block_size``; the traced SDPA needs the q_chunk_size
+        its program was captured with. Their least common multiple satisfies both.
+
+        The q_chunk_size is taken from the model's own program config where it
+        exposes one, so a short suffix keeps its smaller alignment instead of
+        being rounded away. A model without one must declare
+        ``resumed_prefill_token_alignment``: there is no safe default, and
+        guessing block_size is what produces the silent wrong prefix.
+        """
+        q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id)
+        if q_chunk is None:
+            q_chunk = self.model_capabilities.get("resumed_prefill_token_alignment")
+        if q_chunk is None:
+            raise ValueError(
+                f"{type(self).__name__} resumes a prefill but neither exposes "
+                "`get_attn_sdpa_program_config` on its model_args nor declares "
+                "`model_capabilities['resumed_prefill_token_alignment']`, so the "
+                "alignment its chunked-SDPA program requires cannot be determined."
+            )
+        return math.lcm(block_size, int(q_chunk))
+
+    def _assert_uniform_resume_alignment(self, prefill_seq_len, block_size, expected):
+        """Replica 0's alignment stands for every replica. Fail if it stops doing so.
+
+        ``create_submeshes`` splits the mesh into submeshes of one shape, and
+        ``initialize_vllm_model`` builds every replica's ``ModelArgs`` from the same
+        arguments, so they all pin the same q_chunk_size. The per-user offsets are
+        therefore aligned once against replica 0 rather than per replica. Nothing in
+        the type system holds that, so check it instead of trusting it.
+        """
+        for model_id in range(1, self.data_parallel):
+            other = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+            assert other == expected, (
+                f"replica {model_id} needs resume alignment {other} where replica 0 needs "
+                f"{expected} at padded length {prefill_seq_len}; offsets are aligned once "
+                "against replica 0 and would be wrong for this replica."
+            )
+
+    def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
+        """Floor each resume offset to what the paged ops and the traced SDPA need.
+
+        ``block_size`` covers the page-table slice the chunk's K/V is written
+        through: an offset off that multiple shifts every write by
+        ``chunk_start % block_size`` positions.
+
+        ``q_chunk_size`` covers the SDPA op, which requires ``chunk_start_idx`` to
+        be a multiple of the value its program was built with and answers from the
+        wrong prefix rather than raising when it is not. Under tracing that value
+        is pinned at capture, so it has to be satisfied by the offset.
+
+        Flooring recomputes at most ``alignment - 1`` tokens whose K/V is rewritten
+        identically into the same blocks, so it is semantically a no-op. Mirrors
+        the ``SDPA_CHUNK_ALIGN`` round-down in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Non-paged prefill: there is no page table to slice.
+            return num_cached_per_user
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+        aligned = []
+        for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
+            if int(num_cached) == 0:
+                # Not a resume. Callers pass a zero-filled start_pos for an
+                # ordinary prefill, so this is the common path and must not
+                # require the model to describe an alignment it never uses.
+                aligned.append(0)
+                continue
+            floored = (int(num_cached) // block_size) * block_size
+            # The alignment depends on the padded suffix length, which depends on
+            # the offset, so it has to settle: flooring lengthens the suffix, a
+            # longer suffix can pin a larger q_chunk_size, and that can demand a
+            # smaller offset again.
+            #
+            # The bound is exact, not generous. A pass that does not break must
+            # lower the offset, which lengthens the suffix, which moves it to a
+            # strictly higher padded bucket: an equal bucket would give an equal
+            # alignment and the pass would have broken. So the bucket count bounds
+            # the passes. It is a loose ceiling in practice, because
+            # get_attn_sdpa_prefill_program_config pins only 64 or 256 and two
+            # passes always suffice.
+            for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
+                padded_suffix = get_padded_prefill_len(int(seq_len) - floored)
+                alignment = self._resume_offset_alignment(padded_suffix, block_size)
+                self._assert_uniform_resume_alignment(padded_suffix, block_size, alignment)
+                settled = (int(num_cached) // alignment) * alignment
+                if settled == floored:
+                    break
+                floored = settled
+            else:
+                raise RuntimeError(
+                    f"user {i}: resume offset alignment did not settle for "
+                    f"start_pos={num_cached}, seq_len={seq_len}, block_size={block_size}"
+                )
+            if floored != num_cached:
+                logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
+            aligned.append(floored)
+        return aligned
+
+    @staticmethod
+    def _resumed_warmup_prompt_len(prefill_seq_len, num_cached, capped_warmup_seq_len):
+        """Prompt length whose suffix after ``num_cached`` pads back to this bucket.
+
+        Only the suffix reaches the kernel, so the prompt has to clear the offset by
+        a full bucket. Spanning the bucket alone leaves no suffix at all once
+        ``block_size`` reaches the smallest traced length. ``capped_warmup_seq_len``
+        is the ceiling the rest of warmup uses: past it the call is split into chunks
+        and captures a different trace.
+        """
+        return min(num_cached + prefill_seq_len, capped_warmup_seq_len)
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.

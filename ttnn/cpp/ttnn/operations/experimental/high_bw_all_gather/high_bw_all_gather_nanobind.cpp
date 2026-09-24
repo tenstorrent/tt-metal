@@ -16,9 +16,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
     ttnn::bind_function<"high_bw_all_gather", "ttnn.experimental.">(
         mod,
         R"doc(
-            Gathers a large row-major or tile-layout DRAM tensor over one required
-            device-mesh axis. This is a one-dimensional direct-neighbor Fabric line or
-            ring collective: it does not gather across both axes of a 2D mesh. The
+            Gathers a large row-major or tile-layout DRAM tensor over one device-mesh
+            axis, or over a direct-neighbor ring linearized across a complete 2D mesh.
+            This is a one-dimensional Fabric line or ring collective. The
             operation uses a native one-hop store-and-forward transport and does not
             provide a composite fallback.
 
@@ -46,12 +46,17 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 output_tensor: Preallocated persistent output tensor.
 
             Keyword Args:
-                cluster_axis: Required device-mesh axis (0 or 1) participating in the
-                    one-dimensional collective. The selected axis must contain at least
-                    two devices, and the tensor distribution axes must match the device
-                    mesh axes. Other mesh axes run independent all-gathers.
+                cluster_axis: Device-mesh axis (0 or 1) participating in the
+                    one-dimensional collective. Other mesh axes run independent
+                    all-gathers. Pass ``None`` to gather across every device in a 2D
+                    mesh using a snake Hamiltonian ring. The full-mesh mode requires
+                    at least one even mesh dimension, direct links for every edge of
+                    a row or column snake, and a tensor sharded over ``dim`` across
+                    all mesh devices. The host prefers a row snake, then tries a
+                    column snake if the row route cannot close directly.
                 num_links: Optional number of Fabric links to use. ``None`` uses every
-                    link reported usable across the selected axis. An explicit value
+                    link reported usable across the selected axis, or the minimum
+                    discovered across both axes in full-mesh mode. An explicit value
                     must be greater than zero and cannot exceed that discovered count;
                     use ``2`` to keep the same link count across QuietBox, LoudBox, and
                     Galaxy.

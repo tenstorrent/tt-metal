@@ -79,6 +79,8 @@
   skus:
     wh_n150_civ2:
       timeout: 40
+    wh_n300_civ2:
+      timeout: 40
     bh_p150b_civ2:
       timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -202,10 +204,16 @@
 # complete in time on 8 devices. Smaller SKUs above skip the multi-device (2x4/4x8) suites.
 
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
+# This job installs only the build artifact, not the Python wheel (see setup-job's wheel-artifact-name input,
+# which runtime-unit-tests-impl.yaml does not pass), so every command here must be a prebuilt C++ binary. The
+# matching pytest, test_large_read_only_file_backed_tensor_upload, runs from the ttnn sanity job instead, which
+# already covers all of tests/ttnn/unit_tests/tensor and does install the wheel.
 - name: runtime_iommu_pinned_memory
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
     ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/unit_tests_tensor --gtest_filter='*ReadOnly*:*UniformCopyToDevice_ReusesPinnedMemoryCacheEntries:*UniformCopyToHost_ReusesPinnedMemoryCacheEntries'
   skus:
     wh_n150_civ2:
       timeout: 5
@@ -237,7 +245,7 @@
 - name: runtime_sd_api
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_hybrid_allocator
   skus:
     wh_n150_civ2:
       timeout: 20

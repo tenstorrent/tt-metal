@@ -189,11 +189,11 @@ Path where the above warning is also appended (CI job summary).
 
 ---
 
-## Kimi variant equivalents (only if you run the `kimi_k2_6` variant)
+## Kimi variant equivalents (only if you run the `kimi_k2_7` variant)
 
 Same roles as the DSV3 names above:
 
-- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_6_HF_MODEL`
+- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_7_HF_MODEL`
 - `TT_DS_PREFILL_TTNN_CACHE` → `TT_KIMI_PREFILL_TTNN_CACHE`
 - `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_KIMI_PREFILL_HOST_REF_CACHE`
 - `DEEPSEEK_V3_MLA_REF_CACHE` → `KIMI_MLA_REF_CACHE`

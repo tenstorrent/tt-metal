@@ -448,6 +448,10 @@ void kernel_main() {
     // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the joint
     // mask-generation gate together with joint_l_partial_col.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(37);
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(38) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(39));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(40);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(41);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -462,14 +466,14 @@ void kernel_main() {
     // Effective joint length for masking: per-shard (L_local = L/ring_size) for sharded, full L for replicated.
     constexpr uint32_t L_effective = has_gathered_joint_k ? L / ring_size : L;
 
-    // Slots 34-37: sliding_window_size, kv_pad_from_metadata, joint_is_sharded, logical_lt.
-    constexpr auto out_args = TensorAccessorArgs<38>();
+    // Slots 38-41 are the rank-mapping descriptor; output accessors start at slot 42.
+    constexpr auto out_args = TensorAccessorArgs<42>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
     // Metadata accessor (metadata path only) follows the output accessors and precedes the CB compile
     // args; gate the offset on kv_pad_from_metadata so the no-metadata program never names a non-accessor
-    // compile arg (fall back to a valid unused accessor offset = out_args' slot 38).
-    constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 38;
+    // compile arg (fall back to a valid unused accessor offset = out_args' slot 42).
+    constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 42;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
 
     uint32_t argidx = 0;
@@ -512,7 +516,7 @@ void kernel_main() {
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
         logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
-        const auto masks = ring_joint::build_ring_work_masks_device(
+        const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index,
             ring_size,
             fused_op_receiver.seq.expected[0],
@@ -528,7 +532,10 @@ void kernel_main() {
             L,
             true,
             is_causal != 0,
-            is_balanced != 0);
+            is_balanced != 0,
+            mesh_rows,
+            mesh_cols,
+            snake_orientation);
         active_ring_iter_mask = masks.active_ring_iter_mask;
         single_valid_kv_chunk_mask = masks.single_valid_kv_chunk_mask;
     }
@@ -581,7 +588,9 @@ void kernel_main() {
             sliding_window_size>(noc);
     }
 
-    uint32_t ring_index = fused_op_receiver.seq.ring_index;
+    const uint32_t ring_index =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     uint32_t half_sequence = num_q_chunks / 2;
 
     // Deferred save: stash params for save_accumulators_with_trid and call it
@@ -600,7 +609,11 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
+        const uint32_t ring_id =
+            has_sliding_window
+                ? ring_index
+                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
         if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {

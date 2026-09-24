@@ -32,6 +32,8 @@ import re
 import sys
 from datetime import datetime, timezone
 
+from utils.report import is_reset_op_check
+
 SCHEMA_VERSION = 1
 
 # check ip/phase -> dashboard category. "other" is the catch-all.
@@ -68,6 +70,7 @@ GDDR_INFO_PREFIX = "gddr_info_"
 
 SEVERITY = {"PASS": 0, "SKIP": 0, "EXCLUDED": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3, "ERROR": 3}
 COVERED = {"PASS", "WARN", "FAIL"}
+
 
 RUNS_COLS = [
     "schema_version",
@@ -333,7 +336,7 @@ def checks_rows(report: dict, meta: dict):
                 "is_fail": int(st == "FAIL"),
                 "is_skip": int(st == "SKIP"),
                 "is_covered": int(st in COVERED and executed == 1),
-                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded),
+                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name)),
                 "testcases_passed": tp,
                 "testcases_failed": tf,
                 "executed": executed,

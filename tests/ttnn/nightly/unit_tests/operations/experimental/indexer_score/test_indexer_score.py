@@ -537,17 +537,20 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
             )
         )
 
-    _check_kv_len(run(64), q, k, w, 64)  # only the first 2 k-tiles valid; most work units are fully past kv_len
+    # kv_len=32 with Sq=64: the causal window ends PAST the valid prefix (the chunked-prefill pad tail).
+    # Rows 32..63 saturate to the whole 32-key prefix; bands past it score nothing.
+    _check_kv_len(run(32), q, k, w, 32)
     entries_after_first = device.num_program_cache_entries()
-    for kv_len in (128, 256, 512):  # grow the valid prefix within the same T=512 buffer
+    # 64: window == kv_len exactly (the old tightest legal value). Then grow within the same T=512 buffer.
+    for kv_len in (64, 128, 256, 512):
         _check_kv_len(run(kv_len), q, k, w, kv_len)
     assert device.num_program_cache_entries() == entries_after_first, "changing kv_len recompiled"
 
 
 def test_indexer_score_rejects_bad_kv_len(device, expect_error):
-    """kv_len must be tile-aligned, within (0, T], and leave room for the causal window
-    (chunk_start + Sq <= kv_len). Each violation is rejected -- on a WARM cache too, since kv_len is excluded
-    from the hash and re-validated on a program-cache hit (validate_on_program_cache_hit)."""
+    """kv_len must be tile-aligned and within (0, T], rejected on a WARM cache too (it is hash-excluded and
+    re-validated on a hit). It need NOT leave room for the causal window, which may end past the prefix --
+    test_indexer_score_runtime_kv_len covers that positively."""
     c = KV_LEN
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     q, w, k = _kv_len_inputs()
@@ -557,7 +560,7 @@ def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     ttnn.experimental.indexer_score_dsa(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
     )
-    for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned"), (32, "causal window > kv_len")]:
+    for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned")]:
         with expect_error(RuntimeError, "kv_len"):
             ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
@@ -1686,9 +1689,8 @@ def test_indexer_score_msa_indexed_cache_rejects(device, expect_error):
 
 
 def test_indexer_score_msa_rejects_bad_kv_len(device, expect_error):
-    """MSA mirrors the DSA base kv_len rejections (block_size=0): kv_len must be tile-aligned, within (0, T],
-    and leave room for the causal window (chunk_start + Sq <= kv_len). Each violation fails on a WARM cache
-    too (kv_len is hash-excluded and re-validated on a program-cache hit)."""
+    """MSA mirrors the DSA base kv_len rejections (block_size=0): tile-aligned, within (0, T], rejected on
+    a warm cache too. A causal window ending past kv_len is legal (the chunked-prefill pad tail)."""
     heads, dim, sq, t, chunk_start = 1, 128, 64, 512, 0
     scale = dim**-0.5
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
@@ -1701,7 +1703,7 @@ def test_indexer_score_msa_rejects_bad_kv_len(device, expect_error):
     ttnn.experimental.indexer_score_msa(
         q_dev, k_dev, num_groups=1, chunk_start_idx=chunk_start, scale=scale, program_config=cfg, kv_len=128
     )
-    for bad in (t + 32, 100, 32):  # above T / not tile-aligned / causal window (>= chunk_start+Sq=64) violated
+    for bad in (t + 32, 100):  # above T / not tile-aligned
         with expect_error(RuntimeError, "kv_len"):
             ttnn.experimental.indexer_score_msa(
                 q_dev, k_dev, num_groups=1, chunk_start_idx=chunk_start, scale=scale, program_config=cfg, kv_len=bad
@@ -1965,31 +1967,6 @@ def test_indexer_score_sp1_tp4_seq_subshard(mesh_device):
     default_start = t - chunk
     ref_default = indexer_score_dsa_ref(q_g, k_g, w_g, default_start)
     assert_indexer_match(out_default_t, ref_default, chunk, t, check_neg=True)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["sp1xtp4"], indirect=True)
-def test_indexer_score_sp1_tp4_rejects_undersized_causal_window(mesh_device, expect_error):
-    """Validation must include every TP sub-shard when the named SP axis has size one."""
-    heads, chunk, t, chunk_start = 8, 256, 256, 32
-    q_g, k_g, w_g = _global_inputs(heads, chunk, t, seed=42)
-    mesh_shape = tuple(mesh_device.shape)
-    shard_tp_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 2))
-    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_tp_seq)
-    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_tp_seq)
-    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device))
-
-    # Rank 3 owns [chunk_start + 3*Sq, chunk_start + 4*Sq) = [224, 288), which exceeds T=256.
-    with expect_error(RuntimeError, "exceeds T"):
-        ttnn.experimental.indexer_score_dsa(
-            q_dev,
-            k_dev,
-            w_dev,
-            chunk_start_idx=chunk_start,
-            seq_shard_axes=[0, 1],
-            block_cyclic_sp_axis=0,
-            block_cyclic_chunk_local=chunk,
-            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
-        )
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["sp2xtp2"], indirect=True)

@@ -1730,6 +1730,14 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             continue;
         }
         for (const auto& fabric_type : fabric_type_candidates) {
+            // A torus candidate with no genuine axis at this shape (every wrapped dimension has
+            // extent <= 2) demands nothing a MESH doesn't: generate_mesh_graph_of_shape gates its
+            // wrap edges away, so it would map vacuously and mislabel a plain mesh as a torus.
+            // Skip it and let MESH win honestly.
+            if (fabric_type != FabricType::MESH && !has_genuine_torus_axis(fabric_type, mesh_shape, 0) &&
+                !has_genuine_torus_axis(fabric_type, mesh_shape, 1)) {
+                continue;
+            }
             if (auto mesh_graph = try_map_shape(fabric_type, mesh_shape)) {
                 if (fabric_type != requested_fabric_type) {
                     log_warning(
@@ -1747,7 +1755,15 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     }
 
     for (const auto& mesh_shape : mesh_shapes_to_try) {
-        if (auto mesh_graph = try_map_shape(requested_fabric_type, mesh_shape)) {
+        // Same vacuous-torus rule as the candidate loop: a torus whose every wrapped dimension has
+        // extent <= 2 at this reduced shape is logically a plain mesh — label it honestly instead
+        // of reintroducing the mislabeling through the fallback.
+        FabricType fallback_fabric_type = requested_fabric_type;
+        if (fallback_fabric_type != FabricType::MESH && !has_genuine_torus_axis(fallback_fabric_type, mesh_shape, 0) &&
+            !has_genuine_torus_axis(fallback_fabric_type, mesh_shape, 1)) {
+            fallback_fabric_type = FabricType::MESH;
+        }
+        if (auto mesh_graph = try_map_shape(fallback_fabric_type, mesh_shape)) {
             // Check if the final mesh size doesn't match the number of physical chips
             size_t final_mesh_size = mesh_shape.mesh_size();
             if (final_mesh_size < total_number_of_chips) {

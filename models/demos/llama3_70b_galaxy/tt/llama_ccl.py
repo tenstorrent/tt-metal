@@ -58,7 +58,7 @@ class TT_CCL:
         # BH prefetcher bring-up: keep the prefetcher-fed ring matmuls but route every galaxy collective
         # through the stable/standard op (worker-pinned) instead of the fused galaxy CCLs, whose
         # 1D-multicast writers no-op on the BH 2D-torus fabric. Gated the same way as the model/attention.
-        self.use_unfused_ccl = getattr(model_args, "use_unfused_ccl", False)
+        self.use_unfused_ccl = self.use_prefetcher and getattr(model_args, "use_unfused_ccl", False)
         # Blackhole galaxy exposes only 2 ethernet links between column neighbours (Wormhole has 4). The
         # prefill ring CCLs below historically forced 4 links whenever use_prefetcher was set (previously
         # WH-only); with the prefetcher now enabled on BH that request goes out of bounds, so cap to the

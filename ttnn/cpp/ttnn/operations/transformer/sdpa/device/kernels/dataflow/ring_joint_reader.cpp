@@ -295,6 +295,10 @@ void kernel_main() {
     // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). Joint K chunks whose
     // global start tile is at/after logical_lt are pure padding and are skipped.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(39);
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(40) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(41));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(42);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(43);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -304,9 +308,8 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 37-39 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt) declared
-    // above, so the tensor accessors start at compile-arg slot 40.
-    constexpr auto q_args = TensorAccessorArgs<40>();
+    // Slots 40-43 are the rank-mapping descriptor, so tensor accessors start at slot 44.
+    constexpr auto q_args = TensorAccessorArgs<44>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -318,10 +321,10 @@ void kernel_main() {
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
-    // (unused) accessor offset (q_args' slot 40) so TensorAccessorArgs<> -- instantiated unconditionally
+    // (unused) accessor offset (q_args' slot 44) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 40;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 44;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
@@ -474,9 +477,12 @@ void kernel_main() {
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(3), meta_l1);
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+            const uint32_t tensor_rank =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, fused_op_receiver.seq.ring_index);
-            const auto masks = ring_joint::build_ring_work_masks_device(
+                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+            const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
                 fused_op_receiver.seq.ring_index,
                 ring_size,
                 fused_op_receiver.seq.expected[0],
@@ -492,7 +498,10 @@ void kernel_main() {
                 L,
                 kv_pad_rotation_enabled,
                 is_causal != 0,
-                is_balanced != 0);
+                is_balanced != 0,
+                mesh_rows,
+                mesh_cols,
+                snake_orientation);
             active_ring_iter_mask = masks.active_ring_iter_mask;
 
             CircularBuffer cb_derived(cb_kv_pad_derived);
@@ -656,7 +665,9 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
-    uint32_t ring_index = fused_op_receiver.seq.ring_index;
+    const uint32_t ring_index =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     uint32_t half_sequence = num_q_chunks / 2;
     // Sliding consumes local and halo ranges in one logical Q pass. Wait for every halo that
     // the host work plan selected before starting that pass; this keeps the hot loop free of
@@ -675,7 +686,11 @@ void kernel_main() {
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
+        const uint32_t ring_id =
+            has_sliding_window
+                ? ring_index
+                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {

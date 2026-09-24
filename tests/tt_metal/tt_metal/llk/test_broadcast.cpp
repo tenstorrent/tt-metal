@@ -37,6 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -94,18 +95,16 @@ constexpr float k_broadcast_rtol = 0.0155;
 
 // Quasar drives dataflow through the Gen2 config and takes its DFB sync explicitly; Gen1 arches pin
 // the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
-experimental::DataMovementHardwareConfig make_reader_hw_config(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+experimental::DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     }
     return experimental::DataMovementGen1Config{
         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
 }
 
-experimental::DataMovementHardwareConfig make_writer_hw_config(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+experimental::DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     }
     return experimental::DataMovementGen1Config{
@@ -113,8 +112,8 @@ experimental::DataMovementHardwareConfig make_writer_hw_config(
 }
 
 experimental::ComputeHardwareConfig make_compute_hw_config(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, MathFidelity math_fidelity) {
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
     }
     return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
@@ -235,18 +234,15 @@ std::vector<bfloat16> gold_broadcast(
 constexpr std::uint32_t k_num_tiles_broadcast_test = 1;
 
 auto CreateDramBufferForPageSize(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    std::uint32_t page_size_bytes,
-    std::uint32_t num_pages) {
+    distributed::MeshDevice& mesh_device, std::uint32_t page_size_bytes, std::uint32_t num_pages) {
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = page_size_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig buffer_config{.size = page_size_bytes * num_pages};
-    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    return distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 }
 
-void run_single_core_broadcast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BroadcastConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const BroadcastConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -271,7 +267,7 @@ void run_single_core_broadcast(
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto* device = mesh_device->get_devices().empty() ? nullptr : mesh_device->get_devices().front();
+    auto* device = mesh_device.get_devices().empty() ? nullptr : mesh_device.get_devices().front();
     TT_FATAL(device != nullptr, "mesh_device has no backing devices");
     const bool is_quasar = device->arch() == ARCH::QUASAR;
 
@@ -427,7 +423,7 @@ void run_single_core_broadcast(
         .work_units = {wu},
     };
 
-    Program built_program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program built_program = experimental::MakeProgramFromSpec(mesh_device, spec);
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
@@ -521,9 +517,8 @@ struct SubBcastColCustomConfig {
     MathFidelity math_fidelity = MathFidelity::LoFi;  // SUB is LoFi-only on Quasar (fidelity phases are MUL-only)
 };
 
-void run_sub_bcast_col_custom(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SubBcastColCustomConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBcastColCustomConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -559,9 +554,7 @@ void run_sub_bcast_col_custom(
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto* device = mesh_device->get_devices().empty() ? nullptr : mesh_device->get_devices().front();
-    TT_FATAL(device != nullptr, "mesh_device has no backing devices");
-    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
 
     experimental::KernelSpec::CompilerOptions::Defines defines_vec;
     defines_vec.emplace("CT_DIM", std::to_string(test_config.ct_dim));
@@ -669,7 +662,7 @@ void run_sub_bcast_col_custom(
         .work_units = {wu},
     };
 
-    Program built_program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program built_program = experimental::MakeProgramFromSpec(mesh_device, spec);
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
@@ -785,7 +778,7 @@ TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
     }
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
     test_config.math_fidelity = MathFidelity::HiFi2;
-    unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
+    unit_tests::compute::broadcast::run_single_core_broadcast(*this->devices_.at(0), test_config);
 }
 
 using namespace unit_tests::compute::broadcast;
@@ -899,7 +892,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
                     eltwise_op_to_type.at(EltwiseOp(op)),
                     broadcast_dim_to_type.at(BroadcastDim(dim)),
                     math_fid);
-                unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), cfg);
+                unit_tests::compute::broadcast::run_single_core_broadcast(this->device(), cfg);
             }
         }
     }
@@ -951,12 +944,80 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
         SCOPED_TRACE(
             "ct_dim=" + std::to_string(cfg.ct_dim) + " rt_dim=" + std::to_string(cfg.rt_dim) + " num_blocks=" +
             std::to_string(cfg.num_blocks) + " tiny_tile=" + std::to_string(cfg.tile_shape != TileShape::FULL_TILE));
-        unit_tests::compute::broadcast::run_sub_bcast_col_custom(this->devices_.at(0), cfg);
+        unit_tests::compute::broadcast::run_sub_bcast_col_custom(this->device(), cfg);
         if (HasFatalFailure()) {
             // Later cases are not diagnostic once an earlier one is red.
             break;
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) binary broadcast MUL (rows / cols / scalar), validated against the gold_broadcast host golden
+// (not a legacy kernel). c_0 = A (full tile), c_1 = B (masked bcast tile), MUL-broadcast -> c_16. Both inputs
+// are tilized host-side (the device reads tiled operands); the golden broadcast is computed row-major then
+// tilized. Single Float16_b tile, is_close(rtol 0.0155). Runs on Blackhole (BH-only API).
+// ============================================================================
+namespace {
+// Map the test-side BroadcastDim to the kernel-side ckernel BroadcastType numeric value (COL=1, ROW=2,
+// SCALAR=3) passed as get_compile_time_arg_val(1) to the fused bcast_mul_2_0.cpp kernel.
+std::uint32_t bcast_type_arg(BroadcastDim dim) {
+    switch (dim) {
+        case BroadcastDim::ROW: return 2;
+        case BroadcastDim::COL: return 1;
+        case BroadcastDim::SCALAR: return 3;
+    }
+    return 0;
+}
+
+void expect_bcast_mul_matches_golden(distributed::MeshDevice& md, BroadcastDim dim) {
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_2_0.cpp";
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto in0_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/42, /*offset=*/-1.0f);
+    auto in1_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto in0_bf16 = unpack_vector<bfloat16, std::uint32_t>(in0_packed);
+    auto in1_bf16 = unpack_vector<bfloat16, std::uint32_t>(in1_packed);
+    // Zero the non-broadcast positions of B so device and golden read the same broadcast operand.
+    mask_src_b_for_broadcast(in1_bf16, {32, 32}, dim, /*row_idx=*/0);
+    auto golden_rm = gold_broadcast(in0_bf16, in1_bf16, {32, 32}, EltwiseOp::MUL, dim, /*row_idx=*/0);
+
+    auto c0_input = ::unit_tests::compute::gold_standard_tilize(in0_packed, config);
+    auto c1_input = ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(in1_bf16), config);
+    auto golden_tiled =
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(golden_rm), config);
+
+    auto result = unit_tests::llk::single_core::run_binary(
+        md,
+        c0_input,
+        c1_input,
+        /*num_tiles=*/1,
+        kernel,
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/1,
+        /*out_tiles=*/0,
+        /*extra_compile_args=*/{bcast_type_arg(dim)});
+
+    EXPECT_EQ(golden_tiled.size(), result.size());
+    bool close = is_close_packed_vectors<bfloat16, std::uint32_t>(
+        result, golden_tiled, [](const bfloat16& a, const bfloat16& b) { return is_close(a, b, k_broadcast_rtol); });
+    EXPECT_TRUE(close);
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulRowsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::ROW);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulColsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::COL);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulScalarIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::SCALAR);
 }
 
 }  // namespace tt::tt_metal

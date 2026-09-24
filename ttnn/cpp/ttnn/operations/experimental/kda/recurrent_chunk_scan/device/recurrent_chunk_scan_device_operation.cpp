@@ -9,6 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -119,6 +120,39 @@ RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::
         outputs.push_back(create_device_tensor(spec, in.v_beta.device()));
     }
     return outputs;
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<RecurrentChunkScanOperation::tensor_return_value_t>
+RecurrentChunkScanOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    constexpr double chunk = tt::constants::TILE_HEIGHT;
+    const double batch_heads = attrs.batch_heads;
+    const double instances = batch_heads * attrs.num_chunks;
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    KdaFpuWork work;
+    if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
+        work = {
+            .fpu_matrix_flops = instances * (6.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
+            .fpu_multiply_ops = instances * key_dim * value_dim,
+            .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
+        };
+    } else {
+        work = {
+            .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
+            .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
+            .fpu_add_ops =
+                instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) + batch_heads * key_dim * value_dim,
+        };
+    }
+    std::vector<const Tensor*> inputs = {
+        &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
+    if (in.initial_state) {
+        inputs.push_back(&*in.initial_state);
+    }
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> recurrent_chunk_scan(

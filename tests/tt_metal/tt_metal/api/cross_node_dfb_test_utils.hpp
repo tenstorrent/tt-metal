@@ -43,10 +43,10 @@ inline uint32_t align_staging_size_bytes(uint32_t size_bytes) {
 }
 
 // Allocate a HEIGHT_SHARDED L1 buffer matching CreateCrossNodeDFB's data-ring layout.
-// Must use the same device pointer passed to CreateCrossNodeDFB so L1 allocation is
-// consistent with the runtime-allocated config buffer (esp. on MeshDevice).
+// Must use the same device passed to CreateCrossNodeDFB so L1 allocation is
+// consistent with the runtime-allocated config buffer.
 inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
-    distributed::MeshDevice* device,
+    distributed::MeshDevice& device,
     const CoreRangeSet& all_cores,
     uint32_t entry_size,
     uint32_t num_entries,
@@ -54,7 +54,7 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
     const uint32_t ring_size = entry_size * num_entries;
     const uint32_t num_cores = all_cores.num_cores();
     return CreateBuffer(ShardedBufferConfig{
-        .device = device,
+        .device = &device,
         .size = ring_size * num_cores,
         .page_size = ring_size,
         .buffer_type = buffer_type,
@@ -182,7 +182,7 @@ inline void assert_staging_disjoint_from_cross_node_dfb(
 // at low L1 addresses (~MEM_MAP_END), which is far from the top-of-L1 staging area,
 // so the dispatch does not overwrite this data.
 inline void write_sender_l1_staging(
-    distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& device,
     const CoreRangeSet& sender_cores,
     const experimental::CrossNodeDFB& gdfb,
     uint32_t data_pattern,
@@ -202,7 +202,7 @@ inline void write_sender_l1_staging(
     std::vector<uint32_t> words(aligned_words, 0);
     std::memcpy(words.data(), bytes.data(), bytes.size());
     for (const auto& core : corerange_to_cores(sender_cores)) {
-        slow_dispatch::WriteToL1(mesh_device, core, staging_addr, words, CoreType::WORKER);
+        slow_dispatch::WriteToL1(device, core, staging_addr, words, CoreType::WORKER);
     }
 }
 
@@ -255,7 +255,7 @@ inline std::vector<uint8_t> expected_receiver_ring_bytes(
 }
 
 inline std::vector<uint8_t> read_receiver_ring_bytes(
-    distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& device,
     const experimental::CrossNodeDFB& gdfb,
     const CoreCoord& receiver_core,
     uint32_t num_bytes) {
@@ -266,25 +266,21 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
         return bytes;
     }
     slow_dispatch::ReadFromL1(
-        mesh_device,
-        receiver_core,
-        gdfb.buffer_address(),
-        std::span<uint8_t>(bytes.data(), copy_size),
-        CoreType::WORKER);
+        device, receiver_core, gdfb.buffer_address(), std::span<uint8_t>(bytes.data(), copy_size), CoreType::WORKER);
     return bytes;
 }
 
 // CreateCrossNodeDFB does not zero the data ring; clear L1 before "untouched" checks.
 inline void zero_receiver_ring(
-    distributed::MeshDevice& mesh_device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
+    distributed::MeshDevice& device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
     const uint32_t ring_size = gdfb.ring_size();
     const uint32_t aligned_words = (ring_size + sizeof(uint32_t) - 1) / sizeof(uint32_t);
     std::vector<uint32_t> zeros(aligned_words, 0);
-    slow_dispatch::WriteToL1(mesh_device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);
+    slow_dispatch::WriteToL1(device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);
 }
 
 inline bool verify_receiver_ring(
-    distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& device,
     const experimental::CrossNodeDFB& gdfb,
     const CoreCoord& receiver_core,
     uint32_t data_pattern,
@@ -305,17 +301,17 @@ inline bool verify_receiver_ring(
         entry_size_resized,
         num_entries_after);
     const auto received =
-        read_receiver_ring_bytes(mesh_device, gdfb, receiver_core, static_cast<uint32_t>(expected.size()));
+        read_receiver_ring_bytes(device, gdfb, receiver_core, static_cast<uint32_t>(expected.size()));
     return received == expected;
 }
 
 // Read pages_sent / pages_acked from a core's sharded config page at the given slot.
 inline std::pair<uint32_t, uint32_t> read_credit_pair(
-    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t pages_sent_addr) {
+    distributed::MeshDevice& device, const CoreCoord& core, uint32_t pages_sent_addr) {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     std::vector<uint8_t> bytes(2 * l1_alignment, 0);
     slow_dispatch::ReadFromL1(
-        mesh_device, core, pages_sent_addr, std::span<uint8_t>(bytes.data(), bytes.size()), CoreType::WORKER);
+        device, core, pages_sent_addr, std::span<uint8_t>(bytes.data(), bytes.size()), CoreType::WORKER);
     uint32_t sent = 0;
     uint32_t acked = 0;
     std::memcpy(&sent, bytes.data(), sizeof(uint32_t));
@@ -331,7 +327,7 @@ inline uint32_t cross_node_config_page_l1_address(Program& program, uint8_t remo
 // After a full drain, every receiver slot must have pages_sent == pages_acked == expected units
 // on both the sender and that receiver's page in the dedicated config Buffer.
 inline bool verify_credits_drained(
-    distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& device,
     Program& program,
     uint8_t remote_dfb_id,
     const CoreCoord& sender_core,
@@ -348,8 +344,8 @@ inline bool verify_credits_drained(
     bool ok = true;
     for (uint32_t ri = 0; ri < receivers.size(); ++ri) {
         const uint32_t slot_addr = credit_base + 2 * ri * l1_alignment;
-        const auto [sent_s, acked_s] = read_credit_pair(mesh_device, sender_core, slot_addr);
-        const auto [sent_r, acked_r] = read_credit_pair(mesh_device, receivers[ri], slot_addr);
+        const auto [sent_s, acked_s] = read_credit_pair(device, sender_core, slot_addr);
+        const auto [sent_r, acked_r] = read_credit_pair(device, receivers[ri], slot_addr);
         if (sent_s != expected_units || acked_s != expected_units || sent_r != expected_units ||
             acked_r != expected_units) {
             log_error(

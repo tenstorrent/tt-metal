@@ -3417,6 +3417,17 @@ class TestSafeArgStr:
         result = _safe_arg_str(ttnn.TILE_LAYOUT)
         assert "TILE" in result
 
+    def test_unprintable_str_fallback(self):
+        """An exception from __str__ produces a diagnostic placeholder."""
+        from ttnn.graph import _safe_arg_str
+
+        class BadStr:
+            def __str__(self):
+                """Raise to exercise the safe stringification fallback."""
+                raise ValueError("boom")
+
+        assert _safe_arg_str(BadStr()) == "<unprintable BadStr: ValueError: boom>"
+
     def test_tensor_sequence_is_summarized_not_dumped(self, device):
         """A list of ttnn.Tensors is summarized element-wise, never str()'d.
 

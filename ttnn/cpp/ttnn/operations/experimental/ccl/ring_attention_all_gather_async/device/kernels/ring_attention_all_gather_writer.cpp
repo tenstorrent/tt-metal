@@ -16,6 +16,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
+#include "ring_attention_rank_mapping.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -26,7 +27,7 @@ using ttnn::ccl::Topology;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr uint32_t my_transport_rank = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
@@ -51,9 +52,13 @@ constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
 constexpr uint32_t num_links = get_compile_time_arg_val(18);
 // Host-derived even-ring split-forwarding gate; see ring_attention_all_gather_reader.cpp for semantics.
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(19);
+constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(20);
+constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(21));
+constexpr uint32_t mesh_rows = get_compile_time_arg_val(22);
+constexpr uint32_t mesh_cols = get_compile_time_arg_val(23);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 20;
+    constexpr uint32_t page_size_base_idx = ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
     // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
@@ -180,6 +185,9 @@ void kernel_main() {
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
 
     uint32_t slice_writes = 0;
+    constexpr uint32_t my_tensor_rank =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
     uint32_t row_offset = 0;
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -191,16 +199,16 @@ void kernel_main() {
          * to remove startup latency from the fused op.
          */
 
-        uint32_t tile_id_start = my_chip_id * input_tensor_Wt[input_idx];
+        uint32_t tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
         uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
         uint32_t row_offset =
             (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
         uint32_t tiles_read = input_tile_id_start[input_idx];
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         if (gather_dim == 3) {
-            tile_id_start = my_chip_id * input_tensor_Wt[input_idx];
+            tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
         } else {
-            tile_id_start = my_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+            tile_id_start = my_tensor_rank * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
         }
 
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
@@ -273,7 +281,7 @@ void kernel_main() {
          * While the fused op will not wait on this "local write done" increment,
          * the fused op signaler will account for it in future waits.
          */
-        op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+        op_signaler_sender.synchronize_workers_and_signal_op(my_transport_rank);
     }
 
     // 2. unicast output ready semaphore
@@ -326,20 +334,26 @@ void kernel_main() {
         // neighbor to the left
         // In the ring case, I expect to write to the left num_backward_target times
 
-        int slice_chip_id;
-        uint32_t actual_slice_chip_id;
+        int slice_transport_rank_signed;
+        uint32_t slice_transport_rank;
         if constexpr (direction == 1) {
-            slice_chip_id = my_chip_id + slice_writes + 1;
-            actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
+            slice_transport_rank_signed = my_transport_rank + slice_writes + 1;
+            slice_transport_rank = (slice_transport_rank_signed >= (int)ring_size)
+                                       ? slice_transport_rank_signed - ring_size
+                                       : slice_transport_rank_signed;
         } else {
-            slice_chip_id = my_chip_id - slice_writes - 1;
-            actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
+            slice_transport_rank_signed = my_transport_rank - slice_writes - 1;
+            slice_transport_rank = (slice_transport_rank_signed < 0) ? ring_size + slice_transport_rank_signed
+                                                                     : slice_transport_rank_signed;
         }
         const bool is_split_forwarded_slice = split_forwarding_enabled && (slice_writes == writes_expected - 1);
+        const uint32_t slice_tensor_rank =
+            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                slice_transport_rank, mesh_rows, mesh_cols, snake_orientation);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             uint32_t tiles_read = input_tile_id_start[input_idx];
             uint32_t tiles_to_read = input_tile_id_end[input_idx];
-            uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt[input_idx];
+            uint32_t tile_id_start = slice_tensor_rank * input_tensor_Wt[input_idx];
             uint32_t row_offset =
                 (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
             uint32_t pages_read_in_row = (input_tile_id_start[input_idx] % input_tensor_Wt[input_idx]);
@@ -347,9 +361,9 @@ void kernel_main() {
             uint32_t stride_Wt = output_tensor_Wt[input_idx];
 
             if (gather_dim == 3) {
-                tile_id_start = actual_slice_chip_id * input_tensor_Wt[input_idx];
+                tile_id_start = slice_tensor_rank * input_tensor_Wt[input_idx];
             } else {
-                tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+                tile_id_start = slice_tensor_rank * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
 
             // Packet-aligned midpoint of this input's per-batch-head page range

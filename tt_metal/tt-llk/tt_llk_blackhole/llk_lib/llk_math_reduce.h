@@ -255,7 +255,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
-inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 

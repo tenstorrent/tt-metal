@@ -17,6 +17,7 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 template <bool kv_pad_rotation_enabled>
 constexpr void assert_kv_pad_rotation_streaming_only() {
@@ -89,6 +90,10 @@ void kernel_main() {
     // Slot 53: true (unpadded) joint length in tiles (similar to spatial logical_nt). Drives the
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(54) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(55));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(56);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(57);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -156,10 +161,9 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
-    // scalars (joint_is_sharded, logical_lt) declared near the top of the kernel, so the CB block
-    // starts at 54.
+    // scalars (joint_is_sharded, logical_lt) and rank mapping are declared above, so the CB block starts at 58.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
-    constexpr uint32_t cb_arg_offset = 54;
+    constexpr uint32_t cb_arg_offset = 58;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -232,7 +236,9 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t ring_index = fused_op_indexer.seq.ring_index;
+    const uint32_t ring_index =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            fused_op_indexer.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     const uint32_t half_sequence = num_q_chunks / 2;
     const ChunkedContext chunked_context{
         q_start_idx_t,
@@ -248,7 +254,11 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_indexer.get_next_ring_id_and_sync();
+        const uint32_t ring_id =
+            has_sliding_window
+                ? ring_index
+                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                      fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {

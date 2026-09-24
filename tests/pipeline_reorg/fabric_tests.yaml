@@ -200,12 +200,12 @@
 - name: BH ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
-    bh_loudbox:
-      timeout: 60
+    bh_loudbox_civ2_viommu:
+      timeout: 30
     bh_p300:
-      timeout: 60
+      timeout: 30
     bh_quietbox_2:
-      timeout: 60
+      timeout: 30
   team: scaleout
   owner_id: U06US5C7M7X # Sean Nijjar
 

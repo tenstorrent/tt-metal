@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_reduce.h"
 
@@ -97,7 +98,7 @@ inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
  * @param tensor_shape: Tile shape determining face count and dest stride. int FPU path requires default 32x32.
  */
 template <PoolType type, ReduceDim dim, bool is_int_fpu_en = false>
-inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
+inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape) {
     if constexpr (is_int_fpu_en) {
         LLK_ASSERT(
             tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim &&
