@@ -33,11 +33,6 @@ class Gemma4PrefillRuntime:
     def make_chunk_input(self, token_ids):
         return ttnn.to_device(self._host_tokens(token_ids), self.mesh_device)
 
-    def _stage_positions(self, slot_id, actual_start):
-        self.model.prefill_metadata.update(slot_idx=slot_id, kv_actual_global=actual_start)
-        positions = range(actual_start, actual_start + self.config.chunk_size)
-        ttnn.copy_host_to_device_tensor(self._host_tokens(positions), self.positions)
-
     def _forward(self):
         embeddings = self.model.transform_and_embed_prefill_inputs_device(self.input_tokens)
         return self.model(
@@ -52,12 +47,11 @@ class Gemma4PrefillRuntime:
             hf_model_id=self.hf_model_id,
             prefill_chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
-            max_batch_size=1,
+            max_batch_size=self.config.num_users,
             ring_kv_caches=kv_cache,
             tt_cache_path=self.tt_cache_path,
         )
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
-        self.positions = self.make_chunk_input(range(self.config.chunk_size))
         self.metadata = ttnn.from_torch(
             torch.tensor([0, 0, self.config.chunk_size], dtype=torch.int64).reshape(1, 1, 1, 3),
             device=self.mesh_device,
@@ -65,9 +59,8 @@ class Gemma4PrefillRuntime:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        self.model.set_prefill_rope_positions(self.positions)
         self.model._prefill_metadata_external = True
-        self._stage_positions(0, 0)
+        self.model.prefill_metadata.update(slot_idx=0, actual_start=0, actual_end=self.config.chunk_size)
         output = self._forward()
         ttnn.synchronize_device(self.mesh_device)
         output.deallocate(True)
@@ -101,12 +94,12 @@ class Gemma4PrefillRuntime:
     def validate_chunk(self, slot_id, actual_start, actual_end):
         if not 0 <= slot_id < self.config.num_users:
             raise ValueError(f"KV slot {slot_id} is outside [0, {self.config.num_users})")
-        if actual_start < 0 or actual_start % self.config.chunk_size:
-            raise ValueError("Chunk start must be a nonnegative multiple of 8192")
+        if actual_start < 0 or actual_start % ttnn.TILE_SIZE:
+            raise ValueError("Chunk start must be nonnegative and 32-token aligned")
         if not actual_start < actual_end <= min(actual_start + self.config.chunk_size, self.config.max_seq_len):
             raise ValueError("Chunk must contain 1 to 8192 real tokens within the 256K context")
-        if actual_start != 0 and actual_start != self.slot_ends[slot_id]:
-            raise ValueError(f"Slot {slot_id} expects position {self.slot_ends[slot_id]}, got {actual_start}")
+        if actual_start > self.slot_ends[slot_id]:
+            raise ValueError(f"Slot {slot_id} has KV through {self.slot_ends[slot_id]}, cannot start at {actual_start}")
 
     def prefill_chunk(
         self,
@@ -132,7 +125,7 @@ class Gemma4PrefillRuntime:
             ttnn.copy(metadata_msg, self.metadata)
         elif self.d2h_service is not None:
             raise ValueError("D2H acknowledgments require request metadata")
-        self._stage_positions(slot_id, actual_start)
+        self.model.prefill_metadata.update(slot_idx=slot_id, actual_start=actual_start, actual_end=actual_end)
         ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.mesh_device)
         self.slot_ends[slot_id] = actual_end

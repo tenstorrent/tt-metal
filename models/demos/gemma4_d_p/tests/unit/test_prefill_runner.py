@@ -3,6 +3,8 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -57,7 +59,10 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
     runtime.validate_chunk(1, 16384, 16385)
     runtime.validate_chunk(5, 253952, 262144)
     runtime.validate_chunk(5, 0, 8192)
-    for chunk in [(6, 0, 8192), (0, 16384, 24576), (0, 1, 8193), (5, 253952, 262145)]:
+    runtime.validate_chunk(0, 7008, 9000)
+    runtime.validate_chunk(1, 16352, 17001)
+    runtime.validate_chunk(5, 253920, 262112)
+    for chunk in [(6, 0, 8192), (0, 16384, 24576), (0, 8224, 12000), (0, 1, 8193), (5, 253952, 262145)]:
         with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot"):
             runtime.validate_chunk(*chunk)
 
@@ -106,3 +111,59 @@ def test_tt_cache_requires_configured_root(monkeypatch, tmp_path, expect_error):
         resolve_cache_dir_from_tt_cache_path(None, dtype=ttnn.bfloat16, mesh_shape=(8, 4))
     with expect_error(ValueError, "tt_cache_path must be provided"):
         Gemma4PrefillAdapter().weight_cache_path((8, 4))
+
+
+def test_runtime_compile_and_replay_stage_all_slot_bounds(monkeypatch):
+    import torch
+
+    from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+    from models.demos.gemma4_d_p.tt.runners import runtime as runtime_module
+
+    config = service_params()
+    runtime = Gemma4PrefillRuntime(
+        mesh_device=SimpleNamespace(shape=config.mesh_shape),
+        hf_model_id="google/gemma-4-31B-it",
+        tt_cache_path="/tmp/weights",
+        config=config,
+    )
+    created = []
+
+    def create_model(**kwargs):
+        created.append(kwargs)
+        metadata = object.__new__(PrefillMetadata)
+        metadata.mesh_config = runtime.mesh_config
+        metadata.chunk_size = config.chunk_size
+        metadata.max_seq_len = config.max_seq_len
+        metadata.num_users = kwargs["max_batch_size"]
+        metadata._stage = lambda name, values, seq_dim=None: values
+        return None, SimpleNamespace(prefill_metadata=metadata), None, None
+
+    monkeypatch.setattr(runtime_module, "create_tt_model", create_model)
+    monkeypatch.setattr(runtime, "make_chunk_input", lambda token_ids: object())
+    monkeypatch.setattr(runtime, "_forward", lambda: SimpleNamespace(deallocate=lambda force: None))
+    monkeypatch.setattr(runtime, "_check_cache", lambda cache: None)
+    for name in ("from_torch", "copy", "synchronize_device", "deallocate"):
+        monkeypatch.setattr(runtime_module.ttnn, name, Mock())
+    monkeypatch.setattr(runtime_module.ttnn, "reshape", lambda tensor, shape: tensor)
+    replay = Mock()
+    monkeypatch.setattr(runtime_module.ttnn, "execute_trace", replay)
+    cache = object()
+    runtime.compile(cache)
+    assert created[0]["max_batch_size"] == config.num_users
+    assert runtime.model._prefill_metadata_external
+    runtime.trace_id = 1
+    runtime.slot_ends[5] = 8192
+
+    for slot, start, end in [(5, 7008, 9000), (5, 8992, 12001), (5, 4096, 8000), (0, 0, 8192)]:
+        runtime.prefill_chunk(object(), cache, slot_id=slot, actual_start=start, actual_end=end)
+        metadata = runtime.model.prefill_metadata
+        assert (metadata.slot_idx.item(), metadata.kv_actual_global.item(), metadata.actual_end.item()) == (
+            slot,
+            start,
+            end,
+        )
+        positions = torch.arange(start, start + config.chunk_size)
+        expected = torch.cat([positions[(positions // 1024) % 8 == rank] for rank in range(8)])
+        torch.testing.assert_close(metadata.positions.flatten(), expected)
+        assert runtime.slot_ends[slot] == end
+    assert replay.call_count == 4

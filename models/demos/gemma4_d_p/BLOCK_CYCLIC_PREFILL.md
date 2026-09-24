@@ -30,7 +30,8 @@ by padding at 14336–15199; rank 7 receives 7168–8191; rank 0 receives
 - Sliding SDPA handles both Q segments natively, including a compute block
   crossing the wrap. It reads local KV and exchanges predecessor tails in one
   invocation. Aligned ranks send one tail; a split destination receives two.
-  Metadata callers reserve two halo slots because offsets change during replay.
+  Gemma reserves two halo slots so the trace can replay arbitrary offsets.
+  The upstream op also accepts one slot for traces that never wrap Q.
   Halo size is `ceil((window - 1) / k_chunk_size) * k_chunk_size` per slot.
 - Scalar SDPA uses `kv_actual_isl=start`, `logical_n=end`; both are tile-aligned.
   Partial groups and runtime cache reuse are supported. Circular KV retains
@@ -53,7 +54,8 @@ model.prefill_metadata.update(slot_idx=slot, actual_start=start, actual_end=end)
 
 The same trace handles aligned, rotated, partial, and rewound requests.
 Metadata tensor addresses remain stable. Input and metadata staging precede
-trace timing.
+trace timing. The Gemma runner stages the same metadata and permits rewinds
+within each slot's populated prefix; input tokens must already use CP row order.
 
 ## Validation
 
@@ -78,7 +80,8 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-Measured on Blackhole 8x4 with the same inputs and synchronized trace timing:
+Measured before rebasing onto main, on Blackhole 8x4 with matching inputs
+and synchronized trace timing (main now has newer activation and SDPA tuning):
 
 | Request | Previous Gemma workaround | Native SWA |
 | --- | ---: | ---: |

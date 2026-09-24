@@ -50,8 +50,8 @@ def prefill_chunk(model, token_ids, actual_start, actual_end, *, device_tokens, 
 def test_block_cyclic_prefill_256k():
     golden_dir = Path("/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135")
     metadata = json.loads((golden_dir / "metadata.json").read_text())
-    model_path = os.getenv("HF_MODEL", metadata["model_id"])
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    hf_model_id = os.getenv("HF_MODEL", metadata["model_id"])
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
     context_len, chunk_size = 262144, 8192
     token_ids = tokenizer.encode((golden_dir / "input.txt").read_text())[:context_len]
     assert len(token_ids) == context_len
@@ -70,7 +70,7 @@ def test_block_cyclic_prefill_256k():
     try:
         mesh_config = MeshConfig(mesh_device)
         _, model, caches, _ = create_tt_model(
-            mesh_config, prefill_chunk_size=chunk_size, max_seq_len=context_len, model_path=model_path
+            mesh_config, prefill_chunk_size=chunk_size, max_seq_len=context_len, hf_model_id=hf_model_id
         )
         device_tokens = ttnn.from_torch(
             torch.tensor(token_ids[:chunk_size], dtype=torch.int32).unsqueeze(0),
