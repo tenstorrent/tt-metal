@@ -80,7 +80,9 @@ void kernel_main() {
         cb_out.reserve_back(num_read_per_barrier);
         uint32_t read_offset = 0;
         // Read-back must not consume the write loop's id_per_dim.
-        uint32_t src_id_per_dim[8];
+        // Sized to ttnn::MAX_NUM_DIMENSIONS; the program factory rejects higher ranks.
+        constexpr uint32_t max_num_dims = 8;
+        uint32_t src_id_per_dim[max_num_dims];
         for (uint32_t j = 0; j < num_dims; j++) {
             src_id_per_dim[j] = id_per_dim[j];
         }
