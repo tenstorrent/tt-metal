@@ -20,8 +20,7 @@ __all__ = ["MTPUnionEmbedding", "MTPDeviceEmbedSource", "MTPDeviceGeneration"]
 class MTPUnionEmbedding:
     """One chunk's MTP source rows: this chip's trunk embeddings and the lookahead rows after them.
 
-    Held as an ordered list of row blocks, because the first rank gathers trunk and lookahead
-    separately while a downstream rank receives one contiguous tensor. Only :meth:`window` joins them.
+    Held as an ordered list of row blocks; only :meth:`window` joins them.
     """
 
     def __init__(self, parts: list, *, num_levels: int, window_len: int):
@@ -31,8 +30,6 @@ class MTPUnionEmbedding:
         self._parts: list = list(parts)
         assert self._parts, "a union needs at least one row block"
         self._rows: Optional[ttnn.Tensor] = None
-        # The union after generation patches, as one tensor. Kept beside _parts so a middle rank can
-        # still re-pack the blocks it received, and so .trunk keeps pointing at what the model ran on.
         self._patched: Optional[ttnn.Tensor] = None
         rows = sum(int(p.shape[-2]) for p in self._parts)
         assert rows >= self.window_len + self.num_levels, (
@@ -44,11 +41,7 @@ class MTPUnionEmbedding:
     def from_ids(
         cls, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor, embed_fn, *, num_levels: int
     ) -> "MTPUnionEmbedding":
-        """Gather the union from the two id tensors the H2D row was cut into. Neither is consumed.
-
-        Two gathers rather than one over a rejoined id row: the trunk gather's result is this chunk's
-        model input anyway.
-        """
+        """Gather the union from the two id tensors the H2D row was cut into. Neither is consumed."""
         window_len = int(chunk_ids.shape[-1])
         return cls(
             [embed_fn(chunk_ids), embed_fn(mtp_ids)],
@@ -75,11 +68,7 @@ class MTPUnionEmbedding:
 
     @property
     def trunk(self) -> ttnn.Tensor:
-        """This chunk's trunk embedding -- the leading ``window_len`` rows, as its own tensor.
-
-        The model input on the first rank, owned here because the D2D pack re-reads it after
-        ``forward`` returns. Asserts on a received union, whose leading rows need a copy to separate.
-        """
+        """This chunk's trunk embedding -- the leading ``window_len`` rows, as its own tensor."""
         assert self._parts, "union embedding already deallocated"
         rows = int(self._parts[0].shape[-2])
         assert rows == self.window_len, (
@@ -106,8 +95,7 @@ class MTPUnionEmbedding:
     def add_patch(self, select: ttnn.Tensor, embeddings: ttnn.Tensor) -> None:
         """Add ``select @ embeddings`` into the union: ``[sp, 1, U, 32*sp] @ [1, 1, 32*sp, H/tp]``.
 
-        ``select`` is one-hot, so this writes one embedding row into the union rows that hold the
-        generated position and leaves every other row exactly as it was.
+        ``select`` is one-hot, so this writes one embedding row and leaves every other row as it was.
         """
 
         def _patch(src):
@@ -138,11 +126,7 @@ class MTPUnionEmbedding:
         return ttnn.concat(self._parts, dim=-2), True
 
     def _apply(self, fn) -> None:
-        """Replace the union with ``fn(union)``, freeing what it replaces and the stale ROW_MAJOR copy.
-
-        Never touches ``_parts``: those are the received/gathered blocks, which the D2D pack and
-        ``.trunk`` still read.
-        """
+        """Replace the union with ``fn(union)``, freeing what it replaces and the stale ROW_MAJOR copy."""
         src, temp = self._current()
         out = fn(src)
         if temp or src is self._patched:
@@ -155,8 +139,7 @@ class MTPUnionEmbedding:
     def _row_major(self) -> ttnn.Tensor:
         """ROW_MAJOR copy of the joined union, materialized once and reused until invalidated.
 
-        A window starts at row ``k``, never a tile boundary, and ``ttnn.slice`` only cuts tiles, so
-        the rows have to be untilized. Generation invalidates this once per level.
+        A window starts at row ``k``, never a tile boundary, and ``ttnn.slice`` only cuts tiles.
         """
         if self._rows is None:
             joined, temp = self._current()
@@ -180,8 +163,6 @@ class MTPDeviceGeneration:
         assert self.selects, "generation needs one selector per level"
 
     def deallocate(self) -> None:
-        # `selects` is indexed by ABSOLUTE level and holds None below provided_levels -- those levels
-        # generate nothing, so no selector was ever built for them.
         for t in [self.keep_mask, *self.selects]:
             if t is not None:
                 ttnn.deallocate(t)
@@ -223,13 +204,9 @@ class MTPDeviceEmbedSource:
     def __call__(self, k: int, prev_normed):
         assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
         if self.generation is not None and k >= self.provided_levels:
-            # Strict level order, once each: the patches are incremental, so every earlier level's
-            # token must already be in the union before this one slices its window.
             assert k == self._next_level, f"generation must run levels in order; expected {self._next_level}, got {k}"
             self._next_level += 1
             if k == self.provided_levels:
-                # Once, before the first generated level. A provided level's row already holds the
-                # embedding of the id the socket delivered, and clearing it would lose it.
                 self.union.clear_rows(self.generation.keep_mask)
             gathered = self.generation.embed_fn(prev_normed)
             self.union.add_patch(self.generation.selects[k], gathered)

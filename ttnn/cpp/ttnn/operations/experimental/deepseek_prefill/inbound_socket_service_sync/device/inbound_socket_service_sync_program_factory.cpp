@@ -53,7 +53,6 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
 
     auto* backing_buffer = backing.buffer();
     auto* tokens_buffer = tokens_out.buffer();
-    // Output order is [tokens] (+ overhang) (+ metadata) -- see compute_output_specs.
     Buffer* overhang_buffer = has_overhang ? outputs[1].buffer() : nullptr;
     Buffer* metadata_buffer = has_metadata ? outputs[has_overhang ? 2 : 1].buffer() : nullptr;
 
@@ -83,8 +82,6 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     };
     TensorAccessorArgs(*backing_buffer).append_to(ct_args);
     TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
-    // The overhang accessor block is ALWAYS appended, standing in with the tokens buffer when the split
-    // is off, so the metadata block's compile-time offset in the kernel stays a fixed expression.
     TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);
@@ -121,8 +118,6 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
             start_page,                             // arg 5
             end_page,                               // arg 6
         };
-        // Fixed slots so the kernel's get_arg_val indices never depend on which optional outputs
-        // are enabled; a disabled one is a 0 the kernel never reads.
         if (has_overhang) {
             rt_args.emplace_back(overhang_buffer);  // arg 7: overhang output base address
         } else {

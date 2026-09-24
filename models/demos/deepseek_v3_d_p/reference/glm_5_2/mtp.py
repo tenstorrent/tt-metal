@@ -136,7 +136,6 @@ def glm_mtp_predictor_reference(
     shared_topk = None
     h = hidden
     for k, embed in enumerate(embeds):
-        # Level 1 always computes its own top-k; it is the level the sharing levels share FROM.
         inject = shared_topk if (index_share and k > 0) else None
         want_topk = index_share and k == 0
         result = glm_mtp_module_reference(
@@ -163,7 +162,6 @@ def glm_mtp_predictor_reference(
         outs.append(out)
         normeds.append(out_head_normed)
         kvpes.append(kvpe)
-        # H^k = shared_head.norm(h^k); mirrors TtMTPPredictor.forward.
         h = out_head_normed
 
     return xs, outs, normeds, torch.cat(kvpes, dim=0)

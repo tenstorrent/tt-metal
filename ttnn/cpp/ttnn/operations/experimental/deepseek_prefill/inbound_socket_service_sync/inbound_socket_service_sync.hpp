@@ -24,9 +24,8 @@ namespace ttnn::experimental {
 // tensor, copy it into a freshly-allocated device tensor, and ack the service
 // core.
 
-// Returns, in order: tokens (always, the arriving row minus its trailing `overhang_size_bytes`),
-// overhang (when `overhang_size_bytes > 0`, those trailing bytes as their own tensor), and metadata
-// (when `metadata_size_bytes > 0`). Both splits ride the one copy the op already performs.
+// Returns, in order: tokens (the arriving row minus its trailing `overhang_size_bytes`), overhang (when
+// `overhang_size_bytes > 0`), and metadata (when `metadata_size_bytes > 0`). Both splits ride the one copy.
 std::vector<Tensor> inbound_socket_service_sync(
     const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes = 0, uint32_t overhang_size_bytes = 0);
 

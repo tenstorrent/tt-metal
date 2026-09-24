@@ -1515,8 +1515,6 @@ class ttMLA:
         if kvpe_cache.geometry != self.kv_cache_geometry:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
 
-        # kv_only is fixed at construction for the trunk last layer. A caller that replays one fully
-        # built block across several roles asks for the same fast path per call instead.
         if self.kv_only or force_kv_only:
             return self._forward_kv_only(
                 hidden_states,
@@ -1945,8 +1943,6 @@ class ttMLA:
 
         # Sparse decode needs the index key cache for every full-indexer layer even though this fast path
         # skips query construction and scoring. Shared-indexer layers reuse a prior layer's selection and
-        # own no indexer weights/cache write; injected indices mean an earlier layer already wrote this
-        # slot, which is the gate the full forward puts on its own indexer.
         if self._has_indexer and not self._indexer_reuse and indexer_indices is None:
             assert index_kv_cache is not None, "sparse kv_only requires the caller-owned index key cache"
             self._indexer.write_k(

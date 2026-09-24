@@ -39,14 +39,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
-# Two distributed RMSNorms and one matmul, so it earns the op-level threshold from tests/pcc rather
-# than a block-level one. One value for both weight options.
 FUSED_MTP_PCC = 0.999
-# The MTP layer is an ordinary GLM MoE decoder block, so each regime takes the threshold it is already
-# gated at elsewhere; trained weights route more sensitively, hence the lower one.
+# Keyed by use_pretrained.
 MTP_MODULE_OUTPUT_PCC = {False: 0.98, True: 0.96}
-# The KVPE cache is written by the same ttMLA op whatever the model variant, so it earns the value
-# tests/test_prefill_block.py:74 measured for it (PrefillBlockThresholds.kvpe_kv / kvpe_pe).
 KVPE_PCC = 0.999
 
 SP_AXIS, TP_AXIS = 0, 1
@@ -55,9 +50,7 @@ SP_AXIS, TP_AXIS = 0, 1
 def _accumulated_pcc(base: float, upstream_levels: int, module_pcc: float) -> float:
     """``base``'s own PCC budget plus one block's worth of drift per upstream MTP level.
 
-    MTP is a recurrence, so device/reference disagreement is inherited rather than reset. A stated
-    model, not a measurement; every level's actual PCC is logged. ``module_pcc`` is one module's
-    error, so the ladder is twice as wide on the pretrained leg; level 1 is unaffected either way.
+    MTP is a recurrence, so device/reference disagreement is inherited rather than reset.
     """
     return 1.0 - ((1.0 - base) + upstream_levels * (1.0 - module_pcc))
 
@@ -148,8 +141,7 @@ def _mtp_level_inputs(num_levels: int, seq_len: int, hidden: int, seed: int = 7)
 def _glm52_config_for_mtp(config_only, seq_len: int, layer_idx: int):
     """A GLM-5.2 config with the MTP layer's indexer slot declared, safe to mutate.
 
-    ``copy.copy`` because ``config_only`` is lru_cached. Declaring the slot is not optional setup:
-    GLM-5.2's own map stops at the trunk, so without it the MTP layer's slot is one past the end.
+    ``copy.copy`` because ``config_only`` is lru_cached; GLM-5.2's own map stops at the trunk.
     """
     config = copy.copy(config_only)
     config.max_seq_len = seq_len
@@ -160,12 +152,8 @@ def _glm52_config_for_mtp(config_only, seq_len: int, layer_idx: int):
 def _glm_layer_weights(variant, config, layer_state_dict=None):
     """Layer-78 weights -- MLA + indexer, both layernorms, and the 256-expert MoE.
 
-    One set drives the device and the CPU reference alike, and (for the predictor) every level: MTP
-    is K activations over ONE weight module.
-
-    ``layer_state_dict`` is the checkpoint's real layer 78 (the ``mtp_layer_state_dict`` fixture),
-    already in this function's return shape; ``None`` -- what that fixture returns on the random leg
-    -- means seeded random weights instead.
+    One set drives the device, the CPU reference and every level. ``layer_state_dict`` is the
+    checkpoint's real layer 78; ``None`` means seeded random weights instead.
     """
     if layer_state_dict is not None:
         moe_weights = {
@@ -210,8 +198,6 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
     )
-    # Strided by the compacted full-indexer count, which the declared MTP slot is what makes big
-    # enough. One slot covers the whole MTP stack: a block's slot comes from its static layer_idx.
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
         mesh_device=mesh_device,
@@ -223,9 +209,6 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
         dtype=ttnn.bfloat8_b,
     )
     return kvpe_cache, rope_tensors, index_kv_cache
-
-
-# --- Device: the fused projection alone ---
 
 
 @pytest.mark.parametrize(
@@ -244,8 +227,6 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
     hidden = mtp_cfg.hidden_size
     embed, hid = _mtp_inputs(seq_len, hidden)
 
-    # The eh_proj TP shard, checked on the host before any device op: each chip's concatenated
-    # activation covers two disjoint global column ranges, which a plain mapper would not give it.
     tp = mesh_device.shape[TP_AXIS]
     permuted = eh_proj_to_tt_layout(mtp_state_dict["eh_proj"], tp)
     block = permuted.shape[0] // tp
@@ -279,9 +260,6 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
     ttnn.synchronize_device(mesh_device)
 
 
-# --- Device: the whole module ---
-
-
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
@@ -304,9 +282,7 @@ def test_mtp_module_pcc(
 ):
     """``TtMTPModule`` (fused projection + the MTP layer + ``shared_head.norm``) vs the reference.
 
-    Both weight options: ``random`` needs no checkpoint and pins the plumbing, ``pretrained`` is the
-    real layer 78 so the MoE gate routes by trained margins. The threshold follows the axis, and
-    either way this is standalone -- ``test_mtp_transformer_chunks.py`` only covers it behind the trunk.
+    Both weight options; ``test_mtp_transformer_chunks.py`` only covers this module behind the trunk.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
@@ -316,13 +292,11 @@ def test_mtp_module_pcc(
     hidden = config.hidden_size
     assert hidden == mtp_cfg.hidden_size
 
-    # Real layer 78 when pretrained, seeded random otherwise; device and reference get the same set.
     mla_weights, attn_norm_w, ffn_norm_w, moe_weights, layer_state_dict = _glm_layer_weights(
         variant, config, mtp_layer_state_dict
     )
     module_pcc = MTP_MODULE_OUTPUT_PCC[use_pretrained]
 
-    # --- device module ---
     logger.info(
         f"[mtp module] use_pretrained={use_pretrained} module_pcc={module_pcc} "
         f"building TtMTPModule layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
@@ -340,7 +314,6 @@ def test_mtp_module_pcc(
         topology=topology,
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        # Single-block test: layer_num=1 gives the single-shot cache write a valid layer count.
         layer_num=1,
     )
 
@@ -371,7 +344,6 @@ def test_mtp_module_pcc(
         moe_weights=moe_weights,
     )
 
-    # Most-local first: a failure at #1 is the projection, at #2 the layer, at #3 shared_head.norm.
     _, msg = assert_with_pcc(ref_x.unsqueeze(0), _from_device(tt_x, mesh_device), FUSED_MTP_PCC)
     logger.info(f"[mtp module] fused projection PCC: {msg}")
     _, msg = assert_with_pcc(ref_out.unsqueeze(0), _from_device(tt_out, mesh_device), module_pcc)
@@ -381,14 +353,9 @@ def test_mtp_module_pcc(
     ttnn.synchronize_device(mesh_device)
 
 
-# --- Device: K levels over one module ---
-
-
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-# K = 1 is the regression leg; 4 and 7 are the two that ship. One shared weight module is replayed
-# at every level, so a higher K costs levels and KV slots, not weights.
 @pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
@@ -411,8 +378,7 @@ def test_mtp_predictor_pcc(
     """``TtMTPPredictor`` at K = 1 and K = 4 vs ``glm_mtp_predictor_reference``, single galaxy.
 
     The per-slot KV assertions are the point: a level that wrote the wrong slot still produces the
-    right output single-shot, so nothing else catches a collision. Index sharing is asserted here too,
-    by object identity on the returned top-k. Both weight options.
+    right output single-shot. Index sharing is asserted by object identity on the returned top-k.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
@@ -444,8 +410,6 @@ def test_mtp_predictor_pcc(
         topology=topology,
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        # K levels share one block, so the block's "model layer count" is the MTP stack depth: it is
-        # what turns cache_layer_idx into the flat KV slot.
         layer_num=num_levels,
     )
 
@@ -465,13 +429,10 @@ def test_mtp_predictor_pcc(
         return_indexer_indices=True,
     )
 
-    # Only the first MTP level runs the indexer; the rest attend at its top-k. Checked by object
-    # identity, and it must hold: the layer owns one index-K slot, so a second run would overwrite it.
     if predictor.index_share and num_levels > 1:
         assert all(
             t is res.indexer_indices[0] for t in res.indexer_indices[1:]
         ), "index_share is on but a level ran its own indexer instead of attending at level 1's top-k"
-    # Sharing makes every entry the same object; freeing it twice is a double free.
     for tensor in {id(t): t for t in res.indexer_indices if t is not None}.values():
         ttnn.deallocate(tensor)
 
@@ -490,14 +451,13 @@ def test_mtp_predictor_pcc(
         index_share=predictor.index_share,
     )
 
-    tt_kv = res.kv_cache  # host torch already, [K, 1, seq, kv_lora_rank + qk_rope_head_dim]
+    tt_kv = res.kv_cache
     assert tt_kv is not None, "return_kv_cache=True must produce the host KVPE cache"
     assert tt_kv.shape[0] == num_levels == ref_kv.shape[0], f"{tuple(tt_kv.shape)} vs {tuple(ref_kv.shape)}"
     kv_lora_rank = config.kv_lora_rank
 
     for k in range(num_levels):
-        lvl = k + 1  # 1-based, as in the recurrence
-        # Most-local first within a level, and each threshold carries k levels of inherited drift.
+        lvl = k + 1
         _, msg = assert_with_pcc(
             ref_xs[k].unsqueeze(0),
             _from_device(res.x[k], mesh_device),
@@ -517,8 +477,6 @@ def test_mtp_predictor_pcc(
         )
         logger.info(f"[mtp predictor] L{lvl} shared_head.norm output PCC: {msg}")
 
-        # Slot k, split the way tests/test_prefill_block.py splits it: the latent and the RoPE halves
-        # fail in different ways, and a merged PCC lets a healthy latent hide a broken k_pe.
         ref_slot, tt_slot = ref_kv[k : k + 1], tt_kv[k : k + 1]
         kv_threshold = _accumulated_pcc(KVPE_PCC, k, module_pcc)
         _, kv_pcc = comp_pcc(ref_slot[..., :kv_lora_rank].float(), tt_slot[..., :kv_lora_rank].float())

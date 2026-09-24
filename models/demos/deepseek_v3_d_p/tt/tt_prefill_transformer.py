@@ -48,7 +48,7 @@ def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: in
     """Does this rank load the token-embedding table?
 
     The first rank embeds the prompt; a last rank running MTP needs the same table for the final
-    chunk's generated tokens. Asked from two places, so the rule lives here rather than twice.
+    chunk's generated tokens.
     """
     return bool(is_first_rank or (mtp_levels and is_last_rank))
 
@@ -120,7 +120,6 @@ class TtPrefillTransformer(LightweightModule):
         # Initialize fast cache checker for this directory
         init_checker(cache_path)
 
-        # Embedding: the first rank, plus any rank that embeds MTP windows.
         if rank_loads_embedding(
             is_first_rank, is_last_rank, mtp_levels
         ) and not TtParallelEmbedding.check_cache_complete(cache_path):
@@ -140,8 +139,6 @@ class TtPrefillTransformer(LightweightModule):
             ):
                 return False
 
-            # Final norm and LM head are MTP-only: h^0 is post-norm, and a generated level takes its
-            # lookahead token from the LM head. Loaded iff a predictor runs on this rank.
         if mtp_levels and is_last_rank and not kv_only_last_layer:
             if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
                 return False
@@ -182,8 +179,6 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
-        # The head is MTP-only and its weight cache is column-sharded, so column-parallel is the
-        # only strategy that matches what is on disk.
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
     ):
@@ -212,8 +207,6 @@ class TtPrefillTransformer(LightweightModule):
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
 
-        # Blocks take the full per-axis topology and split SP/TP internally; the norm and LM head
-        # are pure TP-axis collectives, so they take the scalar TP element.
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         sp_topology = topology[0] if isinstance(topology, tuple) else topology
 
@@ -225,12 +218,8 @@ class TtPrefillTransformer(LightweightModule):
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
-        # Needed before the embedding: whether this rank loads the table depends on it, and so does
-        # the KV-cache stride below.
         num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
 
-        # --- Embedding ---
-        # rank_loads_embedding() owns the rule, so the cache check and this build cannot disagree.
         self.embed = (
             TtParallelEmbedding(
                 mesh_device=mesh_device,
@@ -245,14 +234,10 @@ class TtPrefillTransformer(LightweightModule):
             else None
         )
 
-        # The KV-cache slot stride, in slots per user: MTP writes K more slots per user, so the cache
-        # is num_layers + K deep and every block, trunk and MTP alike, must stride by that number.
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
-        # cache_layer_idx in forward is the LOCAL slot, and layer_num is the per-user slot stride,
-        # which matches the cache's depth rather than this rank's layer count. first_layer_idx tells the
         # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
         # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
         # branch of MLA).
@@ -300,14 +285,12 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
-        # Final norm and LM head, built iff a predictor runs here: MTP needs both on device for h^0 and
-        # for a generated level's lookahead token. A kv_only last layer and a non-last rank skip them.
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
             TtDistributedRmsNorm(
                 mesh_device=mesh_device,
                 emb_dim=config.hidden_size,
-                torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+                torch_weight=state_dict.get("norm_weight"),
                 epsilon=config.rms_norm_eps,
                 cluster_axis=tp_axis,
                 num_links=num_links,
@@ -318,14 +301,12 @@ class TtPrefillTransformer(LightweightModule):
             if build_tail
             else None
         )
-        # LM head, same MTP-only gate as the norm above: a level at or above `provided_levels`
-        # generates its own lookahead token by argmax over these logits, then embeds it.
         self.lm_head = (
             TtLMHead(
                 mesh_device=mesh_device,
                 emb_dim=config.hidden_size,
                 vocab_size=config.vocab_size,
-                torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
+                torch_weight=state_dict.get("lm_head_weight"),
                 num_links=num_links,
                 topology=tp_topology,
                 is_balanced=is_balanced,
@@ -361,21 +342,15 @@ class TtPrefillTransformer(LightweightModule):
         self.is_balanced = is_balanced
         self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
-        # Sharding parameters, kept because MTP builds its per-chip masks and row selects from the
-        # same SP geometry the trunk input was sharded with (see _mtp_build_generation).
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
         self.mesh_shape = tuple(mesh_device.shape)
         self.sp_factor = mesh_device.shape[sp_axis]
         self.tp_factor = mesh_device.shape[tp_axis]
         self.emb_dim_per_chip = config.hidden_size // self.tp_factor
-        # Kept for MTP generation's SP broadcast (mtp_generate_embedding); every other collective
-        # this class owns is TP-axis and took its topology at construction.
         self.num_links = num_links
         self.sp_topology = sp_topology
 
-        # MTP is injected rather than built here: the transformer contributes only the embedding
-        # table, model.norm and the LM head.
         self.mtp_predictor = mtp_predictor
         self.num_mtp_levels = num_mtp_levels
         if mtp_predictor is not None:
@@ -410,8 +385,6 @@ class TtPrefillTransformer(LightweightModule):
                 f"layer_num={self.num_kvpe_cache_layers} (it reaches TtPrefillBlock through "
                 "TtMTPModule's **block_kwargs)"
             )
-            # Built above precisely because mtp_predictor is not None; assert the wiring rather
-            # than trust it, since a None table fails deep inside the first level's embed call.
             assert self.embed is not None, "MTP needs the embedding table on this rank (see --- Embedding ---)"
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
@@ -526,8 +499,6 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and would silently drop on_layer_complete"
         )
 
-        # Checked before the trunk runs: the source is not consumed until the end of this forward, so
-        # a mis-wired call would otherwise cost a whole trunk chunk that has already written KV.
         if mtp_union is not None:
             assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"
             assert mtp_union.num_levels == self.num_mtp_levels, (
@@ -559,8 +530,6 @@ class TtPrefillTransformer(LightweightModule):
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates["embed"] = self._to_host(h)
         else:
-            # Already the activation: the upstream rank's hidden state, or this chunk's own embedding
-            # on a first rank with input_is_embedded. Nothing to gather either way.
             h = token_ids
 
         # GLM-5.2 reuse: hold the most recent "full" layer's top-k indices and inject them into the
@@ -627,10 +596,8 @@ class TtPrefillTransformer(LightweightModule):
         if not self.is_last_rank:
             return h
 
-        # Norm and LM head exist on this rank iff MTP does. Without a predictor the KV cache is the whole
-        # product, so the final hidden state is dropped; a caller wanting logits runs the tail on the host.
         if self.norm is not None:
-            h = self.norm(h)  # h^0: the tensor level 1's `hnorm` consumes
+            h = self.norm(h)
 
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
@@ -644,14 +611,11 @@ class TtPrefillTransformer(LightweightModule):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
 
-        # `h` is h^0, the post-norm trunk hidden, and is still live: nothing above frees it.
         if mtp_union is not None:
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to place the rows it generates; the on-device "
                 "metadata path keeps actual_start on device and cannot answer that here"
             )
-            # The MTP slots are in this rank's migration stage, so they ack like any other layer. One
-            # replayed module would ack them all under the same id, hence the explicit base.
             mtp_out, mtp_generated = self.run_mtp(
                 h,
                 kvpe_cache,
@@ -676,20 +640,16 @@ class TtPrefillTransformer(LightweightModule):
         return intermediates
 
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
-        """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does not consume
-        ``tt_ids``. Public because the runner needs the same gather ``forward``'s first-rank embed
-        performs."""
+        """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does not consume ``tt_ids``."""
         return ttnn.unsqueeze_to_4D(self.embed(tt_ids))
 
     def mtp_generate_embedding(self, h_normed: ttnn.Tensor, actual_isl: int) -> ttnn.Tensor:
         """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded and
-        SP-broadcast so every chip can read it. The whole chain is one 32-row tile wide, and greedy
-        rather than sampled because the MTP chain is a draft whose reference is argmax."""
+        SP-broadcast so every chip can read it.
+        """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
-        logits, _ = self.lm_head(h_normed, actual_isl - 1)  # [1, 1, 32, vocab] (vocab/tp if column)
+        logits, _ = self.lm_head(h_normed, actual_isl - 1)
         if self.lm_head.is_column_parallel and self.tp_factor > 1:
-            # argmax needs the whole vocab on one chip; a column-parallel head leaves vocab/tp per chip.
-            # Gather on the vocab dim in TP-device order, the order logit_to_host concatenates them in.
             full = ttnn.all_gather(
                 logits,
                 dim=-1,
@@ -699,9 +659,9 @@ class TtPrefillTransformer(LightweightModule):
             )
             ttnn.deallocate(logits)
             logits = full
-        ids = ttnn.argmax(logits, dim=-1, keepdim=False)  # [1, 1, 32] uint32 ROW_MAJOR
+        ids = ttnn.argmax(logits, dim=-1, keepdim=False)
         ttnn.deallocate(logits)
-        emb = self.mtp_embed_ids(ids)  # [1, 1, 32, H/tp] bf16 TILE
+        emb = self.mtp_embed_ids(ids)
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
             return emb
@@ -715,8 +675,8 @@ class TtPrefillTransformer(LightweightModule):
         self, union, actual_isl: int, actual_start: int, actual_end: int, *, provided_levels: int = 0
     ):
         """The :class:`MTPDeviceGeneration` for levels ``[provided_levels, K)``: one keep mask and one
-        one-hot selector per generated level, all of it host-known before any level runs. A level below
-        ``provided_levels`` gets no selector and stays out of the mask, keeping what the socket sent."""
+        one-hot selector per generated level. A level below ``provided_levels`` gets no selector.
+        """
         assert not self.is_balanced, (
             "MTP device generation is block-cyclic only: under is_balanced a chip's union is not a "
             "contiguous position range, so 'the rows holding position actual_end + k' is not one row "
@@ -782,8 +742,6 @@ class TtPrefillTransformer(LightweightModule):
             generation=generation,
             provided_levels=provided_levels,
         )
-        # Forwarded here rather than by the caller: `actual_isl` is both a named parameter of this
-        # method and something every level's block needs, so passing both would be a duplicate kwarg.
         fwd_kwargs["actual_isl"] = actual_isl
         try:
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)

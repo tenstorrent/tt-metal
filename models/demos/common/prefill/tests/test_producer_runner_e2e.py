@@ -179,7 +179,6 @@ SCENARIOS = {
             "PREFILL_MTP_LEVELS": "4",
             "TT_GLM52_MTP_TTNN_CACHE": GLM52_MTP_TTNN_CACHE,
             "PREFILL_HF_MODEL": GLM52_HF_MODEL,
-            # Same calibrated trunk KVPE floor as the full-depth scenario above; MTP does not move it.
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
         "ready_timeout_s": 3600,

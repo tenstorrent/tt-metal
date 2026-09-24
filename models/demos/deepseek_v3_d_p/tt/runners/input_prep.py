@@ -30,8 +30,7 @@ def prepare_prefill_input_tensor(
 ) -> ttnn.Tensor:
     """Shard and upload one chunk's token IDs as a prefill input tensor.
 
-    An SP-sharded uint32 ROW_MAJOR DRAM tensor, ``[sp_factor, 1, len(token_ids) // sp_factor]``. MTP's
-    lookahead ids ride their own tensor, so an MTP run uploads an identical trunk chunk.
+    An SP-sharded uint32 ROW_MAJOR DRAM tensor, ``[sp_factor, 1, len(token_ids) // sp_factor]``.
     """
     isl_per_chip = len(token_ids) // sp_factor
     assert (
@@ -68,8 +67,6 @@ def prepare_prefill_mtp_tokens(
         f"got {len(token_ids)} ids, expected sp_factor*L + num_mtp_tokens = "
         f"{sp_factor}*{isl_per_chip} + {num_mtp_tokens}"
     )
-    # unfold gives the sp windows of length `num_mtp_tokens` at stride L, as a view; dropping the first L
-    # ids is what shifts window c from chip c's own rows to the ids just past them.
     rows = (
         torch.tensor(token_ids, dtype=torch.int64)[isl_per_chip:].unfold(0, num_mtp_tokens, isl_per_chip).unsqueeze(1)
     )
@@ -174,8 +171,8 @@ def build_mtp_generation_select(
     dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> ttnn.Tensor:
     """``[sp, 1, U, 32*sp]`` one-hot selector: ``select @ gathered`` broadcasts the generated embedding
-    onto exactly the union rows holding global position ``actual_end + level``. A matmul rather than a
-    scatter because no device scatter takes a runtime row index, and one-hot bf16 is bit-exact."""
+    onto exactly the union rows holding global position ``actual_end + level``.
+    """
     isl_per_chip = chunk_size // sp_factor
     union_len = isl_per_chip + num_mtp_tokens
     width = ttnn.TILE_SIZE * sp_factor

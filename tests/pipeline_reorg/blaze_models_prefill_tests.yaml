@@ -1656,7 +1656,6 @@
     bh_sc4:
       timeout: 60
       tier: 1
-      # Not a release gate yet; flip once MTP7 has been green twice.
       release_ready: false
   owner_id: U09L76N1MAT # Nenad Babin
   team: models

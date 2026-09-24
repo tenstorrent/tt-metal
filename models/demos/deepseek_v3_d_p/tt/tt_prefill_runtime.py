@@ -74,9 +74,7 @@ class TtPrefillRuntimeConfig:
     # The KV cache is the prefill output either way; this only trims the last layer.
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
-    # The same trim for the last MTP level: its hidden state feeds no further level and no LM head,
-    # so it only has to fill its KV slot. Serving wants it; the PCC tests, which compare every
-    # level's hidden output, build the predictor directly and keep its own default of off.
+    # The same trim for the last MTP level: it only has to fill its KV slot.
     kv_only_last_mtp_level: bool = True
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
     # slices from the drafter checkpoint; only the last rank builds the KV tail + cache.
@@ -84,8 +82,7 @@ class TtPrefillRuntimeConfig:
     # Drafter checkpoint dir. Empty falls back to $DFLASH_HF_MODEL, which is how the standalone tests that
     # build a runtime directly still reach one.
     dflash_checkpoint_path: str = ""
-    # Number of MTP prediction levels K to run after the trunk, 0 = off. K > 0 makes the runtime build
-    # a predictor, take the lookahead ids off the H2D row, and add K KV-cache slots per user.
+    # Number of MTP prediction levels K to run after the trunk, 0 = off.
     mtp_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
@@ -159,8 +156,6 @@ class TtPrefillRuntime:
         self.drafter = None
         self._dflash_k_cache = None
         self._dflash_v_cache = None
-        # GLM-5.2 MTP. Built in _build_model on the LAST rank only; every other rank just carries
-        # the chunk's union embedding across its socket.
         self.mtp_predictor = None
 
         assert (
@@ -228,8 +223,6 @@ class TtPrefillRuntime:
                 # Must be the dtype the experts will be BUILT at, or a cache at another dtype
                 # reports complete and the placeholder is loaded as the weights.
                 routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
-                # A last rank running MTP loads the embedding table too, for the tokens its own LM
-                # head generates. Asked from config because the predictor is not built until below.
                 mtp_levels=self.config.mtp_levels,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
@@ -251,11 +244,7 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
-        # Resolved before the transformer is constructed: the extra indexer slot changes how every
-        # trunk block sizes its index cache, and the predictor is a constructor argument.
         if self.config.mtp_levels:
-            # Declared on every rank: it states a model fact, not this rank's slice, and the rank that
-            # merges the chunk table reads it to span the MTP tail only the last rank contributes.
             enable_mtp_indexer_slot(self.hf_config)
             if self.config.is_last_rank:
                 self._build_mtp_predictor()
@@ -299,12 +288,10 @@ class TtPrefillRuntime:
     def _build_mtp_predictor(self) -> None:
         """Build this rank's ``TtMTPPredictor``. Last rank only.
 
-        Cache-only, with an empty state_dict -- dequantising the MTP layer's fp8 experts on every runner
-        start is not viable. The weights have their own cache tree, ``$TT_GLM52_MTP_TTNN_CACHE``.
+        Cache-only, with an empty state_dict; the weights have their own tree,
+        ``$TT_GLM52_MTP_TTNN_CACHE``.
         """
         k = self.config.mtp_levels
-        # The build is cache-only, so no checkpoint is needed; when one IS named, prefer from_pretrained,
-        # which also verifies the MTP layer really holds eh_proj before any weight is touched.
         path = os.environ.get("GLM52_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
         mtp_cfg = (
             MTPConfig.from_pretrained(path, num_levels=k)
@@ -322,8 +309,6 @@ class TtPrefillRuntime:
 
         num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
         experts_per_chip = self.config.model_cfg.NUM_ROUTED_EXPERTS // num_devices
-        # check_cache_complete resolves against the process-global checker dir, so point it at the MTP
-        # tree and then put it back. Checked first: a missing dir raises from inside FastCacheChecker.
         mtp_cached = mtp_cache_path.is_dir()
         if mtp_cached:
             init_checker(mtp_cache_path)
@@ -351,12 +336,11 @@ class TtPrefillRuntime:
             self.mesh_device,
             self.hf_config,
             self.config.model_cfg,
-            {"mtp": {}, "layer": {}},  # cache-only; asserted complete above
+            {"mtp": {}, "layer": {}},
             mtp_cfg,
             seq_len=self.config.chunk_size,
             num_levels=k,
             layer_idx=mtp_cfg.mtp_layer_idx,
-            # Level 1 writes the slot right after the trunk's last; the transformer asserts this.
             first_cache_slot=self.config.num_layers,
             kv_only_last_level=self.config.kv_only_last_mtp_level,
             tp_axis=self.config.tp_axis,
@@ -374,15 +358,11 @@ class TtPrefillRuntime:
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
             weight_cache_path=mtp_cache_path,
             cache_name_prefix=MTP_CACHE_PREFIX,
-            # Rank-local index-cache numbering, like every trunk block here: without it the MTP block
-            # falls back to global full-indexer ranks, off by this rank's base on any pipeline split.
             first_layer_idx=self.config.first_layer_idx,
             is_chunked=True,
             max_seq_len=self.config.max_seq_len,
             slot_num=self.config.num_users,
-            is_balanced=False,  # chunked prefill is block-cyclic, like every trunk block
-            # The flat KV slot is cache_user_id * layer_num + cache_layer_idx, so EVERY block in the
-            # model -- trunk and MTP alike -- must stride users by the cache's true depth.
+            is_balanced=False,
             layer_num=self.config.num_layers + k,
         )
 
@@ -495,8 +475,7 @@ class TtPrefillRuntime:
 
     def _mtp_pack_activation(self, hidden: ttnn.Tensor, union_parts: list) -> ttnn.Tensor:
         """Fuse this rank's output hidden and the chunk's union embedding into one D2D activation,
-        stacking them on the row axis. Consumes the hidden; the union's blocks stay owned by their
-        :class:`MTPUnionEmbedding`. Rows are the axis the D2D mapper shards, so the width is untouched.
+        stacking them on the row axis. Consumes the hidden, not the union's blocks.
         """
         packed = ttnn.concat([hidden, *union_parts], dim=2)
         ttnn.deallocate(hidden)
@@ -505,8 +484,7 @@ class TtPrefillRuntime:
     def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Inverse of :meth:`_mtp_pack_activation`. Does not free ``packed`` -- the caller does.
 
-        The split point comes from the config rather than from halving the height: a socket whose
-        height disagrees with this rank's K would otherwise put every window off by the difference.
+        The split point comes from the config rather than from halving the height.
         """
         rows = self.config.chunk_size // self.config.sp_factor
         union_rows = mtp_union_rows(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
@@ -534,8 +512,6 @@ class TtPrefillRuntime:
                 "the device MTP path needs the MTP ids alongside the chunk; the first rank cuts "
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
-            # Either tensor can carry MTP_PAD_TOKEN_ID. TtParallelEmbedding clamps it out of the gather,
-            # and the rows it substitutes are the ones the keep-mask clears, so it never reaches a window.
             union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
             ttnn.deallocate(input_tensor)
             ttnn.deallocate(mtp_tokens)
@@ -550,11 +526,7 @@ class TtPrefillRuntime:
         """Allocate a zero activation matching what the D2D socket delivers, per chip.
 
         Stand-in input for a non-first rank until the upstream sync op overwrites it in place. Both
-        packed forms are sized here -- DFlash widens, MTP heightens -- and the runner reuses this.
-
-        Dim 1 carries any extra per-token state a model ships across the boundary, so it composes
-        with both. `_prepare_trace` captures this buffer as the address-stable input, so a wrong
-        plane count here is baked into the replay.
+        packed forms are sized here -- DFlash widens, MTP heightens -- and `_prepare_trace` captures it.
         """
         rows = (
             d2d_activation_rows(
@@ -576,9 +548,9 @@ class TtPrefillRuntime:
         )
 
     def _num_mtp_tokens(self) -> int:
-        """MTP lookahead ids the H2D row carries past this chip's trunk shard. Same function the
-        runner cuts that row with and the producer builds its rows with, so a locally-built input
-        matches a socket-delivered one exactly. 0 when MTP is off."""
+        """MTP lookahead ids the H2D row carries past this chip's trunk shard. Same function the runner
+        cuts that row with and the producer builds its rows with. 0 when MTP is off.
+        """
         return num_mtp_tokens(self.config.mtp_levels)
 
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
@@ -598,8 +570,8 @@ class TtPrefillRuntime:
 
     def make_mtp_tokens_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build the MTP lookahead companion to :meth:`make_chunk_input`, out of the SAME
-        `chunk_size + num_mtp_tokens` list. First rank only -- nobody else receives ids, and a mismatch
-        between the two is invisible downstream: right shape, right dtype, wrong text."""
+        `chunk_size + num_mtp_tokens` list. First rank only.
+        """
         assert self.config.is_first_rank, "only the first rank builds an MTP token input"
         return prepare_prefill_mtp_tokens(
             token_ids,
@@ -628,8 +600,6 @@ class TtPrefillRuntime:
             self._kv_cache = kv_caches  # kept so capture_trace() can record after the ack is registered
             self._prepare_trace(kv_caches)
         else:
-            # Warm every program the serving loop will run, which under MTP means the token tensor too:
-            # the union gather, the pack and the window slices have shapes that need it present.
             n_mtp = self._num_mtp_tokens()
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
             stream = [0] * (chunk + n_mtp)
@@ -936,8 +906,6 @@ class TtPrefillRuntime:
             # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
             # path does below — publish this chunk's id instead; the captured callback built by
             # set_layer_completion_sink() reads it at replay time.
-            # `config.mtp_levels` is checked as well as the tensor: `mtp_tokens` is legitimately None on
-            # every rank but the first, so the tensor alone would let a replay silently skip every level.
             assert mtp_tokens is None and not self.config.mtp_levels, (
                 "use_trace does not support MTP: the union is built per chunk (fresh addresses) and the "
                 "levels run after the captured segment, neither of which survives a capture; run with "
@@ -991,8 +959,6 @@ class TtPrefillRuntime:
 
         model_input = input_tensor
         mtp_union = None
-        # Set when model_input IS union.trunk: the union owns that tensor and the D2D pack re-reads
-        # it after forward returns, so the unconditional free below must skip it.
         mtp_owns_input = False
         if self.config.dflash_enabled:
             self.drafter.reset()
@@ -1016,8 +982,6 @@ class TtPrefillRuntime:
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
-            # Only the rank that BUILT a predictor runs the levels; an upstream rank just carries the
-            # union across its socket, so it must not hand it to a transformer that has none.
             mtp_union=mtp_union if self.mtp_predictor is not None else None,
             provided_levels=provided_levels,
             on_mtp_complete=on_mtp_complete,
@@ -1052,8 +1016,6 @@ class TtPrefillRuntime:
             if self.config.is_last_rank:
                 mtp_union.deallocate()
                 return None
-            # Non-last rank: re-stack the union under the hidden so it reaches the rank that runs MTP.
-            # A middle rank just passes through what it received.
             packed = self._mtp_pack_activation(out, mtp_union.parts)
             mtp_union.deallocate()
             return packed
@@ -1181,8 +1143,6 @@ class TtPrefillRuntime:
         index_cache = kv_caches.index
         if index_cache is not None:
             first_full = full_indexer_rank(self.hf_config, first_layer_idx)
-            # Same expression the adapter sizes the cache with, MTP tail included: with the MTP slot
-            # declared, `full` at index num_layers makes this one more than the trunk's rank count.
             count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers + mtp_tail) - first_full
             slots_per_user = index_cache.shape[0] // self.config.num_users
             if slots_per_user != count_full:
@@ -1324,11 +1284,8 @@ class TtPrefillRuntime:
             from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
 
             # The merged table spans EVERY stage, so the map covers the model's layers, not this rank's slice.
-            # The no-stage_layouts fallback must span the MTP tail too, or the map is a row short.
             mtp_tail = self.config.mtp_levels if self.config.is_last_rank else 0
             total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers + mtp_tail
-            # MTP widens the KVPE stage by K slots that own no indexer, and `indexer_layer_is_reused`
-            # reports False past the end of `indexer_types` -- clamp so those slots stay out of the map.
             total_layers = min(total_layers, len(self.hf_config.indexer_types))
             index_layer_ids = [
                 layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
@@ -1373,8 +1330,6 @@ class TtPrefillRuntime:
             "producer read-back to validate a sparse model's cache."
         )
         mesh_device = self.mesh_device
-        # The `.kvpe` per-slot stride is the cache's DEPTH, not this rank's layer count: with MTP on the
-        # two differ by K, and striding by the smaller one makes every slot but 0 read the wrong region.
         num_layers = getattr(self.model, "num_kvpe_cache_layers", self.config.num_layers)
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
         # rows may be packed (SCALED_FP8), so decode them with `unpack_host` to logical [latent || RoPE] —

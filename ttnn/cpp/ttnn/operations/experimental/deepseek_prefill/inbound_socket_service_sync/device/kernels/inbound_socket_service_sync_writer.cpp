@@ -18,8 +18,7 @@
 //      local L1 to the metadata-output tensor (only the worker owning page 0).
 //   3. Copy this worker's [start_page, end_page) slice of the backing tensor
 //      into the output tensor, page-by-page, via a single-slot scratch CB.
-//      With `overhang_size_bytes > 0` each staged page drains into TWO tensors,
-//      the head to `tokens` and the tail to `overhang`, on the same read.
+//      With `overhang_size_bytes > 0` a page drains into TWO tensors, head to `tokens`, tail to `overhang`.
 //   4. Atomic-inc the consumed_counter on the service core. The service core
 //      polls for exactly `num_workers` acks per transfer.
 
@@ -43,12 +42,12 @@ constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(3);
 // consumed
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(5);
-// Optional split. 0 = the whole page goes to `tokens`, i.e. the unsplit path.
+// 0 = no split: the whole page goes to `tokens`.
 constexpr uint32_t overhang_size_bytes = get_compile_time_arg_val(6);
 constexpr uint32_t trunk_size_bytes = page_size - overhang_size_bytes;
 
-// Page copy, a template for the same reason as snapshot_metadata below: an `if constexpr` in the
-// non-template kernel_main still type-checks its discarded branch, so the accessor would be built.
+// Templated for the same reason as snapshot_metadata: an `if constexpr` in the non-template kernel_main
+// still type-checks its discarded branch, so the unused accessor would be built.
 template <uint32_t OverhangSize, uint32_t OverhangAccessorOffset, typename BackingT, typename OutputT>
 inline void copy_pages(
     const Noc& noc,
@@ -57,8 +56,6 @@ inline void copy_pages(
     CircularBuffer& scratch_cb,
     uint32_t start_page,
     uint32_t end_page) {
-    // read_barrier before write so no write is issued off an unwritten L1 region;
-    // write_barrier before reusing the single CB slot for the next page.
     if constexpr (OverhangSize == 0) {
         for (uint32_t p = start_page; p < end_page; ++p) {
             noc.async_read(backing, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
@@ -72,8 +69,6 @@ inline void copy_pages(
         for (uint32_t p = start_page; p < end_page; ++p) {
             noc.async_read(backing, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            // Both destinations use the SAME page id: the outputs differ from the backing tensor only
-            // in the width of their last dim, so page p of each holds its piece of backing page p.
             noc.async_write(scratch_cb, tokens_out, trunk_size_bytes, {.offset_bytes = 0}, {.page_id = p});
             noc.async_write(scratch_cb, overhang_out, OverhangSize, {.offset_bytes = trunk_size_bytes}, {.page_id = p});
             noc.async_write_barrier();
@@ -113,8 +108,6 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(5);
     const uint32_t end_page = get_arg_val<uint32_t>(6);
 
-    // TensorAccessorArgs blocks, packed back-to-back from CT-arg index 7: backing, tokens, overhang,
-    // then metadata when enabled. The overhang block is always present, which fixes the next offset.
     constexpr auto backing_accessor_args = TensorAccessorArgs<7>();
     constexpr auto output_accessor_args = TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
     constexpr uint32_t overhang_accessor_offset = output_accessor_args.next_compile_time_args_offset();
@@ -143,8 +136,7 @@ void kernel_main() {
     //    holds the same metadata (multicast), so picking one is fine.
     snapshot_metadata<metadata_size_bytes, metadata_accessor_offset>(noc, start_page);
 
-    // 3. Copy this worker's slice of the backing tensor into the output(s), using the scratch CB as
-    //    a per-page staging area.
+    // 3. Copy this worker's slice of the backing tensor into the output(s).
     copy_pages<overhang_size_bytes, overhang_accessor_offset>(noc, backing, output, scratch_cb, start_page, end_page);
 
     // 4. Ack the service core. Exactly one inc per worker per transfer; the

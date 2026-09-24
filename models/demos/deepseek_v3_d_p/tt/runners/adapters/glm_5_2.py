@@ -45,8 +45,6 @@ class GLM52Adapter(MLAPrefillAdapter):
     l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
 
-    # GLM-5.2 is the only model here that carries MTP weights, so it is the only one
-    # PREFILL_MTP_LEVELS may be set for.
     supports_mtp = True
 
     def load_hf_config(self):
@@ -86,8 +84,6 @@ class GLM52Adapter(MLAPrefillAdapter):
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis
-        # MTP adds K KV slots per user on the rank that runs the levels; the single indexer slot for
-        # the shared MTP layer is a model fact, so every rank declares it (idempotent, precedes reads).
         mtp_levels = params.mtp_levels if params.is_last_rank else 0
         if params.mtp_levels:
             enable_mtp_indexer_slot(hf_config)

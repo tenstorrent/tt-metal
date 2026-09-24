@@ -4,8 +4,8 @@
 
 """Config for one GLM-5.2 MTP module.
 
-Values are read straight out of the HF checkout's config.json: glm_moe_dsa is not AutoConfig-loadable
-on the transformers versions here, which is why the GLM-5.2 runner adapter also loads it by hand.
+Values are read straight out of the HF checkout's config.json: glm_moe_dsa is not
+AutoConfig-loadable on the transformers versions here.
 """
 
 from __future__ import annotations
@@ -50,8 +50,7 @@ class MTPConfig:
     def from_hf_config(cls, c, *, num_levels: int | None = None) -> "MTPConfig":
         """Build from an already-loaded HF config, either a mapping or an attribute object.
 
-        ``num_levels`` defaults to 1 rather than to ``num_nextn_predict_layers``, which counts weight
-        modules.
+        ``num_levels`` defaults to 1, not to ``num_nextn_predict_layers``, which counts weight modules.
         """
         get = c.get if isinstance(c, dict) else (lambda k, d=None: getattr(c, k, d))
         d = cls()
@@ -59,8 +58,6 @@ class MTPConfig:
         return cls(
             hidden_size=int(get("hidden_size", d.hidden_size)),
             rms_norm_eps=float(get("rms_norm_eps", d.rms_norm_eps)),
-            # MTP weights sit one past the last trunk layer. from_pretrained() verifies this against
-            # the checkpoint index; from a bare config object it is arithmetic and stays unchecked.
             mtp_layer_idx=num_hidden_layers,
             num_weight_modules=int(get("num_nextn_predict_layers", d.num_weight_modules)),
             num_levels=int(num_levels) if num_levels is not None else d.num_levels,
@@ -72,8 +69,7 @@ class MTPConfig:
     def from_pretrained(cls, path: str, *, num_levels: int | None = None) -> "MTPConfig":
         """Build from a HF checkpoint directory and confirm the MTP weights are really there.
 
-        ``mtp_layer_idx`` is derived from the layer count, then checked against the checkpoint's tensor
-        index, so a checkout without MTP weights fails here with a readable message.
+        ``mtp_layer_idx`` is derived from the layer count, then checked against the checkpoint's index.
         """
         with open(os.path.join(path, "config.json")) as f:
             cfg = json.load(f)

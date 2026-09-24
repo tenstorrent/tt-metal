@@ -88,9 +88,7 @@ def glm_decoder_layer_reference(
     attn_norm_out = rms_norm(x, attn_norm_weight, config.rms_norm_eps)
 
     ref = SparseMLAReference(config, mla_weights, seq_len=seq_len) if mla_ref is None else mla_ref
-    mla_out = ref.forward(
-        attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk
-    )  # [1, seq, hidden]
+    mla_out = ref.forward(attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk)
     x = x + mla_out
 
     ffn_norm_out = rms_norm(x, ffn_norm_weight, config.rms_norm_eps)

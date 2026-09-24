@@ -37,8 +37,7 @@ def glm52_checkpoint_path() -> str | None:
 def random_mtp_state_dict(cfg: MTPConfig, seed: int = 42) -> dict:
     """Seeded random MTP weights, same conventions as the GLM block test's helpers.
 
-    ``eh_proj`` is generated in HF layout ``[H, 2H]``, un-transposed, exactly as the checkpoint
-    stores it, so the random and pretrained legs feed the module identically.
+    ``eh_proj`` is generated in HF layout ``[H, 2H]``, un-transposed, as the checkpoint stores it.
     """
     g = torch.Generator().manual_seed(seed)
     h = cfg.hidden_size
@@ -79,8 +78,7 @@ def mtp_cfg(use_pretrained) -> MTPConfig:
 def mtp_state_dict(use_pretrained, mtp_cfg) -> dict:
     """The four MTP tensors in HF layout, fed identically to the device module and the CPU reference.
 
-    Pretrained loads only the shards that hold them (four tensors out of 141 shards), so this leg is
-    cheap -- it does not touch the layer's MLA or its 256 fp8 experts.
+    Pretrained opens only the shards that hold them, not the layer's MLA or its 256 fp8 experts.
     """
     if not use_pretrained:
         return random_mtp_state_dict(mtp_cfg)
@@ -98,13 +96,11 @@ def glm_layer_state_dict(config, model_dir: str, layer_idx: int, num_routed_expe
     """One GLM decoder layer's real weights, in ``TtPrefillBlock``'s state_dict format.
 
     The experts and the MLA projections are fp8 with a per-block scale, undone here so one set of
-    bf16 tensors feeds both the device and the CPU reference. ~19 GiB resident for the experts.
+    bf16 tensors feeds both the device and the CPU reference.
     """
     model_dir = str(model_dir)
     prefix = f"model.layers.{layer_idx}."
 
-    # MLA + indexer through the sparse-MLA loader: it emits the canonical dict that feeds BOTH
-    # ttMLA and SparseMLAReference, and unlike the block extractor it carries GLM's indexer tensors.
     weight_map = json.load(open(Path(model_dir) / "model.safetensors.index.json"))["weight_map"]
     shards = sorted({v for k, v in weight_map.items() if k.startswith(f"{prefix}self_attn.")})
     assert shards, f"no self_attn tensors for layer {layer_idx} in {model_dir}"
@@ -140,16 +136,8 @@ def glm_layer_state_dict(config, model_dir: str, layer_idx: int, num_routed_expe
 def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     """The MTP layer's own DECODER-block weights: MLA + indexer, both norms, the 256-expert MoE.
 
-    The other, much larger half of ``mtp_state_dict``, which is only the four MTP-specific tensors.
-    Measured on host for layer 78: 27.5 s and 25.7 GB peak RSS (one sample, warm page cache) -- less
-    than the seeded random equivalent, which spends 69.6 s generating the same ~7 GB of expert
-    weights. Function-scoped, so every case pays it; promote to module scope if it ever dominates a leg.
-
-    ``None`` on the random leg -- it loads nothing and skips nothing -- so a test can request this and
-    carry BOTH weight options on one axis, handing the result straight to a helper that builds seeded
-    weights when it is None (``test_mtp._glm_layer_weights``). A test that is meaningful only with real
-    weights states that by parametrizing ``use_pretrained=[True]``, which is where the skip lives: on
-    the checkpoint's absence below, not on the axis.
+    ``None`` on the random leg, so a test can carry both weight options on one axis and hand the
+    result to a helper that builds seeded weights when it is None.
     """
     if not use_pretrained:
         return None

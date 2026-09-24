@@ -4,8 +4,7 @@
 
 """Host-side helpers for the GLM-5.2 MTP module: checkpoint loading and the ``eh_proj`` TP layout.
 
-Deliberately free of any ``ttnn`` import so the ``eh_proj`` shard math can be unit-tested on a host
-with no device and no built ttnn.
+Free of any ``ttnn`` import, so the shard math is unit-testable on a host with no device.
 """
 
 from __future__ import annotations
@@ -24,8 +23,7 @@ MTP_CACHE_ENV = "TT_GLM52_MTP_TTNN_CACHE"
 The MTP weights are keyed on layer 78, which the trunk cache does not carry, so they live in their
 own tree."""
 
-# The four non-decoder-layer tensors an MTP module adds on top of a normal GLM decoder layer.
-# `shared_head.norm` is the only one on the OUTPUT side.
+# The four non-decoder-layer tensors an MTP module adds to a GLM decoder layer.
 MTP_TENSOR_SUFFIXES = {
     "eh_proj.weight": "eh_proj",
     "enorm.weight": "enorm",
@@ -44,15 +42,14 @@ def eh_proj_to_tt_layout(eh_proj_weight: torch.Tensor, tp: int) -> torch.Tensor:
     assert w_in == 2 * h_out, f"eh_proj must be [H, 2H], got {tuple(eh_proj_weight.shape)}"
     assert tp >= 1 and h_out % tp == 0, f"tp={tp} must divide hidden={h_out}"
 
-    w_t = eh_proj_weight.t().contiguous()  # [2H, H] -- rows 0..H-1 = enorm half, H..2H-1 = hnorm half
+    w_t = eh_proj_weight.t().contiguous()
     return w_t.view(2, tp, h_out // tp, h_out).transpose(0, 1).contiguous().reshape(2 * h_out, h_out)
 
 
 def eh_proj_expected_chip_shard(eh_proj_weight: torch.Tensor, tp: int, chip: int) -> torch.Tensor:
     """The ``[2H/tp, H]`` block chip ``chip`` must hold, derived straight from the HF layout.
 
-    Written independently of :func:`eh_proj_to_tt_layout` so that comparing the two is a real
-    cross-check rather than a restatement.
+    Written independently of :func:`eh_proj_to_tt_layout`, so comparing the two is a real cross-check.
     """
     h_out, w_in = eh_proj_weight.shape
     assert w_in == 2 * h_out, f"eh_proj must be [H, 2H], got {tuple(eh_proj_weight.shape)}"
@@ -60,7 +57,7 @@ def eh_proj_expected_chip_shard(eh_proj_weight: torch.Tensor, tp: int, chip: int
     block = h_out // tp
     e_cols = eh_proj_weight[:, chip * block : (chip + 1) * block]
     h_cols = eh_proj_weight[:, h_out + chip * block : h_out + (chip + 1) * block]
-    return torch.cat([e_cols, h_cols], dim=1).t().contiguous()  # [2H/tp, H]
+    return torch.cat([e_cols, h_cols], dim=1).t().contiguous()
 
 
 def _resolve_weight_map(path: str) -> tuple[dict[str, str], bool]:
@@ -80,8 +77,7 @@ def _resolve_weight_map(path: str) -> tuple[dict[str, str], bool]:
 def mtp_layer_idx_from_config(path: str) -> int:
     """The layer index the MTP weights live on: ``num_hidden_layers`` (78 for GLM-5.2).
 
-    Reads ``config.json`` directly rather than via ``AutoConfig`` -- ``glm_moe_dsa`` is not
-    AutoConfig-loadable (see ``runners/adapters/glm_5_2.py::load_hf_config``).
+    Reads ``config.json`` directly -- ``glm_moe_dsa`` is not AutoConfig-loadable.
     """
     with open(os.path.join(path, "config.json")) as f:
         cfg = json.load(f)
@@ -126,8 +122,6 @@ def load_mtp_state_dict(path: str, *, layer_idx: int | None = None) -> dict[str,
         f"Expected e.g. {prefix}eh_proj.weight — check num_hidden_layers and that this is an "
         "MTP-carrying checkout."
     )
-    # eh_proj is BF16 in the checkpoint with no weight_scale_inv, unlike every MLA/MoE weight on the
-    # same layer. If that ever changes an fp8 dequant path is needed and the raw load below is wrong.
     assert sd["eh_proj"].dtype == torch.bfloat16, (
         f"eh_proj expected bfloat16 (no dequant path), got {sd['eh_proj'].dtype}; "
         f"{prefix}eh_proj.weight_scale_inv present in checkpoint?"
@@ -146,8 +140,6 @@ def mtp_indexer_types(config, mtp_layer_idx: int | None = None) -> list:
     if mtp_layer_idx is None:
         mtp_layer_idx = int(getattr(config, "num_hidden_layers", None) or len(types))
     while len(types) <= mtp_layer_idx:
-        # "full": the MTP layer has its own indexer weights, so it computes its own top-k. Sharing
-        # is across MTP levels, not with the trunk.
         types.append("full")
     return types
 
@@ -155,8 +147,8 @@ def mtp_indexer_types(config, mtp_layer_idx: int | None = None) -> list:
 def enable_mtp_indexer_slot(config, mtp_layer_idx: int | None = None) -> int:
     """Extend ``config.indexer_types`` in place via :func:`mtp_indexer_types`. Idempotent.
 
-    Returns the MTP layer index that is now covered. Note this mutates ``config``; callers holding a
-    shared/cached config object (``tests/conftest.py::config_only`` is ``lru_cache``d) should copy first.
+    Returns the MTP layer index that is now covered. Mutates ``config``; callers holding a shared
+    or cached config object should copy first.
     """
     types = mtp_indexer_types(config, mtp_layer_idx)
     config.indexer_types = types

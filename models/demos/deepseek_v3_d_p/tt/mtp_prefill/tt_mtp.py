@@ -64,7 +64,6 @@ class TtFusedMTP(LightweightModule):
         self.tp_axis = tp_axis
         self.tp = mesh_device.shape[tp_axis]
         self.num_links = num_links
-        # Every collective here runs on the TP axis, so a per-axis tuple resolves to that entry.
         self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.compute_kernel_config = compute_kernel_config
 
@@ -119,11 +118,9 @@ class TtFusedMTP(LightweightModule):
     ) -> ttnn.Tensor:
         """Transpose, permute, shard and optionally cache ``eh_proj``.
 
-        With ``device=None`` this only writes cache files, so the bytes are produced by the same code
-        that later consumes them.
+        With ``device=None`` this only writes cache files.
         """
         h = hidden_size
-        # Shard the contracted dim over the TP axis and replicate over the other.
         dims = (None, -2) if tp_axis == 1 else (-2, None)
 
         def _to_ttnn(tensor: torch.Tensor, name: str) -> ttnn.Tensor:
@@ -198,14 +195,11 @@ class TtFusedMTP(LightweightModule):
         h = self.hnorm(hidden)
 
         x = ttnn.concat([e, h], dim=-1)
-        # Freed as the consumer is enqueued: the predictor replays this per level, so anything left
-        # behind is multiplied by K. `embed` and `hidden` belong to the caller.
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         out_full = ttnn.matmul(x, self.eh_proj, compute_kernel_config=self.compute_kernel_config)
         ttnn.deallocate(x)
 
-        # Contracted dim was sharded, so every chip holds a full-width partial sum.
         if self.mesh_device.shape[self.tp_axis] > 1:
             out = ttnn.reduce_scatter(
                 out_full, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
@@ -283,7 +277,6 @@ class TtMTPModule(LightweightModule):
             torch_weight=mtp_weights.get("shared_head_norm"),
             cluster_axis=tp_axis,
             num_links=num_links,
-            # TtPrefillBlock resolves a per-axis topology itself; a bare norm needs it resolved.
             topology=self.fused.topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"{cache_name_prefix}.shared_head_norm",
@@ -303,7 +296,6 @@ class TtMTPModule(LightweightModule):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.shared_head_norm"):
             return False
-        # The MTP layer is always MoE, never dense.
         return TtPrefillBlock.check_cache_complete(
             cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
         )
@@ -311,9 +303,8 @@ class TtMTPModule(LightweightModule):
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor, rope_tensors: dict, kvpe_cache, **fwd_kwargs):
         """Run one MTP level.
 
-        Returns ``(x, out, out_head_normed, *block_extras)``. ``out_head_normed`` is what the next
-        level consumes; ``out`` is returned beside it as its own comparison point. Both are None
-        when the level runs kv_only.
+        Returns ``(x, out, out_head_normed, *block_extras)``; ``out_head_normed`` is what the next level
+        consumes. Both are None when the level runs kv_only.
         """
         x = self.fused(embed, hidden)
         out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
@@ -323,13 +314,13 @@ class TtMTPModule(LightweightModule):
 
 # Forward kwargs the predictor owns; passing one of these through would break the level loop.
 _RESERVED_FWD_KWARGS = (
-    "cache_layer_idx",  # the per-level KV slot
-    "indexer_indices",  # level 1's top-k, injected into the later levels
-    "return_indexer_indices",  # promoted to a named argument
-    "return_kv_cache",  # promoted to a named argument
-    "return_kv_intermediates",  # would change TtPrefillBlock's return arity
-    "ack_layer_idx",  # renumbered per level off layer_ack_base
-    "force_kv_only",  # set by the last-level policy
+    "cache_layer_idx",
+    "indexer_indices",
+    "return_indexer_indices",
+    "return_kv_cache",
+    "return_kv_intermediates",
+    "ack_layer_idx",
+    "force_kv_only",
 )
 
 
@@ -337,11 +328,11 @@ _RESERVED_FWD_KWARGS = (
 class MTPPredictorOutput:
     """Per-level results from :meth:`TtMTPPredictor.forward`, ordered by level."""
 
-    x: list  # the fused-projection output, i.e. the decoder layer's input
-    out: list  # decoder-layer output, before shared_head.norm (None for a kv_only level)
-    out_head_normed: list  # the level's output, what the next level consumes (None if kv_only)
-    kv_cache: object = None  # host KVPE for every slot, or None
-    indexer_indices: list | None = None  # per-level top-k, or None
+    x: list  # fused-projection output, the decoder layer's input
+    out: list  # decoder-layer output, before shared_head.norm
+    out_head_normed: list  # what the next level consumes
+    kv_cache: object = None
+    indexer_indices: list | None = None
 
 
 class TtMTPPredictor(LightweightModule):
@@ -378,12 +369,9 @@ class TtMTPPredictor(LightweightModule):
         assert self.num_levels >= 1, f"num_levels must be >= 1, got {self.num_levels}"
         self.first_cache_slot = int(first_cache_slot)
         self.index_share = self.mtp_config.index_share_for_mtp_iteration if index_share is None else bool(index_share)
-        # The last level's hidden feeds no further level and no LM head, so only its KV slot is wanted.
-        # Off by default: the PCC tests compare every level's output against the CPU reference.
         self.kv_only_last_level = bool(kv_only_last_level)
         self.mesh_device = mesh_device
 
-        # One module, replayed: rebuilding per level would re-upload the MTP layer's experts each time.
         self.module = TtMTPModule(
             mesh_device,
             config,
@@ -416,9 +404,8 @@ class TtMTPPredictor(LightweightModule):
     ) -> MTPPredictorOutput:
         """Run every level, chaining each level's normed output into the next.
 
-        ``get_embed(k, hidden)`` supplies level k's embedding lazily. Each embedding is deallocated
-        once its level has run. ``layer_ack_base`` numbers level k's migration ack ``base + k``: one
-        replayed module would otherwise ack every level under the same layer.
+        ``get_embed(k, hidden)`` supplies level k's embedding lazily. ``layer_ack_base`` numbers level
+        k's migration ack ``base + k``.
         """
         for name in _RESERVED_FWD_KWARGS:
             if name in fwd_kwargs:
@@ -431,10 +418,8 @@ class TtMTPPredictor(LightweightModule):
         h = hidden
 
         for k in range(self.num_levels):
-            # h is H^k here: the trunk output at k=0, the previous level's chained output after.
             embed = get_embed(k, h)
             is_last = k == self.num_levels - 1
-            # Level 1 always computes its own top-k; the others share it.
             want_indices = return_indexer_indices or (share and k == 0)
             kwargs = dict(fwd_kwargs)
             kwargs["cache_layer_idx"] = self.first_cache_slot + k
@@ -446,13 +431,10 @@ class TtMTPPredictor(LightweightModule):
                 kwargs["return_indexer_indices"] = True
             if is_last and return_kv_cache:
                 kwargs["return_kv_cache"] = True
-            # Level 0 under sharing owns the top-k the other levels take, so it only goes kv_only when
-            # it is not also that producer -- which it is only at num_levels == 1.
             if is_last and self.kv_only_last_level and not (share and k == 0):
                 kwargs["force_kv_only"] = True
 
             x, out, out_head_normed, *extras = self.module.forward(embed, h, rope_tensors, kvpe_cache, **kwargs)
-            # The fused projection reads `embed` once, so it is dead after the module call.
             ttnn.deallocate(embed)
             if want_indices:
                 kv, indices = extras
@@ -460,7 +442,6 @@ class TtMTPPredictor(LightweightModule):
                 (kv,) = extras
                 indices = None
             if share and k == 0:
-                # Without this the later levels would silently compute their own top-k instead.
                 assert indices is not None, "index_share is on but level 1's MLA returned no top-k indices"
                 shared_indices = indices
 
@@ -470,14 +451,11 @@ class TtMTPPredictor(LightweightModule):
             per_level_indices.append(indices)
             if is_last:
                 kv_host = kv
-            # The next level's hnorm consumes the normed output, not the raw block output.
             h = out_head_normed
 
         if shared_indices is not None and not return_indexer_indices:
-            # The holder frees the shared indices once the last consumer has run.
             ttnn.deallocate(shared_indices)
 
-        # With sharing on, every entry after the first is level 1's tensor: free unique objects only.
         return MTPPredictorOutput(
             x=xs,
             out=outs,

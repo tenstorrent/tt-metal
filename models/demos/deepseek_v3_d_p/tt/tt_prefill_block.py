@@ -619,8 +619,6 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
-        # Effective for this call: a block built kv_only always is; MTP replays one full block and
-        # asks per level. Everything below reads this local, never self.kv_only.
         kv_only = self.kv_only or force_kv_only
         # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
         # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
@@ -684,8 +682,6 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
-            # KV cache filled (by MLA), migration callback fired. The block output is unused (no FFN,
-            # no further layers), but the host KVPE readback is independent of it and still honored.
             kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
             if return_indexer_indices:
                 return None, kv_cache, None

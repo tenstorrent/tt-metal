@@ -45,8 +45,6 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "overhang is the TAIL of each page, not the whole page",
             args.overhang_size_bytes,
             args.page_size);
-        // The split is expressed on the LAST dim of the backing spec, so it is a byte split of each page
-        // only when a page IS one row -- which is how the H2D service configures it, but is not enforced.
         const uint32_t elem_size = backing.element_size();
         const auto& logical = backing.tensor_spec().logical_shape();
         TT_FATAL(
@@ -62,8 +60,7 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "inbound_socket_service_sync: overhang_size_bytes ({}) must be a whole number of {}B elements",
             args.overhang_size_bytes,
             elem_size);
-        // Both halves become the page size of their own DRAM tensor and the source offset of a NOC write
-        // out of L1, so both must clear the widest alignment in play (64B on Blackhole DRAM/PCIe).
+        // 64B is the widest alignment in play: Blackhole DRAM and PCIe.
         constexpr uint32_t kSplitAlignmentBytes = 64;
         const uint32_t trunk_size_bytes = args.page_size - args.overhang_size_bytes;
         TT_FATAL(
@@ -82,11 +79,8 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
     std::vector<tt::tt_metal::TensorSpec> specs;
     const auto& backing_spec = tensor_args.backing.tensor_spec();
     if (args.overhang_size_bytes == 0) {
-        // tokens: identical per-shard spec to the backing tensor.
         specs.push_back(backing_spec);
     } else {
-        // tokens + overhang: the backing spec with its last dim cut in two, same dtype and memory config,
-        // so each half is byte-for-byte the corresponding slice of what the unsplit path returns.
         const uint32_t overhang_elems = args.overhang_size_bytes / tensor_args.backing.element_size();
         auto trunk_shape = backing_spec.logical_shape();
         auto overhang_shape = backing_spec.logical_shape();

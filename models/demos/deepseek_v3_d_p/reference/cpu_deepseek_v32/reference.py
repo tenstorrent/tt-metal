@@ -178,7 +178,6 @@ class SparseMLAReference:
         self._filled = 0  # highest end position written into the caches (across chunked calls)
         self._last_topk: torch.Tensor | None = None
         self._last_logits: torch.Tensor | None = None
-        # Set for the duration of one forward() by its indexer_topk= argument; see _capture_indexer.
         self._inject_topk: torch.Tensor | None = None
         # Capture the indexer's (topk, logits) from inside the single forward pass — no second run.
         self._mla.indexer.register_forward_hook(self._capture_indexer)
@@ -191,8 +190,6 @@ class SparseMLAReference:
             ), f"injected top-k {tuple(self._inject_topk.shape)} != computed {tuple(topk.shape)}"
             topk = self._inject_topk
             self._last_topk, self._last_logits = topk, logits
-            # A forward hook returning non-None replaces the module's output, so the override
-            # reaches sparse attention without MLACPU or the indexer knowing about it.
             return topk, logits
         self._last_topk, self._last_logits = topk, logits
 
@@ -212,7 +209,7 @@ class SparseMLAReference:
         increasing ``actual_start`` (the same pattern as the device chunked test).
 
         ``indexer_topk`` overrides the indexer's selection with indices computed elsewhere, the CPU
-        dual of ttMLA's ``indexer_indices``. It exists for GLM-5.2 cross-layer index reuse.
+        dual of ttMLA's ``indexer_indices``.
         """
         x = hidden_states.to(torch.bfloat16)
         seqlen = x.shape[-2]

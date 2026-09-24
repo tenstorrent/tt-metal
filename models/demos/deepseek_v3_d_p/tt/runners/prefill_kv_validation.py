@@ -116,10 +116,7 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
     empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
-    layout stays encoded in exactly one place.
-
-    ``layer_idx`` narrows the question to one layer, which matters wherever a trace holds only part of
-    the model -- an MTP tail trace carries its own indexer key and no trunk one."""
+    layout stays encoded in exactly one place."""
     from pathlib import Path
 
     dsa_dir = Path(trace_dir) / "dsa"
@@ -155,12 +152,9 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
 
     cos_hs, sin_hs = tables(False)
     cos_il, sin_il = tables(True)
-    # Rope is orthogonal, so un-roping is its transpose: x = out*cos - rot(out)*sin.
-    pre = pe * cos_hs - rot_half_split(pe) * sin_hs  # scalars recovered, in wk output order
-    fixed = pre * cos_il + rot_interleaved(pre) * sin_il  # re-roped on the device's pairing
+    pre = pe * cos_hs - rot_half_split(pe) * sin_hs
+    fixed = pre * cos_il + rot_interleaved(pre) * sin_il
 
-    # Both steps rotate the whole rope half, so its per-row norm is invariant. A mis-signed sin or a
-    # table at the wrong width breaks this, and nothing downstream would separate it from bad math.
     before, after = pe.norm(dim=-1), fixed.norm(dim=-1)
     assert torch.allclose(
         before, after, rtol=1e-4, atol=1e-4

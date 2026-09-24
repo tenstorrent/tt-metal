@@ -237,8 +237,6 @@ class TtParallelEmbedding(LightweightModule):
 
         logger.debug(f"Forward: token_ids shape={token_ids.shape}")
 
-        # An id slot with no token behind it carries runner_utils.MTP_PAD_TOKEN_ID, which is outside
-        # every vocabulary and so must be clamped before the gather indexes the table out of bounds.
         safe_ids = ttnn.minimum(token_ids, self.vocab_size - 1)
         embeddings = ttnn.embedding(
             safe_ids,
