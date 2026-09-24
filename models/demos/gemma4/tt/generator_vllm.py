@@ -1394,7 +1394,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             nkv_local = 1
         else:
             nkv_local = max(1, int(cfg.num_key_value_heads) // tp)
-        full_block_size = int(effective_block_size(cache, int(cfg.head_dim)))
+        full_block_size = int(effective_block_size(cache, int(cfg.head_dim), nkv_local))
         return full_pt, full_block_size
 
     def _prefill_user_chunk_plan(self, tokens, kwargs):
