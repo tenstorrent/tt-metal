@@ -61,7 +61,11 @@ LORA_PATH_ENV = "MINIMAX_H3_HYPERFLOW_LORA_PATH"
 
 SEED = 0
 ASPECT_RATIO = (16, 9)
-PROMPT = CALIBRATED_FOX_PROMPT
+# MINIMAX_H3_PROMPT swaps the prompt. The CLIP column is an alignment against whatever prompt ran, so
+# an overridden row measures a different request than the calibrated ones and carries `_altprompt` in
+# its stem: the artifacts and the sidecar are then a distinct set rather than an overwrite.
+PROMPT = os.environ.get("MINIMAX_H3_PROMPT") or CALIBRATED_FOX_PROMPT
+PROMPT_IS_CALIBRATED = PROMPT == CALIBRATED_FOX_PROMPT
 DURATIONS_S = (5, 10, 15)
 
 # 16384, not the other modes' 65536: the video VAE's taps=3 encoder, which only ref2va reaches,
@@ -174,7 +178,10 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
         f"points; point {LORA_PATH_ENV} at a two-time adapter"
     )
     num_forwards = contract.num_forwards
-    stem = f"{task}_hyperflow{'_yuv420' if yuv else ''}_{width}x{height}_{duration_s}s_{num_forwards}fwd"
+    stem = (
+        f"{task}_hyperflow{'_yuv420' if yuv else ''}_{width}x{height}_{duration_s}s_{num_forwards}fwd"
+        f"{'' if PROMPT_IS_CALIBRATED else '_altprompt'}"
+    )
     logger.info(f"adapter {lora_path} at strength {strength}: {contract.identity()}")
     logger.info(f"{task}: {width}x{height}, {num_frames} frames, {num_forwards} forwards, partition {partition}/")
 
@@ -225,6 +232,7 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
     # The sidecar carries what a table needs, so tabulating a sweep never reparses a log.
     record = {
         "task": task,
+        "prompt": PROMPT,
         # Two nodes can sweep into one artifact directory; without this a mixed table reads as single-source.
         "node": socket.gethostname(),
         "duration_s": duration_s,
