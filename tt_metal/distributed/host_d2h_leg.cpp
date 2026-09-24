@@ -91,6 +91,16 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
             cfg.ring_pages);
         return nullptr;
     }
+    // The ring is aliased into one core's arena, so a larger one addresses the next core's.
+    // Necessary, not sufficient: the ring starts at the socket's data_offset inside it.
+    if (fifo64 > kArenaBytes) {
+        err = fmt::format(
+            "D2HLeg::create: {} B payload x {} ring pages exceeds the {} KiB arena",
+            cfg.payload_bytes,
+            cfg.ring_pages,
+            kArenaBytes >> 10);
+        return nullptr;
+    }
 
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
     const uint32_t align = tt::tt_metal::hal::get_pcie_alignment();
