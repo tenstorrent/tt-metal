@@ -17,7 +17,7 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat out = val;
     // Exclude non-finite: the +inf seed squares to a denormal, SFPMAD flushes it to +0, and
     // 0 * -inf = NaN. Same guard as Wormhole and Blackhole, see #53757.
-    v_if(val != 0.0f && sfpi::exexp(val, sfpi::ExponentMode::Biased) != 255) {
+    v_if(val != 0.0f && sfpi::is_finite(val)) {
         // Fast inverse square-root seed + two Newton-Raphson refinements.
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));

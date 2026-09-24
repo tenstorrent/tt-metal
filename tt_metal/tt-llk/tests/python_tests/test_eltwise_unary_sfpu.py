@@ -555,7 +555,7 @@ def test_eltwise_unary_sfpu_edges(
 # into and nothing in production does. erfinv, asin and acos take the default and still get
 # -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
 @pytest.mark.nightly
-def test_sqrt_custom_infinity_regression():
+def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
