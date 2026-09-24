@@ -57,6 +57,16 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     if (preallocated_output_tensor.has_value()) {
         check_tensor(preallocated_output_tensor.value(), "Preallocated Output");
     }
+
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(input_shape.rank() == 4U, "RMSNormForward input must be rank 4, got shape {}", input_shape);
+
+    const auto expected_gamma_shape = ttnn::Shape({1U, 1U, 1U, input_shape[-1]});
+    TT_FATAL(
+        gamma_tensor.logical_shape() == expected_gamma_shape,
+        "RMSNormForward gamma shape must be {}, got {}",
+        expected_gamma_shape,
+        gamma_tensor.logical_shape());
 }
 
 spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
