@@ -508,17 +508,6 @@ def get_output_tensor_ids(output):
     return ids
 
 
-def _convert_ttnn_to_torch_for_comparison(tensor, *, preserve_fp8_bytes=False, **kwargs):
-    # Mixed-format rows stored as FP8 bytes (e.g. scaled-FP8 sparse KV) must bypass value conversion.
-    if tensor.dtype == ttnn.DataType.FP8_E4M3 and not preserve_fp8_bytes:
-        # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
-        # This matches the FP8 golden's dequantized torch.float32 representation.
-        if ttnn.is_tensor_storage_on_device(tensor):
-            tensor = ttnn.from_device(tensor)
-        tensor = ttnn.to_dtype(tensor, ttnn.float32)
-    return ttnn.to_torch(tensor, **kwargs)
-
-
 def to_torch_for_comparison(tensor, golden_tensor=None, *, preserve_fp8_bytes=False):
     import math
     import torch
@@ -528,8 +517,15 @@ def to_torch_for_comparison(tensor, golden_tensor=None, *, preserve_fp8_bytes=Fa
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
-    def convert(value, **kwargs):
-        return _convert_ttnn_to_torch_for_comparison(value, preserve_fp8_bytes=preserve_fp8_bytes, **kwargs)
+    def convert(tensor, **kwargs):
+        # Mixed-format rows stored as FP8 bytes (e.g. scaled-FP8 sparse KV) must bypass value conversion.
+        if tensor.dtype == ttnn.DataType.FP8_E4M3 and not preserve_fp8_bytes:
+            # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
+            # This matches the FP8 golden's dequantized torch.float32 representation.
+            if ttnn.is_tensor_storage_on_device(tensor):
+                tensor = ttnn.from_device(tensor)
+            tensor = ttnn.to_dtype(tensor, ttnn.float32)
+        return ttnn.to_torch(tensor, **kwargs)
 
     mesh_index = getattr(golden_tensor, "_ttnn_mesh_index", None)
     if mesh_index is not None:
