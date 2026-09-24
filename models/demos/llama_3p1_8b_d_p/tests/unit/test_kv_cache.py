@@ -328,6 +328,42 @@ def test_cache_prefix_tracks_complete_writes_and_invalidates_failed_suffix(monke
     assert cache.populated_end(0, NUM_LAYERS) == 0
 
 
+# A capacity failure must name the knob that caused it and must not strand the cache that did fit,
+# while any other RuntimeError must arrive unedited rather than wearing footprint advice that does
+# not apply. Inject the failure: provoking a real one needs a slot count whose host staging tensor
+# is larger than the DRAM it is meant to overflow, and the device path is covered above.
+@pytest.mark.parametrize(
+    "message, names_num_users",
+    [
+        ("Out of Memory: Not enough space to allocate 268435456 B DRAM buffer across 8 banks", True),
+        ("Cannot access device 3: device has been closed", False),
+    ],
+    ids=["oom", "unrelated"],
+)
+def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
+    monkeypatch, expect_error, message, names_num_users
+):
+    live = []
+
+    def fake_from_torch(source, **metadata):
+        if len(live) == 1:  # the K cache fit; fail the V cache
+            raise RuntimeError(message)
+        tensor = SimpleNamespace(deallocate=lambda force: live.remove(tensor))
+        live.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(cache_module, "_validate_target", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cache_module, "_cache_memory_config", lambda mesh_device: None)
+    monkeypatch.setattr(cache_module.ttnn, "from_torch", fake_from_torch)
+    monkeypatch.setattr(cache_module.ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    # The staging buffer is beside the point here and would be 4 GB at this slot count.
+    monkeypatch.setattr(cache_module.torch, "zeros", lambda shape: None)
+
+    with expect_error(RuntimeError, "num_users=64" if names_num_users else message):
+        allocate_kv_cache(object(), object(), num_users=64, max_seq_len=8192)
+    assert not live, "the K cache stayed allocated after the V cache failed"
+
+
 # Allocate the exact 2-user/32-layer cache on the actual DRAM bank grid and read every chip; this
 # catches wrong batch packing, local sequence size, dtype, NdShard page geometry, or nonzero startup.
 @pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)

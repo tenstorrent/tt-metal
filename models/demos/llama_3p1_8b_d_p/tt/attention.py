@@ -360,6 +360,11 @@ class FullCausalAttention:
         The mask is a function of the chunk's position range alone -- not of the layer or of the cache
         contents -- so the 32 layers of a chunk all want the same (local_q x prefix) tensor. Building it
         per layer meant 32 sets of full-extent elementwise passes per chunk to recompute the same bits.
+
+        The key deliberately omits slot and layer. Both select which KV plane the gather reads; neither
+        appears in the mask, which is built from positions alone. Adding them would rebuild an identical
+        tensor 32 times a chunk. A stale hit is not possible: the key is set only after a successful
+        build, and _release_chunk_mask clears it before one starts.
         """
         key = (actual_start, actual_end, logical_n)
         if self._mask_key != key:
@@ -379,6 +384,20 @@ class FullCausalAttention:
         self._mask = None
         self._query_valid = None
         self._mask_key = None
+
+    def close(self):
+        """Release attention-owned allocations, after callers finish using returned outputs.
+
+        The persistent gather buffers and position tables live for as long as the object does, so a
+        caller that builds an attention and drops it -- a test, or a runtime that rebuilds for a new
+        capacity -- has to say when the device memory goes back. Idempotent.
+        """
+        self._release_chunk_mask()
+        for name in ("gathered_k", "gathered_v", "query_position_table", "key_positions"):
+            tensor = getattr(self, name)
+            if tensor is not None:
+                tensor.deallocate(True)
+                setattr(self, name, None)
 
     def __call__(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
         self._validate_call(

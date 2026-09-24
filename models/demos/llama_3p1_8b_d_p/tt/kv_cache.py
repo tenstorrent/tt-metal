@@ -14,6 +14,8 @@ from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as 
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
 
 SUPPORTED_CACHE_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
+# What tt_metal's bank manager says when a buffer does not fit (tt_metal/impl/allocator/bank_manager.cpp).
+_OOM_MESSAGE = "out of memory"
 
 
 @dataclass
@@ -132,6 +134,11 @@ def allocate_kv_cache(
     except RuntimeError as error:
         for tensor in allocated:
             tensor.deallocate(True)
+        # Only a capacity failure gets the capacity advice. Anything else -- a bad memory config, a
+        # dead device -- keeps its own message, which would otherwise be buried under a footprint
+        # explanation that does not apply. The allocator spells its shortfall "Out of Memory: ...".
+        if _OOM_MESSAGE not in str(error).lower():
+            raise
         # Each cache is replicated per chip, so an out-of-memory here is a per-chip DRAM limit and the
         # two knobs are the slot count and the context length. Say so: the allocator's own message
         # reports a byte shortfall with no hint that num_users is what multiplies it.

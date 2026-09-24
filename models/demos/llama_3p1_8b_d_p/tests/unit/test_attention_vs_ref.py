@@ -1561,60 +1561,72 @@ def test_full_causal_attention_reads_extra_user_slots(mesh_device, expect_error)
     slots, cache_dtype = 4, ttnn.bfloat16
     # Layers chosen so the batch index is not a multiple of the layer count for any slot.
     cases = [(0, 0), (1, 13), (2, 31), (3, 7)]
+    # Each attention holds persistent gather buffers and position tables, and caches a mask once
+    # called, so the mesh keeps them until close() runs. Release them even when an assertion below
+    # fails, or the leak lands on whichever test the shared mesh hands to next.
     attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=cache_dtype, num_users=slots)
+    default_attention = None
     cache = allocate_kv_cache(mesh_device, mesh_config, cache_dtype=cache_dtype, num_users=slots)
-    assert (attention.num_users, cache.num_users) == (slots, slots)
-    _assert_attention_readiness(mesh_device, attention, cache, cache_dtype)
-
-    start, end = 224, 257
     prefix_inputs = []
-    for slot, layer in cases:
-        prefix_inputs.extend(_write_prefix(mesh_device, cache, slot=slot, layer=layer, end=end, prompt=slot))
-    ttnn.synchronize_device(mesh_device)
+    valid_q = None
+    try:
+        assert (attention.num_users, cache.num_users) == (slots, slots)
+        _assert_attention_readiness(mesh_device, attention, cache, cache_dtype)
 
-    per_slot = {}
-    for slot, layer in cases:
-        per_slot[slot] = _run_attention_case(
-            mesh_device,
-            attention,
-            cache,
-            slot=slot,
-            layer=layer,
-            start=start,
-            end=end,
-            prompt=slot,
-            cache_dtype=cache_dtype,
-            label=f"extra-slot-{slot}-layer-{layer}",
-        )
-    # Distinct prompts must give distinct outputs; equality would mean two slots read one plane.
-    # SP ranks owning no position below `end` return no rows for this range, and two empty tensors
-    # compare equal, so those chips carry no signal and are skipped rather than counted as matches.
-    for slot in range(1, slots):
-        compared = [
-            device_idx
-            for device_idx, output in per_slot[slot].items()
-            if output.numel() and not torch.equal(output, per_slot[0][device_idx])
-        ]
-        populated = [index for index, output in per_slot[slot].items() if output.numel()]
-        assert populated, f"slot {slot} produced no rows to compare"
-        assert compared == populated, f"slot {slot} matched slot 0 on chips {sorted(set(populated) - set(compared))}"
+        start, end = 224, 257
+        for slot, layer in cases:
+            prefix_inputs.extend(_write_prefix(mesh_device, cache, slot=slot, layer=layer, end=end, prompt=slot))
+        ttnn.synchronize_device(mesh_device)
 
-    valid_q = _to_q(mesh_device, _physical_fixture("q", 0, NUM_Q_HEADS, start))
-    with expect_error(ValueError, f"slot_idx {slots} out of range"):
-        attention(valid_q, cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
-    with expect_error(ValueError, f"slot_idx {slots} out of range"):
-        attention.validate_request(cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
-    # An attention built for the default pair must refuse this cache instead of addressing 2 of its 4
-    # slots: the two disagree about the packed batch extent the gather indexes into.
-    default_attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=cache_dtype)
-    with expect_error(ValueError, "cache metadata must be"):
-        default_attention.validate_request(cache, slot_idx=0, layer_idx=0, actual_start=start, actual_end=end)
+        per_slot = {}
+        for slot, layer in cases:
+            per_slot[slot] = _run_attention_case(
+                mesh_device,
+                attention,
+                cache,
+                slot=slot,
+                layer=layer,
+                start=start,
+                end=end,
+                prompt=slot,
+                cache_dtype=cache_dtype,
+                label=f"extra-slot-{slot}-layer-{layer}",
+            )
+        # Distinct prompts must give distinct outputs; equality would mean two slots read one plane.
+        # SP ranks owning no position below `end` return no rows for this range, and two empty tensors
+        # compare equal, so those chips carry no signal and are skipped rather than counted as matches.
+        for slot in range(1, slots):
+            compared = [
+                device_idx
+                for device_idx, output in per_slot[slot].items()
+                if output.numel() and not torch.equal(output, per_slot[0][device_idx])
+            ]
+            populated = [index for index, output in per_slot[slot].items() if output.numel()]
+            assert populated, f"slot {slot} produced no rows to compare"
+            assert (
+                compared == populated
+            ), f"slot {slot} matched slot 0 on chips {sorted(set(populated) - set(compared))}"
 
-    valid_q.deallocate(True)
-    for tensor in prefix_inputs:
-        tensor.deallocate(True)
-    cache.k.deallocate(True)
-    cache.v.deallocate(True)
+        valid_q = _to_q(mesh_device, _physical_fixture("q", 0, NUM_Q_HEADS, start))
+        with expect_error(ValueError, f"slot_idx {slots} out of range"):
+            attention(valid_q, cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
+        with expect_error(ValueError, f"slot_idx {slots} out of range"):
+            attention.validate_request(cache, slot_idx=slots, layer_idx=0, actual_start=start, actual_end=end)
+        # An attention built for the default pair must refuse this cache instead of addressing 2 of its 4
+        # slots: the two disagree about the packed batch extent the gather indexes into.
+        default_attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=cache_dtype)
+        with expect_error(ValueError, "cache metadata must be"):
+            default_attention.validate_request(cache, slot_idx=0, layer_idx=0, actual_start=start, actual_end=end)
+    finally:
+        if valid_q is not None:
+            valid_q.deallocate(True)
+        for tensor in prefix_inputs:
+            tensor.deallocate(True)
+        cache.k.deallocate(True)
+        cache.v.deallocate(True)
+        attention.close()
+        if default_attention is not None:
+            default_attention.close()
 
 
 # The periodic raw fixture is retained as precision characterization against its independent source

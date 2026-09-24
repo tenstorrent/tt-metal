@@ -293,14 +293,7 @@ class PrefillModel:
         if self.head is not None:
             self.head.close()
         if self.attention is not None:
-            self.attention._release_chunk_mask()
-            for tensor in (
-                self.attention.gathered_k,
-                self.attention.gathered_v,
-                self.attention.query_position_table,
-                self.attention.key_positions,
-            ):
-                tensor.deallocate(True)
+            self.attention.close()
         for tensor in self.rope_tables:
             tensor.deallocate(True)
         if self.transformation_mat is not None:

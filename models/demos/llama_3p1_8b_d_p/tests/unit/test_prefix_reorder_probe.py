@@ -113,103 +113,105 @@ def test_reorder_routes_agree_and_time(mesh_device):
     attention = FullCausalAttention(mesh_device, mesh_config, cache_dtype=ttnn.bfloat16, max_seq_len=CAPACITY)
     geometry = attention.geometry
     cache = allocate_kv_cache(mesh_device, mesh_config, max_seq_len=CAPACITY, cache_dtype=ttnn.bfloat16)
-    for index in range(CAPACITY // CHUNK):
-        payload = torch.full((NUM_KV_HEADS, CHUNK, HEAD_DIM), float(index + 1))
-        tt_k, tt_v = _to_chunk(mesh_device, payload), _to_chunk(mesh_device, payload)
-        write_kv_chunk(
-            cache,
-            tt_k,
-            tt_v,
-            slot_idx=0,
-            layer_idx=LAYER,
-            actual_start=index * CHUNK,
-            actual_end=(index + 1) * CHUNK,
-        )
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-    ttnn.synchronize_device(mesh_device)
-
-    buffer = attention.gathered_k
-    batch_index = 0 * cache.num_layers + LAYER
-
-    # The gather refused this pair once with "input and output tensors must be on the same mesh
-    # device" even though both came from the same fixture, so say what the two tensors actually are.
-    for name, tensor in (("cache.k", cache.k), ("buffer", buffer)):
-        logger.info(
-            f"{name}: shape={tuple(tensor.shape)} dtype={tensor.dtype} layout={tensor.layout} "
-            f"storage={tensor.storage_type()} device={tensor.device()} mesh={mesh_device}"
-        )
-    # A call through the module itself is the control: if this works and the bare op does not, the
-    # difference is in the probe, not in the op.
-    probe_q = ttnn.from_torch(
-        torch.zeros(1, Llama31_8BConfig.NUM_ATTENTION_HEADS, CHUNK, HEAD_DIM, dtype=torch.bfloat16),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(2, 1)),
-    )
-    attention(probe_q, cache, slot_idx=0, layer_idx=LAYER, actual_start=0, actual_end=CHUNK)
-    ttnn.synchronize_device(mesh_device)
-    probe_q.deallocate(True)
-    logger.info("control: a full attention call through the module gathered fine")
-    supported = True
-
-    for extent in (1024, 2048, 4096, 8192):
-        want = torch.cat([torch.full((CHUNK,), float(i + 1)) for i in range(extent // CHUNK)])
-
-        gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
-        blocks_out = _reorder_by_blocks(gathered, geometry, extent)
+    # The attention owns persistent gather buffers and, after the control call below, a cached mask;
+    # release them even if an assertion fails, since the mesh is shared with the rest of the suite.
+    try:
+        for index in range(CAPACITY // CHUNK):
+            payload = torch.full((NUM_KV_HEADS, CHUNK, HEAD_DIM), float(index + 1))
+            tt_k, tt_v = _to_chunk(mesh_device, payload), _to_chunk(mesh_device, payload)
+            write_kv_chunk(
+                cache,
+                tt_k,
+                tt_v,
+                slot_idx=0,
+                layer_idx=LAYER,
+                actual_start=index * CHUNK,
+                actual_end=(index + 1) * CHUNK,
+            )
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
         ttnn.synchronize_device(mesh_device)
-        blocks_host = ttnn.to_torch(ttnn.get_device_tensors(blocks_out)[0]).float()[0, 0, :, 0]
-        assert torch.equal(blocks_host, want), f"block route wrong at extent {extent}"
-        blocks_out.deallocate(True)
 
-        try:
+        buffer = attention.gathered_k
+        batch_index = 0 * cache.num_layers + LAYER
+
+        # The gather refused this pair once with "input and output tensors must be on the same mesh
+        # device" even though both came from the same fixture, so say what the two tensors actually are.
+        for name, tensor in (("cache.k", cache.k), ("buffer", buffer)):
+            logger.info(
+                f"{name}: shape={tuple(tensor.shape)} dtype={tensor.dtype} layout={tensor.layout} "
+                f"storage={tensor.storage_type()} device={tensor.device()} mesh={mesh_device}"
+            )
+        # A call through the module itself is the control: if this works and the bare op does not, the
+        # difference is in the probe, not in the op.
+        probe_q = ttnn.from_torch(
+            torch.zeros(1, Llama31_8BConfig.NUM_ATTENTION_HEADS, CHUNK, HEAD_DIM, dtype=torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(2, 1)),
+        )
+        control = attention(probe_q, cache, slot_idx=0, layer_idx=LAYER, actual_start=0, actual_end=CHUNK)
+        ttnn.synchronize_device(mesh_device)
+        control.deallocate(True)
+        probe_q.deallocate(True)
+        logger.info("control: a full attention call through the module gathered fine")
+
+        # Both routes must succeed. `_reorder_natural` takes the permute route unconditionally in
+        # production, so an op that refuses it is a broken model, not an unsupported experiment --
+        # this used to demote such a failure to a skip, which would have hidden exactly that.
+        for extent in (1024, 2048, 4096, 8192):
+            want = torch.cat([torch.full((CHUNK,), float(i + 1)) for i in range(extent // CHUNK)])
+
+            gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
+            blocks_out = _reorder_by_blocks(gathered, geometry, extent)
+            ttnn.synchronize_device(mesh_device)
+            blocks_host = ttnn.to_torch(ttnn.get_device_tensors(blocks_out)[0]).float()[0, 0, :, 0]
+            assert torch.equal(blocks_host, want), f"block route wrong at extent {extent}"
+            blocks_out.deallocate(True)
+
             gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
             permute_out = _reorder_by_permute(gathered, CAPACITY, extent)
             ttnn.synchronize_device(mesh_device)
             permute_host = ttnn.to_torch(ttnn.get_device_tensors(permute_out)[0]).float()[0, 0, :, 0]
-        except Exception as error:  # the route is a shape-op bet; report what refuses it
-            supported = False
-            logger.error(f"permute route unsupported at extent {extent}: {type(error).__name__}: {error}")
-            break
-        assert torch.equal(permute_host, want), (
-            f"permute route wrong at extent {extent}: " f"first mismatch at {int((permute_host != want).nonzero()[0])}"
-        )
-        permute_out.deallocate(True)
-        logger.info(f"extent {extent}: both routes reproduce natural order exactly")
+            assert torch.equal(permute_host, want), (
+                f"permute route wrong at extent {extent}: "
+                f"first mismatch at {int((permute_host != want).nonzero()[0])}"
+            )
+            permute_out.deallocate(True)
+            logger.info(f"extent {extent}: both routes reproduce natural order exactly")
 
-    if not supported:
-        pytest.skip("permute route is not supported by these ops; keep the per-block reorder")
-
-    # Time each route in isolation. The gather is common to both and is timed separately so the
-    # comparison is reorder-vs-reorder rather than gather-plus-reorder.
-    reps = 20
-    logger.info(f"{'extent':>8} {'gather ms':>10} {'blocks ms':>10} {'permute ms':>11} {'speedup':>8}")
-    for extent in (1024, 2048, 4096, 8192):
-        timings = {}
-        for name, route in (("gather", None), ("blocks", _reorder_by_blocks), ("permute", _reorder_by_permute)):
-            for _ in range(3):  # warm the program cache for this shape
-                gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
-                if route is _reorder_by_blocks:
-                    _reorder_by_blocks(gathered, geometry, extent).deallocate(True)
-                elif route is _reorder_by_permute:
-                    _reorder_by_permute(gathered, CAPACITY, extent).deallocate(True)
-            ttnn.synchronize_device(mesh_device)
-            start = time.perf_counter()
-            for _ in range(reps):
-                gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
-                if route is _reorder_by_blocks:
-                    _reorder_by_blocks(gathered, geometry, extent).deallocate(True)
-                elif route is _reorder_by_permute:
-                    _reorder_by_permute(gathered, CAPACITY, extent).deallocate(True)
-            ttnn.synchronize_device(mesh_device)
-            timings[name] = (time.perf_counter() - start) / reps * 1e3
-        blocks_only = timings["blocks"] - timings["gather"]
-        permute_only = timings["permute"] - timings["gather"]
-        ratio = blocks_only / permute_only if permute_only > 0 else float("inf")
-        logger.info(f"{extent:>8} {timings['gather']:>10.3f} {blocks_only:>10.3f} {permute_only:>11.3f} {ratio:>7.2f}x")
-
-    cache.k.deallocate(True)
-    cache.v.deallocate(True)
+        # Time each route in isolation. The gather is common to both and is timed separately so the
+        # comparison is reorder-vs-reorder rather than gather-plus-reorder.
+        reps = 20
+        logger.info(f"{'extent':>8} {'gather ms':>10} {'blocks ms':>10} {'permute ms':>11} {'speedup':>8}")
+        for extent in (1024, 2048, 4096, 8192):
+            timings = {}
+            for name, route in (("gather", None), ("blocks", _reorder_by_blocks), ("permute", _reorder_by_permute)):
+                for _ in range(3):  # warm the program cache for this shape
+                    gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
+                    if route is _reorder_by_blocks:
+                        _reorder_by_blocks(gathered, geometry, extent).deallocate(True)
+                    elif route is _reorder_by_permute:
+                        _reorder_by_permute(gathered, CAPACITY, extent).deallocate(True)
+                ttnn.synchronize_device(mesh_device)
+                start = time.perf_counter()
+                for _ in range(reps):
+                    gathered = _gather(cache.k, buffer, batch_index=batch_index, extent=extent)
+                    if route is _reorder_by_blocks:
+                        _reorder_by_blocks(gathered, geometry, extent).deallocate(True)
+                    elif route is _reorder_by_permute:
+                        _reorder_by_permute(gathered, CAPACITY, extent).deallocate(True)
+                ttnn.synchronize_device(mesh_device)
+                timings[name] = (time.perf_counter() - start) / reps * 1e3
+            blocks_only = timings["blocks"] - timings["gather"]
+            permute_only = timings["permute"] - timings["gather"]
+            ratio = blocks_only / permute_only if permute_only > 0 else float("inf")
+            logger.info(
+                f"{extent:>8} {timings['gather']:>10.3f} {blocks_only:>10.3f} " f"{permute_only:>11.3f} {ratio:>7.2f}x"
+            )
+    finally:
+        cache.k.deallocate(True)
+        cache.v.deallocate(True)
+        attention.close()

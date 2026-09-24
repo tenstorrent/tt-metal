@@ -87,7 +87,9 @@ class PrefillGeometry:
 
         Block-cyclic storage is only addressable in complete chunks: token ``p`` lives on SP rank
         ``(p % 1024) // 256``, so covering any token of a chunk means covering all four ranks' blocks
-        for that chunk. This is the active extent to hand to the gather.
+        for that chunk. This is the active extent to hand to the gather, and it is also what satisfies
+        ``prefix_gather_block_order``'s divisibility precondition: ``chunk_size == local_sequence * sp``,
+        so any multiple of the former is a multiple of the latter.
         """
         if type(populated) is not int:
             raise TypeError("populated must be an eager Python int")
@@ -101,6 +103,9 @@ class PrefillGeometry:
         A partial gather transfers fewer source pages but does NOT compact its destination: every rank
         keeps its full-capacity output slot so cache offsets stay stable. The stride below therefore
         stays keyed to max_seq_len, and only the block COUNT shrinks with the prefix.
+
+        ``extent`` is what ``gathered_prefix_extent`` returns; the check below is the boundary for
+        anyone who computes one another way.
         """
         if extent % self.local_sequence:
             raise ValueError(f"extent must be a multiple of {self.local_sequence}, got {extent}")
