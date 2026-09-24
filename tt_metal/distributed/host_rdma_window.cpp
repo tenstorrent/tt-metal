@@ -214,9 +214,13 @@ std::string RdmaWindow::put_word(uint64_t value, uint32_t peer_rank, uint64_t ta
     if (rc != MPI_SUCCESS) {
         return mpi_error_text("MPI_Put(credit)", rc);
     }
-    // Local completion only: the staging slot has to be free before it wraps round.
-    if (const int frc = MPI_Win_flush_local(static_cast<int>(peer_rank), im.win); frc != MPI_SUCCESS) {
-        return mpi_error_text("MPI_Win_flush_local(credit)", frc);
+    // Once per lap, not once per credit: a slot needs local completion only before it is
+    // REUSED, and a flush_local is a ~7 us round trip that would otherwise gate every frame.
+    // _all, not (peer): one staging ring serves every peer, so one peer's flush frees nothing.
+    if (im.next_word == 0) {
+        if (const int frc = MPI_Win_flush_local_all(im.win); frc != MPI_SUCCESS) {
+            return mpi_error_text("MPI_Win_flush_local_all(credit)", frc);
+        }
     }
     return {};
 }
