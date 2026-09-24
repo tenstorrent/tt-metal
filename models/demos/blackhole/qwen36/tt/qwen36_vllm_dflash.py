@@ -249,7 +249,9 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._last_bucket = None  # bucket id plan() last put in force (logged on change)
         if _W > 1:
             if not model.use_tp:
-                raise RuntimeError("Qwen36DFlash speculative serving needs the TP code path (use_tp_path; e.g. MESH_DEVICE=P150x4)")
+                raise RuntimeError(
+                    "Qwen36DFlash speculative serving needs the TP code path (use_tp_path; e.g. MESH_DEVICE=P150x4)"
+                )
             K = default_draft_len()
             buckets = parse_buckets(os.environ.get(_BUCKETS_ENV)) or ((B, K + 1),)
             self._buckets = check_buckets(buckets, B, K, _RAGGED)
@@ -294,11 +296,13 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
         * TP=4 (P150x4 / P300x2: Nv=12 GDN value heads, 1 KV head per device): the validated profile; the fused
           ``gdn_spec_step`` verify (QWEN36_GDN_SPEC_FUSED=1) and the fused spec SDPA both apply, any bucket set.
-        * TP=2 (p150x2: Nv=24, 2 KV heads per device): the FALLBACK path only -- the composite GDN verify
-          (QWEN36_GDN_SPEC_FUSED=0: ``gdn_spec_step`` needs 2*Nv <= 32), whose ``fused_recurrent`` core budget
-          B*Nv <= 110 caps every bucket (and max_num_seqs, since plain decode runs the fused recurrence at full
-          batch width) at B <= 4; the composite verify is single-bucket; the spec SDPA takes the per-row path
-          (attention/tp.py::_spec_sdpa_plan returns None at NKV != 1). See profiles/p150x2/DFLASH2_FEASIBILITY.md 3.
+        * TP=2 (p150x2: Nv=24, 2 KV heads per device): the fused ``gdn_spec_step`` verify applies too since the op
+          reads a head's a|b gate pair from two tiles (2*Nv = 48 gate columns; profiles/thatch_adopt/laneH_RESULTS.md),
+          with the composite GDN verify (QWEN36_GDN_SPEC_FUSED=0, single-bucket) as the fallback. Either way every
+          bucket's B and max_num_seqs are capped at B*Nv <= compute cores (B <= 4 at Nv=24): the fused op runs one
+          core per (user, head), the composite ``fused_recurrent`` has the same core budget, and plain decode runs
+          the fused recurrence at full batch width. The spec SDPA takes the per-row path (attention/tp.py::
+          _spec_sdpa_plan returns None at NKV != 1). See profiles/p150x2/DFLASH2_FEASIBILITY.md 3.
         * anything else (TP=1, TP=8): unvalidated -> refuse.
         """
         nd = int(model.num_devices)
@@ -307,30 +311,31 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         if nd == 4:
             return
         if nd == 2:
+            grid = model.mesh_device.compute_with_storage_grid_size()
+            cores = int(grid.x * grid.y)
             problems = []
-            if fused:
+            if not fused and len(buckets) > 1:
                 problems.append(
-                    f"QWEN36_GDN_SPEC_FUSED=1 needs 2*Nv <= 32 GDN gate columns in one tile (Nv={nv} per device at TP=2): "
-                    "set QWEN36_GDN_SPEC_FUSED=0 (composite verify)"
+                    f"the composite verify (QWEN36_GDN_SPEC_FUSED=0) is single-bucket "
+                    f"({_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r}); set QWEN36_GDN_SPEC_FUSED=1 for multi-bucket"
                 )
-            if len(buckets) > 1:
-                problems.append(f"the composite verify is single-bucket ({_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r})")
-            over = [f"{b}x{t}" for b, t in buckets if b * nv > 110]
-            if over or int(model.args.max_batch_size) * nv > 110:
+            over = [f"{b}x{t}" for b, t in buckets if b * nv > cores]
+            if over or int(model.args.max_batch_size) * nv > cores:
                 problems.append(
-                    f"fused_recurrent core budget B*Nv <= 110 with Nv={nv}: --max-num-seqs and every bucket's B must be "
-                    f"<= {110 // nv} (got max_num_seqs={model.args.max_batch_size}, buckets {[f'{b}x{t}' for b, t in buckets]})"
+                    f"GDN core budget B*Nv <= {cores} with Nv={nv}: --max-num-seqs and every bucket's B must be "
+                    f"<= {cores // nv} (got max_num_seqs={model.args.max_batch_size}, buckets {[f'{b}x{t}' for b, t in buckets]})"
                 )
             if problems:
-                raise RuntimeError("Qwen36DFlash speculative serving at TP=2 (fallback path): " + "; ".join(problems))
+                raise RuntimeError("Qwen36DFlash speculative serving at TP=2: " + "; ".join(problems))
+            verify = "FUSED gdn_spec_step verify (two-tile a|b gates)" if fused else "FALLBACK composite GDN verify"
             logger.warning(
-                f"Qwen36DFlash speculative serving at TP=2: FALLBACK path (composite GDN verify, per-row spec SDPA, "
-                f"single bucket {bucket_id(buckets[0])}, Nv={nv}/device) -- slower than the TP=4 fused verify"
+                f"Qwen36DFlash speculative serving at TP=2: {verify}, per-row spec SDPA, "
+                f"buckets {','.join(bucket_id(bt) for bt in buckets)}, Nv={nv}/device ({cores} cores -> B <= {cores // nv})"
             )
             return
         raise RuntimeError(
-            f"Qwen36DFlash speculative serving is validated at TP=4 (fused) and TP=2 (fallback) only; got {nd} device(s) "
-            "(use QWEN36_DRAFTER=mtp for plain decode)"
+            f"Qwen36DFlash speculative serving is validated at TP=4 (fused) and TP=2 (fused or composite) only; got {nd} "
+            "device(s) (use QWEN36_DRAFTER=mtp for plain decode)"
         )
 
     @staticmethod

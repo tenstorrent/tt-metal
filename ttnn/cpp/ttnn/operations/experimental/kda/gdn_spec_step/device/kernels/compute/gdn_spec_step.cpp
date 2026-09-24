@@ -8,7 +8,8 @@
 //    rows exactly 0). The plain kernel's placement matmul is not needed: rows already sit at r0+t, and its only
 //    numeric effect (fp32 -> SrcB rounding) is idempotent with the one every consumer of qc/kc/vc applies.
 // B. row-batched pre once: qn = l2norm(qc)*scale, kn = l2norm(kc) (mask_T), vm = vc*mask_T, kt = kn^T, T gate pairs
-//    (a, b extracted from the a|b tile by exact one-hot matmuls), zs = silu(z).
+//    (a, b extracted from the a|b tile(s) by exact one-hot matmuls; AB2 = 1 when 2*Nv > 32 and b may sit in a second
+//    tile, ab_in[b_idx]), zs = silu(z).
 // C. T serial delta-rule steps, state resident in L1 (state_in -> hn -> hn ...), post-token state copied to `hnew`
 //    for the writer, the token's output row accumulated through the e_t row mask.
 // D. row-batched post: out = rmsnorm(acc) * w * zs (rows outside the user's stay exactly 0 in the `out` tiles; the
@@ -30,21 +31,6 @@ inline void reduce_rows(uint32_t n) {
 
 constexpr uint32_t kOneBits = 0x3F800000u;     // 1.0f
 constexpr uint32_t kTwentyBits = 0x41A00000u;  // 20.0f (softplus threshold, as ttnn.softplus(1.0, 20.0))
-
-// out = a[ai] @ b[bi]  (single-tile matmul; the exact one-hot row / column extraction of the gate scalars)
-inline void mm1(uint32_t a, uint32_t b, uint32_t ai, uint32_t bi, uint32_t out, DataflowBuffer& out_dfb) {
-    out_dfb.reserve_back(1);
-    pack_reconfig_data_format(out);
-    reconfig_data_format<SrcOrder::Reverse>(a, b);
-    matmul_init(a, b);
-    tile_regs_acquire();
-    matmul_tiles(a, b, ai, bi, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, out, 0);
-    tile_regs_release();
-    out_dfb.push_back(1);
-}
 
 // beta_t = sigmoid(b_s), dec = exp(neg_exp_A * softplus(a_s + dt_bias))  (all-equal scalar tiles), one DST acquire:
 // DST0 <- b_s -> sigmoid; DST1 <- a_s, DST2 <- dtb, add, softplus, DST3 <- nea, mul, exp  -- gdn_decode_step_conv.cpp's
@@ -204,17 +190,38 @@ inline void rmsnorm_rows(
 }
 
 // gates of one token: a = ab[r0+t, h], b = ab[r0+t, Nv+h] extracted exactly with the bf16 one-hot selectors
-// (g1 = rsel[t] @ ab: every row = row r0+t; a_s = g1 @ csel[0], b_s = g1 @ csel[1]: all-equal scalar tiles)
+// (g1[i] = rsel[t] @ ab_in[i]: every row = row r0+t of that a|b tile; a_s = g1[0] @ csel[0], b_s = g1[AB2] @ csel[1]:
+// all-equal scalar tiles). AB2 = 0: one a|b tile (2*Nv <= 32), exactly the one-tile op order. AB2 = 1 (Nv = 24): b's
+// row is gathered from ab_in[b_idx] (b_idx = 0 when this head's a and b share a tile) into g1[1]; single-tile
+// one-hot matmuls are exact gathers, so a head whose pair shares a tile computes the same bits either way.
+template <uint32_t AB2>
 inline void gates_token(
     DataflowBuffer& rsel,
     DataflowBuffer& g1,
     DataflowBuffer& a_s,
     DataflowBuffer& b_s,
     DataflowBuffer& beta_t,
-    DataflowBuffer& dec) {
+    DataflowBuffer& dec,
+    uint32_t b_idx) {
     rsel.wait_front(1);
-    mm1(dfb::rsel, dfb::ab_in, 0, 0, dfb::g1, g1);
-    g1.wait_front(1);
+    g1.reserve_back(1 + AB2);
+    pack_reconfig_data_format(dfb::g1);
+    reconfig_data_format<SrcOrder::Reverse>(dfb::rsel, dfb::ab_in);
+    matmul_init(dfb::rsel, dfb::ab_in);
+    tile_regs_acquire();
+    matmul_tiles(dfb::rsel, dfb::ab_in, 0, 0, 0);
+    if constexpr (AB2 != 0) {
+        matmul_tiles(dfb::rsel, dfb::ab_in, 0, b_idx, 1);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, dfb::g1, 0);
+    if constexpr (AB2 != 0) {
+        pack_tile(1, dfb::g1, 1);
+    }
+    tile_regs_release();
+    g1.push_back(1 + AB2);
+    g1.wait_front(1 + AB2);
     a_s.reserve_back(1);
     b_s.reserve_back(1);
     pack_reconfig_data_format(dfb::a_s);
@@ -222,7 +229,7 @@ inline void gates_token(
     matmul_init(dfb::g1, dfb::csel);
     tile_regs_acquire();
     matmul_tiles(dfb::g1, dfb::csel, 0, 0, 0);
-    matmul_tiles(dfb::g1, dfb::csel, 0, 1, 1);
+    matmul_tiles(dfb::g1, dfb::csel, AB2, 1, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, dfb::a_s, 0);
@@ -230,7 +237,7 @@ inline void gates_token(
     tile_regs_release();
     a_s.push_back(1);
     b_s.push_back(1);
-    g1.pop_front(1);
+    g1.pop_front(1 + AB2);
     rsel.pop_front(1);
     a_s.wait_front(1);
     b_s.wait_front(1);
@@ -241,8 +248,8 @@ inline void gates_token(
 
 }  // namespace
 
-template <uint32_t Kt, uint32_t Vt, uint32_t T, uint32_t K, uint32_t scale_bits, uint32_t inv_dv_bits>
-TT_KERNEL void compute(uint32_t u) {
+template <uint32_t Kt, uint32_t Vt, uint32_t T, uint32_t K, uint32_t AB2, uint32_t scale_bits, uint32_t inv_dv_bits>
+TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     (void)u;
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ch = 2 * Kt + Vt;
@@ -317,13 +324,13 @@ TT_KERNEL void compute(uint32_t u) {
     silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
     z_in.pop_front(Vt);
     zs.wait_front(Vt);
-    ab_in.wait_front(1);
+    ab_in.wait_front(1 + AB2);
     csel.wait_front(2);
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
     for (uint32_t t = 0; t < T; ++t) {
-        gates_token(rsel, g1, a_s, b_s, beta_t, dec);
+        gates_token<AB2>(rsel, g1, a_s, b_s, beta_t, dec, b_idx);
     }
-    ab_in.pop_front(1);
+    ab_in.pop_front(1 + AB2);
     csel.pop_front(2);
 
     // ---- A. window rebuild, shifted conv operands, 4-tap causal conv + SiLU, placement -- phased so every matmul /

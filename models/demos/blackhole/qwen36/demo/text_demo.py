@@ -298,6 +298,8 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(4096, 100, True, 8, 1, id="spec_4k_b8", marks=pytest.mark.timeout(900)),
         pytest.param(8192, 100, True, 8, 1, id="spec_8k_b8", marks=pytest.mark.timeout(900)),
         pytest.param(16384, 100, True, 8, 1, id="spec_16k_b8", marks=pytest.mark.timeout(1800)),
+        # 4-user long-ISL point for the TP=2 (Nv=24: B <= 4) spec profile; 4 sequential 32k prefills x 2 passes.
+        pytest.param(32768, 100, True, 4, 1, id="spec_32k_b4", marks=pytest.mark.timeout(2400)),
     ],
 )
 def test_demo_text(

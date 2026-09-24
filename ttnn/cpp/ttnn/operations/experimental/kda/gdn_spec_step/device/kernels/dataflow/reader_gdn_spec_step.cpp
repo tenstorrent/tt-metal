@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Reader: one core = (user u, value head h). Reads the ctrl page (parity, mi[u], initial ring block of (u,h); HOLD
 // sentinel -> block bh, mi 0), the constants, the head's 12 whole window tiles (win[par], user u) + 12 whole raw
-// projection tiles + the 12 tap tiles (rows 0..K-1 only), z, the a|b tile, the norm weight row, builds the bf16
+// projection tiles + the 12 tap tiles (rows 0..K-1 only), z, the a|b tile(s), the norm weight row, builds the bf16
 // one-hot selector tiles, then reads the 64 KiB initial state last (compute's conv/pre overlap it). No per-token reads.
+// a|b: a[h] is column h and b[h] column Nv + h past tile ab_page. With 2*Nv <= 32 both sit in tile ab_page (one read,
+// ab_in[0]); with Nv = 24 (TP = 2) the a|b block spans two tiles and b's tile is read into ab_in[1] when it differs
+// from a's (b_idx = 1, decided by the host per core), so the compute gathers b's row from ab_in[b_idx].
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -36,7 +39,7 @@ template <
     uint32_t norm_eps_bits,
     uint32_t ctrl_bytes,
     uint32_t hold_sentinel>
-TT_KERNEL void reader(uint32_t u, uint32_t h) {
+TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
     const auto wa_acc = TensorAccessor(tensor::win_a);
     const auto wb_acc = TensorAccessor(tensor::win_b);
@@ -116,20 +119,31 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
     load_head_scalar<dtb_fp32 != 0>(dtb_acc, dtb_s, noc, h);
     load_head_scalar<nea_fp32 != 0>(nea_acc, nea_s, noc, h);
 
-    // ---- phase 1 (small): z, the a|b tile, the gate selectors -> compute starts silu(z) and the T gate pairs
+    // ---- phase 1 (small): z, the a|b tile(s), the gate selectors -> compute starts silu(z) and the T gate pairs
     z_in.reserve_back(Vt);
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
-    ab_in.reserve_back(1);
-    read_tiles_at(qkv_acc, ab_in, noc, pg + ab_page, 1, 0);
-    // csel[0]: row h all ones (column extractor of a), csel[1]: row Nv + h all ones (of b)
+    // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
+    // AB2 = 0 -> one tile, one entry, exactly the 2*Nv <= 32 read)
+    constexpr uint32_t AB2 = (2 * Nv > 32) ? 1u : 0u;
+    ab_in.reserve_back(1 + AB2);
+    read_tiles_at(qkv_acc, ab_in, noc, pg + ab_page + (h >> 5), 1, 0);
+    if constexpr (AB2 != 0) {
+        if (b_idx != 0) {
+            read_tiles_at(qkv_acc, ab_in, noc, pg + ab_page + ((Nv + h) >> 5), 1, 1);
+        }
+    } else {
+        (void)b_idx;
+    }
+    // csel[0]: row h & 31 all ones (column extractor of a within its tile), csel[1]: row (Nv + h) & 31 (of b within
+    // its)
     csel.reserve_back(2);
     zero_reserved(csel, noc, 2);
     {
         auto lock = csel.scoped_write_lock(2);
         auto p16 = lock.template get_ptr<volatile uint16_t>();
         for (uint32_t j = 0; j < 32; ++j) {
-            set_one(p16, 0, h, j);
-            set_one(p16, 1, Nv + h, j);
+            set_one(p16, 0, h & 31u, j);
+            set_one(p16, 1, (Nv + h) & 31u, j);
         }
     }
     csel.push_back(2);
@@ -148,7 +162,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
     rsel.push_back(T);
     noc.async_read_barrier();
     z_in.push_back(Vt);
-    ab_in.push_back(1);
+    ab_in.push_back(1 + AB2);
 
     // ---- phase 2 (bulk): window + raw projection tiles, taps, weight row; the conv selectors built meanwhile
     // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile

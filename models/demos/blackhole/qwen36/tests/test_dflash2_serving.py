@@ -16,7 +16,9 @@ touches another slot, or a stale page-table row shows up here as a confident mis
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_dflash2_serving.py -v -s
 Needs the DFlash2 drafter matched to the served weights (DFLASH_WEIGHTS) and the full 64-layer model.
 """
+
 import gc
+import os
 
 import pytest
 import torch
@@ -35,7 +37,10 @@ from models.demos.blackhole.qwen36.tests.test_spec_batched import (
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import MAX_NEW, NUM_BLOCKS, _reference_greedy
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-B = 2
+# Slots allocated (the verify bucket is (B, K+1)); the scenario itself uses slots 0 and 1, so B > 2 runs the same
+# joins / leaves with the extra slots HELD -- QWEN36_DFLASH_SERVING_TEST_B=4 exercises the served 4x8 bucket (TP=2's
+# only bucket at Nv=24) with two held rows.
+B = int(os.environ.get("QWEN36_DFLASH_SERVING_TEST_B", "2"))
 K = 7
 
 

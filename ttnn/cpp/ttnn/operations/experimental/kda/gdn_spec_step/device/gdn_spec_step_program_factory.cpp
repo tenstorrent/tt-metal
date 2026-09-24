@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 // One core per (user, value head). Reader: ctrl page, constants, the head's 12 window tiles (win[par]) + 12 raw
-// projection tiles + 12 tap tiles, z, a|b, the one-hot selector tiles and the 64 KiB initial state (last). Compute:
+// projection tiles + 12 tap tiles, z, a|b (one tile, or two when 2*Nv > 32 and the head's a and b sit in different
+// tiles: Nv = 24 at TP = 2), the one-hot selector tiles and the 64 KiB initial state (last). Compute:
 // per chunk the window rebuild (2 one-hot matmuls), the 4 shifted operands (4 one-hot matmuls) and the 4-tap conv +
 // SiLU in gdn_decode_step_conv's op order; then the row-batched pre (l2norms, mask, kt, gates), T L1-resident
 // delta-rule steps (state -> hnew per token), the row-batched gated RMSNorm. Writer: window rows to win[1-par]
@@ -77,6 +78,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const uint32_t BH = B * Nv;
     const uint32_t C = 2 * Nk * a.key_dim + Nv * a.value_dim;
     const uint32_t Ct = C / TILE_WIDTH;  // tiles per window / tap row
+    // a|b gate columns [qkvz_dim, qkvz_dim + 2*Nv): one tile when 2*Nv <= 32 (TP = 4: Nv = 12); two tiles at Nv = 24
+    // (TP = 2), where a[h] (column h) and b[h] (column Nv + h) of heads h >= 8 sit in different tiles -> the reader
+    // reads b's tile into a second ab_in entry (b_idx = 1) and the compute gathers b's row from it
+    const uint32_t AB2 = (2 * Nv > TILE_WIDTH) ? 1u : 0u;
 
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
@@ -111,13 +116,13 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"src_in", 2 * Ch, t16, bf16},  // [win tiles 0..Ch-1 of user u (rows 0..Lw-1) | raw qkv tiles 0..Ch-1]
         {"taps", Ch, t16, bf16},        // tile c: tap j in row j (rows >= K zero)
         {"z_in", Vt, t16, bf16},
-        {"ab_in", 1, t16, bf16},
-        {"sel", 3 + K, t16, bf16},  // WO_W, WO_N (window rebuild), SH_j (shifted conv operands), P (placement)
-        {"mask_T", 1, t16, bf16},   // 1.0 at (u*T + t, 0) for t < T (row-batched l2norm mask)
-        {"e_t", T, t16, bf16},      // tile t: 1.0 at (u*T + t, 0)
-        {"rsel", T, t16, bf16},     // tile t: 1.0 at column u*T + t in every row (gate row extractor)
-        {"csel", 2, t16, bf16},     // tile 0: row h all ones; tile 1: row Nv + h all ones (gate column extractors)
-        {"w_in", Vt, t16, bf16},    // norm weight in row 0
+        {"ab_in", 1 + AB2, t16, bf16},  // [a's tile | b's tile when it differs (AB2)]
+        {"sel", 3 + K, t16, bf16},      // WO_W, WO_N (window rebuild), SH_j (shifted conv operands), P (placement)
+        {"mask_T", 1, t16, bf16},       // 1.0 at (u*T + t, 0) for t < T (row-batched l2norm mask)
+        {"e_t", T, t16, bf16},          // tile t: 1.0 at (u*T + t, 0)
+        {"rsel", T, t16, bf16},         // tile t: 1.0 at column u*T + t in every row (gate row extractor)
+        {"csel", 2, t16, bf16},         // tile 0: row h all ones; tile 1: row Nv + h all ones (gate column extractors)
+        {"w_in", Vt, t16, bf16},        // norm weight in row 0
         {"scaler", 1, t32, fp32},
         {"eps_l2", 1, t16, bf16},
         {"eps_norm", 1, t16, bf16},
@@ -126,14 +131,16 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"state_in", KV, t32, fp32}};
     const std::vector<Dfb> reader_local = {{"ctrl_r", 1, ctrl_bytes, u32}};
     const std::vector<Dfb> compute_local = {
-        {"wc", Ch, t16, bf16},   {"shift", Ch * K, t16, bf16}, {"cv", Ch, t32, fp32},    {"tmp", tmp_tiles, t32, fp32},
-        {"stats", 1, t32, fp32}, {"scratch", 1, t32, fp32},    {"inv", 1, t32, fp32},    {"qc", Kt, t32, fp32},
-        {"kc", Kt, t32, fp32},   {"vc", Vt, t32, fp32},        {"qn", Kt, t32, fp32},    {"kn", Kt, t32, fp32},
-        {"vm", Vt, t32, fp32},   {"kt", Kt, t32, fp32},        {"g1", 1, t32, fp32},     {"a_s", 1, t32, fp32},
-        {"b_s", 1, t32, fp32},   {"beta_t", T, t32, fp32},     {"dec", T, t32, fp32},    {"eb", 1, t32, fp32},
-        {"hd", KV, t32, fp32},   {"vread", Vt, t32, fp32},     {"delta", Vt, t32, fp32}, {"outer", KV, t32, fp32},
-        {"hn", KV, t32, fp32},   {"gq", Vt, t32, fp32},        {"acc_a", Vt, t32, fp32}, {"acc_b", Vt, t32, fp32},
-        {"on", Vt, t32, fp32},   {"zs", Vt, t32, fp32}};
+        {"wc", Ch, t16, bf16},         {"shift", Ch * K, t16, bf16}, {"cv", Ch, t32, fp32},
+        {"tmp", tmp_tiles, t32, fp32}, {"stats", 1, t32, fp32},      {"scratch", 1, t32, fp32},
+        {"inv", 1, t32, fp32},         {"qc", Kt, t32, fp32},        {"kc", Kt, t32, fp32},
+        {"vc", Vt, t32, fp32},         {"qn", Kt, t32, fp32},        {"kn", Kt, t32, fp32},
+        {"vm", Vt, t32, fp32},         {"kt", Kt, t32, fp32},        {"g1", 1 + AB2, t32, fp32},
+        {"a_s", 1, t32, fp32},         {"b_s", 1, t32, fp32},        {"beta_t", T, t32, fp32},
+        {"dec", T, t32, fp32},         {"eb", 1, t32, fp32},         {"hd", KV, t32, fp32},
+        {"vread", Vt, t32, fp32},      {"delta", Vt, t32, fp32},     {"outer", KV, t32, fp32},
+        {"hn", KV, t32, fp32},         {"gq", Vt, t32, fp32},        {"acc_a", Vt, t32, fp32},
+        {"acc_b", Vt, t32, fp32},      {"on", Vt, t32, fp32},        {"zs", Vt, t32, fp32}};
     const std::vector<Dfb> compute_out = {
         {"hnew", a.hnew_depth * KV, t32, fp32}, {"out", Vt, tout, out_fmt}, {"wout", Ch, t16, bf16}};
     const std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
@@ -166,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         .unique_id = READER,
         .source = std::string(kDir) + "dataflow/reader_gdn_spec_step.cpp",
         .compiler_options = {.opt_level = KernelBuildOptLevel::Os},  // code size (kernel config buffer)
-        .runtime_arg_schema = {.runtime_arg_names = {"u", "h"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"u", "h", "b_idx"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     for (const auto& d : reader_out) {
@@ -260,9 +267,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
              {"Vt", Vt},
              {"T", T},
              {"K", K},
+             {"AB2", AB2},
              {"scale_bits", float_bits(a.scale)},
              {"inv_dv_bits", float_bits(1.0f / static_cast<float>(a.value_dim))}},
-        .runtime_arg_schema = {.runtime_arg_names = {"u"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"u", "b_idx"}},
         .hw_config = std::move(compute_hw),
     };
     for (const auto& d : reader_out) {
@@ -276,7 +284,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         compute.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
     }
 
-    // ---- runtime args: core i handles item (u, h) = (i / Nv, i % Nv)
+    // ---- runtime args: core i handles item (u, h) = (i / Nv, i % Nv); b_idx = 1 when head h's b gate column lies in
+    //      a different tile than its a column (only possible with AB2)
     m2::KernelRunArgs reader_args{.kernel = READER};
     m2::KernelRunArgs writer_args{.kernel = WRITER};
     m2::KernelRunArgs compute_args{.kernel = COMPUTE};
@@ -285,9 +294,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         const uint32_t item = dist.wi_start[i];
         const uint32_t u = item / Nv;
         const uint32_t h = item % Nv;
-        m2::AddRuntimeArgsForNode(reader_args.runtime_arg_values, core, {{"u", u}, {"h", h}});
+        const uint32_t b_idx = (AB2 != 0 && ((Nv + h) / TILE_WIDTH) != (h / TILE_WIDTH)) ? 1u : 0u;
+        m2::AddRuntimeArgsForNode(reader_args.runtime_arg_values, core, {{"u", u}, {"h", h}, {"b_idx", b_idx}});
         m2::AddRuntimeArgsForNode(writer_args.runtime_arg_values, core, {{"u", u}, {"h", h}});
-        m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"u", u}});
+        m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"u", u}, {"b_idx", b_idx}});
     }
 
     // ---- tensor parameters (ring and the window pair are read by the reader and written in place by the writer)

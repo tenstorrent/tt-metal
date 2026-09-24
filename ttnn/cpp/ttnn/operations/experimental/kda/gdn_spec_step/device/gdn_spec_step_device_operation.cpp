@@ -77,7 +77,14 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     const uint32_t Nv = a.num_value_heads, Nk = a.num_key_heads, Dk = a.key_dim, Dv = a.value_dim;
     const uint32_t T = a.T, B = a.B, K = a.conv_kernel;
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
-    TT_FATAL(2 * Nv <= TW, "{}: a|b must fit one tile row (2*Nv <= 32)", kOp);
+    // one core per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the factory
+    const auto grid = in.qkvzab.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        B * Nv <= static_cast<uint32_t>(grid.x * grid.y),
+        "{}: B * num_value_heads = {} (user, head) items exceed the {}-core compute grid",
+        kOp,
+        B * Nv,
+        grid.x * grid.y);
     TT_FATAL(Dk > 0 && Dv > 0 && Dk % TW == 0 && Dv % TW == 0, "{}: key_dim and value_dim must be tile aligned", kOp);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     TT_FATAL(T >= 1 && B >= 1, "{}: need T >= 1, B >= 1", kOp);
