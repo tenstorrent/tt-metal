@@ -51,7 +51,9 @@ struct FrameTrailer {
     uint64_t elapsed;
     // The signal rides the frame rather than racing it, so data-before-signal needs no
     // fence: the payload and these words arrive in one page.
-    uint32_t sig_off;  // signal word, as an offset from l1_base on the TARGET
+    // Symmetric: the host hands both sides the same l1_base through tt_uva_ini(), so this
+    // offset names one word that sender and target each own at the same place.
+    uint32_t sig_off;
     uint32_t sig_val;
     uint32_t sig_op;  // UvaSignalOp
     uint32_t reserved0;
