@@ -11,6 +11,7 @@
 #include <internal/cluster_noc_helpers.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <exception>
 #include <random>
@@ -36,6 +37,11 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -203,6 +209,15 @@ void test_hd_socket_loopback(
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
+    if (const auto& context = mesh_device->impl().coowner_context()) {
+        std::array<uint32_t, 2> addresses = {
+            input_socket.get_config_buffer_address(), output_socket.get_config_buffer_address()};
+        std::array<uint32_t, 2> minima = {}, maxima = {};
+        context->all_reduce(ttsl::Span<uint32_t>(addresses), ttsl::Span<uint32_t>(minima), multihost::ReduceOp::MIN);
+        context->all_reduce(ttsl::Span<uint32_t>(addresses), ttsl::Span<uint32_t>(maxima), multihost::ReduceOp::MAX);
+        EXPECT_EQ(minima, maxima);
+    }
+
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
     // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
@@ -246,17 +261,43 @@ void test_hd_socket_loopback(
 
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_iterations; i++) {
-        std::iota(src_vec.begin(), src_vec.end(), i);
-        for (uint32_t j = 0; j < num_txns; j++) {
-            input_socket.write(src_vec.data() + (j * page_size_words), 1);
-            output_socket.read(dst_vec.data() + (j * page_size_words), 1);
+    if (mesh_device->is_local(socket_core.device_coord)) {
+        uint32_t page_size_words = page_size / sizeof(uint32_t);
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            std::iota(src_vec.begin(), src_vec.end(), i);
+            for (uint32_t j = 0; j < num_txns; j++) {
+                input_socket.write(src_vec.data() + (j * page_size_words), 1);
+                output_socket.read(dst_vec.data() + (j * page_size_words), 1);
+            }
         }
+        input_socket.barrier();
+        output_socket.barrier();
+        EXPECT_EQ(src_vec, dst_vec);
+    } else {
+        auto rejects_non_owner = [](auto&& operation) {
+            EXPECT_THAT(
+                operation, testing::ThrowsMessage<std::runtime_error>(testing::HasSubstr("rank owning endpoint")));
+        };
+        rejects_non_owner([&] { input_socket.write(src_vec.data(), 1); });
+        rejects_non_owner([&] { experimental::detail::try_write(input_socket, src_vec.data(), 1); });
+        rejects_non_owner([&] { input_socket.has_space(std::nullopt); });
+        rejects_non_owner([&] { input_socket.acked_past(0); });
+        rejects_non_owner([&] { input_socket.populate_descriptor(); });
+        rejects_non_owner([&] { output_socket.read(dst_vec.data(), 1); });
+        rejects_non_owner([&] { experimental::detail::try_read(output_socket, dst_vec.data(), 1); });
+        rejects_non_owner([&] { output_socket.has_data(); });
+        rejects_non_owner([&] { output_socket.pages_available(); });
+        rejects_non_owner([&] { output_socket.bytes_sent(); });
+        rejects_non_owner([&] { output_socket.host_fifo(); });
+        rejects_non_owner([&] { output_socket.pop(1); });
+        rejects_non_owner([&] { output_socket.discard_pending_pages(); });
+        rejects_non_owner([&] { output_socket.populate_descriptor(); });
+        EXPECT_NO_THROW(input_socket.barrier(1));
+        EXPECT_NO_THROW(output_socket.barrier(1));
     }
-    input_socket.barrier();
-    output_socket.barrier();
-    EXPECT_EQ(src_vec, dst_vec);
+    if (const auto& context = mesh_device->impl().coowner_context()) {
+        context->barrier();
+    }
 }
 
 void test_hd_socket_multithreaded_loopback(
@@ -402,6 +443,75 @@ bool is_device_coord_mmio_mapped(
     const auto& cluster = MetalContext::instance().get_cluster();
     auto device_id = mesh_device->get_device(device_coord)->id();
     return cluster.get_associated_mmio_device(device_id) == device_id;
+}
+
+// Run with rank bindings that split one mesh across multiple ranks.
+using SharedHDSocketFixture = GenericMeshDeviceFixture;
+TEST_F(SharedHDSocketFixture, OwnerLoopbackAndNonOwnerAccess) {
+    if (!mesh_device_->impl().coowner_context()) {
+        GTEST_SKIP() << "Requires a mesh shared by multiple ranks.";
+    }
+    const auto range = MeshCoordinateRange(mesh_device_->shape());
+    for (const auto& coord : {range.start_coord(), range.end_coord()}) {
+        for (auto mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+            SCOPED_TRACE(fmt::format("endpoint={}, mode={}", coord, static_cast<int>(mode)));
+            // More pages than the FIFO capacity exercises wraparound and acknowledgements.
+            test_hd_socket_loopback(mesh_device_, 4096, 1024, 16384, mode, 2, {coord, CoreCoord(0, 0)});
+        }
+    }
+}
+
+class SharedServiceHDSocketFixture : public MeshDeviceFixture4x8DispatchAgnostic {
+protected:
+    void TearDown() override {
+        experimental::DispatchContext::get().reset();
+        MeshDeviceFixture4x8DispatchAgnostic::TearDown();
+    }
+};
+
+TEST_F(SharedServiceHDSocketFixture, RejectServiceEndpointBeforeCollectiveAllocation) {
+    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE") || mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Requires Blackhole slow dispatch with manual fast dispatch.";
+    }
+    const auto& context = mesh_device_->impl().coowner_context();
+    if (!context) {
+        GTEST_SKIP() << "Requires a mesh shared by multiple ranks.";
+    }
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    const auto coord = MeshCoordinateRange(mesh_device_->shape()).start_coord();
+    auto& service = mesh_device_->impl().metal_context().get_service_core_manager();
+    IDevice* owner_device = mesh_device_->is_local(coord) ? mesh_device_->get_device(coord) : nullptr;
+    std::array<uint32_t, 3> local = {}, shared = {};
+    CoreCoord core(0, 0);
+    if (owner_device) {
+        try {
+            core = service.get_claimable_cores(owner_device).at(0);
+            service.claim(owner_device, {core});
+            local = {1, core.x, core.y};
+        } catch (const std::exception& e) {
+            ADD_FAILURE() << "Could not claim service endpoint: " << e.what();
+        }
+    }
+    context->all_reduce(ttsl::Span<uint32_t>(local), ttsl::Span<uint32_t>(shared), multihost::ReduceOp::MAX);
+    ASSERT_EQ(shared[0], 1u);
+    const MeshCoreCoord endpoint(coord, CoreCoord(shared[1], shared[2]));
+    auto rejected = testing::ThrowsMessage<std::runtime_error>(testing::HasSubstr("claimed service-core endpoints"));
+    EXPECT_THAT([&] { D2HSocket socket(mesh_device_, endpoint, 4096); }, rejected);
+    for (auto mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+        EXPECT_THAT([&] { H2DSocket socket(mesh_device_, endpoint, BufferType::L1, 4096, mode); }, rejected);
+    }
+    if (owner_device) {
+        service.release(owner_device, {core});
+    }
+    context->barrier();
+    // A rejected constructor must not strand a peer in an allocation collective.
+    {
+        H2DSocket input(mesh_device_, {coord, CoreCoord(0, 0)}, BufferType::L1, 4096, H2DMode::HOST_PUSH);
+        D2HSocket output(mesh_device_, {coord, CoreCoord(0, 0)}, 4096);
+        input.barrier(1000);
+        output.barrier(1000);
+    }
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 }
 
 using HDSocketFixture = MeshDevice1x2Fixture;

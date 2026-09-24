@@ -92,7 +92,10 @@ public:
      * socket metadata and downstream (host) buffer addresses.
      *
      * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
      * Only the rank owning sender_core maps host memory and may read or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.

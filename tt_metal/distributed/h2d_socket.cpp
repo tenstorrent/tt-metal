@@ -146,6 +146,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
 }
 
 void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
+    validate_host_socket_allocation(*mesh_device, recv_core_);
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     auto num_cores = 1;
     auto shard_params = ShardSpecBuffer(
@@ -170,9 +171,8 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
-                            ? mesh_device->get_device(recv_core_.device_coord)
-                            : nullptr;
+    auto* recv_device =
+        mesh_device->is_local(recv_core_.device_coord) ? mesh_device->get_device(recv_core_.device_coord) : nullptr;
     if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
@@ -191,9 +191,8 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     }
 
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
-                            ? mesh_device->get_device(recv_core_.device_coord)
-                            : nullptr;
+    auto* recv_device =
+        mesh_device->is_local(recv_core_.device_coord) ? mesh_device->get_device(recv_core_.device_coord) : nullptr;
     if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
@@ -734,6 +733,7 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
 }
 
 bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
+    validate_host_socket_access(mesh_device_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
@@ -753,6 +753,7 @@ bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
 }
 
 bool H2DSocket::acked_past(uint32_t watermark) {
+    validate_host_socket_access(mesh_device_, recv_core_);
     // in_flight = bytes_sent_ - bytes_acked_ (unsigned, always <= fifo_size_)
     // bytes_since_watermark = bytes_sent_ - watermark (unsigned, in [0, fifo_size_])
     // Write at watermark is done iff bytes_acked_ >= watermark, equivalently
@@ -855,6 +856,7 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
 }
 
 void H2DSocket::write(void* data, uint32_t num_pages) {
+    validate_host_socket_access(mesh_device_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
@@ -873,6 +875,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
 }
 
 bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
+    validate_host_socket_access(mesh_device_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
@@ -910,6 +913,7 @@ MeshDevice* H2DSocket::get_mesh_device() const { return mesh_device_; }
 H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
 
 HDSocketDescriptor H2DSocket::populate_descriptor() const {
+    validate_host_socket_access(mesh_device_, recv_core_);
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
     // The descriptor schema has no fields for the L2CPU LIM addresses, so a connector
     // could not rebuild the device side. Checked here rather than in export_descriptor()

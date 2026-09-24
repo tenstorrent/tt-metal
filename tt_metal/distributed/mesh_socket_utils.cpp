@@ -5,6 +5,8 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -17,6 +19,30 @@
 using namespace tt::tt_metal::distributed::multihost;
 
 namespace tt::tt_metal::distributed {
+
+void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoord& endpoint) {
+    const auto& context = mesh_device.impl().coowner_context();
+    if (!context) {
+        return;
+    }
+    uint32_t local_service_core = 0;
+    if (mesh_device.is_local(endpoint.device_coord)) {
+        auto* device = mesh_device.get_device(endpoint.device_coord);
+        auto& service = mesh_device.impl().metal_context().get_service_core_manager();
+        local_service_core = service.claimed_cores(device->id()).contains(endpoint.core_coord);
+    }
+    uint32_t service_core = 0;
+    context->all_reduce(
+        ttsl::Span<uint32_t>(&local_service_core, 1), ttsl::Span<uint32_t>(&service_core, 1), ReduceOp::MAX);
+    TT_FATAL(service_core == 0, "Host sockets on shared meshes do not support claimed service-core endpoints.");
+}
+
+void validate_host_socket_access(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint) {
+    TT_FATAL(
+        !mesh_device || mesh_device->is_local(endpoint.device_coord),
+        "Host socket I/O requires the rank owning endpoint {}.",
+        endpoint.device_coord);
+}
 
 namespace {
 

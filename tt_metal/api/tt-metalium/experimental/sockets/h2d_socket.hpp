@@ -86,7 +86,10 @@ public:
      * via export_descriptor() for cross-process attachment.
      *
      * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
      * Only the rank owning recv_core maps host memory and may write or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * If `recv_core` is a claimed service core, the device-side buffers are allocated
      * from that core's service-core L1 region instead of the worker-grid BankManager.
