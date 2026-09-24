@@ -145,6 +145,20 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
               " the credit and done arrays index";
         return nullptr;
     }
+    // Refused for the same reason as the host bound above: rx_arena_offset() takes a core
+    // and no chip, so one region holds one chip's arenas and chip 1 would alias chip 0.
+    if (cfg.topo.chips_per_host != 1) {
+        err = "H2HSocket: chips_per_host " + std::to_string(cfg.topo.chips_per_host) +
+              " is not supported; the arenas are not partitioned per chip (exactly 1)";
+        return nullptr;
+    }
+    // Checked here, not inherited from HostRegion: the chip comparisons below decode 0 for a
+    // single-chip host, so a non-zero cfg.chip would reject every frame instead of routing it.
+    if (cfg.chip >= cfg.topo.chips_per_host) {
+        err = "H2HSocket: chip " + std::to_string(cfg.chip) + " is outside 0.." +
+              std::to_string(cfg.topo.chips_per_host - 1);
+        return nullptr;
+    }
     if (cfg.ring_pages == 0) {
         err = "H2HSocket: ring_pages must be at least 1";
         return nullptr;
@@ -239,13 +253,18 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         const SendTask& t = im.tx_queue[c].front();
         const uint32_t host = tt_uva_target_host(t.dst, im.cfg.topo);
         const uint32_t dest_core = tt_uva_t6_core(t.dst);
+        // The selector carries a chip this layout cannot express, so it is checked rather
+        // than dropped: chip 1 core N would otherwise land in chip 0 core N's arena.
+        const uint32_t dest_chip = tt_uva_t6_chip(t.dst, im.cfg.topo.chips_per_host);
         // dest_core indexes our own per-peer arrays as well as the target's ring, and it
         // comes out of a UVA, so it is bounded here and not trusted to be one of ours.
-        if (host == kHostNone || host >= im.cfg.topo.num || host == im.cfg.topo.ident || dest_core >= im.cfg.cores) {
+        if (host == kHostNone || host >= im.cfg.topo.num || host == im.cfg.topo.ident ||
+            dest_core >= im.cfg.cores || dest_chip != im.cfg.chip) {
             im.fail(fmt::format(
-                "h2h: core {} addressed host {} core {}, which is not a peer of this symmetric socket",
+                "h2h: core {} addressed host {} chip {} core {}, which is not a peer of this symmetric socket",
                 t.core,
                 host,
+                dest_chip,
                 dest_core));
             im.tx_queue[c].pop_front();
             --im.tx_queued;
@@ -346,8 +365,10 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
 
         const uint32_t host = tt_uva_t6_selector_host(d.origin, im.cfg.topo.chips_per_host);
         const uint32_t src_core = tt_uva_t6_selector_core(d.origin);
+        const uint32_t src_chip = tt_uva_t6_selector_chip(d.origin, im.cfg.topo.chips_per_host);
         // cfg.cores, not kProvisionedCores: src_core indexes done_out, which is sized by it.
-        if (host >= im.cfg.topo.num || host == im.cfg.topo.ident || src_core >= im.cfg.cores) {
+        if (host >= im.cfg.topo.num || host == im.cfg.topo.ident || src_core >= im.cfg.cores ||
+            src_chip != im.cfg.chip) {
             im.fail(
                 "h2h: a delivered frame named origin selector " + std::to_string(d.origin) +
                 ", which is not a peer core");
