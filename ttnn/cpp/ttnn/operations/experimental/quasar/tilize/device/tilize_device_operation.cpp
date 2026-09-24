@@ -28,6 +28,14 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // Sharded optimized factories borrow the tensor buffers as DFBs, which must be L1.
+    if (input_tensor.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
@@ -44,14 +52,6 @@ bool can_use_sharded_optimized_factories(
         if (operation_attributes.output_mem_config.shard_spec().value().shape[0] != tt::constants::TILE_HEIGHT) {
             return false;
         }
-        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-    }
-
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-        return false;
     }
 
     if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {

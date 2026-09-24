@@ -54,10 +54,10 @@ void kernel_main() {
 
     uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
+        for (uint32_t j = 0; j < tile_height; j++) {
+            row_stick_ids[j] = stick_id + j;
+        }
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
-            for (uint32_t j = 0; j < tile_height; j++) {
-                row_stick_ids[j] = stick_id + j;
-            }
             curr_stick_offset = curr_offset;
             write_tiles(1, tile_width_size);
             curr_offset += tile_width_size;

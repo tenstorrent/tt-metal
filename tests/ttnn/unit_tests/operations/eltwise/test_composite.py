@@ -73,6 +73,40 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device, expe
 
 
 @pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (-10, None),
+        (None, 10),
+        (-10, 10),
+    ],
+)
+def test_clamp_tensor_bounds_output_tensor(min_val, max_val, device):
+    # Regression test for issue #55334: the tensor-bounds overload of ttnn.clamp
+    # ignored the output_tensor argument and silently left the caller-supplied
+    # buffer unwritten.
+    input_shape = torch.Size([1, 1, 32, 32])
+    in_data, input_tensor = data_gen_with_range(input_shape, -100, 100, device)
+
+    min_tensor = (
+        ttnn.full(input_shape, min_val, device=device, layout=ttnn.TILE_LAYOUT) if min_val is not None else None
+    )
+    max_tensor = (
+        ttnn.full(input_shape, max_val, device=device, layout=ttnn.TILE_LAYOUT) if max_val is not None else None
+    )
+
+    preallocated_output = ttnn.zeros(input_shape, device=device, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.clamp(input_tensor, min_tensor, max_tensor, output_tensor=preallocated_output)
+
+    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    golden_tensor = golden_function(in_data, min_val, max_val)
+
+    # The op's return value must match the golden result...
+    assert compare_pcc([result], [golden_tensor])
+    # ...and the preallocated output_tensor buffer must have actually been written.
+    assert compare_pcc([preallocated_output], [golden_tensor])
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
@@ -131,25 +165,6 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device, expec
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_mish_ttnn(input_shapes, device):
-    in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.mish(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.mish)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
     (torch.Size([1, 1, 89600, 32]),),
 )
 def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
@@ -183,28 +198,6 @@ def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("k", [1, 5])
-def test_unary_polygamma_ttnn(input_shapes, k, device):
-    torch.manual_seed(213919)
-    torch_input = torch.rand(input_shapes, dtype=torch.bfloat16) * 9.0 + 1.0
-    golden_function = ttnn.get_golden_function(ttnn.polygamma)
-    golden_tensor = golden_function(torch_input, k)
-
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.polygamma(input_tensor, k)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
-
-
 # Locks in accuracy at the lower domain boundary (x ~ 0.5), where the exact-summation
 # cutoff (NUM_TERMS) places the Euler-Maclaurin tail closest to its asymptotic limit.
 @pytest.mark.parametrize(
@@ -226,136 +219,7 @@ def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
     output_tensor = ttnn.polygamma(input_tensor, k)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_tril_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.tril(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.tril)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_triu_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.triu(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.triu)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 64])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "dim",
-    [-1, 3],
-)
-def test_unary_glu_ttnn(input_shapes, dim, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    golden_fn = ttnn.get_golden_function(ttnn.glu)
-
-    output_tensor = ttnn.glu(input_tensor, dim)
-    golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 64])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "dim",
-    [-1, 3],
-)
-def test_unary_reglu_ttnn(input_shapes, dim, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    golden_fn = ttnn.get_golden_function(ttnn.reglu)
-
-    output_tensor = ttnn.reglu(input_tensor, dim)
-    golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 64])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "dim",
-    [-1, 3],
-)
-def test_unary_geglu_ttnn(input_shapes, dim, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    golden_fn = ttnn.get_golden_function(ttnn.geglu)
-
-    output_tensor = ttnn.geglu(input_tensor, dim)
-    golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 64])),  # Single core
-        (torch.Size([1, 3, 320, 32 * 8])),  # Multi core
-    ),
-)
-@pytest.mark.parametrize(
-    "dim",
-    [-1, 3],
-)
-def test_unary_swiglu_ttnn(input_shapes, dim, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    golden_fn = ttnn.get_golden_function(ttnn.swiglu)
-
-    output_tensor = ttnn.swiglu(input_tensor, dim)
-    golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
+    sdpa/test_sliding_window_work_plan.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
@@ -13,9 +14,11 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
 
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
+    test_scalar_lhs_binary.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
+    test_eltwise.cpp
     test_gelu_bw_ulp.cpp
     test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
@@ -30,10 +33,12 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
+    test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
+    test_sort_prim_validation.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
@@ -41,6 +46,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_wavelet_planner.cpp
     test_wavelet_sfpu.cpp
     test_work_split_tilize.cpp
+    test_unary_program_hash.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES

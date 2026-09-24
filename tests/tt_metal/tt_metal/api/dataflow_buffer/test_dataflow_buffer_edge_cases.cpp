@@ -127,7 +127,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -254,6 +254,241 @@ TEST_F(UnitMeshFixture, B3_2_0_TailCreditRace_RepeatedImplicitSync_DMDM) {
     run_dm_dfb_dm_implicit_sync_2_0(this->device(), /*num_iterations=*/3, /*implicit_sync=*/true);
 }
 
+// Implicit-sync availability guards.
+//
+// Both guards drive one endpoint through the real implicit-sync path
+// (async_read/async_write with TXN_ID) while the opposite endpoint acts as a
+// credit controller using the explicit push_back / pop_front APIs. The
+// controller withholds the credit the second implicit transfer needs and
+// records, into L1, whether that transfer returned anyway. A pending transfer
+// is invisible to the tile-counter occupancy / free-space registers, so a
+// guard that consults only those registers lets the second transfer reuse a
+// slot that is not actually available.
+namespace {
+
+constexpr uint32_t kGuardEntrySize = 1024;
+constexpr uint32_t kGuardRingEntries = 16;
+constexpr uint32_t kGuardSentinel = 0xBAADF00Du;
+
+const m2::DFBSpecName GUARD_DFB{"dfb"};
+const m2::KernelSpecName GUARD_PRODUCER{"producer"};
+const m2::KernelSpecName GUARD_CONSUMER{"consumer"};
+const m2::TensorParamName GUARD_TENSOR{"guard_tensor"};
+const m2::SemaphoreSpecName GUARD_SEM_PRODUCER_READY{"producer_ready"};
+const m2::SemaphoreSpecName GUARD_SEM_CONSUMER_READY{"consumer_ready"};
+const m2::SemaphoreSpecName GUARD_SEM_SECOND_ATTEMPT{"second_attempt"};
+const m2::SemaphoreSpecName GUARD_SEM_SECOND_RETURNED{"second_returned"};
+const m2::SemaphoreSpecName GUARD_SEM_CREDIT_RELEASED{"credit_released"};
+const m2::SemaphoreSpecName GUARD_SEM_PEER_PRELOADED{"peer_preloaded"};
+
+std::vector<m2::SemaphoreBinding> guard_semaphore_bindings() {
+    return {
+        {.semaphore_spec_name = GUARD_SEM_PRODUCER_READY, .accessor_name = "producer_ready"},
+        {.semaphore_spec_name = GUARD_SEM_CONSUMER_READY, .accessor_name = "consumer_ready"},
+        {.semaphore_spec_name = GUARD_SEM_SECOND_ATTEMPT, .accessor_name = "second_attempt"},
+        {.semaphore_spec_name = GUARD_SEM_SECOND_RETURNED, .accessor_name = "second_returned"},
+        {.semaphore_spec_name = GUARD_SEM_CREDIT_RELEASED, .accessor_name = "credit_released"},
+    };
+}
+
+std::vector<m2::SemaphoreSpec> guard_semaphore_specs(const m2::NodeCoord& node) {
+    return {
+        {.unique_id = GUARD_SEM_PRODUCER_READY, .target_nodes = node},
+        {.unique_id = GUARD_SEM_CONSUMER_READY, .target_nodes = node},
+        {.unique_id = GUARD_SEM_SECOND_ATTEMPT, .target_nodes = node},
+        {.unique_id = GUARD_SEM_SECOND_RETURNED, .target_nodes = node},
+        {.unique_id = GUARD_SEM_CREDIT_RELEASED, .target_nodes = node},
+    };
+}
+
+void check_guard_result(distributed::MeshDevice& mesh_device, uint32_t result_l1_addr, const char* what) {
+    std::vector<uint32_t> result;
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 1u);
+    ASSERT_NE(result[0], kGuardSentinel) << "credit controller never reported a result";
+    EXPECT_EQ(result[0], 0u) << "the second implicit " << what << " returned before its credit was released";
+}
+
+}  // namespace
+
+// Implicit writes: the DM consumer drains one entry per tile counter, then
+// wraps back to the first counter whose entry is claimed but not yet acked.
+static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_device, uint32_t num_tile_counters) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync is Quasar-only";
+    }
+
+    const m2::NodeCoord node{0, 0};
+    const uint32_t num_pages = num_tile_counters + 1;
+    const auto tensor_spec = make_flat_dram_tensor_spec(kGuardEntrySize, num_pages, DataType::UINT32);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb{
+        .unique_id = GUARD_DFB,
+        .entry_size = kGuardEntrySize,
+        .num_entries = kGuardRingEntries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // One producer thread per tile counter; each posts to the counter it owns.
+    auto producer = make_dm_kernel(
+        GUARD_PRODUCER,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_write_guard_producer.cpp",
+        static_cast<uint8_t>(num_tile_counters));
+    producer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
+    producer.semaphore_bindings = guard_semaphore_bindings();
+    disable_implicit_sync_for(producer, GUARD_DFB);
+
+    auto consumer = make_dm_kernel(
+        GUARD_CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_write_guard_consumer.cpp");
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.tensor_bindings = {{.tensor_parameter_name = GUARD_TENSOR, .accessor_name = "dst_tensor"}};
+    consumer.compile_time_args = {{"num_tile_counters", num_tile_counters}};
+    consumer.semaphore_bindings = guard_semaphore_bindings();
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {GUARD_PRODUCER, GUARD_CONSUMER}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "implicit_write_availability_guard",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .semaphores = guard_semaphore_specs(node),
+        .tensor_parameters = {{.unique_id = GUARD_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
+    std::vector<uint32_t> sentinel{kGuardSentinel};
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sentinel);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = GUARD_PRODUCER,
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
+        {.kernel = GUARD_CONSUMER},
+    };
+    params.tensor_args = {{GUARD_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    check_guard_result(mesh_device, result_l1_addr, "write");
+}
+
+// Implicit reads: one producer round-robins num_tile_counters. POSTED/ACKED are
+// preloaded so each counter has exactly one free slot. The producer reserves
+// every one of those slots, then the next read revisits the first counter and
+// must wait for that counter's consumer to free it.
+static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_device, uint32_t num_tile_counters) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync is Quasar-only";
+    }
+
+    const m2::NodeCoord node{0, 0};
+    // STRIDED splits the ring across the consumers, so each tile counter holds
+    // ring / num_tile_counters entries. Preloading POSTED to that capacity with
+    // ACKED at 1 leaves exactly one free slot on every counter: the producer can
+    // reserve one read per counter, and the read that wraps back to the first
+    // counter must then wait for that counter's consumer to free a slot.
+    const uint32_t ring_entries = kGuardRingEntries;
+    const uint32_t preload_posted = ring_entries / num_tile_counters;
+    constexpr uint32_t preload_acked = 1;
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(kGuardEntrySize, num_tile_counters + 1, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb{
+        .unique_id = GUARD_DFB,
+        .entry_size = kGuardEntrySize,
+        .num_entries = ring_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto producer = make_dm_kernel(
+        GUARD_PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_read_guard_producer.cpp");
+    producer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    producer.tensor_bindings = {{.tensor_parameter_name = GUARD_TENSOR, .accessor_name = "src_tensor"}};
+    producer.compile_time_args = {{"preload_posted", preload_posted}, {"num_tile_counters", num_tile_counters}};
+    producer.semaphore_bindings = guard_semaphore_bindings();
+
+    auto consumer = make_dm_kernel(
+        GUARD_CONSUMER,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_read_guard_consumer.cpp",
+        static_cast<uint8_t>(num_tile_counters));
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.compile_time_args = {{"preload_acked", preload_acked}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
+    consumer.semaphore_bindings = guard_semaphore_bindings();
+    consumer.semaphore_bindings.push_back(
+        {.semaphore_spec_name = GUARD_SEM_PEER_PRELOADED, .accessor_name = "peer_preloaded"});
+    disable_implicit_sync_for(consumer, GUARD_DFB);
+
+    auto semaphores = guard_semaphore_specs(node);
+    semaphores.push_back({.unique_id = GUARD_SEM_PEER_PRELOADED, .target_nodes = node});
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {GUARD_PRODUCER, GUARD_CONSUMER}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "implicit_read_availability_guard",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = {{.unique_id = GUARD_TENSOR, .spec = in_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
+    std::vector<uint32_t> sentinel{kGuardSentinel};
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sentinel);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = GUARD_PRODUCER},
+        {.kernel = GUARD_CONSUMER,
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
+    };
+    params.tensor_args = {{GUARD_TENSOR, std::cref(in_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    check_guard_result(mesh_device, result_l1_addr, "read");
+}
+
+TEST_F(UnitMeshFixture, ImplicitReadPendingPostReservesFreeSlot) {
+    run_implicit_read_availability_guard(this->device(), /*num_tile_counters=*/1);
+}
+
+TEST_F(UnitMeshFixture, ImplicitReadAvailability_1Producer2Consumer_2TC) {
+    run_implicit_read_availability_guard(this->device(), /*num_tile_counters=*/2);
+}
+
+TEST_F(UnitMeshFixture, ImplicitWritePendingAckIsNotNewData) {
+    run_implicit_write_availability_guard(this->device(), /*num_tile_counters=*/1);
+}
+
+TEST_F(UnitMeshFixture, ImplicitWriteAvailability_2Producer1Consumer_2TC) {
+    run_implicit_write_availability_guard(this->device(), /*num_tile_counters=*/2);
+}
+
 // D1: long implicit-sync run past counter wrap
 TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     if (this->device().arch() != ARCH::QUASAR) {
@@ -365,7 +600,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -596,7 +831,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -672,5 +907,301 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A_2_0
     };
     run_single_dfb_program_2_0(this->device(), params);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Tensix→DM ring pressure with a mapping-independent oracle.
+//
+// The RingPressure_2Sx4S case above is the only test in the tree that combines ring wraparound,
+// data verification, and a DM side wider than the Tensix side -- and its expected values were
+// re-derived by mapping observed output tiles back to input pages, so it cannot distinguish a
+// slot-mapping defect from intended behaviour. These three use M2Oracle::MULTISET, which asserts
+// only what the DFB contract guarantees: every ring slot is delivered exactly once per ring-fill,
+// in any order.
+//
+// The 2Sx2S case is the control. It must pass, and it is what makes a failure in the other two
+// evidence about the DFB rather than about the new oracle.
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_2Sx2S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_1Sx2S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_2Sx4S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 4,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// ---------------------------------------------------------------------------------------------
+// DM→DM asymmetric under ring pressure.
+//
+// This is the configuration closest to the op-level corruption that the harness can verify END TO END:
+// the DM producers NoC-read from DRAM and write their OWN ring slots (unlike the Tensix-producer cases,
+// where the host prefills the ring and the producer only posts credits), and the DM consumers NoC-write
+// to DRAM, so the default identity oracle applies. Existing DM→DM ring-pressure coverage is symmetric
+// only (1Sx1S, 3Sx3S), and existing asymmetric DM→DM coverage moves exactly one ring-fill -- so
+// asymmetric-plus-wrap is untested, and it is where per-thread producer slot assignment would show up.
+//
+// Shapes mirror the op configs that corrupt: 4Sx1S/2Sx1S are the in0/in1 (R, C) shapes at C=1,
+// 1Sx2S/1Sx4S are the out (C, W) shapes at C=1.
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_4Sx1S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 4,
+        .num_consumers = 1,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(4, 1),
+        .num_entries_in_buffer = 2 * default_num_entries(4, 1),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_2Sx1S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 1,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(2, 1),
+        .num_entries_in_buffer = 2 * default_num_entries(2, 1),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_1Sx2S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(1, 2),
+        .num_entries_in_buffer = 2 * default_num_entries(1, 2),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_1Sx4S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(1, 4),
+        .num_entries_in_buffer = 2 * default_num_entries(1, 4),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// ---------------------------------------------------------------------------------------------
+// DM -> DFB -> Tensix -> DFB -> DM, multi-threaded, under ring pressure.
+//
+// The single-DFB sweeps all pass at the asymmetric shapes an op-level binary_ng corrupts, so the
+// remaining structural difference is that a real op chains TWO DFBs through a Tensix stage that is
+// simultaneously a consumer and a producer. Nothing else in the tree covers that with multiple threads:
+// A1 above is the right topology but hardcodes one thread per stage and one ring-fill.
+//
+// (R, C, W) are the producer / compute / consumer thread counts, i.e. exactly the KernelSpec::num_threads
+// triple a Quasar op sets. Rings are sized 2 x max(endpoints) so the tile stream wraps many times. The
+// oracle is the end-to-end identity, since the copy kernel is an identity.
+static void run_a1_threaded_pipeline(
+    distributed::MeshDevice& mesh_device, uint32_t r, uint32_t c, uint32_t w, uint32_t total_tiles) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+    }
+    ASSERT_EQ(total_tiles % r, 0u);
+    ASSERT_EQ(total_tiles % c, 0u);
+    ASSERT_EQ(total_tiles % w, 0u);
+
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_tiles, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = 2 * std::max(r, c),
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    m2::DataflowBufferSpec dfb_out{
+        .unique_id = DFB_OUT,
+        .entry_size = entry_size,
+        .num_entries = 2 * std::max(c, w),
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto producer = make_dm_dfb_producer(
+        PRODUCER,
+        DFB_IN,
+        IN_TENSOR,
+        total_tiles / r,
+        /*implicit_sync=*/false,
+        m2::DFBAccessPattern::STRIDED,
+        static_cast<uint8_t>(r));
+
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_eltwise_copy_2_0.cpp", static_cast<uint8_t>(c));
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    // Per-THREAD count: the kernel loop is not strided, the STRIDED binding is what hands each thread
+    // its own sub-stream. Same convention the single-DFB helper uses.
+    compute.compile_time_args = {{"per_core_tile_cnt", total_tiles / c}};
+
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER,
+        DFB_OUT,
+        OUT_TENSOR,
+        total_tiles / w,
+        /*blocked_consumer=*/false,
+        /*implicit_sync=*/false,
+        m2::DFBAccessPattern::STRIDED,
+        static_cast<uint8_t>(w));
+
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{
+        .name = "wu",
+        .kernels = {PRODUCER, CONSUMER, COMPUTE},
+        .target_nodes = node,
+    };
+    m2::ProgramSpec spec{
+        .name = "a1_threaded_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = create_random_vector_of_bfloat16(entry_size * total_tiles, 2.0f, 0xA1A1);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
+
+    // Poison the output so a pass cannot come from a buffer that happened to already hold the answer,
+    // and so pages nobody wrote are distinguishable from pages written with wrong data.
+    constexpr uint32_t kPoison = 0xDEADBEEFu;
+    const std::vector<uint32_t> poison(input.size(), kPoison);
+    slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), poison);
+    m2_writeshard_barrier_uint32(mesh_device, out_tensor, poison);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    ASSERT_EQ(input.size(), output.size());
+
+    // Second read of the same buffer: a difference would mean the readback is unstable, which would
+    // make every mismatch count below meaningless.
+    std::vector<uint32_t> output_reread;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output_reread);
+    ASSERT_EQ(output, output_reread) << "output buffer readback is not stable across two reads";
+
+    size_t bad = 0;
+    size_t untouched = 0;
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == output[i]) {
+            continue;
+        }
+        ++bad;
+        untouched += (output[i] == kPoison);
+    }
+    EXPECT_EQ(bad, 0u) << "A1 threaded pipeline R=" << r << " C=" << c << " W=" << w << ": " << bad << " of "
+                       << input.size() << " words wrong (" << (100.0 * bad / input.size()) << "%), of which "
+                       << untouched << " still hold the poison value (never written)";
+}
+
+// 48 tiles is divisible by every thread count used below, so no thread is ever handed a short share.
+#define A1_THREADED_TEST(r, c, w)                                                    \
+    TEST_F(UnitMeshFixture, DMTensixDMTest2xDFB_Threaded_R##r##C##c##W##w##_2_0) {   \
+        run_a1_threaded_pipeline(this->device(), (r), (c), (w), /*total_tiles=*/48); \
+    }
+
+A1_THREADED_TEST(1, 1, 1)  // control: op-level PASS
+A1_THREADED_TEST(2, 2, 1)  // op-level PASS
+A1_THREADED_TEST(4, 4, 2)  // op-level PASS, the optimum
+A1_THREADED_TEST(2, 1, 1)  // op-level FAIL 46.6%  (R > C)
+A1_THREADED_TEST(4, 1, 1)  // op-level FAIL 69.9%  (R > C)
+A1_THREADED_TEST(1, 1, 2)  // op-level FAIL 50.0%  (W > C)
+A1_THREADED_TEST(1, 1, 4)  // op-level FAIL 74.9%  (W > C)
+
+#undef A1_THREADED_TEST
 
 }  // namespace tt::tt_metal

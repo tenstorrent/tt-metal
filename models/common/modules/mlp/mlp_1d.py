@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
-from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.tt_ccl import (
@@ -108,17 +107,23 @@ class MLP1DConfig:
     w1_w3_dtype: ttnn.DataType | None = None
     w2_dtype: ttnn.DataType | None = None
     activation_dtype: ttnn.DataType | None = None
-    ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    # Optional decode-only overrides (DRAM-sharded decode matmuls). When None, match ff1_3 / ff2.
-    decode_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    decode_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     # If True, move W1 decode output to DRAM before W3 linear so W3 CB validation does not overlap W1 L1.
     decode_spill_w1_to_dram_before_w3: bool = False
 
     linear_dtype: ttnn.DataType | None = None
     mul_dtype: ttnn.DataType | None = None
+
+    # Architecture-sensitive requests. ``None`` selects the concrete mesh/SKU
+    # default during construction; explicit compatible values are copied and
+    # preserved in the internal resolved state.
+    ff1_3_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    ff2_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    decode_ff1_3_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    decode_ff2_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
     prefill_len_cutoff: int | None = None
+    prefill_dram_shard_grid_width: int | None = None
+    prefill_ff1_ff3_grid: tuple[int, int] | None = None
+    prefill_ff2_grid: tuple[int, int] | None = None
 
     def use_minimal_w2_matmul(self, seq_len: int) -> bool:
         """Whether the W2 down-proj prefill matmul should use minimal_matmul.
@@ -132,7 +137,10 @@ class MLP1DConfig:
         """Check if all fields except optional ones are resolved."""
         # activation_dtype is optional override for linear_dtype and mul_dtype.
         # prefill_w2_minimal_matmul_config is only materialized when the minimal-matmul opt-in is set.
-        optional = {"activation_dtype", "prefill_w2_minimal_matmul_config"}
+        optional = {
+            "activation_dtype",
+            "prefill_w2_minimal_matmul_config",
+        }
         # topology: None for single_device (CCL not needed)
         if self.mesh_device and self.mesh_device.get_num_devices() == 1:
             optional.add("topology")
@@ -174,7 +182,7 @@ class MLP1D(LightweightModule):
         All other settings use sensible defaults.
         """
         super().__init__()
-        self.config = _resolve_mlp1d_config(MLP1DConfig(w1=w1, w2=w2, w3=w3))
+        self.config = resolve_mlp1d_arch_config(MLP1DConfig(w1=w1, w2=w2, w3=w3))
         self._device_weights_loaded = False
 
     @classmethod
@@ -195,10 +203,11 @@ class MLP1D(LightweightModule):
             )
             mlp = MLP1D.from_config(config)
         """
-        # bypass the __init__ method of the base class for power users who want to customize the config
+        if not isinstance(config, MLP1DConfig):
+            raise TypeError("MLP1D.from_config expects MLP1DConfig")
         instance = object.__new__(cls)
-        super(MLP1D, instance).__init__()  # Call LightweightModule.__init__()
-        instance.config = _resolve_mlp1d_config(config)  # make a resolved copy of `config`
+        super(MLP1D, instance).__init__()
+        instance.config = resolve_mlp1d_arch_config(config)
         instance._device_weights_loaded = False
         return instance
 
@@ -630,12 +639,11 @@ class MLP1D(LightweightModule):
             w1_w3_dtype=ff1_3_dtype,
             w2_dtype=ff2_dtype,
             activation_dtype=activation_dtype,
+            decode_spill_w1_to_dram_before_w3=False,
             ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
             decode_ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
-            decode_spill_w1_to_dram_before_w3=False,
-            # Use prefill_len_cutoff from args to match original MLP behavior
             prefill_len_cutoff=args.prefill_len_cutoff,
         )
         return cls.from_config(config)
@@ -756,14 +764,142 @@ def _matmul_config(
     )
 
 
-def _compute_kernel_config_hifi2_fp16() -> ttnn.WormholeComputeKernelConfig:
+def _copy_compute_kernel_config(arch, config=None) -> ttnn.DeviceComputeKernelConfig:
+    """Create an independent concrete compute config for ``arch``."""
+    if config is None:
+        values = {
+            "math_fidelity": ttnn.MathFidelity.HiFi2,
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": False,
+            "packer_l1_acc": True,
+            "dst_full_sync_en": False,
+        }
+    else:
+        required = (
+            "math_fidelity",
+            "math_approx_mode",
+            "fp32_dest_acc_en",
+            "packer_l1_acc",
+            "dst_full_sync_en",
+        )
+        missing = [field for field in required if not hasattr(config, field)]
+        if missing:
+            raise ValueError(f"MLP1D compute config is missing fields: {', '.join(missing)}")
+        values = {field: getattr(config, field) for field in required}
+        if hasattr(config, "throttle_level"):
+            values["throttle_level"] = config.throttle_level
+
+    candidate = ttnn.WormholeComputeKernelConfig(**values)
+    return ttnn.init_device_compute_kernel_config(arch, candidate)
+
+
+def _compute_kernel_config_hifi2_fp16(arch) -> ttnn.DeviceComputeKernelConfig:
     """Default compute kernel config for MLP (HiFi2 with FP16 accumulation)."""
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+    return _copy_compute_kernel_config(arch)
+
+
+def _resolve_mlp1d_mesh(config: MLP1DConfig):
+    mesh_device = config.mesh_device or getattr(config.w1, "device", None) or ttnn.GetDefaultDevice()
+    if mesh_device is None:
+        raise ValueError("MLP1D requires a mesh_device or a weight associated with a mesh device")
+    for name in ("w1", "w2", "w3"):
+        weight_device = getattr(getattr(config, name), "device", None)
+        if weight_device is not None and weight_device != mesh_device:
+            raise ValueError(f"MLP1D {name} device must match mesh_device")
+    return mesh_device
+
+
+def _validate_mlp1d_arch_config(config: MLP1DConfig, arch) -> None:
+    for field in (
+        "ff1_3_compute_kernel_cfg",
+        "ff2_compute_kernel_cfg",
+        "decode_ff1_3_compute_kernel_cfg",
+        "decode_ff2_compute_kernel_cfg",
+    ):
+        if getattr(config, field) is None:
+            raise ValueError(f"MLP1D resolved config requires {field}")
+
+    if config.prefill_len_cutoff <= 0 or config.prefill_len_cutoff % TILE_SIZE:
+        raise ValueError("MLP1D prefill_len_cutoff must be a positive multiple of the tile size")
+    if config.prefill_dram_shard_grid_width <= 0:
+        raise ValueError("MLP1D prefill DRAM shard grid width must be positive")
+
+    mesh_device = _resolve_mlp1d_mesh(config)
+    dram_width = mesh_device.dram_grid_size().x
+    expected_dram_width = 8 if arch == ttnn.device.Arch.WORMHOLE_B0 else dram_width
+    if config.prefill_dram_shard_grid_width != expected_dram_width:
+        raise ValueError(
+            "MLP1D prefill DRAM shard grid width does not match the resolved architecture/SKU "
+            f"({config.prefill_dram_shard_grid_width} != {expected_dram_width})"
+        )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    dim = config.dim if config.dim is not None else config.w1.source.shape[-2]
+    hidden_dim = config.hidden_dim if config.hidden_dim is not None else config.w1.source.shape[-1]
+    grid_tile_shapes = {
+        "prefill_ff1_ff3_grid": (8, dim // TILE_SIZE),
+        "prefill_ff2_grid": (
+            8,
+            get_padded_hidden_dim(hidden_dim, mesh_device.get_num_devices(), TILE_SIZE) // TILE_SIZE,
+        ),
+    }
+    for field, tile_shape in grid_tile_shapes.items():
+        grid = getattr(config, field)
+        if len(grid) != 2 or min(grid) <= 0:
+            raise ValueError(f"MLP1D {field} must contain two positive dimensions")
+        if grid[0] > compute_grid.x or grid[1] > compute_grid.y:
+            raise ValueError(f"MLP1D {field} {grid} exceeds mesh compute grid ({compute_grid.x}, {compute_grid.y})")
+        if tile_shape[0] % grid[0] or tile_shape[1] % grid[1]:
+            raise ValueError(f"MLP1D {field} {grid} must evenly divide tile shape {tile_shape}")
+
+
+def resolve_mlp1d_arch_config(config: MLP1DConfig) -> MLP1DConfig:
+    """Return a fully resolved config after one concrete-mesh architecture query."""
+    if not isinstance(config, MLP1DConfig):
+        raise TypeError("resolve_mlp1d_arch_config expects MLP1DConfig")
+    mesh_device = _resolve_mlp1d_mesh(config)
+    arch = mesh_device.arch()
+    if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
+        raise ValueError(f"Unsupported MLP1D architecture: {arch}")
+
+    dim = config.dim if config.dim is not None else config.w1.source.shape[-2]
+    hidden_dim = config.hidden_dim if config.hidden_dim is not None else config.w1.source.shape[-1]
+    if dim <= 0 or dim % TILE_SIZE:
+        raise ValueError("MLP1D dim must be a positive multiple of the tile size")
+    if hidden_dim <= 0:
+        raise ValueError("MLP1D hidden_dim must be positive")
+    num_devices = mesh_device.get_num_devices()
+    padded_hidden_dim = get_padded_hidden_dim(hidden_dim, num_devices, TILE_SIZE)
+    # Simple construction retains the legacy TTTv1 cutoff (1024 on Wormhole,
+    # 512 on Blackhole). Blackhole uses the concrete SKU's DRAM width (7 on
+    # P100, 8 on P150), while Wormhole's accepted recipe intentionally uses 8.
+    default_prefill_len_cutoff = 1024 if arch == ttnn.device.Arch.WORMHOLE_B0 else 512
+    default_prefill_dram_shard_grid_width = (
+        8 if arch == ttnn.device.Arch.WORMHOLE_B0 else mesh_device.dram_grid_size().x
     )
+    default_prefill_ff1_ff3_grid = _find_prefill_grid(8, dim // TILE_SIZE)
+    default_prefill_ff2_grid = _find_prefill_grid(8, padded_hidden_dim // TILE_SIZE)
+    resolved = replace(
+        config,
+        ff1_3_compute_kernel_cfg=_copy_compute_kernel_config(arch, config.ff1_3_compute_kernel_cfg),
+        ff2_compute_kernel_cfg=_copy_compute_kernel_config(arch, config.ff2_compute_kernel_cfg),
+        decode_ff1_3_compute_kernel_cfg=_copy_compute_kernel_config(arch, config.decode_ff1_3_compute_kernel_cfg),
+        decode_ff2_compute_kernel_cfg=_copy_compute_kernel_config(arch, config.decode_ff2_compute_kernel_cfg),
+        prefill_len_cutoff=(
+            default_prefill_len_cutoff if config.prefill_len_cutoff is None else config.prefill_len_cutoff
+        ),
+        prefill_dram_shard_grid_width=(
+            default_prefill_dram_shard_grid_width
+            if config.prefill_dram_shard_grid_width is None
+            else config.prefill_dram_shard_grid_width
+        ),
+        prefill_ff1_ff3_grid=(
+            default_prefill_ff1_ff3_grid if config.prefill_ff1_ff3_grid is None else config.prefill_ff1_ff3_grid
+        ),
+        prefill_ff2_grid=(default_prefill_ff2_grid if config.prefill_ff2_grid is None else config.prefill_ff2_grid),
+    )
+    _validate_mlp1d_arch_config(resolved, arch)
+    return _resolve_mlp1d_config(resolved)
 
 
 def _create_dram_sharded_mem_config(
@@ -776,7 +912,7 @@ def _create_dram_sharded_mem_config(
 
 
 def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
-    """Materialize the config to known good defaults using replace pattern."""
+    """Materialize non-architecture fields after architecture requests resolve."""
 
     to_set = {}
 
@@ -794,22 +930,10 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         hidden_dim = config.w1.source.shape[-1]
         to_set["hidden_dim"] = hidden_dim
 
-    # Derive mesh_device from weights, fall back to default
-    mesh_device = config.mesh_device
-    if mesh_device is None:
-        mesh_device = config.w1.device
-    if mesh_device is None:
-        mesh_device = ttnn.GetDefaultDevice()
+    # Derive and validate the concrete mesh without another architecture query.
+    mesh_device = _resolve_mlp1d_mesh(config)
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
-
-    assert mesh_device is not None, "mesh_device must be available at this point!"
-    if config.w1.device is not None:
-        assert mesh_device == config.w1.device, "mesh_device must match the device of w1!"
-    if config.w2.device is not None:
-        assert mesh_device == config.w2.device, "mesh_device must match the device of w2!"
-    if config.w3.device is not None:
-        assert mesh_device == config.w3.device, "mesh_device must match the device of w3!"
 
     # Derive tt_ccl
     tt_ccl = config.tt_ccl
@@ -850,22 +974,6 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     if config.mul_dtype is None:
         to_set["mul_dtype"] = config.activation_dtype or ttnn.bfloat8_b
     prefill_len_cutoff = config.prefill_len_cutoff
-    if config.prefill_len_cutoff is None:
-        to_set["prefill_len_cutoff"] = 512 if is_blackhole() else 1024
-        prefill_len_cutoff = to_set["prefill_len_cutoff"]
-
-    # Compute kernel configs
-    if config.ff1_3_compute_kernel_cfg is None:
-        to_set["ff1_3_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
-    if config.ff2_compute_kernel_cfg is None:
-        to_set["ff2_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
-
-    ff13_resolved = config.ff1_3_compute_kernel_cfg or to_set.get("ff1_3_compute_kernel_cfg")
-    ff2_resolved = config.ff2_compute_kernel_cfg or to_set.get("ff2_compute_kernel_cfg")
-    if config.decode_ff1_3_compute_kernel_cfg is None:
-        to_set["decode_ff1_3_compute_kernel_cfg"] = ff13_resolved
-    if config.decode_ff2_compute_kernel_cfg is None:
-        to_set["decode_ff2_compute_kernel_cfg"] = ff2_resolved
 
     # --- Phase 3: Decode program configs ---
     # Note: Use padded_hidden_dim to match auto-padding in LazyWeight
@@ -920,17 +1028,15 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     # --- Phase 4: Prefill program configs ---
 
-    # DRAM shard grid width: on Wormhole always 8 (despite 12 physical DRAM cores);
-    # on Blackhole use actual DRAM grid width (7 for P100, 8 for P150).
-    # Matching per_core_N to this width avoids silent PCC issues on P100.
-    dram_shard_grid_width = 8 if not is_blackhole() else mesh_device.dram_grid_size().x
+    # Matching per_core_N to the resolved SKU width avoids silent PCC issues
+    # on P100 while preserving the accepted Wormhole width of 8.
+    dram_shard_grid_width = config.prefill_dram_shard_grid_width
 
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
     if config.prefill_w1_w3_prg_config is None:
-        prefill_rows = 8
-        prefill_mlp_grid_size = _find_prefill_grid(prefill_rows, dim // tile_size)
+        prefill_mlp_grid_size = config.prefill_ff1_ff3_grid
         n_w1_w3 = padded_hidden_dim // num_devices
 
         @lru_cache
@@ -947,8 +1053,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     if config.prefill_w2_prg_config is None:
         n_w2 = dim
-        prefill_rows = 8
-        grid_size = _find_prefill_grid(prefill_rows, padded_hidden_dim // tile_size)
+        grid_size = config.prefill_ff2_grid
 
         @lru_cache
         def w2_prg_config(seq_len: int):
@@ -966,7 +1071,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     # (mlp.py via model_config.py:1329-1334: 8/8/8 blocks); the compute grid is the W2 prefill grid
     # (find_prefill_grid over padded_hidden_dim), equivalent to TTTv1's mlp2_grid(seq_len).
     if config.prefill_w2_minimal_matmul and config.prefill_w2_minimal_matmul_config is None:
-        minimal_w2_grid = _find_prefill_grid(8, padded_hidden_dim // tile_size)
+        minimal_w2_grid = config.prefill_ff2_grid
 
         @lru_cache
         def w2_minimal_matmul_config(seq_len: int):

@@ -815,7 +815,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             return {
                 "log_with_base_tile_init();", fmt::format("log_with_base_tile<false, true>({}, 0x3fb8aa3bu);", idst)};
-        case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
+        case UnaryOpType::ABS:
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
+            return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
         case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
         case UnaryOpType::SIGN: return {"sign_tile_init();", fmt::format("sign_tile({});", idst)};
         case UnaryOpType::SQUARE:
@@ -1063,15 +1067,18 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     }
     if (name == "softplus") {
-        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f, 0.0f});  // beta=1, threshold=20, approx_mode=0
+        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f});  // beta=1, threshold=20
     }
     if (name == "xielu") {
         return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
     }
     if (name == "selu") {
+        // selu_tile takes the scale first and alpha second, the same order ttnn::selu exposes
+        // them in. Values below are the exact values of the nearest floats to the published SELU
+        // constants: 1.0507009873554804934193349852946 and 1.6732632423543772848170429916717.
+        float scale = 1.05070102214813232421875f;
         float alpha = 1.67326319217681884765625f;
-        float lambda = 1.05070102214813232421875f;
-        return UnaryWithParam(UnaryOpType::SELU, {alpha, lambda});
+        return UnaryWithParam(UnaryOpType::SELU, {scale, alpha});
     }
     if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
@@ -1167,6 +1174,21 @@ std::map<std::string, std::string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+}
+
+void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
+    // Exactly one tag survives: the caller's dtype, except that an earlier float32 operand keeps INP_FLOAT32
+    // over a later bf16-class one (the float32 SFPU variants are the accurate ones for both).
+    const bool keep_float32 = defines.contains("INP_FLOAT32") && dtype != DataType::INT32 && dtype != DataType::UINT32;
+    for (const char* tag : {"INP_FLOAT32", "INP_INT32", "INP_UINT32", "INP_FLOAT"}) {
+        defines.erase(tag);
+    }
+    switch (dtype) {
+        case DataType::INT32: defines["INP_INT32"] = "1"; break;
+        case DataType::UINT32: defines["INP_UINT32"] = "1"; break;
+        case DataType::FLOAT32: defines["INP_FLOAT32"] = "1"; break;
+        default: defines[keep_float32 ? "INP_FLOAT32" : "INP_FLOAT"] = "1"; break;
+    }
 }
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {

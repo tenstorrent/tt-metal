@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -25,9 +27,10 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
+template <typename ReadySem>
 FORCE_INLINE void send_affine_pair(
     Noc& noc,
-    Semaphore<>& ready,
+    ReadySem& ready,
     uint32_t target,
     DataflowBuffer& send_a,
     DataflowBuffer& send_b,
@@ -53,14 +56,14 @@ FORCE_INLINE void send_affine_pair(
     ready.up(noc, target_x, target_y, 1);
 }
 
-template <uint32_t G>
+template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
     uint32_t& completed_stages,
     Noc& noc,
-    Semaphore<>& arrival,
-    Semaphore<>& release) {
+    ArrivalSem& arrival,
+    ReleaseSem& release) {
     completed_stages++;
     const uint32_t coordinator = worker_index - group;
     const uint32_t coordinator_x = worker_x(coordinator);
@@ -78,7 +81,7 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G>
+template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
@@ -94,28 +97,45 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
     Noc noc;
-    Semaphore<> ready(sem::ready);
-    Semaphore<> arrival(sem::arrival);
-    Semaphore<> release(sem::release);
+    Semaphore ready(sem::ready);
+    Semaphore arrival(sem::arrival);
+    Semaphore release(sem::release);
 
-    initial_a.reserve_back(a_tiles);
-    initial_b.reserve_back(b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * a_tiles, a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * b_tiles, b_tiles);
-    noc.async_read_barrier();
-    initial_a.push_back(a_tiles);
-    initial_b.push_back(b_tiles);
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        chronology.reserve_back(1);
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
+        topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        kda_chronology::store(words, topology);
+        chronology.push_back(1);
+    }
+    const uint32_t active = topology.head_groups(G);
+    if (group < active) {
+        initial_a.reserve_back(a_tiles);
+        initial_b.reserve_back(b_tiles);
+        issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * a_tiles, a_tiles);
+        issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * b_tiles, b_tiles);
+        noc.async_read_barrier();
+        initial_a.push_back(a_tiles);
+        initial_b.push_back(b_tiles);
+    }
 
     uint32_t completed_stages = 0;
 
     uint32_t ready_target = 0;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
-        send_a.wait_front(a_tiles);
-        send_b.wait_front(b_tiles);
-        if (group + distance < G) {
+        if (group < active) {
+            send_a.wait_front(a_tiles);
+            send_b.wait_front(b_tiles);
+        }
+        if (group + distance < active) {
             send_affine_pair(noc, ready, worker_index + distance, send_a, send_b, remote_a, remote_b, a_tiles, b_tiles);
         }
-        if (group >= distance) {
+        if (group < active && group >= distance) {
             remote_a.reserve_back(a_tiles);
             remote_b.reserve_back(b_tiles);
             ready_target++;
@@ -129,12 +149,16 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         }
         // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
         // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
+        // Inactive dataflow workers must also participate: the barrier counts all G workers for this head.
         synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
     }
 
+    if (group >= active) {
+        return;
+    }
     send_a.wait_front(a_tiles);
     send_b.wait_front(b_tiles);
-    if (group + 1 == G) {
+    if (group + 1 == active) {
         const uint32_t head = worker_index / G;
         for (uint32_t tile = 0; tile < a_tiles; tile++) {
             noc.async_write(

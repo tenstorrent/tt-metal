@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/scoped_lock_cache_ops.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -87,18 +88,18 @@ struct OutputContext {
     uint32_t* const stack_ptr;
     const uint32_t stack_buffer_size;
 
-    const uint32_t output_dfb_addr;
+    const uint32_t output_addr;
     const uint32_t write_out_count;
 
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_dfb_addr, uint32_t out_count) :
+    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_addr, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),
         stack_buffer_size(size),
-        output_dfb_addr(dst_dfb_addr),
+        output_addr(dst_addr),
         write_out_count(out_count) {}
 };
 
@@ -238,7 +239,7 @@ void process_input_tile(
         }
 
         // Offset to the face within the tile
-        uint32_t face_offset = face_id * face_size;
+        const uint32_t face_offset = face_id * face_size;
         volatile tt_l1_ptr DTYPE* face_ptr = src_ptr + face_offset;
 
         // Go over the rows of the face. Update the maximum values in each row.
@@ -254,7 +255,7 @@ void process_input_tile(
             // Go over elements in the current row, current face.
             for (uint32_t col = 0; col < cols_to_process; col++) {
                 // Index within the face
-                uint32_t index = row * face_width + col;
+                const uint32_t index = (row * face_width) + col;
 
                 DTYPE value = face_ptr[index];
 
@@ -267,7 +268,7 @@ void process_input_tile(
 
                 if (new_max) {
                     const bool is_left_side_face = (face_id == 0 || face_id == 2);
-                    const uint32_t new_arg_max = tile_x * ctx.tile_width + (is_left_side_face ? 0 : face_width) + col;
+                    const uint32_t new_arg_max = (tile_x * ctx.tile_width) + (is_left_side_face ? 0 : face_width) + col;
                     curr_max = value;
                     curr_arg_max = new_arg_max;
                 }
@@ -290,7 +291,7 @@ void process_input_tile(
  * @note The location of where values are stored is managed by the OutputContext object
  */
 template <bool keepdim>
-void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputContext& ctx) {
+void collect_row_major_output(const uint32_t new_values[], uint32_t count, OutputContext& ctx) {
     const uint32_t curr_collected = ctx.collected_count;
 
     if constexpr (keepdim) {
@@ -300,16 +301,16 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
     }
 
     auto* stack_ptr = ctx.stack_ptr;
-    auto* dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_dfb_addr);
+    auto* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
-        uint32_t write_index = curr_collected + idx;
+        const uint32_t write_index = curr_collected + idx;
         if constexpr (keepdim) {
             // Accumulate into the on stack array
             stack_ptr[write_index] = new_values[idx];
         } else {
-            // Write directly into the output DFB
-            dfb_ptr[write_index] = new_values[idx];
+            // Write directly into the output scratchpad
+            out_ptr[write_index] = new_values[idx];
         }
     }
 
@@ -331,24 +332,27 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
-    auto dst_dfb_addr = output_ctx.output_dfb_addr;
-    CoreLocalMem<uint32_t> dst_dfb_mem(dst_dfb_addr);
+    auto dst_addr = output_ctx.output_addr;
+    const CoreLocalMem<uint32_t> dst_mem(dst_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
-        // Otherwise, argmax values are accumulated directly in the output DFB.
+        // Otherwise, argmax values are accumulated directly in the output scratchpad.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
-            auto* dst_dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_dfb_addr);
-            // Copy one page of output data into the output DFB.
+            auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+            // Copy one page of output data into the output scratchpad.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
-                dst_dfb_ptr[idx] = stack_ptr[sent_count + idx];
+                dst_ptr[idx] = stack_ptr[sent_count + idx];
             }
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
-        noc.async_write(dst_dfb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
+        // Quasar DM cores stage output through the cached view, so flush it to SRAM before this NoC
+        // read. No-op on WH/BH, where CPU stores are already coherent with the NoC.
+        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), write_size);
+        noc.async_write(dst_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
         collected_count -= output_page_elements;

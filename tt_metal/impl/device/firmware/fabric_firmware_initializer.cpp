@@ -34,8 +34,7 @@ using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
 // Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
-// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
-// docs/fabric-ccl-emulation.md.
+// so its launch/sync handshake would never complete — skip it (as for Mock).
 bool skip_fabric_fw_for_emule() {
     return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 }

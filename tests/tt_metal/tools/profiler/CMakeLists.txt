@@ -1,6 +1,9 @@
 set(PROFILER_TEST_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_full_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_timestamped_events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_decode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_fetch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sync_events.cpp
 )
 
 foreach(TEST_SRC ${PROFILER_TEST_SRCS})

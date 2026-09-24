@@ -14,9 +14,16 @@ CHUNK_START epoch and the post-loop E2E_CLOCK; a chunk's bar runs start(r,c) -> 
 last chunk uses last_compute_end), i.e. compute + any idle wait for the next chunk.
 
     python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace <run.log> [-o out.png]
+
+Or, for gapless data under per-chunk sync, read the runner's per-rank timing CSVs directly instead of
+the fd-race-prone combined log:
+
+    python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace --timing-dir <PREFILL_TIMING_DIR> [-o out.png]
 """
 
 import argparse
+import glob
+import os
 import re
 from collections import defaultdict
 
@@ -59,6 +66,45 @@ def parse(path):
     return starts, last_end, measured
 
 
+def parse_timing_dir(d):
+    """-> the same (starts, last_end, measured) as parse(), from the per-rank timing CSVs the runner
+    appends under PREFILL_TIMING_DIR (rank,c,compute_start,compute_ms). These bypass the shared-stdout
+    fd race that splices C++ lines into the CHUNK_* log records, so this source is gapless."""
+    starts = defaultdict(dict)
+    measured = defaultdict(dict)
+    last_end = {}
+    for path in sorted(glob.glob(os.path.join(d, "rank*.csv"))):
+        with open(path, errors="ignore") as f:
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) != 4:
+                    continue
+                try:
+                    rank, c, cs, ms = int(parts[0]), int(parts[1]), float(parts[2]), float(parts[3])
+                except ValueError:
+                    continue
+                starts[rank][c] = cs
+                measured[rank][c] = ms / 1000.0
+                last_end[rank] = max(last_end.get(rank, 0.0), cs + ms / 1000.0)
+    if not starts:
+        raise SystemExit(f"no rank*.csv timing rows found under {d}")
+    return starts, last_end, measured
+
+
+def trim_to_last(starts, last_end, measured, n):
+    """Keep only the last n chunk indices, dropping the producer's warmup chunks so the chart shows the
+    same real-request window the summarizer reports. last_end is rebuilt from the kept ends so the final
+    bar isn't clipped."""
+    all_c = sorted({c for r in starts for c in starts[r]})
+    if n is None or n >= len(all_c):
+        return starts, last_end, measured
+    keep = set(all_c[-n:])
+    starts = {r: d2 for r, d in starts.items() if (d2 := {c: v for c, v in d.items() if c in keep})}
+    measured = {r: {c: v for c, v in measured.get(r, {}).items() if c in keep} for r in starts}
+    last_end = {r: max(starts[r][c] + measured.get(r, {}).get(c, 0.0) for c in starts[r]) for r in starts}
+    return starts, last_end, measured
+
+
 def slot_end(starts, last_end, rank, chunk, ordered):
     """End of (rank, chunk)'s time SLOT (compute + idle): the next chunk's start, else last_compute_end."""
     i = ordered.index(chunk)
@@ -75,16 +121,37 @@ def median(xs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("log", help="combined pipeline-prefill run log (all ranks)")
+    ap.add_argument("log", nargs="?", help="combined pipeline-prefill run log (all ranks)")
+    ap.add_argument(
+        "--timing-dir",
+        help="dir of per-rank timing CSVs (PREFILL_TIMING_DIR); preferred over the log — gapless",
+    )
     ap.add_argument("-o", "--out", default="pipeline_trace.png")
     ap.add_argument("--no-arrows", action="store_true", help="omit the rank->rank handoff arrows")
+    ap.add_argument(
+        "--real-chunks",
+        type=int,
+        default=None,
+        help="plot only the last N chunks (drops producer warmup, matching the summarizer's window)",
+    )
     args = ap.parse_args()
 
-    starts, last_end, measured = parse(args.log)
+    if args.timing_dir:
+        starts, last_end, measured = parse_timing_dir(args.timing_dir)
+        source_label = os.path.basename(os.path.normpath(args.timing_dir))
+    elif args.log:
+        starts, last_end, measured = parse(args.log)
+        source_label = args.log.split("/")[-1]
+    else:
+        ap.error("provide a log path or --timing-dir")
+
+    starts, last_end, measured = trim_to_last(starts, last_end, measured, args.real_chunks)
     ranks = sorted(starts)
     origin = min(s for r in ranks for s in starts[r].values())  # t=0 at the first chunk start
 
-    n_chunks = max(len(starts[r]) for r in ranks)
+    all_chunks = sorted({c for r in ranks for c in starts[r]})
+    cpos = {c: i for i, c in enumerate(all_chunks)}
+    n_chunks = len(all_chunks)
     cmap = plt.get_cmap("turbo", max(n_chunks, 1))
 
     # Per-chunk compute duration, proxied by the downstream rank's start (it unblocks ~immediately when
@@ -128,7 +195,7 @@ def main():
                     ]
                     dur = slot if slot > 0 else median(own)
             comp_end = s + dur
-            color = cmap(c % cmap.N)
+            color = cmap(cpos[c])
             # Compute block (solid). The idle time (comp_end -> next chunk start) is left UNDRAWN, so
             # the white background shows through as the pipeline bubble.
             ax.broken_barh(
@@ -168,7 +235,7 @@ def main():
                         (x1, nxt - bar_h / 2),
                         arrowstyle="-|>",
                         mutation_scale=7,
-                        color=cmap(c % cmap.N),
+                        color=cmap(cpos[c]),
                         alpha=0.5,
                         linewidth=0.7,
                         shrinkA=0,
@@ -197,7 +264,7 @@ def main():
     ax.set_yticklabels([f"rank {r}" for r in ranks])
     # rank 0 at the bottom; the pipeline flows upward (default y increases upward).
     ax.set_xlabel("time since first chunk start (s)")
-    ax.set_title(f"pipeline-prefill trace — {len(ranks)} ranks, {n_chunks} chunks  ({args.log.split('/')[-1]})")
+    ax.set_title(f"pipeline-prefill trace — {len(ranks)} ranks, {n_chunks} chunks  ({source_label})")
     ax.grid(axis="x", alpha=0.3)
     fig.tight_layout()
     fig.savefig(args.out, dpi=130)

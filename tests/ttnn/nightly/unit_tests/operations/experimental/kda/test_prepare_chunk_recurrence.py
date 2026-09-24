@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -13,17 +13,18 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
-    collect_accuracy_and_determinism_results,
     assert_equal,
+    collect_accuracy_and_determinism_results,
 )
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device,
 ]
 
 CHUNK_SIZE = 32
@@ -31,24 +32,119 @@ OUTPUT_NAMES = ("v_beta", "kd", "q_decay", "intra", "k_dec_t", "final_decay", "t
 
 
 @dataclass(frozen=True)
-class _ProductionCase:
+class _TestCase:
     case_id: str
     num_heads: int
     num_chunks: int
     key_dim: int
     value_dim: int
-    expected_duration_ns: int
 
 
-_PRODUCTION_PERF_MARGIN = 0.05
-_PRODUCTION_CASE = _ProductionCase(
-    "h2-n4-k32-v64",
-    num_heads=2,
-    num_chunks=4,
-    key_dim=32,
-    value_dim=64,
-    expected_duration_ns=25_419,
-)
+_PERFORMANCE_MARGIN = 0.05
+_PRODUCTION_OUTPUT_BF16_MASK = 0x26
+_PRODUCTION_EXPECTED_DURATION_NS = 816_534
+_T_INV_MAX_ABS = 0.01
+_UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
+_PRODUCTION_CASE = _TestCase("sp2-tp4-h24-n80-k128-v128", 24, 80, 128, 128)
+
+
+def _prepare_chunk_recurrence_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 5 or len(outputs) != 7:
+        raise ValueError("chunk-recurrence preparation requires five inputs and seven outputs")
+    tensors = (*inputs, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("chunk-recurrence preparation tensor shapes must be positive")
+
+    q, k, v, g, beta = inputs
+    if len(q.shape) != 3 or len(v.shape) != 3 or len(beta.shape) != 4:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    num_heads, num_chunks, chunk_size, trailing = beta.shape
+    if chunk_size != CHUNK_SIZE or trailing != 1 or q.shape[-1] % num_heads or v.shape[-1] % num_heads:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    key_dim = q.shape[-1] // num_heads
+    value_dim = v.shape[-1] // num_heads
+    if (
+        q.shape != (1, num_chunks * CHUNK_SIZE, num_heads * key_dim)
+        or k.shape != q.shape
+        or g.shape != q.shape
+        or v.shape != (1, num_chunks * CHUNK_SIZE, num_heads * value_dim)
+    ):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    expected_output_shapes = (
+        (num_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, 1),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if any(output.shape != expected for output, expected in zip(outputs, expected_output_shapes, strict=True)):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+
+    instances = num_heads * num_chunks
+    inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (4 * CHUNK_SIZE**2 * key_dim + inverse_flops),
+            multiply_ops=instances * (10 * CHUNK_SIZE * key_dim + CHUNK_SIZE * value_dim),
+            add_ops=instances * (2 * CHUNK_SIZE + (CHUNK_SIZE - 1) * key_dim + CHUNK_SIZE * key_dim + CHUNK_SIZE**2),
+            reduction_ops=instances * 2 * CHUNK_SIZE * (key_dim - 1),
+        ),
+        perf_model.SfpuOps(
+            exp_ops=instances * (3 * CHUNK_SIZE * key_dim + key_dim),
+            rsqrt_ops=instances * 2 * CHUNK_SIZE,
+        ),
+    )
+
+
+def _prepare_chunk_recurrence_performance(
+    inputs: Sequence[ttnn.Tensor],
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=inputs,
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_prepare_chunk_recurrence_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 1)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 1, 32, 1)),
+    )
+    outputs = (
+        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    assert fpu == perf_model.FpuOps(
+        matrix_flops=19104,
+        multiply_ops=672,
+        add_ops=1214,
+        reduction_ops=64,
+    )
+    assert sfpu == perf_model.SfpuOps(exp_ops=194, rsqrt_ops=64)
 
 
 def _host_inputs(
@@ -95,18 +191,32 @@ def _oracle(
     k = k * torch.rsqrt(k.square().sum(dim=-1, keepdim=True) + 1e-6)
     cumulative_g = torch.cumsum(g, dim=2)
     decay = torch.exp(cumulative_g)
-    inverse_decay = torch.exp(-cumulative_g)
     final_g = cumulative_g[:, :, -1]
 
     v_beta = beta * v
     kd = beta * k * decay
     q_decay = q * decay
-    intra = torch.matmul(q_decay, (k * inverse_decay).transpose(-1, -2)).tril()
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
     final_decay = torch.exp(final_g).unsqueeze(-1)
-    akk = torch.matmul(beta * k * decay, (k * inverse_decay).transpose(-1, -2))
-    identity = torch.eye(CHUNK_SIZE, dtype=torch.float32).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
-    t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1))
+    k_fp64 = k.double()
+    cumulative_g_fp64 = cumulative_g.double()
+    anchor_g = cumulative_g_fp64[:, :, -1:].mul(0.5)
+    akk = torch.matmul(
+        beta.double() * k_fp64 * torch.exp(cumulative_g_fp64 - anchor_g),
+        (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+    )
+    # The unused upper triangle can exceed FP32 range for real gates near -5.
+    # Mask in FP64 before converting the causal reference to the output dtype.
+    intra = (
+        torch.matmul(
+            q.double() * torch.exp(cumulative_g_fp64 - anchor_g),
+            (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+        )
+        .tril()
+        .float()
+    )
+    identity = torch.eye(CHUNK_SIZE, dtype=torch.float64).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
+    t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1)).float()
     outputs = (v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv)
     return tuple(
         output.to(torch.bfloat16) if output_bf16_mask & (1 << index) else output.float()
@@ -149,125 +259,183 @@ def _run(
         )
 
 
-@pytest.mark.parametrize(
-    ("num_heads", "num_chunks", "key_dim", "value_dim", "output_bf16_mask", "output_memory"),
-    [
-        (2, 1, 32, 32, 0, ttnn.DRAM_MEMORY_CONFIG),
-        (2, 3, 32, 32, 0x26, ttnn.L1_MEMORY_CONFIG),
-        (2, 4, 32, 64, 0, ttnn.DRAM_MEMORY_CONFIG),
-        (3, 2, 64, 32, 0x37, ttnn.L1_MEMORY_CONFIG),
-    ],
-)
-def test_prepare_chunk_recurrence_contract_and_trace(
-    device: ttnn.Device,
-    num_heads: int,
-    num_chunks: int,
-    key_dim: int,
-    value_dim: int,
-    output_bf16_mask: int,
-    output_memory: ttnn.MemoryConfig,
-) -> None:
-    host_inputs = _host_inputs(num_heads, num_chunks, key_dim, value_dim)
-    expected = _oracle(host_inputs, num_heads, output_bf16_mask)
-    inputs = _device_inputs(host_inputs, device)
-    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in inputs)
+def _case_host_inputs(case: _TestCase, *, seed: int) -> tuple[torch.Tensor, ...]:
+    return _host_inputs(case.num_heads, case.num_chunks, case.key_dim, case.value_dim, seed=seed)
 
-    first = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask, memory_config=output_memory)
-    assert len(first) == 7
+
+def _t_inv_numerical_stress_inputs() -> tuple[torch.Tensor, ...]:
+    """Reproduce the captured inverse instability without loading captured values."""
+    inputs = list(_host_inputs(1, 1, 128, 128, seed=0))
+    generator = torch.Generator().manual_seed(0)
+    # Layer 13's failing chunk has cosine similarity around 0.997, key norm
+    # around 0.36, and beta around 0.918. A shared Gaussian direction plus
+    # small independent noise approximates that geometry; exact gate values
+    # are unnecessary to expose the inverse's cancellation.
+    direction = torch.randn(1, 1, 128, generator=generator)
+    noise = torch.randn(1, CHUNK_SIZE, 128, generator=generator)
+    inputs[1] = ((0.36 / 128**0.5) * (direction + 0.07 * noise)).to(torch.bfloat16).float()
+    inputs[3] = torch.full_like(inputs[3], -0.05).to(torch.bfloat16).float()
+    inputs[4] = 0.90 + 0.03 * torch.rand(1, 1, CHUNK_SIZE, 1, generator=generator)
+    return tuple(inputs)
+
+
+def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _assert_output_accurate(
+    name: str,
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    context: str,
+    t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
+) -> None:
+    assert torch.isfinite(actual).all(), f"{context} {name} contains nonfinite values"
+    assert_accurate(expected, actual, name=f"{context} {name}", pcc_threshold=0.999)
+    if name == "t_inv":
+        _assert_t_inv_strict_lower_accurate(
+            expected,
+            actual,
+            context=context,
+            max_abs_threshold=t_inv_max_abs_threshold,
+        )
+
+
+def _assert_outputs_accurate(
+    expected: Sequence[torch.Tensor],
+    actual: Sequence[torch.Tensor],
+    *,
+    context: str,
+    t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
+) -> None:
+    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        _assert_output_accurate(
+            name,
+            expected_output,
+            actual_output,
+            context=context,
+            t_inv_max_abs_threshold=t_inv_max_abs_threshold,
+        )
+
+
+def _assert_t_inv_strict_lower_accurate(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    context: str,
+    max_abs_threshold: float,
+) -> None:
+    lower_rows, lower_columns = torch.tril_indices(CHUNK_SIZE, CHUNK_SIZE, offset=-1)
+    expected_strict_lower = expected[..., lower_rows, lower_columns]
+    actual_strict_lower = actual[..., lower_rows, lower_columns]
+
+    assert_accurate(
+        expected_strict_lower,
+        actual_strict_lower,
+        name=f"{context} t_inv strictly-lower",
+        pcc_threshold=0.999,
+    )
+    max_abs = float((expected_strict_lower - actual_strict_lower).abs().max())
+    assert (
+        max_abs <= max_abs_threshold
+    ), f"{context} t_inv strictly-lower max abs error {max_abs:.6f} exceeds {max_abs_threshold:.6f}"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [_UNIT_TEST_CASE, _PRODUCTION_CASE],
+    ids=lambda case: case.case_id,
+)
+def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(
+    device: ttnn.Device,
+    case: _TestCase,
+) -> None:
+    output_bf16_mask = _PRODUCTION_OUTPUT_BF16_MASK
+    compute_kernel_config = _production_compute_config(device)
+    host_inputs = _case_host_inputs(case, seed=52797)
+    expected = _oracle(host_inputs, case.num_heads, output_bf16_mask)
+    inputs = _device_inputs(host_inputs, device)
+
+    def run() -> tuple[ttnn.Tensor, ...]:
+        return tuple(
+            _run(
+                inputs,
+                case.num_heads,
+                output_bf16_mask=output_bf16_mask,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
+
+    reference_outputs, actual, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name=f"{case.case_id} outputs device-side exact-value determinism marker",
+    )
+    assert len(reference_outputs) == 7
     expected_shapes = (
-        (num_heads, num_chunks, CHUNK_SIZE, value_dim),
-        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
-        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
-        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
-        (num_heads, num_chunks, key_dim, CHUNK_SIZE),
-        (num_heads, num_chunks, key_dim, 1),
-        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim),
+        (case.num_heads, case.num_chunks, CHUNK_SIZE, case.key_dim),
+        (case.num_heads, case.num_chunks, CHUNK_SIZE, case.key_dim),
+        (case.num_heads, case.num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (case.num_heads, case.num_chunks, case.key_dim, CHUNK_SIZE),
+        (case.num_heads, case.num_chunks, case.key_dim, 1),
+        (case.num_heads, case.num_chunks, CHUNK_SIZE, CHUNK_SIZE),
     )
     input_addresses = {tensor.buffer_address() for tensor in inputs}
     output_addresses = set()
-    for index, (output, shape) in enumerate(zip(first, expected_shapes, strict=True)):
+    for index, (output, shape) in enumerate(zip(reference_outputs, expected_shapes, strict=True)):
         expected_dtype = ttnn.bfloat16 if output_bf16_mask & (1 << index) else ttnn.float32
         assert output.dtype == expected_dtype
         assert output.layout == ttnn.TILE_LAYOUT
-        assert output.memory_config() == output_memory
+        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         assert tuple(output.shape) == shape
         assert output.buffer_address() not in input_addresses
         output_addresses.add(output.buffer_address())
     assert len(output_addresses) == 7
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask, memory_config=output_memory)
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-
-    for name, expected_output, first_tt, traced_tt in zip(OUTPUT_NAMES, expected, first, traced, strict=True):
-        actual = ttnn.to_torch(first_tt)
-        assert_accurate(expected_output, actual, name=name, pcc_threshold=0.999)
-        assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
-    for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
-        assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
-    ttnn.release_trace(device, trace_id)
+    _assert_outputs_accurate(expected, actual, context=f"{case.case_id} invocation 0")
+    for output in reference_outputs:
+        ttnn.deallocate(output)
 
 
-def _production_host_inputs(*, seed: int) -> tuple[torch.Tensor, ...]:
-    case = _PRODUCTION_CASE
-    return _host_inputs(case.num_heads, case.num_chunks, case.key_dim, case.value_dim, seed=seed)
+def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: ttnn.Device) -> None:
+    host_inputs = _t_inv_numerical_stress_inputs()
+    num_heads = host_inputs[-1].shape[0]
+    expected = _oracle(host_inputs, num_heads, 0)
+    device_inputs = _device_inputs(host_inputs, device)
 
-
-def _assert_outputs_accurate(
-    expected: tuple[torch.Tensor, ...],
-    actual: list[ttnn.Tensor],
-    *,
-    context: str,
-) -> None:
-    for name, expected_output, actual_tt in zip(OUTPUT_NAMES, expected, actual, strict=True):
-        assert_accurate(expected_output, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=0.999)
-
-
-def test_prepare_chunk_recurrence_production_shape_accuracy(device: ttnn.Device) -> None:
-    case_id = "sp1-tp8-h12-n160-k128-v128"
-    num_heads = 12
-    num_chunks = 160
-    key_dim = 128
-    value_dim = 128
-    output_bf16_mask = 0x26
-    host_inputs = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=52797)
-    expected = _oracle(host_inputs, num_heads, output_bf16_mask)
-    inputs = _device_inputs(host_inputs, device)
-
-    first = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask)
-    second = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask)
-    _assert_outputs_accurate(expected, first, context=case_id)
-    for name, first_output, second_output in zip(OUTPUT_NAMES, first, second, strict=True):
-        assert_bit_identical(ttnn.to_torch(first_output), ttnn.to_torch(second_output), name=f"{case_id} {name} repeat")
-
-
-def test_prepare_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
-    host_inputs = _production_host_inputs(seed=1441)
-    inputs = _device_inputs(host_inputs, device)
-
-    def run() -> tuple[ttnn.Tensor, ...]:
-        return tuple(_run(inputs, case.num_heads))
-
-    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
+    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(
+        device,
+        lambda: tuple(_run(device_inputs, num_heads)),
+    )
     assert_equal(
         torch.zeros_like(mismatch_marker),
         mismatch_marker,
-        name="prepared outputs device-side exact-value determinism marker",
+        name="correlated keys outputs device-side exact-value determinism marker",
     )
-    for name, expected, output in zip(OUTPUT_NAMES, _oracle(host_inputs, case.num_heads, 0), outputs, strict=True):
-        assert_accurate(expected, output, name=f"deterministic reference {name}", pcc_threshold=0.999)
+    _assert_output_accurate(
+        "t_inv",
+        expected[-1],
+        outputs[-1],
+        context="correlated keys",
+    )
     for output in reference:
         ttnn.deallocate(output)
 
 
 def test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
-    host_a = _production_host_inputs(seed=1911)
-    host_b = _production_host_inputs(seed=1912)
+    case = _UNIT_TEST_CASE
+    host_a = _case_host_inputs(case, seed=1911)
+    host_b = _case_host_inputs(case, seed=1912)
     inputs_a = _device_inputs(host_a, device)
     inputs_b = _device_inputs(host_b, device)
 
@@ -280,14 +448,22 @@ def test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.D
     assert device.num_program_cache_entries() == entries
     assert all(a.buffer_address() != b.buffer_address() for a, b in zip(inputs_a, inputs_b, strict=True))
     assert all(a.buffer_address() != b.buffer_address() for a, b in zip(outputs_a, outputs_b, strict=True))
-    _assert_outputs_accurate(_oracle(host_a, case.num_heads, 0), outputs_a, context="cache miss tensors")
-    _assert_outputs_accurate(_oracle(host_b, case.num_heads, 0), outputs_b, context="cache hit fresh tensors")
+    _assert_outputs_accurate(
+        _oracle(host_a, case.num_heads, 0),
+        tuple(ttnn.to_torch(output) for output in outputs_a),
+        context="cache miss tensors",
+    )
+    _assert_outputs_accurate(
+        _oracle(host_b, case.num_heads, 0),
+        tuple(ttnn.to_torch(output) for output in outputs_b),
+        context="cache hit fresh tensors",
+    )
     assert not torch.equal(ttnn.to_torch(outputs_a[0]), ttnn.to_torch(outputs_b[0]))
 
 
 def test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
-    inputs = _device_inputs(_production_host_inputs(seed=817), device)
+    case = _UNIT_TEST_CASE
+    inputs = _device_inputs(_case_host_inputs(case, seed=817), device)
     implicit = _run(inputs, case.num_heads)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
@@ -308,30 +484,32 @@ def test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaul
 
 
 def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
-    host_inputs = _production_host_inputs(seed=818)
+    case = _UNIT_TEST_CASE
+    host_inputs = _case_host_inputs(case, seed=818)
     inputs = _device_inputs(host_inputs, device)
     approximate = _run(inputs, case.num_heads)
     entries = device.num_program_cache_entries()
-    precise_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    precise_config = _production_compute_config(device)
     precise = _run(inputs, case.num_heads, compute_kernel_config=precise_config)
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(host_inputs, case.num_heads, 0)
-    _assert_outputs_accurate(expected, approximate, context="default approximate math")
-    _assert_outputs_accurate(expected, precise, context="explicit precise math")
+    _assert_outputs_accurate(
+        expected,
+        tuple(ttnn.to_torch(output) for output in approximate),
+        context="default approximate math",
+    )
+    _assert_outputs_accurate(
+        expected,
+        tuple(ttnn.to_torch(output) for output in precise),
+        context="explicit precise math",
+    )
 
 
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
     device: ttnn.Device, expect_error: Callable
 ) -> None:
-    case = _PRODUCTION_CASE
-    inputs = _device_inputs(_production_host_inputs(seed=819), device)
+    case = _UNIT_TEST_CASE
+    inputs = _device_inputs(_case_host_inputs(case, seed=819), device)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
@@ -348,23 +526,41 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for chunk-recurrence preparation performance checks")
 
-    inputs = _device_inputs(_production_host_inputs(seed=117), device)
+    host_inputs = _case_host_inputs(case, seed=117)
+    inputs = _device_inputs(host_inputs, device)
 
     def run() -> list[ttnn.Tensor]:
-        return _run(inputs, case.num_heads)
+        return _run(
+            inputs,
+            case.num_heads,
+            output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=_production_compute_config(device),
+        )
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
-    logger.info(
-        f"chunk-recurrence preparation {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+    performance = _prepare_chunk_recurrence_performance(
+        inputs,
+        outputs,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
     )
-    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    logger.info(
+        f"chunk-recurrence preparation {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
+    )
+    upper = _PRODUCTION_EXPECTED_DURATION_NS * (1 + _PERFORMANCE_MARGIN)
     assert duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
-        f"(reference {case.expected_duration_ns} ns, regression margin {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        f"(reference {_PRODUCTION_EXPECTED_DURATION_NS} ns, margin {_PERFORMANCE_MARGIN * 100:.0f}%)"
     )
 
 
@@ -468,12 +664,28 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
         _run(inputs, 2, memory_config=sharded)
 
 
-@pytest.mark.parametrize("removed_keyword", ["eye", "tril", "ones", "chunk_size", "v_flat", "normalize_qk", "scale"])
-def test_prepare_chunk_recurrence_does_not_expose_removed_arguments(
-    device: ttnn.Device,
-    expect_error: Callable,
-    removed_keyword: str,
-) -> None:
-    inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
-    with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.prepare_chunk_recurrence(*inputs, 2, **{removed_keyword: True})
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20, 0x26], ids=["all-fp32", "decay-bf16", "production"])
+def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_mask: int) -> None:
+    """Keep row transactions contiguous after inverse scratch advances its DFB cursors."""
+    grid = device.compute_with_storage_grid_size()
+    work_items_per_core = 32
+    chunks = grid.x * grid.y * work_items_per_core
+    chunk = _t_inv_numerical_stress_inputs()
+    inputs = tuple(x.repeat(1, chunks, 1) for x in chunk[:4]) + (chunk[4].repeat(1, chunks, 1, 1),)
+    key_dim = chunk[3].shape[-1]
+    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
+    if output_bf16_mask & (1 << 5):
+        expected = expected.to(torch.bfloat16).float()
+    outputs = _run(
+        _device_inputs(inputs, device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = ttnn.to_torch(outputs[5]).float()
+    # final_decay does not depend on the inverse. The old inverse used single-tile
+    # transactions in row-sized DFBs, leaving their cursors offset for the next
+    # work item; the subsequent row reservation crossed the ring end and corrupted
+    # adjacent storage, which surfaced here as a final_decay mismatch.
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)

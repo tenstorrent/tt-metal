@@ -117,16 +117,24 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     // Slice adjustment for tile-aligned K values
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
-    // If we had to round up K for op, slice down to the requested K value
+    // If we had to round up K for op, trim the result down to the requested K value
     if (adjusted_k != k) {
-        const auto output_shape = result[0].logical_shape();
-        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
-
-        // Slice both values and indices tensors to remove extra elements beyond requested K
-        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        // The kernels write whole tiles of adjusted_k columns, so for a 4D last-dim call the requested k is a
+        // logical width change on the same buffer; the other cases still go through slice.
+        if (orig_rank == 4 && is_dim_last_idx) {
+            for (auto& tensor : result) {
+                auto logical_shape = tensor.logical_shape();
+                logical_shape[3] = k;
+                tensor = tensor.reshape(logical_shape, tensor.padded_shape());
+            }
+        } else {
+            const auto output_shape = result[0].logical_shape();
+            ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+            result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+            result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        }
     }
 
     // Rank restoration - convert from op-required 4D back to original rank
@@ -263,6 +271,12 @@ constexpr uint32_t large_k_route_k_multiple = 16;
 // Lifting it is a separate, perf-validated change.
 constexpr uint32_t large_k_route_max_width = 1u << 19;
 
+// Python sampling queries this exact predicate through the nanobind helper
+// ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices
+// before relaxing its call shape (the binding lives on the reduction
+// submodule; only registered ttnn operations are hoisted to top-level ttnn).
+// Keep that helper wired to this implementation so policy changes cannot
+// drift.
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
     const uint32_t k,
@@ -388,6 +402,24 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
 }  // namespace
 
 }  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::operations::reduction::topk::detail {
+
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, const uint32_t k) {
+    TT_FATAL(is_device_tensor(input_tensor), "Sampling top-k route query requires an on-device tensor");
+    return CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+        input_tensor,
+        k,
+        /*largest=*/true,
+        /*stable=*/false,
+        /*is_dim_last_idx=*/true,
+        /*has_user_indices_tensor=*/false,
+        /*has_preallocated_outputs=*/false,
+        /*has_sub_core_grids=*/false,
+        /*user_memory_config=*/std::nullopt);
+}
+
+}  // namespace ttnn::operations::reduction::topk::detail
 
 namespace ttnn {
 

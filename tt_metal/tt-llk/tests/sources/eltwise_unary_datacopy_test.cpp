@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
 #endif
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_tiles * num_faces;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
                 formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
         }
         PROFILER_SYNC();
     }
@@ -68,9 +68,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if constexpr (!tilize_en && !unpack_to_dest)
+            // MATH_ISOLATE must fake the dvalids unpack would post. Blackhole tilize
+            // always posts SrcB (UNP_ZEROSRC) per tile regardless of dest acc;
+            // non-tilize unpack_A posts SrcB only for FP32 dest acc. Leaving unpack
+            // idle here deadlocks math.
+            if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en>(src_handshake_iters);
             }
         }
         else
@@ -99,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 formats.unpack_A_dst,
                                 0 /* block_ct_dim */,
                                 FACE_R_DIM,
-                                4 /* num_faces */,
+                                num_faces,
                                 false /* narrow_tile */);
                         }
                     }
@@ -107,6 +111,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
+    }
+    if constexpr (tilize_en)
+    {
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
     }
 }
 
@@ -121,6 +129,7 @@ const bool is_int_fpu_en = false;
 #endif
 
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -137,7 +146,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int DST_INDEX                    = params.DST_INDEX;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces;
+    const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
 
     {
         START_PERF_MEASURE("INIT")

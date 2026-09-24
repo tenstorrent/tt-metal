@@ -74,6 +74,7 @@ def close_device(device: "ttnn.device.Device"):
 
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
+is_trace_capture_active = ttnn._ttnn.device.is_trace_capture_active
 SetRootDir = ttnn._ttnn.device.SetRootDir
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice

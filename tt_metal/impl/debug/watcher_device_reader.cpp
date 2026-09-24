@@ -230,6 +230,13 @@ string get_l1_target_str(
     return out;
 }
 
+// Quasar: each global semaphore is a 0x40-byte alias window where a read at +4*(inc+8) posts `inc`
+// and returns the pre-increment value (see api/debug/ring_buffer.h, which posts 1 from the device).
+// Reading the base is therefore a GET of 8, not a peek: it decrements the MPSC head and raises
+// GLOBAL_SEMAPHORES (GET_UNDERFLOW / GET_ON_UNINITIALIZED). inc == 0 is the non-mutating read.
+constexpr uint64_t watcher_ring_buf_sem_peek_addr =
+    TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
+
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
     TT_FATAL(
@@ -513,7 +520,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
-                get_riscv_name(hal, llrt::get_core_type(device_id, virtual_core), processor_index));
+                get_riscv_name(hal, llrt::get_core_type(env, device_id, virtual_core), processor_index));
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -526,7 +533,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+            auto programmable_core_type = llrt::get_core_type(env, device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =
@@ -595,14 +602,16 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
     // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot.
+    // rest of the snapshot. Gated on the same condition as DumpRingBuffer(), the only consumer: with
+    // the ring buffer disabled the device firmware never initializes semaphore 31, so touching it at
+    // all would fault.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),
             {static_cast<size_t>(reader.device_id), virtual_coord},
-            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+            watcher_ring_buf_sem_peek_addr);
     }
 
     return Core(

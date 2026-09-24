@@ -23,6 +23,10 @@ Environment:
   JIRA_*              as jira_client.py; JIRA_ISSUE_TYPE default Task
   JIRA_SKIP           build the report but do not file it
 
+A Jira issue is filed only when something needs attention: sim failures, an
+inconclusive sim check, or e2e suite failures. A fully green run is recorded in
+the markdown artifact and step summary only.
+
 Exits 0 whether or not tests failed -- this reports, it does not gate.
 """
 import json
@@ -34,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from jira_client import _env, _truthy, file_issue
+from jira_client import _commit_link, _env, _truthy, file_issue
 from create_jira import format_test, match_entry, parse_failed
 
 HERE = Path(__file__).resolve().parent
@@ -249,7 +253,7 @@ def render_plain(report, meta):
     out += [
         f"Requirements with passing evidence: {len(with_evidence)} of {len(scoped)}.",
         "",
-        f"Commit:      {meta['sha']}",
+        f"Commit:      {_commit_link(meta['sha'])}",
         f"Sim results: {meta['url']}",
         f"Release run: {meta['run_url']}",
         "",
@@ -481,9 +485,23 @@ def main():
         print("JIRA_SKIP set; report not filed")
         return
 
+    # A fully green run needs no ticket: the report is already in the step
+    # summary and the release artifact. File only when there is something to
+    # act on -- sim failures, an inconclusive check, or e2e suite failures.
+    suite_failures = suite_totals(suites)["failed"] if suites else 0
+    if verdict == PASSED and not suite_failures:
+        print("all green; report kept in the artifact and step summary, no Jira issue filed")
+        return
+
     scoped = _in_scope(report["requirements"])
     with_evidence = sum(1 for r in scoped if r["passed"])
-    status = {PASSED: "all gating tests passed", FAILED: "failures present", INCONCLUSIVE: "inconclusive"}[verdict]
+    status = {
+        PASSED: "all gating tests passed",
+        FAILED: "sim failures present",
+        INCONCLUSIVE: "sim check inconclusive",
+    }[verdict]
+    if suite_failures:
+        status += f", {suite_failures} e2e suite test(s) failed"
     print(
         file_issue(
             base=_env("JIRA_BASE_URL", required=True),
@@ -494,6 +512,7 @@ def main():
                 f"Release test evidence {version}: {status} " f"({with_evidence}/{len(scoped)} requirements covered)"
             ),
             issue_type=_env("JIRA_ISSUE_TYPE", "Task"),
+            assignee=_env("JIRA_ASSIGNEE_ACCOUNT_ID", "") or None,
             description=render_plain(report, meta) + "\n",
             labels=["release", "test-evidence", f"release-{version}"]
             + sorted({r["key"] for r in report["requirements"] if r["passed"]}),

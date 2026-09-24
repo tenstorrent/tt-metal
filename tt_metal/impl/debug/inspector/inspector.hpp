@@ -20,6 +20,7 @@ namespace distributed {
 class MeshBuffer;
 class MeshDeviceImpl;
 class MeshWorkloadImpl;
+class MeshSocket;
 }  // namespace distributed
 
 namespace inspector {
@@ -58,6 +59,8 @@ public:
 
     static void mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
     static void mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
+
+    static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
     static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;

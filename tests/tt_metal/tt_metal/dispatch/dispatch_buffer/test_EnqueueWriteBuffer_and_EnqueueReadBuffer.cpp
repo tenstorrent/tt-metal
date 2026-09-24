@@ -40,6 +40,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "dispatch_test_utils.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
@@ -228,36 +229,18 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
 
 // These are helper functions that are used for Slow Dispatch based IO. These are used in tests mixing Fast Dispatch IO
 // with Slow Dispatch for validation.
-void WriteToUnitMeshBuffer(
+std::shared_ptr<distributed::MeshBuffer> CreateSlowDispatchMeshBufferView(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const TestBufferConfig& config,
-    const std::vector<uint32_t>& src,
     const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
-    std::shared_ptr<Buffer> slow_dispatch_buffer;
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = config.page_size, .buffer_type = config.buftype, .bottom_up = false};
     if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
-    } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        local_config.sharding_args = sharding_args.value();
     }
-    detail::WriteToBuffer(*slow_dispatch_buffer, src);
-}
-
-void ReadFromUnitMeshBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const TestBufferConfig& config,
-    std::vector<uint32_t>& dst,
-    const std::shared_ptr<distributed::MeshBuffer>& buf,
-    const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
-    std::shared_ptr<Buffer> slow_dispatch_buffer;
-    if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
-    } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
-    }
-    detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
+    return distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buf->size()}, local_config, mesh_device.get(), buf->address());
 }
 
 // These are helper functions used to write and read from a region of a MeshBuffer (sub-buffer)
@@ -358,7 +341,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             if (cq_write) {
                 distributed::WriteShard(cq, bufa, src, device_coord);
             } else {
-                WriteToUnitMeshBuffer(mesh_device, config, src, bufa, config.sharding_args);
+                auto slow_dispatch_buffer =
+                    CreateSlowDispatchMeshBufferView(mesh_device, config, bufa, config.sharding_args);
+                slow_dispatch::WriteToBuffer(*slow_dispatch_buffer, src);
                 if (config.buftype == BufferType::DRAM) {
                     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                 } else {
@@ -376,7 +361,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             if (cq_read) {
                 distributed::ReadShard(cq, result, bufa, device_coord);
             } else {
-                ReadFromUnitMeshBuffer(mesh_device, config, result, bufa, config.sharding_args);
+                auto slow_dispatch_buffer =
+                    CreateSlowDispatchMeshBufferView(mesh_device, config, bufa, config.sharding_args);
+                slow_dispatch::ReadFromBuffer(*slow_dispatch_buffer, result);
             }
 
             EXPECT_EQ(src, result);
@@ -501,7 +488,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_write) {
                     distributed::WriteShard(cq, buf, src, device_coord, false);
                 } else {
-                    local_test_functions::WriteToUnitMeshBuffer(mesh_device, test_config, src, buf, std::nullopt);
+                    auto slow_dispatch_buffer =
+                        CreateSlowDispatchMeshBufferView(mesh_device, test_config, buf, std::nullopt);
+                    slow_dispatch::WriteToBuffer(*slow_dispatch_buffer, src);
                     const auto device_id = mesh_device->get_device_ids()[0];
                     if (buftype == BufferType::DRAM) {
                         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device_id);
@@ -519,7 +508,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_read) {
                     distributed::ReadShard(cq, res, buf, device_coord, true);
                 } else {
-                    local_test_functions::ReadFromUnitMeshBuffer(mesh_device, test_config, res, buf, std::nullopt);
+                    auto slow_dispatch_buffer =
+                        CreateSlowDispatchMeshBufferView(mesh_device, test_config, buf, std::nullopt);
+                    slow_dispatch::ReadFromBuffer(*slow_dispatch_buffer, res);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -1575,9 +1566,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     TestBufferConfig config = {
-        .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = uint32_t(mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -1590,10 +1580,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
-        .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = num_round_robins * (mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -1660,10 +1649,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     constexpr uint32_t page_size = 200;
     const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
+    const uint32_t num_banks = mesh_device->allocator()->get_num_banks(BufferType::DRAM);
     const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 

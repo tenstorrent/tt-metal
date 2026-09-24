@@ -5,9 +5,10 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
@@ -22,18 +23,16 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -133,7 +132,7 @@ public:
     std::optional<int> get_physical_slot(ChipId chip) const;
 
     //! device driver and misc apis
-    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
+    std::optional<tt::umd::SemVer> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
@@ -200,38 +199,6 @@ public:
         tt::tt_metal::CoreCoord core_end,
         uint64_t addr) const;
 
-    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
-        return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    /**
-     * Returns a pointer to the static TLB window associated with the given target.
-     *
-     * Ownership:
-     *   - The returned TlbWindow is owned and managed by the underlying driver.
-     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
-     *
-     * Lifetime:
-     *   - The pointer remains valid for as long as the underlying driver/device
-     *     context for this Cluster instance remains initialized and the static TLB
-     *     configuration is not torn down by the driver.
-     *   - Callers may cache the pointer, but must ensure they do not use it after
-     *     the Cluster/driver has been destroyed or the device has been deinitialized.
-     *
-     * Concurrency:
-     *   - The driver may return the same TlbWindow instance across multiple calls
-     *     (i.e., this is typically a cached/static window).
-     *   - It is safe to share the pointer across threads for read-only operations.
-     *   - If callers perform operations that mutate the TlbWindow or its underlying
-     *     mappings, they must provide appropriate external synchronization.
-     */
-    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_window(target.chip, target_coord);
-    }
-
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         // Simulation/mock/emule chips do not have host NUMA affinity; UMD throws if queried.
         if (this->target_type_ != tt::TargetDevice::Silicon) {
@@ -254,7 +221,11 @@ public:
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
         ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
     std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
-        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id,
+        void* buffer,
+        size_t sysmem_buffer_size,
+        bool map_to_noc = false,
+        tt::umd::DeviceBufferAccess device_access = tt::umd::DeviceBufferAccess::READ_WRITE) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
@@ -361,6 +332,8 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
+    // Returns whether device-read-only page pinning is available.
+    bool is_read_only_page_pinning_supported() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -456,6 +429,9 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
+    // tensor shard on the transfer path, so it must not be recomputed per call.
+    bool read_only_page_pinning_supported_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

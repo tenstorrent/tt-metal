@@ -15,12 +15,67 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     create_conv3d_config,
     reshape_output,
     run_conv3d_test,
+    prepare_input_tensor,
+    _out_size,
+    apply_logical_pad_mask,
     ALIGNMENT,
 )
 
 # Test configuration constants
 PCC_TOLERANCE = 0.99
 HIGH_PRECISION_PCC = 0.9999
+
+
+@pytest.mark.parametrize(
+    "expected_arch,input_shape,out_channels,grid_size,blocking",
+    [
+        # 8x8 Wormhole: H is split as 2+2+1+0 for each (C_out, T) pair, leaving 15 interleaved
+        # H-partition assignments with no work. The 45 active assignments use Chain placement.
+        pytest.param(
+            ttnn.device.Arch.WORMHOLE_B0,
+            (1, 64, 5, 5, 5),
+            160,
+            (8, 8),
+            (64, 32, 1, 1, 1),
+        ),
+        # Compacting away idle H partitions fits three strips in nine rows, switching Chain to Mcast.
+        pytest.param(
+            ttnn.device.Arch.BLACKHOLE,
+            (1, 64, 7, 12, 5),
+            96,
+            (11, 10),
+            (64, 32, 1, 1, 1),
+            id="blackhole_chain_to_mcast",
+        ),
+    ],
+)
+def test_conv3d_core_placement_with_idle_partitions(
+    device, expected_arch, input_shape, out_channels, grid_size, blocking
+):
+    if device.arch() != expected_arch:
+        pytest.skip(f"Case targets {expected_arch}, running on {device.arch()}")
+
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=grid_size,
+    )
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels,
+        kernel_size=(3, 3, 3),
+        stride=(1, 1, 1),
+        groups=1,
+        padding=(0, 1, 1),
+        padding_mode="zeros",
+        grid_size=grid_size,
+        config=config,
+    )
 
 
 def compute_conv3d_tensor_2d_shape(input_shape):
@@ -1121,3 +1176,305 @@ def test_conv3d_preprepared_large_kernel_no_config(device):
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d (pre-prepared large kernel, no config) torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+def test_conv3d_fp32_exact_tail(device):
+    """Gate for the fp32-exact tail (use_fp32_exact): SFPU reduction/bias + UnpackToDestFp32.
+
+    True fp32 end to end, HiFi4, bias on, scored against a float64 golden. Two assertions,
+    each catching a return of the tail's TF32 roundings:
+      1. rel RMSE <= 1.35e-3 per blocking. Measured with the exact tail: 1.155e-3 at both
+         blockings (the matmul's own Src-truncation floor). Measured without it: 1.507e-3
+         single-block, 1.638e-3 at C_in_block=32.
+      2. Blocking invariance: error at C_in_block=32 (multi-block, reduction branch) within
+         5% of full-C (single block, bias/untilize only). Measured spread: 0.0% with the
+         exact tail, 8.7% without (the per-block partial reload).
+    """
+    torch.manual_seed(42)
+    input_shape = (1, 128, 4, 6, 6)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    padding = (0, 1, 1)
+    N, C, D, H, W = input_shape
+
+    input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, out_channels, kernel_size=kernel_size, padding=padding, bias=True)
+    with torch.no_grad():
+        golden = (
+            torch.nn.functional.conv3d(
+                input_tensor.double(),
+                conv3d_module.weight.data.double(),
+                conv3d_module.bias.data.double(),
+                padding=padding,
+            )
+        ).float()
+    D_out = _out_size(D, padding[0], 1, kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], 1, kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], 1, kernel_size[2], 1)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=ttnn.DataType.FLOAT32)
+
+    errors = {}
+    grid_size = device.compute_with_storage_grid_size()
+    for c_in_block in (C, 32):  # full-C: single block (bias/untilize); 32: 4 blocks (reduction too)
+        config = create_conv3d_config(
+            C_in_block=c_in_block, weights_dtype=ttnn.DataType.FLOAT32, compute_with_storage_grid_size=grid_size
+        )
+        tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.DataType.FLOAT32, pad_value=0)
+        tt_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+        )
+        tt_bias = ttnn.from_torch(
+            conv3d_module.bias.data.reshape(1, -1),
+            device=device,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.TILE_LAYOUT,
+            pad_value=0,
+        )
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            bias_tensor=tt_bias,
+            dtype=ttnn.DataType.FLOAT32,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            groups=1,
+            padding=padding,
+            padding_mode="zeros",
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
+        out = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+        rel = ((out.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std()).item()
+        errors[c_in_block] = rel
+        logger.info(f"conv3d fp32-exact tail, C_in_block={c_in_block}: rel RMSE vs float64 = {rel:.3e}")
+
+    for c_in_block, rel in errors.items():
+        assert rel <= 1.35e-3, f"C_in_block={c_in_block}: rel RMSE {rel:.3e} > 1.35e-3 vs float64 golden"
+    spread = abs(errors[32] - errors[C]) / max(errors[C], 1e-12)
+    assert spread <= 0.05, (
+        f"error depends on C_in blocking (full-C {errors[C]:.3e} vs 32 {errors[32]:.3e}, spread {spread:.1%}): "
+        "the reduction path is re-rounding partials"
+    )
+
+
+def test_conv3d_fp32_exact_tail_streaming(device):
+    """Same gate for the streaming-output variant of the fp32-exact tail.
+
+    The config forces enable_streaming_output on (single C_in block; C_out_block=32 so fp32
+    writes are 128B <= TILE_WIDTH*4; W_out_block=40 so num_patches=40 -> matmul_M_t=2), which
+    runs the per-row SFPU bias + untilize branch instead of the whole-block one. C_in=64 keeps
+    the static CBs (vol2col/weights scale with C_in) inside Wormhole's smaller L1. Measured
+    with the exact tail: 1.172e-3; without it: 1.526e-3 (bound 1.35e-3).
+    """
+    torch.manual_seed(42)
+    C, C_out, W = 64, 32, 40
+    input_shape = (1, C, 4, 6, W)
+    kernel_size, padding = (3, 3, 3), (0, 1, 1)
+    N = 1
+
+    input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, C_out, kernel_size=kernel_size, padding=padding, bias=True)
+    with torch.no_grad():
+        golden = (
+            torch.nn.functional.conv3d(
+                input_tensor.double(),
+                conv3d_module.weight.data.double(),
+                conv3d_module.bias.data.double(),
+                padding=padding,
+            )
+        ).float()
+    D_out = _out_size(input_shape[2], padding[0], 1, kernel_size[0], 1)
+    H_out = _out_size(input_shape[3], padding[1], 1, kernel_size[1], 1)
+    W_out = _out_size(input_shape[4], padding[2], 1, kernel_size[2], 1)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=ttnn.DataType.FLOAT32)
+    config = create_conv3d_config(
+        C_in_block=C,
+        C_out_block=32,
+        W_out_block=W,
+        weights_dtype=ttnn.DataType.FLOAT32,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.DataType.FLOAT32, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.FLOAT32,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.DataType.FLOAT32,
+        output_channels=C_out,
+        kernel_size=kernel_size,
+        stride=(1, 1, 1),
+        groups=1,
+        padding=padding,
+        padding_mode="zeros",
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+    out = reshape_output(tt_output, N, D_out, H_out, W_out, C_out, device)
+    rel = ((out.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std()).item()
+    logger.info(f"conv3d fp32-exact tail (streaming): rel RMSE vs float64 = {rel:.3e}")
+    assert rel <= 1.35e-3, f"streaming-output path: rel RMSE {rel:.3e} > 1.35e-3 vs float64 golden"
+
+
+@pytest.mark.parametrize(
+    "optional_tensor",
+    ["bias", "halo_buffer", "pad_offset"],
+)
+def test_conv3d_optional_tensor_memory_config_is_hashed(device, optional_tensor):
+    """Moving an optional tensor between DRAM and L1 must miss the program cache (#55831).
+
+    The bias, halo and pad-offset buffers are baked into the kernels as compile-time
+    TensorAccessorArgs (IsDram, page size, sharding), which override_runtime_arguments cannot patch.
+    Before the fix the hash keyed only on has_value(), so the second call below hit the entry
+    compiled for the other memory space and read the tensor through the wrong accessor. Everything
+    but the optional tensor's placement is held fixed (same input/weight tensors, same values) so a
+    second entry can only come from the memory config.
+    """
+    input_shape = (1, 32, 4, 16, 16)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    dtype = ttnn.DataType.BFLOAT16
+    # Non-zero masks are what enable mask mode; the pad-offset accessor is only compiled in then.
+    logical_h_mask, logical_w_mask = (12, 10) if optional_tensor == "pad_offset" else (0, 0)
+
+    torch.manual_seed(42)
+    N, C, D, H, W = input_shape
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2], 1)
+
+    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(
+        C, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True, padding_mode="zeros"
+    )
+    # A zero-filled halo buffer reproduces zero padding, so the same torch reference serves all cases.
+    reference_input = apply_logical_pad_mask(input_tensor, 0, 0, logical_h_mask, logical_w_mask)
+    gt_output = conv3d_module(reference_input)
+
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=dtype)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    config = create_conv3d_config(C_in_block=32, weights_dtype=dtype)
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    torch_bias = conv3d_module.bias.data.reshape(1, -1)
+
+    def make_optional_tensor(memory_config):
+        if optional_tensor == "bias":
+            return ttnn.from_torch(
+                torch_bias,
+                device=device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                pad_value=0,
+                memory_config=memory_config,
+            )
+        if optional_tensor == "halo_buffer":
+            # 512 pages covers the [Htop|Hbot|Wleft|Wright] sections this shape needs (2*N*D*(pad_h*W + pad_w*(H+2*pad_h))).
+            return ttnn.from_torch(
+                torch.zeros(512, C).bfloat16(),
+                device=device,
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=memory_config,
+            )
+        return ttnn.from_torch(
+            torch.tensor([[0, 0]], dtype=torch.int32),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+
+    # Bias is always present so the writer's bias accessor is compiled in for every case; for the
+    # bias case it is the tensor under test, otherwise it stays in DRAM.
+    dram_bias = ttnn.from_torch(torch_bias, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0)
+
+    def run(tensor_under_test):
+        kwargs = {"bias_tensor": dram_bias}
+        if optional_tensor == "bias":
+            kwargs["bias_tensor"] = tensor_under_test
+        elif optional_tensor == "halo_buffer":
+            kwargs["halo_buffer"] = tensor_under_test
+        else:
+            kwargs["pad_offset_tensor"] = tensor_under_test
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            dtype=dtype,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            groups=1,
+            padding=padding,
+            dilation=(1, 1, 1),
+            padding_mode="zeros",
+            config=config,
+            compute_kernel_config=kernel_config,
+            logical_h_mask=logical_h_mask,
+            logical_w_mask=logical_w_mask,
+            **kwargs,
+        )
+        return reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    def run_checked(memory_config):
+        tensor_under_test = make_optional_tensor(memory_config)
+        assert tensor_under_test.memory_config().buffer_type == memory_config.buffer_type
+        tt_output = run(tensor_under_test)
+        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+        logger.info(f"{optional_tensor} in {memory_config.buffer_type}: {pcc_message}")
+        assert pcc_passed, f"{optional_tensor} in {memory_config.buffer_type}: {pcc_message}"
+
+    # Warm-up in DRAM compiles conv3d (IsDram=1 for the tensor under test) plus any helper ops the
+    # loop below also dispatches, so from here on new entries can only come from conv3d itself.
+    run_checked(ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_warmup = device.num_program_cache_entries()
+
+    # Same placement with a freshly allocated buffer must be a hit: the address is not in the key.
+    run_checked(ttnn.DRAM_MEMORY_CONFIG)
+    assert device.num_program_cache_entries() == entries_after_warmup, "re-running in DRAM must hit the cache"
+
+    # Moving the tensor to L1 must miss and compile a second conv3d program.
+    run_checked(ttnn.L1_MEMORY_CONFIG)
+    assert device.num_program_cache_entries() == entries_after_warmup + 1, (
+        f"{optional_tensor} in DRAM and in L1 must compile distinct programs; "
+        f"got {device.num_program_cache_entries() - entries_after_warmup} new entries for the L1 call"
+    )

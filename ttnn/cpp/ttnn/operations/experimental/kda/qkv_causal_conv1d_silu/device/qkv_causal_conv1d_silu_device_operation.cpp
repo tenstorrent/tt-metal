@@ -9,6 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -23,6 +24,11 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
+    kda_factory_detail::check_actual_start(in.input, in.actual_start, operation_name);
+    kda_factory_detail::check_allocated_device_tensor(in.predecessor_carry, operation_name, "predecessor_carry");
+    kda_factory_detail::check_same_device(in.input, in.predecessor_carry, operation_name, "predecessor_carry");
+    TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
+
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
@@ -84,7 +90,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
-
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},
              std::pair{&in.tap1, "tap1"},
@@ -122,6 +127,22 @@ QkvCausalConv1dSiluOperation::tensor_return_value_t QkvCausalConv1dSiluOperation
         create_device_tensor(specs[2], in.input.device())};
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<QkvCausalConv1dSiluOperation::tensor_return_value_t>
+QkvCausalConv1dSiluOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const auto& input_shape = in.input.logical_shape();
+    const double width = static_cast<double>(attrs.q_width) + attrs.k_width + attrs.v_width;
+    const double elements = static_cast<double>(input_shape[0]) * attrs.sequence * width;
+    const KdaFpuWork work{
+        .fpu_multiply_ops = 4.0 * elements,
+        .fpu_add_ops = 3.0 * elements,
+    };
+    const std::array<const Tensor*, 6> inputs = {&in.input, &in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 std::vector<Tensor> qkv_causal_conv1d_silu(
     const Tensor& input,
     const Tensor& history,
@@ -134,7 +155,10 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     uint32_t channel_chunk_size,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const Tensor& actual_start,
+    uint32_t sequence_parallel_axis,
+    const Tensor& predecessor_carry) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
@@ -144,10 +168,18 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .k_width = k_width,
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
+            .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
-            .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+            .input = input,
+            .history = history,
+            .tap0 = tap0,
+            .tap1 = tap1,
+            .tap2 = tap2,
+            .tap3 = tap3,
+            .actual_start = actual_start,
+            .predecessor_carry = predecessor_carry});
 }
 
 }  // namespace ttnn::experimental::prim

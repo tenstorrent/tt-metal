@@ -29,25 +29,50 @@ def get_data_pipeline_datetime_from_datetime(requested_datetime):
     return requested_datetime.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
+def get_jobs_that_started_(github_pipeline_json, github_jobs_json):
+    """
+    The jobs of this pipeline attempt that actually started running.
+
+    A run that its concurrency group cancelled before any job started reports either no jobs at
+    all, or jobs that GitHub concluded as skipped without ever running them. Neither kind has
+    logs, timings or test reports to analyse. Jobs that started before the pipeline was submitted
+    are dropped too, because those are carried over from a previous attempt for that pipeline.
+    """
+    pipeline_submission_ts = get_datetime_from_github_datetime(github_pipeline_json["created_at"])
+
+    def job_started_(github_job):
+        # Skipped jobs get a start timestamp from GitHub, but nothing ever ran on a runner
+        # See https://github.com/tenstorrent/tt-metal/issues/24151 for an example
+        if github_job.get("conclusion") == "skipped":
+            return False
+        job_start_ts = github_job.get("started_at")
+        if not job_start_ts:
+            return False
+        return get_datetime_from_github_datetime(job_start_ts) >= pipeline_submission_ts
+
+    return list(filter(job_started_, github_jobs_json["jobs"]))
+
+
 def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json):
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
 
     repository_url = github_pipeline_json["repository"]["html_url"]
 
-    jobs = github_jobs_json["jobs"]
-    jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
-    eligible_jobs_start_times = list(
-        filter(
-            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
-            jobs_start_times,
-        )
+    # get_jobs_that_started_ already drops jobs carried over from a previous attempt, jobs GitHub
+    # concluded as skipped without running them, and jobs with no start timestamp at all. Reading
+    # started_at off the raw list instead would fail on that last kind, and would let a skipped
+    # job's invalid start timestamp set the pipeline start -- the same timestamp that
+    # get_job_row_from_github_job already discards for skipped jobs further down.
+    sorted_jobs_start_times = sorted(
+        get_datetime_from_github_datetime(job_["started_at"])
+        for job_ in get_jobs_that_started_(github_pipeline_json, github_jobs_json)
     )
-    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    # Callers are expected to have screened out pipelines with nothing to analyse with
+    # get_jobs_that_started_, so reaching this point means the JSON objects are malformed
     assert (
         sorted_jobs_start_times
-    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
+    ), f"This pipeline does not have any jobs that started on or after the pipeline was submitted. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]
@@ -678,7 +703,7 @@ def create_json_with_github_benchmark_environment(
     git_branch_name = os.environ["GITHUB_REF_NAME"]
 
     assert "GITHUB_RUN_ID" in os.environ
-    github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+    github_pipeline_id = int(os.environ["GITHUB_RUN_ID"])
 
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 

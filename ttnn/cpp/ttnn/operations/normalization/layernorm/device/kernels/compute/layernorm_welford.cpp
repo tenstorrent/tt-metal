@@ -23,7 +23,7 @@ namespace kutil = norm::kernel_util;
 namespace generic = kutil::generic;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
@@ -130,7 +130,7 @@ void kernel_main() {
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
+    auto* p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
@@ -223,7 +223,7 @@ void kernel_main() {
             // the transpose-dest setup so transpose_tile below can replay them.
             transpose_init(dfb_x_welford);
 #else
-            dfb_x_obj.wait_front(wt + 1);
+            dfb_x_obj.wait_front(static_cast<uint16_t>(wt + 1));
 #endif
             transpose_tile(dfb_x_welford, wt, input_dst);
 #ifdef WELFORD_FP32_ALIAS
@@ -248,7 +248,7 @@ void kernel_main() {
         dfb_x_welford_obj.wait_front(num_to_wait);
         transpose_init(dfb_x_welford);
 #else
-        dfb_x_obj.wait_front(num_to_wait);
+        dfb_x_obj.wait_front(static_cast<uint16_t>(num_to_wait));
 #endif
         transpose_tile(dfb_x_welford, Wt - 1, input_dst);
 #ifdef WELFORD_FP32_ALIAS
@@ -313,7 +313,7 @@ void kernel_main() {
             reconfig_data_format(dfb_x, dfb_ex);
         }
         dfb_ex_obj.wait_front(onetile);  // should have 1 tile
-        dfb_xmm_obj.reserve_back(total_buffer_size);
+        dfb_xmm_obj.reserve_back(static_cast<uint16_t>(total_buffer_size));
         sub_bcast_cols_init(dfb_x, dfb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
@@ -326,11 +326,11 @@ void kernel_main() {
                 pack_tile(i, dfb_xmm);
             }
             tile_regs_release();
-            dfb_xmm_obj.push_back(block.full_block_size());
-            dfb_x_obj.pop_front(block.full_block_size());
+            dfb_xmm_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
+            dfb_x_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
         dfb_ex_obj.pop_front(1);
-        dfb_xmm_obj.wait_front(total_buffer_size);
+        dfb_xmm_obj.wait_front(static_cast<uint16_t>(total_buffer_size));
 
         if constexpr (!fuse_pre_add) {
             reconfig_data_format_srca(dfb_x, dfb_xmm);
@@ -376,14 +376,14 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            dfb_im_or_out_obj.reserve_back(block.full_block_size());
+            dfb_im_or_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, dfb_im_or_out);  // pack either to intermediate (dfb_fusion or dfb_out)
             }
             tile_regs_release();
-            dfb_im_or_out_obj.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            dfb_im_or_out_obj.push_back(static_cast<uint16_t>(
+                block.full_block_size()));  // if no gamma/beta are provided, this will be passed on to the writer
 
 #ifdef FUSE_GAMMA
             {
@@ -453,7 +453,7 @@ void kernel_main() {
 #endif
         }
         dfb_ex2pe_obj.pop_front(onetile);
-        dfb_xmm_obj.pop_front(total_buffer_size);
+        dfb_xmm_obj.pop_front(static_cast<uint16_t>(total_buffer_size));
 
     }  // NCHt loop
 }

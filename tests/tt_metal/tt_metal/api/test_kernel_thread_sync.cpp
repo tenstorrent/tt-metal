@@ -133,7 +133,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
             make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
     SetProgramRunArgs(program, params);
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     for (const auto& cfg : kernel_configs) {
         std::vector<uint32_t> observed;
