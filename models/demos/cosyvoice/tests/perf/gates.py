@@ -29,7 +29,8 @@ a band it has to stay inside, not a marker that hides it from the summary line.
 Every value in `EXPECTATIONS` comes from the certification run described in
 `../../PERF.md` Part I -- one commit, one day, Blackhole `p150a`, Blackhole `p150b`
 and Wormhole n300, five configurations each -- except `rtf_synthesize`, which postdates
-that run: it was recorded on `p150a` alone, and n300 has no figure for it yet.
+that run: it was recorded on `p150a` and `p150b` on 2026-09-24, and n300 has no figure for
+it yet.
 
 A `recorded` value is the centre of a band, not the last run's figure. PERF.md
 publishes what a given run measured; this table holds the reference those measurements
@@ -138,14 +139,15 @@ BLACKHOLE = {
     "tok_s_stretch": Meets(),
     # PERF.md §3.2.
     "rtf": Meets(),
-    # `synthesize` per utterance, zero-shot zh, second call, p150a on 2026-09-24:
-    # 0.534-0.538 default, 0.512 with `COSYVOICE_FF2_GRID=8x2`, 0.732-0.736 with
+    # `synthesize` per utterance, zero-shot zh, second call, 2026-09-24. p150a: 0.533-0.538
+    # default, 0.511-0.512 with `COSYVOICE_FF2_GRID=8x2`, 0.730-0.736 with
     # `COSYVOICE_KV_INPLACE=1`, whose cache captures 65 decode traces per utterance where
-    # the moving one captures one -- a cost the steady state never pays. Centred between
-    # them, and wide enough for p150b's ~5 %.
+    # the moving one captures one -- a cost the steady state never pays. p150b: 0.600,
+    # 0.592 and 0.914, 12-25 % slower than p150a per utterance, the in-place cache most.
+    # Centred on the span of all twelve, with ~10 % above the slowest.
     "rtf_synthesize": Misses(
-        0.62,
-        0.30,
+        0.72,
+        0.40,
         "the per-utterance fixed cost: the LLM's prefill and decode-trace capture (about 1.1 s "
         "on p150a, more with the in-place cache) and the flow's capture; keeping traces across "
         "utterances would remove them",

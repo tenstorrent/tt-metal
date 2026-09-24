@@ -216,7 +216,10 @@ def test_device_synthesize_rtf(device):
     second call of the same utterance, so no kernel compile and no first-use state -- the
     vocoder's weight preparation per geometry -- is in the figure. A length new to the
     process costs more than this, by an amount that depends on what the process has
-    already built, so that is measured in PERF.md rather than asserted here.
+    already built, so that is measured in PERF.md rather than asserted here. The token count,
+    and with it the audio length, differs between boards and configurations: RAS from a
+    fixed seed diverges once the logits differ in their last bits. RTF is per second of
+    audio, so the figures stay comparable.
 
     The "RTF < 0.5" requirement is judged on this figure (`gates.py`, `rtf_synthesize`).
     """
