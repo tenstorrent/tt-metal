@@ -155,11 +155,25 @@ def _wrap_matmul_out_bfp8(original_fn, weight):
     return wrapper
 
 
+# Tensors the guarded ``ttnn.deallocate`` must skip once (id -> remaining skips): the fused RoPE pass hands
+# back Q/K that the base forward believes it may free, and the concat-free SDPA output is handed straight
+# to the output projection while the base forward still frees "the SDPA output" after concat_heads.
+_SKIP_DEALLOC_ONCE: dict[int, int] = {}
+# SDPA outputs already written in the [B, 1, S, H*d] layout (QWEN_SDPA_CONCAT_OUT=1): concat_heads is a no-op.
+_SDPA_CONCAT_OUT_IDS: set[int] = set()
+
+
 def _wrap_concat_heads_headsplit(original_fn):
     """Route ``nlp_concat_heads`` to the model-local head-split kernels."""
 
     @functools.wraps(original_fn)
     def wrapper(context, *args, **kwargs):
+        if id(context) in _SDPA_CONCAT_OUT_IDS:
+            # SDPA already produced [B, 1, S, H*d]; the base forward deallocates its "SDPA output" right after
+            # this call, so protect the tensor once and hand it back as the concatenated result.
+            _SDPA_CONCAT_OUT_IDS.discard(id(context))
+            _SKIP_DEALLOC_ONCE[id(context)] = _SKIP_DEALLOC_ONCE.get(id(context), 0) + 1
+            return context
         if not args and _interleaved_out(kwargs.get("memory_config")) and _concat_headsplit_supported(context):
             return nlp_concat_heads_headsplit(context, memory_config=kwargs.get("memory_config"))
         return original_fn(context, *args, **kwargs)
@@ -167,14 +181,25 @@ def _wrap_concat_heads_headsplit(original_fn):
     return wrapper
 
 
-def _wrap_sdpa_bidirectional(original_fn):
-    """Return a wrapper that forces ``is_causal=False`` and injects the padding mask."""
+def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
+    """Return a wrapper that forces ``is_causal=False`` and injects the padding mask.
+
+    ``concat_out`` (QWEN_SDPA_CONCAT_OUT=1, batched prefill only): ask SDPA for its output in the
+    ``[B, 1, S, H*d]`` layout (``output_heads_concat=True``), which is what ``nlp_concat_heads`` would
+    produce, so that pass (142 MB per layer at bs32) is skipped. The concat wrapper recognises the tensor.
+    """
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
         kwargs["is_causal"] = False
         if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
             kwargs["attn_mask"] = _PAD_ATTN_MASK
+        q = args[0] if args else kwargs.get("input_tensor_q")
+        if concat_out and q is not None and int(q.shape[0]) > 1:
+            kwargs["output_heads_concat"] = True
+            out = original_fn(*args, **kwargs)
+            _SDPA_CONCAT_OUT_IDS.add(id(out))
+            return out
         return original_fn(*args, **kwargs)
 
     return wrapper
@@ -276,7 +301,8 @@ class PplxBidirectionalAttention(Attention):
         kv_cache=None,
     ):
         original_sdpa = ttnn.transformer.scaled_dot_product_attention
-        ttnn.transformer.scaled_dot_product_attention = _wrap_sdpa_bidirectional(original_sdpa)
+        concat_out = os.getenv("QWEN_SDPA_CONCAT_OUT", "0") == "1"
+        ttnn.transformer.scaled_dot_product_attention = _wrap_sdpa_bidirectional(original_sdpa, concat_out=concat_out)
 
         # Head-split QKV/concat live in tt/custom_ops as generic_op kernels and are
         # injected the same way as the bidirectional SDPA above.
@@ -323,27 +349,29 @@ class PplxBidirectionalAttention(Attention):
                 # the tensors SDPA reads, so skip exactly one deallocation of each (later
                 # frees still happen, nothing leaks).
                 _saved_rope = self.rotary_embedding_prefill
-                _skip_once = {}
 
                 def _identity_rope(q, k, rm):
-                    _skip_once[id(q)] = 1
-                    _skip_once[id(k)] = 1
+                    _SKIP_DEALLOC_ONCE[id(q)] = _SKIP_DEALLOC_ONCE.get(id(q), 0) + 1
+                    _SKIP_DEALLOC_ONCE[id(k)] = _SKIP_DEALLOC_ONCE.get(id(k), 0) + 1
                     return q, k
 
                 self.rotary_embedding_prefill = _identity_rope
-                _saved_dealloc = ttnn.deallocate
-
-                def _guarded_dealloc(t, *a, **kw):
-                    if _skip_once.get(id(t), 0) > 0:
-                        _skip_once[id(t)] -= 1
-                        return None
-                    return _saved_dealloc(t, *a, **kw)
-
-                ttnn.deallocate = _guarded_dealloc
         elif os.getenv("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "0") == "1":
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_headsplit(original_create_heads)
-        if os.getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "0") == "1":
+        if os.getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "0") == "1" or concat_out:
             ttnn.experimental.nlp_concat_heads = _wrap_concat_heads_headsplit(original_concat_heads)
+        if self._fused_norm_consts is not None or concat_out:
+            _saved_dealloc = ttnn.deallocate
+
+            def _guarded_dealloc(t, *a, **kw):
+                if _SKIP_DEALLOC_ONCE.get(id(t), 0) > 0:
+                    _SKIP_DEALLOC_ONCE[id(t)] -= 1
+                    if _SKIP_DEALLOC_ONCE[id(t)] == 0:
+                        del _SKIP_DEALLOC_ONCE[id(t)]
+                    return None
+                return _saved_dealloc(t, *a, **kw)
+
+            ttnn.deallocate = _guarded_dealloc
         try:
             return super().forward_prefill(
                 x_11SH,

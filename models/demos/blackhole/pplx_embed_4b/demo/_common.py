@@ -425,6 +425,12 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         else:
             os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
+    # SDPA writes its output straight in the [B, 1, S, H*d] layout (output_heads_concat=True, a tile-id
+    # remap in the SDPA writer), so the concat-heads pass (142 MB per layer at bs32) is skipped. Bit-identical
+    # to concat_heads(SDPA). Cold e2e: bs8 117.7 -> 115.4, bs16 226.2 -> 221.9, bs32 433.8 -> 430.1;
+    # sustained bs32 445.8 -> 440.3. bs1 keeps the model-local concat op (4 us). Opt out: QWEN_SDPA_CONCAT_OUT=0.
+    if batch_size > 1:
+        os.environ.setdefault("QWEN_SDPA_CONCAT_OUT", "1")
     # Fused residual add + RMSNorm with each row split over R cores (multi-wave row-split kernel). The
     # row-granular kernel leaves most of the 120 cores idle in the last wave at 128-512 tile-rows;
     # standalone stock add + rms_norm -> split: M=4096 184 -> 141 us (R=5), M=8192 320 -> 242 (R=5),
