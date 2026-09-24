@@ -39,6 +39,12 @@ OPS = [
 
 VALUES = (1.5, 2.5, 0.5, 3.0)
 
+# Ops whose first gradient is grad itself, returned without a dispatch. #55613 settled that
+# those keep grad's own memory config rather than the requested one, since honouring the
+# request would mean materialising a copy where none is needed, so output 0 is out of scope
+# here. Every other output of the same op is not.
+PASSTHROUGH_FIRST_OUTPUT = {"frac_bw", "addcmul_bw", "addcdiv_bw"}
+
 
 def _t(v, device, memory_config):
     return ttnn.from_torch(
@@ -60,7 +66,11 @@ def _call(op, arity, scalars, device, memory_config):
 
 @pytest.mark.parametrize("op, arity, scalars", OPS)
 def test_gradients_land_in_the_requested_memory(device, op, arity, scalars):
-    for i, out in enumerate(_call(op, arity, scalars, device, ttnn.L1_MEMORY_CONFIG)):
+    outputs = _call(op, arity, scalars, device, ttnn.L1_MEMORY_CONFIG)
+    assert outputs, f"{op} returned no gradient"
+    for i, out in enumerate(outputs):
+        if i == 0 and op in PASSTHROUGH_FIRST_OUTPUT:
+            continue
         assert out.memory_config().buffer_type == ttnn.BufferType.L1, f"{op} output {i} is in {out.memory_config()}"
 
 

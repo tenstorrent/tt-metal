@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -15,6 +16,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <vector>
 
 namespace ttnn {
@@ -29,6 +31,29 @@ using namespace tt::tt_metal;
 
 tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+}
+
+// Alignment that the data region and every shard buffer within it are expected to satisfy, so that a caller can
+// use the mapped file as a pinned DMA source without copying it first. Spelled out rather than taken from the
+// serializer's own `kTensorDataAlignment`, so that changing the on-disk format has to change this golden too.
+constexpr uintptr_t kExpectedDataAlignment = 64;
+
+// Reads the byte offset at which the tensor data region begins in a serialized tensor file.
+uint64_t read_data_region_offset(const std::string& file_name) {
+    std::ifstream file(file_name, std::ios::binary);
+    uint64_t header_size = 0;
+    file.read(reinterpret_cast<char*>(&header_size), sizeof(header_size));
+    EXPECT_TRUE(file.good());
+    return sizeof(header_size) + header_size;
+}
+
+// Collects the address of every shard buffer of a host tensor. `load_tensor_flatbuffer` maps the file at offset 0,
+// so these addresses have the same alignment as the shards' offsets within the file.
+std::vector<uintptr_t> shard_addresses(const Tensor& tensor) {
+    std::vector<uintptr_t> addresses;
+    tensor.host_storage().buffer().apply(
+        [&](const HostBuffer& shard) { addresses.push_back(reinterpret_cast<uintptr_t>(shard.view_bytes().data())); });
+    return addresses;
 }
 
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
@@ -96,6 +121,52 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
             EXPECT_FLOAT_EQ(static_cast<float>(test_data[i]), static_cast<float>(loaded_data[i]));
         }
     }
+}
+
+// Range lockstep lives on the MemoryConfig, so it has to survive serialization: any path that
+// rebuilds a spec from its stored form -- a warm tensor cache, for instance -- would otherwise
+// silently drop it and the buffer would revert to a chip-wide allocation scan.
+TEST_F(TensorSerializationFlatbufferTest, WithRangeLockstepAllocation) {
+    TemporaryFile test_file("flatbuffer_range_lockstep.tensorbin");
+    std::vector<float> test_data{1.0f, 2.0f, 3.0f, 4.0f};
+
+    auto memory_config = MemoryConfig(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(CoreRangeSet(CoreCoord(0, 0)), {32, 32}, ShardOrientation::ROW_MAJOR));
+    tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(memory_config, true);
+
+    Tensor original_tensor = Tensor::from_vector(
+        test_data,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{1, 1, 2, 2}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, memory_config)));
+
+    dump_tensor_flatbuffer(test_file.string(), original_tensor);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_TRUE(tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+        loaded_tensor.memory_config()))
+        << "range lockstep was dropped by the flatbuffer round-trip";
+    EXPECT_TRUE(loaded_tensor.memory_config() == original_tensor.memory_config());
+}
+
+// A config that never opted in must not come back opted in.
+TEST_F(TensorSerializationFlatbufferTest, WithoutRangeLockstepAllocation) {
+    TemporaryFile test_file("flatbuffer_no_range_lockstep.tensorbin");
+    std::vector<float> test_data{1.0f, 2.0f};
+
+    Tensor original_tensor = Tensor::from_vector(
+        test_data,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{1, 1, 1, 2},
+            TensorLayout(
+                DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
+
+    dump_tensor_flatbuffer(test_file.string(), original_tensor);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_FALSE(tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+        loaded_tensor.memory_config()));
 }
 
 TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
@@ -387,6 +458,37 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
 
     EXPECT_EQ(loaded_tensor.tensor_topology().distribution_shape(), expected_shape);
     EXPECT_EQ(loaded_tensor.tensor_topology().placements(), expected_placements);
+}
+
+// Shards are 12 bytes each, so they only land on `kExpectedDataAlignment` if the serializer pads between them.
+TEST(TensorSerializationFlatbufferAlignmentTest, ShardsAreAlignedForPinnedMemory) {
+    TemporaryFile test_file("alignment.tensorbin");
+    constexpr size_t kNumShards = 3;
+
+    std::vector<Tensor> shards;
+    shards.reserve(kNumShards);
+    for (size_t i = 0; i < kNumShards; i++) {
+        shards.push_back(Tensor::from_vector(
+            std::vector<float>{1.0f * i, 2.0f * i, 3.0f * i}, get_tensor_spec(ttnn::Shape{1, 3}, DataType::FLOAT32)));
+    }
+    Tensor original_tensor = ttnn::distributed::from_host_shards(shards, MeshShape(1, kNumShards));
+
+    dump_tensor_flatbuffer(test_file.string(), original_tensor, DumpTensorMode::LOCAL);
+
+    EXPECT_EQ(read_data_region_offset(test_file.string()) % kExpectedDataAlignment, 0);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    const std::vector<uintptr_t> addresses = shard_addresses(loaded_tensor);
+    EXPECT_THAT(addresses, SizeIs(kNumShards));
+    for (uintptr_t address : addresses) {
+        EXPECT_EQ(address % kExpectedDataAlignment, 0);
+    }
+
+    std::vector<Tensor> loaded_shards = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_shards, SizeIs(kNumShards));
+    for (size_t i = 0; i < kNumShards; i++) {
+        EXPECT_THAT(loaded_shards[i].to_vector<float>(), Pointwise(FloatEq(), shards[i].to_vector<float>()));
+    }
 }
 
 }  // namespace

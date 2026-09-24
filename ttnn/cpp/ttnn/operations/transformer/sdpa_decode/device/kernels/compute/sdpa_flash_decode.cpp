@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This kernel reconfigs ~30x; force the Src zero-flag DEFAULT configurator out-of-line (one shared copy
+// reached by a call at each reconfig/init site, instead of an inlined fast path at every one) to reclaim
+// kernel-config-buffer space. Must be defined before the compute API includes. Perf-neutral (init-time only).
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)

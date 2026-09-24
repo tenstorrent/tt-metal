@@ -16,14 +16,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      # No longer consumed by any matrix entry — the only runner label built from it
-      # belonged to the "N300 WH B0 not yet ported" bare-metal group, removed when the
-      # tier-3 models migrated to the Models CI. Kept declared because pipeline-select
-      # still passes it.
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
       architecture:
         description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
         required: false

@@ -14,22 +14,6 @@ name: 🗓️ LLK ttsim Weekly
 #   - weekly cron at 02:00 UTC every Friday
 on:
   workflow_dispatch:
-    inputs:
-      workers:
-        description: "xdist workers per run"
-        required: false
-        default: "10"
-        type: string
-      per_test_timeout_seconds:
-        description: "Per-test timeout in seconds"
-        required: false
-        default: "300"
-        type: string
-      timeout_minutes:
-        description: "Per-architecture job timeout in minutes"
-        required: false
-        default: "180"
-        type: string
   schedule:
     # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
     # runs can lag by a few minutes during peak load — don't rely on
@@ -39,7 +23,7 @@ on:
 permissions:
   # `packages: write` is required by build-docker-artifact.yaml to push
   # the LLK CI image tag if it doesn't already exist. No `checks: write`
-  # on purpose — see llk-ttsim-regression.yaml for rationale.
+  # on purpose — see llk-ttsim-weekly-impl.yaml for rationale.
   contents: read
   packages: write
 
@@ -48,20 +32,13 @@ jobs:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
 
-  ttsim-regression:
+  ttsim-weekly:
     name: "🧪 LLK ttsim regression"
     needs: build-images
-    uses: ./.github/workflows/llk-ttsim-regression.yaml
+    uses: ./.github/workflows/llk-ttsim-weekly-impl.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      # Defaults on workflow_call inputs are only used when the caller omits
-      # them entirely. On workflow_dispatch inputs are strings, so cast them
-      # to the numbers the reusable workflow expects; on schedule they are
-      # empty and the `|| 'N'` fallback kicks in.
-      workers: ${{ fromJSON(inputs.workers || '10') }}
-      per_test_timeout_seconds: ${{ fromJSON(inputs.per_test_timeout_seconds || '300') }}
-      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '180') }}
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
@@ -70,7 +47,7 @@ jobs:
     # ad-hoc debugging and don't need Slack noise. `always()` so the job
     # still runs when the regression reports failures (it's expected to).
     if: always() && github.event_name == 'schedule'
-    needs: ttsim-regression
+    needs: ttsim-weekly
     steps:
       - name: Download blackhole report
         if: always()
@@ -96,6 +73,27 @@ jobs:
           path: reports/quasar
         continue-on-error: true
 
+      # Combined result over every child in `needs:`, most-severe-wins — the same
+      # aggregation sanity-tests.yaml feeds its AI run summary. Reading toJSON(needs)
+      # instead of one job's `result`/`outputs.matrix` keeps this data-driven if another
+      # impl leg is added to `needs:` later.
+      - name: Aggregate child results
+        id: aggregate
+        # Reporting must never fail the run: a jq error here would turn a green run red.
+        continue-on-error: true
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $s |
+            if   any($s[]; . == "failure")   then "failure"
+            elif any($s[]; . == "cancelled") then "cancelled"
+            elif any($s[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+
       # Parse per-arch XMLs with Python stdlib (no extra dependency) and
       # emit the rendered Slack message body as a step output. The channel
       # id and token are intentionally kept on the `Send Slack digest`
@@ -108,7 +106,7 @@ jobs:
           REPO: ${{ github.repository }}
           SERVER: ${{ github.server_url }}
           RUN_ID: ${{ github.run_id }}
-          REGRESSION_RESULT: ${{ needs.ttsim-regression.result }}
+          REGRESSION_RESULT: ${{ steps.aggregate.outputs.run-result }}
         run: |
           set -euo pipefail
           python3 - <<'PY' > message.txt
@@ -130,12 +128,10 @@ jobs:
                             Path("reports/wormhole/ttsim-version"),
                             Path("reports/quasar/ttsim-version")):
               if candidate.is_file():
-                  for line in candidate.read_text().splitlines():
-                      m = re.match(r"ttsim_version=['\"]?([\w.-]+)['\"]?", line.strip())
-                      if m:
-                          TTSIM_VERSION = m.group(1)
-                          break
-                  if TTSIM_VERSION != "unknown":
+                  # tt_metal/ttsim-version holds a bare release tag (e.g. v1.10.2).
+                  tag = candidate.read_text().strip()
+                  if tag:
+                      TTSIM_VERSION = tag
                       break
 
           def read_enumerated(enum_path: Path):
@@ -199,7 +195,7 @@ jobs:
                       f"💥 {crashed_txt} crashed"
                   )
 
-          header = f"📊 *LLK ttsim weekly digest (v{TTSIM_VERSION})* 📊"
+          header = f"📊 *LLK ttsim weekly digest ({TTSIM_VERSION})* 📊"
           if REG_RESULT != "success":
               # Only flag infra-level issues — ttsim test failures are expected
               # and are reflected in the counts below, not in this banner.

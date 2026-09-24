@@ -164,6 +164,7 @@ std::uint64_t JitCompileService::estimate_compile_request_bytes_in(const Compile
         bytes += target.target_name.size();
         bytes += target.cflags.size();
         bytes += target.includes.size();
+        bytes += target.pch_umbrella.size();
         bytes += target.compiler_opt_level.size();
         bytes += target.lflags.size();
         bytes += target.extra_link_objs.size();
@@ -220,6 +221,7 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
             t.defines.push_back(define.cStr());
         }
         t.includes = target.getIncludes().cStr();
+        t.pch_umbrella = target.getPchUmbrella().cStr();
         t.compiler_opt_level = target.getCompilerOptLevel().cStr();
         for (auto src : target.getSrcs()) {
             t.srcs.push_back(src.cStr());

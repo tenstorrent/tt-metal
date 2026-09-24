@@ -3,7 +3,7 @@
 Comprehensive performance sweep tests designed to generate profiling data for the NoC estimator. These tests systematically exercise every major NOC communication pattern across a wide range of transaction sizes, grid configurations, and transfer mechanisms to produce the data needed for accurate latency/bandwidth prediction.
 
 ## Dispatch Mode
-All tests use **fast dispatch** via `GenericMeshDeviceFixture`.
+All tests use **fast dispatch** via `UnitMeshFastDispatchFixture`.
 
 ## NOC API
 - **L1 kernels** use the device 2.0 NOC API (`Noc`, `UnicastEndpoint`, `MulticastEndpoint`).

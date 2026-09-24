@@ -32,15 +32,14 @@ void preallocated_tensors_check(
     const Tensor& input,
     const Tensor& other,
     const std::array<bool, 2>& required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     TT_FATAL(required_outputs[0] || required_outputs[1], "At least one gradient is expected to be calculated.");
 
-    // A gradient the caller did not preallocate still has to land where the caller asked.
     if (required_outputs[0] && !input_grad.has_value()) {
-        input_grad = ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+        input_grad = ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, memory_config);
     }
     if (required_outputs[1] && !other_grad.has_value()) {
-        other_grad = ttnn::empty_like(other, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+        other_grad = ttnn::empty_like(other, std::nullopt, std::nullopt, std::nullopt, memory_config);
     }
 }
 
@@ -133,8 +132,7 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
 
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
 
     if (are_required_outputs[0]) {
         ttnn::assign(grad_tensor, input_grad.value());
@@ -158,8 +156,7 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
     if (are_required_outputs.at(0)) {
         ttnn::assign(grad_tensor, input_grad.value());
         result[0] = input_grad;
@@ -180,7 +177,9 @@ std::vector<std::optional<Tensor>> add_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
+    if (!input_grad.has_value()) {
+        input_grad = ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+    }
     ttnn::assign(grad_tensor, input_grad.value());
     result.emplace_back(input_grad);
     return result;
@@ -196,8 +195,7 @@ std::vector<std::optional<Tensor>> add_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
     if (are_required_outputs.at(0)) {
         ttnn::assign(grad_tensor, input_grad.value());
         result[0] = input_grad;
@@ -235,8 +233,11 @@ std::vector<std::optional<Tensor>> sub_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     result.emplace_back(
-        input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value())
-                               : ttnn::assign(grad_tensor, ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config)));
+        input_grad.has_value()
+            ? ttnn::assign(grad_tensor, input_grad.value())
+            : ttnn::assign(
+                  grad_tensor,
+                  ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config)));
     return result;
 }
 
@@ -488,6 +489,8 @@ std::vector<std::optional<Tensor>> assign_bw(
     const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt};
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // With no preallocated input_grad, grad is returned and keeps its own config.
     grad_tensor_res[0] = input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value()) : grad_tensor;
     return grad_tensor_res;
 }
@@ -503,7 +506,11 @@ std::vector<std::optional<Tensor>> assign_bw(
     std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt, std::nullopt};
 
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_tensor, other_tensor, {are_required_outputs[0], are_required_outputs[1]},
+        input_grad,
+        other_grad,
+        input_tensor,
+        other_tensor,
+        {are_required_outputs[0], are_required_outputs[1]},
         output_mem_config);
 
     if (are_required_outputs[0]) {
@@ -523,14 +530,18 @@ std::vector<std::optional<Tensor>> concat_bw(
     const Tensor& other,
     int dim,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
 
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_tensor_a_arg, other, {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+        input_grad,
+        other_grad,
+        input_tensor_a_arg,
+        other,
+        {are_required_outputs[0], are_required_outputs[1]},
+        memory_config);
 
     if (are_required_outputs[0]) {
         ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -540,6 +551,9 @@ std::vector<std::optional<Tensor>> concat_bw(
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
         ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        // The preallocated output governs placement (slice.cpp:123 prefers
+        // optional_output_tensor's config) and input_grad is always set by the helper above,
+        // so passing memory_config here would be inert.
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
@@ -579,7 +593,11 @@ std::vector<std::optional<Tensor>> rsub_bw(
     std::vector<std::optional<ttnn::Tensor>> result = {std::nullopt, std::nullopt};
 
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, grad_tensor, grad_tensor, {are_required_outputs[0], are_required_outputs[1]},
+        input_grad,
+        other_grad,
+        grad_tensor,
+        grad_tensor,
+        {are_required_outputs[0], are_required_outputs[1]},
         output_mem_config);
     if (are_required_outputs.at(0)) {
         ttnn::neg(grad_tensor, output_mem_config, input_grad);
@@ -596,13 +614,11 @@ std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
     const Tensor& input_b,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(
-        (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor_res;
     Tensor input = ttnn::add(input_a, input_b);
-    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
         grad_tensor_res.push_back(gelu_result[0].value());
@@ -614,19 +630,39 @@ std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     float bias,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor_res;
-    TT_FATAL(
-        (approximate == "none" || approximate == "tanh"),
-        "Incorrect rounding mode (expected 'none' or 'tanh')",
-        "Error");
     Tensor input = ttnn::add(input_tensor, bias);
-    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
     }
     return grad_tensor_res;
+}
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::string& approximate,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(approximate == "none" || approximate == "tanh", "Incorrect approximation type (expected 'none', 'tanh')");
+    const auto variant =
+        approximate == "tanh" ? operations::unary::GeluVariant::TANH : operations::unary::GeluVariant::ACCURATE;
+    return ttnn::bias_gelu_bw(grad_tensor, input_a, input_b, variant, output_mem_config);
+}
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float bias,
+    const std::string& approximate,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(approximate == "none" || approximate == "tanh", "Incorrect approximation type (expected 'none', 'tanh')");
+    const auto variant =
+        approximate == "tanh" ? operations::unary::GeluVariant::TANH : operations::unary::GeluVariant::ACCURATE;
+    return ttnn::bias_gelu_bw(grad_tensor, input_tensor, bias, variant, output_mem_config);
 }
 
 std::vector<Tensor> max_bw(
@@ -657,7 +693,9 @@ std::vector<std::optional<Tensor>> div_bw(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
+    if (!input_grad.has_value()) {
+        input_grad = ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+    }
 
     if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
@@ -694,28 +732,15 @@ std::vector<std::optional<Tensor>> div_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     if (rounding_mode == std::nullopt) {
-        float t_nan = std::nanf("");
-        float t_inf = std::numeric_limits<float>::infinity();
-        float neg_inf = -std::numeric_limits<float>::infinity();
         if (are_required_outputs.at(0)) {
             ttnn::multiply(
                 grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::multiply(ttnn::sign(grad_tensor, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                    output_mem_config),
-                input_grad.value(),
-                output_mem_config);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
@@ -729,24 +754,6 @@ std::vector<std::optional<Tensor>> div_bw(
                 std::nullopt,
                 output_mem_config,
                 other_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::where(
-                        ttnn::eqz(input_a, output_mem_config),
-                        t_nan,
-                        ttnn::multiply(
-                            ttnn::multiply(
-                                ttnn::sign(input_a, output_mem_config), neg_inf, std::nullopt, output_mem_config),
-                            ttnn::sign(grad_tensor, output_mem_config),
-                            std::nullopt,
-                            output_mem_config),
-                        output_mem_config),
-                    output_mem_config),
-                other_grad.value(),
-                output_mem_config);
             result[1] = other_grad;
         }
     } else {
@@ -828,7 +835,11 @@ std::vector<std::optional<Tensor>> mul_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_tensor_arg, other_tensor_arg, {are_required_outputs[0], are_required_outputs[1]},
+        input_grad,
+        other_grad,
+        input_tensor_arg,
+        other_tensor_arg,
+        {are_required_outputs[0], are_required_outputs[1]},
         output_mem_config);
 
     if (are_required_outputs.at(0)) {

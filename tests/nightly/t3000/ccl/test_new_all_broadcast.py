@@ -69,6 +69,7 @@ def run_all_broadcast_impl(
     trace_mode=False,
     rand_tensor=True,
     mem_config=None,
+    output_mem_config=None,
     input_shard_shape=None,
     input_shard_grid=None,
     output_shard_shape=None,
@@ -147,7 +148,8 @@ def run_all_broadcast_impl(
     else:
         assert mem_config is not None
         input_mem_config = mem_config
-        output_mem_config = mem_config
+        if output_mem_config is None:
+            output_mem_config = input_mem_config
     ###
 
     input_tensor_mesh_list = []
@@ -583,3 +585,30 @@ def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
         for tt_torch_output_slice in tt_torch_output_slices:
             eq, output = comp_equal(tt_torch_output_slice, torch_reference)
             assert eq, f"Tensor{i} FAILED: {output}"
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_linear"]
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mem_config, output_mem_config",
+    [
+        (ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1), ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+    ],
+    ids=["l1_to_dram", "dram_to_l1"],
+)
+def test_all_broadcast_output_mem_config(mesh_device, function_level_defaults, mem_config, output_mem_config):
+    run_all_broadcast_impl(
+        mesh_device,
+        num_devices=8,
+        output_shape=[1, 1, 32, 32],
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        function_level_defaults=function_level_defaults,
+        all_broadcast_topology=ttnn.Topology.Linear,
+        mem_config=mem_config,
+        output_mem_config=output_mem_config,
+    )

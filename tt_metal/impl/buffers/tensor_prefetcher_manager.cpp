@@ -35,6 +35,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
+#include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"  // receiver_socket_md (for L1 layout sizing)
 
@@ -615,7 +616,7 @@ void TensorPrefetcherManager::start() {
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::CompileProgram(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
+        programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::LaunchProgram(
             devices_[d], *programs_[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
@@ -1279,11 +1280,26 @@ void TensorPrefetcherManager::stop() {
 namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
-    const auto& hal = MetalContext::instance(mesh_device.impl().get_context_id()).hal();
-    return hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    const auto& metal = MetalContext::instance(mesh_device.impl().get_context_id());
+    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
+    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
+    // relay takes that same free subchannel with BOTH of its NIUs in stream mode
+    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
+    // wins and the prefetcher reports unsupported rather than racing it for the core.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        return false;
+    }
+    return metal.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig&) {
+    TT_FATAL(
+        IsTensorPrefetcherSupported(mesh_device),
+        "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
+        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or the streaming profiler "
+        "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
+        "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
+        "skip the prefetcher path.");
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.start();
 }

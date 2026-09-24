@@ -69,6 +69,8 @@ void kernel_main() {
 
     constexpr uint32_t one_tile = 1;
     const uint32_t TILE_WIDTH_MASK = tile_width - 1;
+    // Hoisted so both the pre-scan and the inner scan skip a per-iteration ctz on a runtime arg.
+    const uint32_t tile_width_shift = __builtin_ctz(tile_width);
 
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
@@ -87,6 +89,18 @@ void kernel_main() {
     DataflowBuffer input_index_dfb(input_index_tensor_cb_index);
     DataflowBuffer input_dfb(input_tensor_cb_index);
     DataflowBuffer output_dfb(output_tensor_cb_index);
+
+    // `needed[]`: 1-bit-per-Wt_input-tile mask so the wi loop skips input tiles no index in this index tile references.
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
+    constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
+    constexpr uint32_t tile_hw = tile_faces * tile_faces * face_size * face_size;
+    constexpr uint32_t bitmap_words = (Wt_input + 31) / 32;
+    constexpr uint32_t BITMAP_WORDS_MAX = 256;  // 1 KB, covers Wt_input <= 8192 (vocab <= 262144)
+    constexpr bool use_bitmap = (bitmap_words <= BITMAP_WORDS_MAX);
+    uint32_t needed[use_bitmap ? bitmap_words : 1];
+    // Guard against future cap / element-width bumps overflowing the 4 KB WH BRISC/NCRISC local region.
+    static_assert(sizeof(needed) <= 1024, "gather needed[] > 1 KB; may overflow WH local region");
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -110,17 +124,37 @@ void kernel_main() {
 
             output_dfb.reserve_back(one_tile);
 
+            const uint32_t input_index_tensor_l1_read_addr = input_index_dfb.get_read_ptr();
+            const uint32_t output_tensor_l1_write_addr = output_dfb.get_write_ptr();
+
+            if constexpr (use_bitmap) {
+                for (uint32_t w = 0; w < bitmap_words; ++w) {
+                    needed[w] = 0;
+                }
+                for (uint32_t count = 0; count < tile_hw; ++count) {
+                    const uint32_t global_index = get_value_from_tile(
+                        input_index_tensor_l1_read_addr, count, input_index_tensor_data_format_size);
+                    const uint32_t tile_idx = global_index >> tile_width_shift;
+                    if (tile_idx < Wt_input) {
+                        needed[tile_idx >> 5] |= (1u << (tile_idx & 31u));
+                    }
+                }
+            }
+
             for (uint32_t wi = 0; wi < Wt_input; wi++) {
                 input_dfb.wait_front(one_tile);
 
+                if constexpr (use_bitmap) {
+                    if ((needed[wi >> 5] & (1u << (wi & 31u))) == 0) {
+                        // No index in this tile maps to wi; drop it without the inner scan.
+                        input_dfb.pop_front(one_tile);
+                        continue;
+                    }
+                }
+
                 const uint32_t input_tensor_l1_read_addr = input_dfb.get_read_ptr();
-                const uint32_t input_index_tensor_l1_read_addr = input_index_dfb.get_read_ptr();
-                const uint32_t output_tensor_l1_write_addr = output_dfb.get_write_ptr();
 
                 uint32_t count = 0;
-                constexpr uint32_t tile_faces = 2;
-                constexpr uint32_t face_size = 16;
-                constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
                 for (uint32_t i = 0; i < tile_faces; ++i) {
                     for (uint32_t j = 0; j < tile_faces; ++j) {
                         for (uint32_t k = 0; k < face_size; ++k) {
@@ -130,9 +164,9 @@ void kernel_main() {
                                     input_index_tensor_l1_read_addr, count, input_index_tensor_data_format_size);
 
                                 // Calculate local index
-                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                const uint32_t tile_idx = global_index >> tile_width_shift;
 
-                                ASSERT(tile_idx <= Wt_input);
+                                ASSERT(tile_idx < Wt_input);
 
                                 if (tile_idx != wi) {
                                     // Index not in current input tile, skip

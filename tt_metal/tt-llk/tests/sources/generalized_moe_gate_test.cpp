@@ -63,7 +63,8 @@ constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 //
 // BINARY stays at Transpose::None: it is here to pin the FPU mop's arithmetic across all four faces,
 // and a transposed SrcA would only make its golden restate what the unpacker did.
-constexpr auto GATE_UNPACK_TRANSPOSE = (GMG_MODE == MODE_GATE) ? ckernel::Transpose::Both : ckernel::Transpose::None;
+constexpr auto GATE_UNPACK_TRANSPOSE =
+    (GMG_MODE == MODE_GATE) ? (GMG_TRANSPOSE_OF_FACES ? ckernel::Transpose::Both : ckernel::Transpose::IntraFace) : ckernel::Transpose::None;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -257,7 +258,14 @@ static inline void run_gate()
         GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
-        GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        if constexpr (GMG_DO_EXTRA_SCALE)
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8_scaled, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE, GMG_EXTRA_SCALE);
+        }
+        else
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        }
     }
     else
     {
@@ -297,7 +305,7 @@ static inline void run_gate()
     // transpose is the one step the run-producing path skips.
     if constexpr (!(GMG_PRODUCE_RUN && !GMG_GROUPED))
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
 }
@@ -324,7 +332,7 @@ static inline void run_move()
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP2)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
@@ -359,12 +367,12 @@ static inline void run_placement()
     }
     else if constexpr (GMG_SUB_OP == RUN_COPY_TOPK_RUN)
     {
-        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
+        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
     }
     else if constexpr (GMG_SUB_OP == RUN_PLACE_FIELD)
     {
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
     }
     else if constexpr (GMG_SUB_OP == RUN_MERGE16)
     {
@@ -377,13 +385,13 @@ static inline void run_placement()
         // finalize does its own merge, so unlike the RUN_COMBINE tail there is no merge16 here.
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
         mop_dest_reset();
@@ -394,7 +402,7 @@ static inline void run_placement()
         // The same combine, but the arriving run is already in DEST at {8,10} and reaches the merge
         // slot by relocation instead. Whether a relocated run is still a run the merge accepts is
         // the run format's contract, and copy_topk_run's own test only checks that cells moved.
-        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, is_fp32_dest_acc_en, 8 /* from_lo */, 10 /* from_hi */, 4 /* to_lo */, 6 /* to_hi */));
+        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, 8 /* from_lo */, 10 /* from_hi */, 4 /* to_lo */, 6 /* to_hi */));
         GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
     }
     else
@@ -408,13 +416,13 @@ static inline void run_placement()
         // the way the op's copy_tile does; place_field's own test sweeps the source offsets.
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, is_fp32_dest_acc_en, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
     }
 }
@@ -526,6 +534,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (GMG_MODE != MODE_BINARY && !STEP2_RUNS)
         {
+// Wait until unpack has posted both dummy valids; clearing before they arrive leaves unpack blocked after math completes.
+TTI_STALLWAIT(
+    p_stall::STALL_MATH,
+    p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
 

@@ -28,6 +28,9 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prep
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.common.utility_functions import comp_pcc
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ============================================================================
 # Pure-torch RoPE reference (no TTTv1 dependency)
 # ============================================================================

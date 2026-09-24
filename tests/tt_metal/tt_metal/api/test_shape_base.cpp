@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal {
 
-TEST(TensorShapeBaseTests, General4D) {
+TEST(TensorShapeBaseTests, CPU_General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 4);
@@ -27,7 +27,7 @@ TEST(TensorShapeBaseTests, General4D) {
     EXPECT_THROW(vec[-5], std::exception);
 }
 
-TEST(TensorVectorBaseTests, General5D) {
+TEST(TensorVectorBaseTests, CPU_General5D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50, 60});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 5);
@@ -41,7 +41,7 @@ TEST(TensorVectorBaseTests, General5D) {
     EXPECT_THROW(vec[-6], std::exception);
 }
 
-TEST(TensorShapeBaseTests, Empty) {
+TEST(TensorShapeBaseTests, CPU_Empty) {
     tt::tt_metal::ShapeBase vec({});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 0);
@@ -57,7 +57,7 @@ TEST(TensorShapeBaseTests, Empty) {
     EXPECT_THROW(vec[-5], std::exception);
 }
 
-TEST(TensorVectorBaseTests, SingleElement) {
+TEST(TensorVectorBaseTests, CPU_SingleElement) {
     tt::tt_metal::ShapeBase vec({20});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 1);
@@ -70,7 +70,7 @@ TEST(TensorVectorBaseTests, SingleElement) {
     EXPECT_THROW(vec[-5], std::exception);
 }
 
-TEST(TensorShapeBaseTests, TwoElements) {
+TEST(TensorShapeBaseTests, CPU_TwoElements) {
     tt::tt_metal::ShapeBase vec({20, 30});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 2);

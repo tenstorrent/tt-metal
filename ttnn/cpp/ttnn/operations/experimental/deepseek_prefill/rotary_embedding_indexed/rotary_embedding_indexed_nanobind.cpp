@@ -18,6 +18,7 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
     using ttnn::Tensor;
     using ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::rotary_embedding_indexed;
     using MemCfg = std::optional<tt::tt_metal::MemoryConfig>;
+    using SubshardAxis = std::optional<uint32_t>;
     using KCfg = std::optional<const ttnn::DeviceComputeKernelConfig>;
     ttnn::bind_function<"rotary_embedding_indexed", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -43,7 +44,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
 
             Args:
                 input (ttnn.Tensor): 4D per-chip input chunk on device, TILE layout
-                    [1, n_heads, chunk_local, head_dim].
+                    [1, n_heads, chunk_local, head_dim]. All four tensor operands must use the
+                    standard 32x32 tile.
                 cos (ttnn.Tensor): 4D cos cache on device, TILE layout, SP-sharded over
                     `cluster_axis` in block-cyclic order keyed by `chunk_local`.
                 sin (ttnn.Tensor): 4D sin cache, same layout/shape as `cos`.
@@ -54,6 +56,21 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                     at element [0]; the reader reads it on-device. Same argument name/position in both
                     forms.
                 cluster_axis (int): mesh axis the cos/sin caches are SP-sharded along (0 or 1).
+                seq_subshard_axis (int, optional): other mesh axis subdividing the input query rows.
+                    The caller must supply input equivalent to an exact mesh_partition of the full
+                    SP slab with dim=-2 and cluster_axis=seq_subshard_axis. Cos/sin must remain
+                    replicated on this axis and be built for
+                    chunk_local = input sequence length * subshard axis size.
+                    The op cannot validate these layout preconditions: replicated or differently
+                    partitioned input, or mismatched cache slab geometry, produces incorrect per-rank
+                    rotation offsets without an error. Each rank reads its contiguous query window
+                    within the original (possibly rotated) slab.
+                    This structural option is hashed and works with both scalar and metadata forms.
+
+                rotary_dim (int, optional): width of the rotary region; defaults to the full input
+                    width. Must match cos/sin width and be a positive multiple of 32.
+                rotary_offset (int): first rotary channel (default 0), a multiple of 32. The region
+                    must fit within input width. Other channels are copied without conversion.
 
             Returns:
                 ttnn.Tensor: a new tensor with the same spec as `input`, rotary-embedded.
@@ -68,7 +85,10 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 const MemCfg&,
-                const KCfg&>(&rotary_embedding_indexed),
+                const KCfg&,
+                const SubshardAxis&,
+                const std::optional<uint32_t>&,
+                uint32_t>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -76,7 +96,10 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("kv_actual_global"),
             nb::arg("cluster_axis"),
             nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt),
+            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("seq_subshard_axis") = std::nullopt,
+            nb::arg("rotary_dim") = std::nullopt,
+            nb::arg("rotary_offset") = 0),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -87,7 +110,10 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const Tensor&,
                 uint32_t,
                 const MemCfg&,
-                const KCfg&>(&rotary_embedding_indexed),
+                const KCfg&,
+                const SubshardAxis&,
+                const std::optional<uint32_t>&,
+                uint32_t>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -95,7 +121,10 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("kv_actual_global").noconvert(),
             nb::arg("cluster_axis"),
             nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt));
+            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("seq_subshard_axis") = std::nullopt,
+            nb::arg("rotary_dim") = std::nullopt,
+            nb::arg("rotary_offset") = 0));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::detail

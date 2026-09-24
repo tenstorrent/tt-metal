@@ -49,12 +49,10 @@ void RunTest(
     const experimental::NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
 
     // Allocate L1 buffer for sync flag
-    tt_metal::InterleavedBufferConfig sync_buffer_config{
-        .device = device,
-        .size = sizeof(uint32_t),
-        .page_size = sizeof(uint32_t),
-        .buffer_type = tt_metal::BufferType::L1};
-    auto sync_buffer = CreateBuffer(sync_buffer_config);
+    auto sync_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = sizeof(uint32_t)},
+        {.page_size = sizeof(uint32_t), .buffer_type = tt_metal::BufferType::L1},
+        mesh_device.get());
     uint32_t tensix_sync_addr = sync_buffer->address();
     std::vector<uint32_t> zero_data = {0};
     tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, zero_data);

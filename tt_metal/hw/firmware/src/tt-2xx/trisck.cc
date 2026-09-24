@@ -110,6 +110,14 @@ uint32_t _start() {
 
     EARLY_RETURN_FOR_DEBUG
 
+#ifdef ARCH_QUASAR
+    // Raise the Memory Access Hang timeout so that it does not falsely trip a 0x19/0x119 hw trap.
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
+#endif
+
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");

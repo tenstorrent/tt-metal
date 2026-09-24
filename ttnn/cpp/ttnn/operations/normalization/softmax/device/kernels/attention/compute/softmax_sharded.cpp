@@ -46,7 +46,7 @@ ALWI void calc_numeric_stable() {
         tile_regs_acquire();
         dfb_out_obj.reserve_back(subblock_w);
         for (std::uint32_t w = 0; w < subblock_w; w++) {
-            std::uint32_t index = w + index_subblock_w_offset;
+            const std::uint32_t index = w + index_subblock_w_offset;
             sub_tiles_bcast_cols(dfb_in_id, dfb_max_id, index, 0, w);
         }
         dfb_out_obj.reserve_back(subblock_w);
@@ -81,7 +81,7 @@ void kernel_main() {
     constexpr auto dfb_out0 = dfb::out0;
 
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     constexpr auto dfb_fused_attn = dfb::fused_attn;
@@ -96,23 +96,23 @@ void kernel_main() {
 #endif
 
     DataflowBuffer dfb_in0_obj(dfb_in0);
-    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    const DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
     DataflowBuffer dfb_exps_obj(dfb_exps);
     DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
     DataflowBuffer dfb_out0_obj(dfb_out0);
     DataflowBuffer dfb_x_obj(dfb_x);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
     DataflowBuffer dfb_scale_mask_obj(dfb_scale_mask);
 #endif
 
     constexpr int dst0 = 0;
-    int index_subblock_w_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index = 0;
 
     for (std::uint32_t i = 0; i < block_h; i++) {
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
         // fused scale
         reconfig_data_format(dfb_in0, dfb_fused_scale);
         pack_reconfig_data_format(dfb_scale_mask);
@@ -207,7 +207,7 @@ void kernel_main() {
         pack_reconfig_data_format(dfb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(dfb_in0);
+        copy_init(dfb_in0);
         exp_tile_init<EXP_APPROX>();
         for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();

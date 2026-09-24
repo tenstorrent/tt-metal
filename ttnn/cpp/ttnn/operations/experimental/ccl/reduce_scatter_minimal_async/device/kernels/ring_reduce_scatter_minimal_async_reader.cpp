@@ -79,8 +79,8 @@ IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
 // Two staging layouts are supported, selected by the `contiguous_interm` compile-time arg. Both
 // specializations expose the same four hooks, called from the same places in kernel_main:
 //
-//   begin_iteration(b, slice_idx)  once per ring iteration
-//   begin_channel(c)               once per channel of the slice
+//   begin_iteration(b, slice_idx)  once per (batch, channel) unit, before begin_channel
+//   begin_channel(c)               once per (batch, channel) unit
 //   skip_chunk(tiles)              a chunk this worker/direction does not own
 //   read_chunk(...)                once per owned chunk; issues the readback transactions
 //
@@ -117,7 +117,10 @@ struct IntermSource</*Contiguous=*/false> {
         start_tiles_read(tiles_read_start) {}
 
     void begin_iteration(uint32_t b, uint32_t slice_idx) {
-        interm_slice_base = slice_base_tile_id(slice_idx);
+        // Per-batch staging region, as on the chunk-paged layout. Free here: this intermediate is
+        // input-shaped, and the slice addressing above spans exactly input_batch_num_pages tiles,
+        // so the B regions tile a buffer that was already allocated at full input size.
+        interm_slice_base = b * input_batch_num_pages + slice_base_tile_id(slice_idx);
         output_batch_base = b * output_batch_num_pages;
     }
 
@@ -195,20 +198,25 @@ struct IntermSource</*Contiguous=*/true> {
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
     uint32_t penult_interm_channel_chunk_base = 0;
+    uint32_t penult_interm_batch_chunk_base = 0;
 
     // The per-worker row/column starts are meaningless here: chunk pages are addressed straight
     // from tiles_read, so nothing has to be tracked across chunks.
     IntermSource(uint32_t, uint32_t, uint32_t) {}
 
-    void begin_iteration(uint32_t /*b*/, uint32_t slice_idx) {
-        interm_slice_chunk_base = slice_idx * slice_C * chunks_per_channel;
+    void begin_iteration(uint32_t b, uint32_t slice_idx) {
+        // Each batch stages into its own region, so a batch never overwrites partial sums an
+        // earlier one has yet to consume. This is what lets the per-batch barrier go away.
+        interm_slice_chunk_base = (b * ring_size + slice_idx) * slice_C * chunks_per_channel;
+        penult_interm_batch_chunk_base = b * slice_C * chunks_per_channel;
     }
 
     void begin_channel(uint32_t c) {
         interm_channel_chunk_base = interm_slice_chunk_base + c * chunks_per_channel;
         // The penult intermediate has no slice_idx axis (each device receives exactly one such
-        // contribution, from exactly one neighbor, at exactly one iteration).
-        penult_interm_channel_chunk_base = c * chunks_per_channel;
+        // contribution, from exactly one neighbor, at exactly one iteration), but it does carry the
+        // batch axis, for the same reason the main staging region does.
+        penult_interm_channel_chunk_base = penult_interm_batch_chunk_base + c * chunks_per_channel;
     }
 
     void skip_chunk(uint32_t) {}
@@ -270,6 +278,12 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    // (batch, channel) units this worker owns, as [unit_start, unit_end) with u = b * slice_C + c. All of
+    // them are processed inside every ring step. The page-major split gives every worker every unit and
+    // a fraction of the pages in each; the unit-major split gives it a contiguous group of units and
+    // every page within them.
+    const uint32_t unit_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t unit_end = get_arg_val<uint32_t>(arg_idx++);
     // Chunk-paged layout only: staging buffer holding the 2nd-last iteration's direct-to-remote
     // contribution, read back as the 3rd term of the final iteration's local reduce. The tiled
     // layout reads that term from output_tensor instead and leaves this address at 0.
@@ -307,20 +321,31 @@ void kernel_main() {
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
 
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
-        if constexpr (fuse_op) {
-            matmul_receiver.wait_for_matmul_batch(b);
-        }
-        uint32_t batch_offset = input_batch_num_pages * b;
-
-        // Loop over the slices, starting from the chip half-way across the ring, and working backwards
-        // until we get to ourselves.
-        //
-        // In some iters we process a full tensor slice, and sometimes only half slice.
-        // In the 1st iter we don't perform a reduction, in other iters we reduce 2 tensors.
-        // In the last iter we reduce 3 tensors (local + remote from fwd device + remote from bwd device).
-        // In the last iter the writer outputs to local output tensor, in other iters it sends to next chip.
-        // These behaviors are controlled by a "state machine" to avoid code duplication in the loop body.
+    // Ring step outermost, batches inside: every (batch, channel) unit this worker owns is processed
+    // within each ring step, so the tensor crosses the ring once however many batches it has and a
+    // step carries the worker's whole share of the slice. With the batch loop outside the ring loop
+    // there were B traversals of B-times-smaller steps, and at one chunk per step the read -> add ->
+    // send chain could not overlap at all. Each batch stages into its own region, which is what lets
+    // every batch be in flight within one step.
+    //
+    // Loop over the slices, starting from the chip half-way across the ring, and working backwards
+    // until we get to ourselves.
+    //
+    // In some iters we process a full tensor slice, and sometimes only half slice.
+    // In the 1st iter we don't perform a reduction, in other iters we reduce 2 tensors.
+    // In the last iter we reduce 3 tensors (local + remote from fwd device + remote from bwd device).
+    // In the last iter the writer outputs to local output tensor, in other iters it sends to next chip.
+    // These behaviors are controlled by a "state machine" to avoid code duplication in the loop body.
+    // Fused with a batched producer (fuse_op, B > 1): one ring traversal per batch, so the reduce-scatter
+    // of batch b overlaps the matmul producing batch b+1, which is what the fused op batches for. In every
+    // other case a single traversal carries all of the worker's units, one ring step at a time.
+    constexpr uint32_t num_traversals = (fuse_op && input_tensor_B > 1) ? input_tensor_B : 1;
+    for (uint32_t t = 0; t < num_traversals; ++t) {
+        // Units of this traversal: the worker's whole range, or its intersection with batch t.
+        const uint32_t t_unit_start =
+            num_traversals == 1 ? unit_start : (unit_start > t * slice_C ? unit_start : t * slice_C);
+        const uint32_t t_unit_end =
+            num_traversals == 1 ? unit_end : (unit_end < (t + 1) * slice_C ? unit_end : (t + 1) * slice_C);
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
         int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
         uint32_t num_iters = ring_size_by_2 + 1;
@@ -360,12 +385,11 @@ void kernel_main() {
             } else if (slice_idx >= (int)ring_size) {
                 slice_idx = (uint32_t)slice_idx - ring_size;
             }
+            const uint32_t slice_base = slice_base_tile_id(slice_idx);
 
             // address incrementer for input_tensor; the staged partial sums are addressed by
             // interm_source, whose layout depends on contiguous_interm.
-            uint32_t input_tile_id_start = slice_base_tile_id(slice_idx) + batch_offset;
-            interm_source.begin_iteration(b, slice_idx);
-
+            uint32_t input_tile_id_start = 0;
             uint32_t input_pages_read_in_row = start_pages_read_in_row;
             uint32_t input_row_offset = start_row_offset;
             auto get_next_input_tile_id = [&]() -> uint32_t {
@@ -379,10 +403,21 @@ void kernel_main() {
             };
 
             uint32_t chunk_count = 0;
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t u = t_unit_start; u < t_unit_end; ++u) {
+                const uint32_t b = u / slice_C;
+                const uint32_t c = u % slice_C;
+                if constexpr (fuse_op) {
+                    // The fused producer releases batches in order and every unit is first touched in step
+                    // 0. The wait is a wait_min, so repeating it for each unit of a batch costs nothing.
+                    if (i == 0) {
+                        matmul_receiver.wait_for_matmul_batch(b);
+                    }
+                }
                 // reset addr counters
+                input_tile_id_start = slice_base + b * input_batch_num_pages + c * input_channel_num_pages;
                 input_pages_read_in_row = start_pages_read_in_row;
                 input_row_offset = start_row_offset;
+                interm_source.begin_iteration(b, slice_idx);
                 interm_source.begin_channel(c);
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
@@ -469,16 +504,14 @@ void kernel_main() {
                         }
                     }  // if skip or process
                 }  // while total_tiles_to_read
-
-                input_tile_id_start += input_channel_num_pages;
-            }
+            }  // for units
 
             // Next slice idx
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
-    }
+    }  // for traversals
 
-    // Reset the out_ready semaphores once, only after all batches
+    // Reset the out_ready semaphores once, after the whole ring traversal
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), 0);
 }

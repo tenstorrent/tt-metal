@@ -145,7 +145,7 @@ class FpuNode:
         operation: "L1Operation",
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.unpacker is not None:
+        if self.unpacker is not None and self.src_a is not None:
             unpacked_tensor_a, unpacked_tensor_b = self.unpacker.golden(
                 input_tensor_a, input_tensor_b, operation, config, self
             )

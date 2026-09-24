@@ -2,11 +2,12 @@ add_library(ttnn_kernel_lib INTERFACE)
 add_library(TTNN::KernelLib ALIAS ttnn_kernel_lib)
 
 file(
-    GLOB kernel_lib_jit_api
+    GLOB_RECURSE kernel_lib_jit_api
     CONFIGURE_DEPENDS
     *.hpp
     *.inl
 )
+list(FILTER kernel_lib_jit_api EXCLUDE REGEX "/tests/")
 list(SORT kernel_lib_jit_api)
 
 set_target_properties(

@@ -55,6 +55,7 @@ std::uint8_t my_relative_y_ __attribute__((used));
 #if defined(UCK_CHLKC_PACK)
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
 #else
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif
@@ -63,6 +64,21 @@ thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((use
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
 // returns immediately for any DFB math TRISC is not a participant in (expected_signal == 0).
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
+
+#ifdef ENABLE_LLK_ASSERT
+namespace llk_tdma_guard {
+// TEN-4746 tile-counter guard mask (Quasar). thread_local so each TRISC gets its own mask in the
+// host-threaded emulation (tt-llk#1678); declared extern thread_local in llk_tdma_guard.h.
+thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
+}  // namespace llk_tdma_guard
+
+namespace llk_reinit_guard {
+// #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
+// llk_reinit_guard.h.
+thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
+    __attribute__((used)) = {};
+}  // namespace llk_reinit_guard
+#endif
 
 namespace ckernel {
 
