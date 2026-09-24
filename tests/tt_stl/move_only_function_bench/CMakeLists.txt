@@ -48,6 +48,13 @@ target_include_directories(zoo_headers INTERFACE ${zoo_SOURCE_DIR}/inc)
 # Establishes std::function's real inline buffer for this configuration; the benchmark pins the
 # candidates to whatever it reports.
 add_executable(sbo_probe sbo_probe.cpp)
+# Links the candidate headers so the probe sees exactly the candidates.hpp the benchmark does.
+target_link_libraries(
+    sbo_probe
+    PRIVATE
+        function2
+        zoo_headers
+)
 
 add_executable(bench bench.cpp)
 target_link_libraries(

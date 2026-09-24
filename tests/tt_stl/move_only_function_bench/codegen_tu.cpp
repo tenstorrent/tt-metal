@@ -5,31 +5,19 @@
 // Item 6 of #57444: object-size comparison. One translation unit, compiled once per candidate via
 // -DCANDIDATE_{STD,ZOO,FU2}, so the resulting .o sizes are directly comparable.
 
-#include "inline_capacity.hpp"
+#include "candidates.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <utility>
 
-#if defined(CANDIDATE_FU2)
-#include <function2/function2.hpp>
-#elif defined(CANDIDATE_ZOO)
-#include <zoo/FunctionPolicy.h>
-#endif
-
-namespace {
-using bench_config::kInlineBytes;
-using bench_config::kInlinePointers;
-}  // namespace
-
 #if defined(CANDIDATE_STD)
-using Fn = std::function<void()>;
+using Fn = bench::StdFunction<void()>;
 #elif defined(CANDIDATE_FU2)
-using Fn = fu2::function_base<true, false, fu2::capacity_fixed<kInlineBytes>, true, true, void()>;
+using Fn = bench::Fu2Function<void()>;
 #elif defined(CANDIDATE_ZOO)
-using Fn =
-    zoo::Function<zoo::AnyContainer<zoo::Policy<void* [kInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>, void()>;
+using Fn = bench::ZooFunction<void()>;
 #else
 #error "define one of CANDIDATE_STD / CANDIDATE_ZOO / CANDIDATE_FU2"
 #endif

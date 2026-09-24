@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Measures std::function's real small-object buffer for the active standard library and checks it
-// against the constant the benchmark compiles in (inline_capacity.hpp).
+// against the constant the benchmark compiles in (candidates.hpp).
 //
 // The benchmark's fairness rests on those two agreeing: the candidates are pinned to exactly the
 // buffer std::function gets. Exits non-zero on a mismatch so a standard library that moves the
 // boundary fails loudly rather than silently skewing the comparison.
 
-#include "inline_capacity.hpp"
+#include "candidates.hpp"
 
 #include <cstddef>
 #include <cstdio>
@@ -66,22 +66,22 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 int main(int argc, char** argv) {
     const bool verbose = argc > 1;
 
-    std::printf("stdlib: %s\n", bench_config::kStdlibName);
+    std::printf("stdlib: %s\n", bench::kStdlibName);
     std::printf("sizeof(std::function<void()>) = %zu\n", sizeof(std::function<void()>));
 
     std::size_t largest_inline = 0;
     probe_all(largest_inline, verbose, std::make_index_sequence<64>{});
 
     std::printf("measured inline buffer: %zu B\n", largest_inline);
-    std::printf("compiled-in kInlineBytes: %zu B\n", bench_config::kInlineBytes);
+    std::printf("compiled-in kInlineBytes: %zu B\n", bench::kInlineBytes);
 
-    if (largest_inline != bench_config::kInlineBytes) {
+    if (largest_inline != bench::kInlineBytes) {
         std::printf(
             "MISMATCH: std::function holds %zu B inline but the benchmark pins candidates to %zu B.\n"
             "The comparison would not be apples-to-apples. Update kInlineBytes in "
-            "inline_capacity.hpp.\n",
+            "candidates.hpp.\n",
             largest_inline,
-            bench_config::kInlineBytes);
+            bench::kInlineBytes);
         return 1;
     }
 

@@ -11,7 +11,7 @@ Building tt-metal itself twice to cover gcc and clang is not practical.
 
 All three are pinned to whatever inline capacity `std::function` has in the current configuration,
 so no side gets a bigger buffer than the baseline. That capacity varies by standard library; see
-`inline_capacity.hpp`, and run `sbo_probe` to check it.
+`candidates.hpp`, and run `sbo_probe` to check it.
 
 | Name | Type |
 | --- | --- |

@@ -6,12 +6,9 @@
 // ttsl::move_only_function. Compares zoo and fu2 against std::function at a common inline
 // capacity. See README.md for how to run and how to read the numbers.
 
-#include "inline_capacity.hpp"
+#include "candidates.hpp"
 
 #include <benchmark/benchmark.h>
-
-#include <function2/function2.hpp>
-#include <zoo/FunctionPolicy.h>
 
 #include <atomic>
 #include <cstddef>
@@ -32,30 +29,12 @@ std::atomic<std::size_t> g_allocations{0};
 
 std::size_t take_allocations() { return g_allocations.exchange(0, std::memory_order_relaxed); }
 
-using bench_config::kInlineBytes;
-using bench_config::kInlinePointers;
+using bench::kInlineBytes;
+using bench::kInlinePointers;
 
-using StdFn = std::function<void()>;
-// HasStrongExceptGuarantee=true makes the move constructor noexcept, matching std::function, zoo
-// and the std::move_only_function this will become. fu2's own unique_function default is false,
-// which would leave this the only contender with a throwing move. The cost is that fu2 then refuses
-// callables whose move can throw; see README.
-using Fu2Fn = fu2::function_base<
-    /*IsOwning=*/true,
-    /*IsCopyable=*/false,
-    fu2::capacity_fixed<kInlineBytes>,
-    /*IsThrowing=*/true,
-    /*HasStrongExceptGuarantee=*/true,
-    void()>;
-// zoo::VTableFunction is deliberately not used: AnyContainer provides no operator bool and no
-// has_value(), so it cannot stand in for std::move_only_function. operator bool lives on
-// zoo::Function, and the RTTI affordance is what makes it reliable -- without it the fallback
-// compares destructor pointers against Destroy::noOp, which identical-code folding can merge for a
-// trivially destructible target, making an engaged function report itself empty.
-template <typename Signature>
-using ZooFunction = zoo::
-    Function<zoo::AnyContainer<zoo::Policy<void* [kInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>, Signature>;
-using ZooFn = ZooFunction<void()>;
+using StdFn = bench::StdFunction<void()>;
+using ZooFn = bench::ZooFunction<void()>;
+using Fu2Fn = bench::Fu2Function<void()>;
 
 // Captures sized to sit either side of kInlineBytes.
 struct SmallCapture {
@@ -201,7 +180,7 @@ struct SizeReport {
             "inline capacity in use: %zu B (%s)\n"
             "sizes: std::function=%zu/%zu zoo=%zu/%zu fu2=%zu/%zu (bytes: sizeof/alignof)\n",
             kInlineBytes,
-            bench_config::kStdlibName,
+            bench::kStdlibName,
             sizeof(StdFn),
             alignof(StdFn),
             sizeof(ZooFn),
