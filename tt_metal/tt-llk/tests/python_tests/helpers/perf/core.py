@@ -270,8 +270,13 @@ class PerfReport:
         frame = pd.concat(self._frames, ignore_index=True)
         mask = pd.concat(self._masks, ignore_index=True)
 
-        # apply masks
-        frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
+        out = frame[mask].copy()
+        # THROWAWAY: a synthetic +10% on every TILE_LOOP L1_TO_L1 point. Never merge.
+        column = "mean(L1_TO_L1)"
+        if column in out.columns and MARKER in out.columns:
+            rows = out[MARKER] == TILE_LOOP_MARKER
+            out.loc[rows, column] = out.loc[rows, column] * 1.10
+        out.to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
 
 
 def get_unique_base_names(input_dir: Path):
