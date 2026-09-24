@@ -1497,6 +1497,7 @@ class ttMLA:
         indexer_indices: Optional[ttnn.Tensor] = None,
         return_indexer_indices: bool = False,
         metadata: Optional[ttnn.Tensor] = None,
+        force_kv_only: bool = False,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         # Trace-safe metadata path: a 3-tuple of 1-element uint32 DRAM tensors (slot_id, actual_start,
         # actual_end) passed in from outside. When provided, the chunked-prefill ops (update_padded_kv_cache,
@@ -1514,7 +1515,9 @@ class ttMLA:
         if kvpe_cache.geometry != self.kv_cache_geometry:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
 
-        if self.kv_only:
+        # kv_only is fixed at construction for the trunk last layer. A caller that replays one fully
+        # built block across several roles asks for the same fast path per call instead.
+        if self.kv_only or force_kv_only:
             return self._forward_kv_only(
                 hidden_states,
                 rope_tensors,
@@ -1524,6 +1527,7 @@ class ttMLA:
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,
                 index_kv_cache=index_kv_cache,
+                indexer_indices=indexer_indices,
                 metadata=metadata,
             )
 
@@ -1928,6 +1932,7 @@ class ttMLA:
         index_kv_cache: Optional[ttnn.Tensor],
         actual_end: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
     ) -> None:
         """Last-layer fast path: fill the migratable KVPE cache, then stop before query/attention/output.
 
@@ -1940,8 +1945,9 @@ class ttMLA:
 
         # Sparse decode needs the index key cache for every full-indexer layer even though this fast path
         # skips query construction and scoring. Shared-indexer layers reuse a prior layer's selection and
-        # intentionally own no indexer weights/cache write.
-        if self._has_indexer and not self._indexer_reuse:
+        # own no indexer weights/cache write; injected indices mean an earlier layer already wrote this
+        # slot, which is the gate the full forward puts on its own indexer.
+        if self._has_indexer and not self._indexer_reuse and indexer_indices is None:
             assert index_kv_cache is not None, "sparse kv_only requires the caller-owned index key cache"
             self._indexer.write_k(
                 hidden_states,

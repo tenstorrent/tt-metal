@@ -312,7 +312,8 @@ class TtMTPModule(LightweightModule):
         """Run one MTP level.
 
         Returns ``(x, out, out_head_normed, *block_extras)``. ``out_head_normed`` is what the next
-        level consumes; ``out`` is returned beside it as its own comparison point.
+        level consumes; ``out`` is returned beside it as its own comparison point. Both are None
+        when the level runs kv_only.
         """
         x = self.fused(embed, hidden)
         out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
@@ -328,6 +329,7 @@ _RESERVED_FWD_KWARGS = (
     "return_kv_cache",  # promoted to a named argument
     "return_kv_intermediates",  # would change TtPrefillBlock's return arity
     "ack_layer_idx",  # renumbered per level off layer_ack_base
+    "force_kv_only",  # set by the last-level policy
 )
 
 
@@ -336,8 +338,8 @@ class MTPPredictorOutput:
     """Per-level results from :meth:`TtMTPPredictor.forward`, ordered by level."""
 
     x: list  # the fused-projection output, i.e. the decoder layer's input
-    out: list  # decoder-layer output, before shared_head.norm
-    out_head_normed: list  # the level's output, what the next level consumes
+    out: list  # decoder-layer output, before shared_head.norm (None for a kv_only level)
+    out_head_normed: list  # the level's output, what the next level consumes (None if kv_only)
     kv_cache: object = None  # host KVPE for every slot, or None
     indexer_indices: list | None = None  # per-level top-k, or None
 
@@ -362,6 +364,7 @@ class TtMTPPredictor(LightweightModule):
         layer_idx: Optional[int] = None,
         first_cache_slot: int = 0,
         index_share: Optional[bool] = None,
+        kv_only_last_level: bool = False,
         **module_kwargs,
     ):
         """Build the one shared module and fix the replay policy.
@@ -375,6 +378,9 @@ class TtMTPPredictor(LightweightModule):
         assert self.num_levels >= 1, f"num_levels must be >= 1, got {self.num_levels}"
         self.first_cache_slot = int(first_cache_slot)
         self.index_share = self.mtp_config.index_share_for_mtp_iteration if index_share is None else bool(index_share)
+        # The last level's hidden feeds no further level and no LM head, so only its KV slot is wanted.
+        # Off by default: the PCC tests compare every level's output against the CPU reference.
+        self.kv_only_last_level = bool(kv_only_last_level)
         self.mesh_device = mesh_device
 
         # One module, replayed: rebuilding per level would re-upload the MTP layer's experts each time.
@@ -440,6 +446,10 @@ class TtMTPPredictor(LightweightModule):
                 kwargs["return_indexer_indices"] = True
             if is_last and return_kv_cache:
                 kwargs["return_kv_cache"] = True
+            # Level 0 under sharing owns the top-k the other levels take, so it only goes kv_only when
+            # it is not also that producer -- which it is only at num_levels == 1.
+            if is_last and self.kv_only_last_level and not (share and k == 0):
+                kwargs["force_kv_only"] = True
 
             x, out, out_head_normed, *extras = self.module.forward(embed, h, rope_tensors, kvpe_cache, **kwargs)
             # The fused projection reads `embed` once, so it is dead after the module call.

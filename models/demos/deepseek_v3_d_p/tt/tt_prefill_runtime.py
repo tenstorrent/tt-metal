@@ -74,6 +74,10 @@ class TtPrefillRuntimeConfig:
     # The KV cache is the prefill output either way; this only trims the last layer.
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
+    # The same trim for the last MTP level: its hidden state feeds no further level and no LM head,
+    # so it only has to fill its KV slot. Serving wants it; the PCC tests, which compare every
+    # level's hidden output, build the predictor directly and keep its own default of off.
+    kv_only_last_mtp_level: bool = True
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
     # slices from the drafter checkpoint; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
@@ -354,6 +358,7 @@ class TtPrefillRuntime:
             layer_idx=mtp_cfg.mtp_layer_idx,
             # Level 1 writes the slot right after the trunk's last; the transformer asserts this.
             first_cache_slot=self.config.num_layers,
+            kv_only_last_level=self.config.kv_only_last_mtp_level,
             tp_axis=self.config.tp_axis,
             sp_axis=self.config.sp_axis,
             num_links=self.config.num_links,
