@@ -318,7 +318,7 @@ TEST_F(Conv3dOpTest, BatchStrideAndPadding) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, AsymmetricStrideAndPadding) {
+TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricStrideAndPadding) {
     Conv3dCase c;
     c.in_size = {6, 7, 8};
     c.kernel = {3, 3, 3};
@@ -335,7 +335,7 @@ TEST_F(Conv3dOpTest, Dilation) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, DilationWithGroupsStrideAndPadding) {
+TEST_F(Conv3dOpTest, NIGHTLY_DilationWithGroupsStrideAndPadding) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {7, 8, 9};
@@ -348,7 +348,7 @@ TEST_F(Conv3dOpTest, DilationWithGroupsStrideAndPadding) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, PerAxisDilation) {
+TEST_F(Conv3dOpTest, NIGHTLY_PerAxisDilation) {
     Conv3dCase c;
     c.in_size = {6, 8, 10};
     c.dilation = {1, 2, 3};
@@ -357,7 +357,7 @@ TEST_F(Conv3dOpTest, PerAxisDilation) {
 }
 
 // span = dil * (k - 1) = 4 on every axis; padding 5 exceeds it, so dX takes the crop path with a dilated kernel.
-TEST_F(Conv3dOpTest, DilationWithPaddingBeyondSpan) {
+TEST_F(Conv3dOpTest, NIGHTLY_DilationWithPaddingBeyondSpan) {
     Conv3dCase c;
     c.in_size = {5, 6, 7};
     c.dilation = {2, 2, 2};
@@ -365,7 +365,7 @@ TEST_F(Conv3dOpTest, DilationWithPaddingBeyondSpan) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, GroupsWithDilationAndUnalignedChannels) {
+TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithDilationAndUnalignedChannels) {
     Conv3dCase c;
     c.in_size = {5, 6, 7};
     c.C_in = 24;
@@ -390,7 +390,7 @@ TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpan) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpanWithStride) {
+TEST_F(Conv3dOpTest, NIGHTLY_PaddingLargerThanKernelSpanWithStride) {
     Conv3dCase c;
     c.N = 2;
     c.stride = {2, 2, 2};
@@ -398,14 +398,14 @@ TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpanWithStride) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, OutputChannelsNotTileAligned) {
+TEST_F(Conv3dOpTest, NIGHTLY_OutputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_out = 40;
     c.padding = {1, 1, 1};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, InputChannelsNotTileAligned) {
+TEST_F(Conv3dOpTest, NIGHTLY_InputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_in = 12;
     c.padding = {1, 1, 1};
@@ -422,7 +422,7 @@ TEST_F(Conv3dOpTest, InputAndOutputChannelsNotTileAligned) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, GroupsWithUnalignedChannels) {
+TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithUnalignedChannels) {
     Conv3dCase c;
     c.C_in = 24;
     c.C_out = 16;
@@ -449,21 +449,21 @@ TEST_F(Conv3dOpTest, PatchEmbedKernel) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, AsymmetricOddKernel) {
+TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricOddKernel) {
     Conv3dCase c;
     c.kernel = {1, 3, 3};
     c.padding = {0, 1, 1};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, EvenCubicKernelWithStride) {
+TEST_F(Conv3dOpTest, NIGHTLY_EvenCubicKernelWithStride) {
     Conv3dCase c;
     c.kernel = {2, 2, 2};
     c.stride = {2, 2, 2};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, Groups) {
+TEST_F(Conv3dOpTest, NIGHTLY_Groups) {
     Conv3dCase c;
     c.C_in = 64;
     c.C_out = 32;
@@ -472,7 +472,7 @@ TEST_F(Conv3dOpTest, Groups) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, GroupsWithStrideAndBatch) {
+TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithStrideAndBatch) {
     Conv3dCase c;
     c.N = 2;
     c.C_in = 64;
@@ -498,7 +498,7 @@ TEST_F(Conv3dOpTest, OneDimensionalBias) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, LargerChannelCounts) {
+TEST_F(Conv3dOpTest, NIGHTLY_LargerChannelCounts) {
     Conv3dCase c;
     c.C_in = 128;
     c.C_out = 128;
