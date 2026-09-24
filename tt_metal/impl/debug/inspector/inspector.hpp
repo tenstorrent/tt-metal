@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -110,6 +111,9 @@ public:
     // correctly resolves riscs that share a single binary. Returns an empty string if data is not available.
     static std::string get_kernel_elf_path(int watcher_kernel_id, uint32_t processor_index);
     static void enable_kernel_path_collection();
+    // Records the ELF each processor index of a kernel id runs, for a kernel binary built outside
+    // Program::compile (the emulator's JIT). Same collection gate as compile-time registration.
+    static void register_kernel_elf_paths(int watcher_kernel_id, std::vector<std::string> processor_elf_paths) noexcept;
 
     static inspector::RpcServer& get_rpc_server();
 
