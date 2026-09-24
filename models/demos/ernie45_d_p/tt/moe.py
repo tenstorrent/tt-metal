@@ -49,9 +49,14 @@ class TtRouter:
         wsum = ttnn.sum(wts, dim=-1, keepdim=True)
         wts = ttnn.div(wts, wsum)
         ttnn.deallocate(wsum)
-        dense = ttnn.scatter(ttnn.zeros_like(probs), dim=-1, index=idx, src=wts)
+        # ttnn.scatter has no fp32-TILE path: selection and renorm stay fp32, the applied weights are bf16.
+        zeros = ttnn.typecast(ttnn.zeros_like(probs), ttnn.bfloat16)
         ttnn.deallocate(probs)
-        return ttnn.typecast(dense, ttnn.bfloat16), idx, wts
+        wts_bf16 = ttnn.typecast(wts, ttnn.bfloat16)
+        dense = ttnn.scatter(zeros, dim=-1, index=idx, src=wts_bf16)
+        ttnn.deallocate(zeros)
+        ttnn.deallocate(wts_bf16)
+        return dense, idx, wts
 
 
 class TtMoE:
