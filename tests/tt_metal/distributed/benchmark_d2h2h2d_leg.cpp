@@ -60,6 +60,15 @@ void init_counters(benchmark::State& state) {
     state.counters["device_bytes_per_cycle"] = 0;
     state.counters["frames"] = 0;
     state.counters["bad_cores"] = 0;
+    // Where the caller's time goes, as opposed to how long a frame takes. A fixed per-pass
+    // cost lands on however many frames the pass posted, so posts_per_flush sets throughput.
+    state.counters["posts_per_flush"] = 0;
+    state.counters["starved_pass_pct"] = 0;
+    state.counters["h2h_flush_pct"] = 0;
+    state.counters["d2h_poll_pct"] = 0;
+    state.counters["h2h_poll_pct"] = 0;
+    state.counters["h2d_drain_pct"] = 0;
+    state.counters["poll_calls"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -78,6 +87,14 @@ struct RankReport {
     uint64_t h2d_samples = 0;
     uint64_t frames = 0;
     uint64_t bad_cores = 0;
+    // Phase 0 instrumentation: the sender owns these, so they ride the same all_gather.
+    double posts_per_flush = 0.0;
+    double starved_pass_pct = 0.0;
+    double h2h_flush_pct = 0.0;
+    double d2h_poll_pct = 0.0;
+    double h2h_poll_pct = 0.0;
+    double h2d_drain_pct = 0.0;
+    uint64_t poll_calls = 0;
 };
 
 class D2H2H2DFixture : public benchmark::Fixture {
@@ -298,6 +315,25 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         RankReport local{};
         local.frames = msgs_;
         if (timing) {
+            const auto& ps = sock_->h2h().pass_stats();
+            const auto& tm = sock_->timing();
+            if (ps.passes != 0) {
+                local.posts_per_flush = static_cast<double>(ps.posts) / static_cast<double>(ps.passes);
+                local.starved_pass_pct = 100.0 * static_cast<double>(ps.starved) / static_cast<double>(ps.passes);
+            }
+            if (tm.h2h_poll_ns != 0) {
+                local.h2h_flush_pct = 100.0 * static_cast<double>(ps.flush_ns) / static_cast<double>(tm.h2h_poll_ns);
+            }
+            // Shares of time inside poll(), not of wall time: the caller also waits outside it.
+            const double legs = static_cast<double>(tm.d2h_poll_ns + tm.h2h_poll_ns + tm.h2d_drain_ns);
+            if (legs > 0.0) {
+                local.d2h_poll_pct = 100.0 * static_cast<double>(tm.d2h_poll_ns) / legs;
+                local.h2h_poll_pct = 100.0 * static_cast<double>(tm.h2h_poll_ns) / legs;
+                local.h2d_drain_pct = 100.0 * static_cast<double>(tm.h2d_drain_ns) / legs;
+            }
+            local.poll_calls = tm.poll_calls;
+        }
+        if (timing) {
             const double secs = std::chrono::duration<double>(t1 - t0).count();
             const double gb = static_cast<double>(msgs_ - warmup_msgs_) * payload_bytes_ / 1e9;
             local.gbps = secs > 0.0 ? gb / secs : 0.0;
@@ -367,6 +403,14 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["device_bytes_per_cycle"] = tx.device_bytes_per_cycle;
         state.counters["frames"] = static_cast<double>(tx.frames);
         state.counters["bad_cores"] = static_cast<double>(rx.bad_cores);
+        // tx: only the sending rank runs the posting loop these describe.
+        state.counters["posts_per_flush"] = tx.posts_per_flush;
+        state.counters["starved_pass_pct"] = tx.starved_pass_pct;
+        state.counters["h2h_flush_pct"] = tx.h2h_flush_pct;
+        state.counters["d2h_poll_pct"] = tx.d2h_poll_pct;
+        state.counters["h2h_poll_pct"] = tx.h2h_poll_pct;
+        state.counters["h2d_drain_pct"] = tx.h2d_drain_pct;
+        state.counters["poll_calls"] = static_cast<double>(tx.poll_calls);
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
