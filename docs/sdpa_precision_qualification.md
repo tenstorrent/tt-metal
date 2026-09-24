@@ -449,6 +449,7 @@ changing the frozen Q256/K512/D128 outputs.
 | Exp ring single- and multi-pass (1x2) | 124 passed |
 | Continuation | 162 passed |
 | Watcher subset: odd Q (B/E), D64/D256, K256/K384 | 12 + 31 + 35 passed; L1 skips only |
+| After barrier change: regression / exp ring / geometry | 565 / 131 / 418 + 105 passed |
 | Joint, tails, GQA, preparation, FP32 state | 595 passed (combined regression) |
 | Model device smoke (random weights; FLUX.1/2, Qwen path, Mochi, Wan, LTX-2 video/audio, MiniMax H3, SD3.5, Motif, Ideogram4) | all passed; 1x1 and 1x2 |
 
@@ -471,15 +472,18 @@ as DiT callers configure it). Milliseconds:
 
 | Blocking | Legacy | A | B | C | D | E_bf16 | E_bfp8 | E_bfp4 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Q256/K512 | 1.895 | 2.122 | 2.168 | 3.348 | 4.369 | 2.122 | 1.854 | 1.847 |
-| Q128/K512 | 3.169 | 4.125 | 4.140 | 4.138 | 4.409 | 4.131 | 3.275 | 2.922 |
-| Q256/K256 | 1.914 | 2.201 | 2.729 | 3.928 | 5.117 | 2.432 | 2.420 | 2.436 |
-| Q224/K384 | 3.043 | 2.803 | 4.095 | 4.246 | 5.526 | 3.919 | 4.229 | 4.197 |
-| Q320/K256 | 2.373 | 2.428 | 3.377 | 4.895 | 6.336 | 2.993 | 3.017 | 3.012 |
+| Q256/K512 | 1.889 | 1.785 | 2.171 | 3.352 | 4.349 | 1.857 | 1.849 | 1.835 |
+| Q128/K512 | 3.225 | 2.443 | 2.466 | 3.449 | 4.384 | 2.387 | 1.872 | 1.834 |
+| Q256/K256 | 1.911 | 1.937 | 2.710 | 3.966 | 5.062 | 2.432 | 2.413 | 2.444 |
+| Q224/K384 | 3.040 | 2.351 | 4.064 | 4.276 | 5.528 | 3.919 | 4.228 | 4.225 |
+| Q320/K256 | 2.384 | 2.419 | 3.338 | 4.892 | 6.322 | 2.998 | 3.019 | 3.008 |
 
-These are single-op trace timings, not model throughput. Small Q chunks cost the
-recipes more than legacy (Q128: +30% for A), so callers should prefer the largest
-Q chunk their parallel layout allows.
+These are single-op trace timings, not model throughput, measured after raising the
+chain-head reader's DRAM read-barrier interval from 2 to 16 tiles (before it,
+FAST was 12% slower than legacy at Q256 and 30% slower at Q128; 1- and 4-core
+timings are unchanged). FAST and LOW_PRECISION now match or beat legacy at matched
+blocking; BALANCED and ACCURATE cost 1.8-2.6x legacy, which is their HiFi4/FP32
+arithmetic, not dataflow.
 
 ## Continuous coverage
 
