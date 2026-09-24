@@ -100,9 +100,17 @@ TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPOR
 - `tt-perf-report <ops_perf_results.csv>` gives the per-op table used for the `ttperfreport_*.txt` files.
 - Per-op L1/DRAM buffer placement: `$PY $M/tests/perf/gen_mem_report.py --batch 8 --seq 512 --out /tmp/mem_bs8.csv`.
 
-Raw profiles and reports collected so far are on the host under
-`/home/ttuser/ashai/pplx-embedding-models/perf_csv/` (`visualizer_reports/pplx4b_20260923_bs{8,32}_isl512/`,
-`ttperfreport_*.txt`, baseline op CSVs); they are not in the repo (tens of MB each).
+Raw profiles and reports are on the host under `/home/ttuser/ashai/pplx-embedding-models/perf_csv/`
+(not in the repo: 2–10 GB per folder):
+
+- `visualizer_reports/pplx4b_FINAL_bs{1,8,16,32}_isl512/` — the shipped defaults at commit f970e9199d5,
+  regenerated 2026-09-24 (ops CSV + `profile_log_device.csv` + tracy file + `ttperfreport_*.txt`; each folder
+  loads into ttnn-visualizer as a Performance report). The 2026-09-23 set is under `superseded_20260923/`,
+  the pre-optimization set under `pplx4b_baseline_bs*`.
+- `ttperfreport_pplx4b_FINAL_bs{1,8,16,32}_isl512.txt` — rendered `tt-perf-report` tables (signpost window).
+- `pplx4b_FINAL_bs{1,8,16,32}_isl512_ops.csv`, `pplx4b_FINAL_all_batches_comparison.csv` — per-op totals of
+  the signposted replay (op, calls, total_ms, avg_ms, max_ms, %), same format as the `pplx4b_baseline_*` files.
+- `doc/optimized/perf_summary.json` in the repo carries the same per-op breakdown next to the e2e numbers.
 
 ## 6. Accuracy
 
