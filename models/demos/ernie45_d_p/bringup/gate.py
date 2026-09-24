@@ -123,7 +123,9 @@ def run_gate(tid: str, commit: bool, force: bool) -> int:
     LOGS.mkdir(exist_ok=True)
     log = LOGS / f"{tid}.log"
     t0 = time.time()
-    env = dict(os.environ, ERNIE_BRINGUP_TASK=tid)
+    # Pin imports to THIS checkout: an ambient PYTHONPATH pointing at another tt-metal tree would silently
+    # mix modules from two checkouts (seen: models.demos.common resolved from ../tt-metal).
+    env = dict(os.environ, ERNIE_BRINGUP_TASK=tid, PYTHONPATH=str(REPO))
     with open(log, "w") as f:
         f.write(f"$ {task['gate']['cmd']}\n")
         f.flush()
@@ -190,6 +192,20 @@ def next_tasks() -> list[str]:
     ]
 
 
+def sweep(prefix: str, commit: bool) -> int:
+    """Deterministic replay: every task (optionally only ids starting with `prefix`) in declaration order."""
+    tasks = load_tasks()
+    ids = [t for t in tasks if t.startswith(prefix)]
+    summary = []
+    for tid in ids:
+        rc = run_gate(tid, commit, force=False)
+        summary.append((tid, {0: "PASS", 1: "FAIL", 2: "BLOCKED"}[rc]))
+        if rc == 1:
+            break
+    print("\nSWEEP: " + " ".join(f"{t}={v}" for t, v in summary))
+    return 0 if all(v == "PASS" for _, v in summary) and len(summary) == len(ids) else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("task", nargs="?")
@@ -197,6 +213,12 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="run even if deps are not PASS")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--next", action="store_true")
+    ap.add_argument(
+        "--sweep",
+        action="store_true",
+        help="re-run every task in tasks.yaml order (deps enforced against this sweep's fresh verdicts); "
+        "stops at the first FAIL. Optional task prefix filter, e.g. --sweep P2",
+    )
     a = ap.parse_args()
     if a.status:
         print_status()
@@ -204,6 +226,8 @@ def main() -> int:
     if a.next:
         print("\n".join(next_tasks()))
         return 0
+    if a.sweep:
+        return sweep(a.task or "", a.commit)
     return run_gate(a.task, a.commit, a.force)
 
 

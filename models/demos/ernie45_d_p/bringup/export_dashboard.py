@@ -40,7 +40,8 @@ def git(*args) -> str:
 def main():
     spec = yaml.safe_load((BRINGUP / "tasks.yaml").read_text())
     state = json.loads((BRINGUP / "state.json").read_text()) if (BRINGUP / "state.json").exists() else {}
-    comps = yaml.safe_load((BRINGUP / "components.yaml").read_text())["components"]
+    comp_doc = yaml.safe_load((BRINGUP / "components.yaml").read_text())
+    comps, findings = comp_doc["components"], comp_doc.get("findings", [])
 
     commits = {}
     for line in git("log", "--format=%h|%cI|%s", "--grep=[ernie45_d_p]", "--fixed-strings").splitlines():
@@ -107,6 +108,20 @@ def main():
         "components": comps,
         "plan": plan(cfg),
         "trails": trails,
+        "findings": findings,
+        "timing": [
+            {
+                "task": tid,
+                "label": label,
+                "chunks": sorted(
+                    (int(k.rsplit("_c", 1)[1]), v["value"])
+                    for k, v in M.load(tid).items()
+                    if k.startswith("chunk_seconds_c")
+                ),
+            }
+            for tid, _, label in TRAILS
+            if tid.startswith("P2") and M.load(tid)
+        ],
         "box": {"name": "Blackhole QuietBox", "chips": "4x p150b", "mesh": "1x4 (FABRIC_1D_RING)"},
     }
     p21 = state.get("P2.1", {}).get("metrics", {})

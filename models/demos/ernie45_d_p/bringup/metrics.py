@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -29,8 +30,22 @@ def reset(task_id: str) -> None:
         p.unlink()
 
 
+def _in_precompile_collect_pass() -> bool:
+    """run_safe_pytest.sh runs each test once on fake tensors (compile collection) before the real pass."""
+    for mod_name, mod in list(sys.modules.items()):
+        if (
+            mod_name.endswith("up_front_collect")
+            and getattr(mod, "_INLINE", False)
+            and getattr(mod, "_PASS", None) == "collect"
+        ):
+            return True
+    return False
+
+
 def record(task_id: str, name: str, value, **extra) -> None:
-    """Record one metric. Last write wins per name. Safe to call from pytest workers."""
+    """Record one metric. Last write wins per name. Ignored during the precompile collect pass."""
+    if _in_precompile_collect_pass():
+        return
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     p = _path(task_id)
     data = json.loads(p.read_text()) if p.exists() else {"task": task_id, "metrics": {}}
