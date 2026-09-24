@@ -118,7 +118,7 @@ multi-chip: no collectives, no fabric traffic, no mesh device.
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* | — |
 | `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
 | `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
-| Streaming inference | ✅ content, schedule and audio | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio) | *Streaming* |
+| Streaming inference | ✅ on Blackhole; ❌ content on Wormhole at `e0de3009` (see *Streaming content on Wormhole* under Open defects) | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio) | *Streaming* |
 | Efficient multi-lingual switching | ✅ 5 languages × 4 modes | `demo/sweep.py` | *Speech quality* |
 
 ---
@@ -173,12 +173,10 @@ where the core-grid win that is large at `K = 4096` nearly vanishes. `PERF.md`
 n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. On Blackhole it
 completes on a p150a and a p150b, but in the upstream CI on `bh_p150` two consecutive
 runs of the perf suite lost the runner about 12 minutes in, and a run without this file
-completed. So it is off by default on both architectures: `COSYVOICE_STREAMING_PERF=1`
-runs it on Blackhole, and Wormhole skips it either way, because a lost or wedged machine
-costs every later test in the run. `synthesize_streaming` itself runs on n300; its
-`peak < 1.5` check in `test_device_streaming_generates_the_same_tokens_as_batch` is not
-yet measured there with the persistent carry buffers, and this test's head-to-head
-timing has no Wormhole figure.
+completed. So it runs only with `COSYVOICE_RUN_STREAMING_PERF=1`, on either architecture,
+because a lost or wedged machine costs every later test in the run. `synthesize_streaming`
+itself runs on n300 (what it produces there is under Streaming content on Wormhole, below);
+this test's head-to-head timing has no Wormhole figure.
 
 The cause is not established. Ruled out:
 
@@ -211,7 +209,23 @@ the vocoder through it — completes on Blackhole:
 `scripts/probe_warm_order.py --order reversed` finishes on `p150a` in 6.2 s with a warm
 JIT cache and 273.8 s with a cleared one, 248 s of that compiling kernels under the live
 trace. It is untested on n300, where the next step is to run `test_streaming_perf` with
-its Wormhole skip removed.
+`COSYVOICE_RUN_STREAMING_PERF=1`.
+
+### Streaming content on Wormhole
+
+At `e0de3009`, on tt-metal main `86d0bdb8ccbe` (2026-09-24), `tests/e2e/test_streaming.py::test_device_streamed_matches_non_streamed`
+fails on n300: mel PCC `0.21` against the `0.85` gate, streamed RMS `0.633` against `0.049`
+for the non-streamed run of the same tokens and seed
+(https://github.com/tenstorrent/tt-metal/actions/runs/35976068834). At `a7c8416d3` the same
+test passed on n300 with RMS `0.052`, and its log shows `_verify_prepared` rejecting the
+prepared weight of `Conv1d(128->128, k=11)` at length 8321, inside the Wormhole `ttnn.conv1d`
+defect range. `TtStreamingSynthesizer` now pauses that check for the length of a stream
+(`TtHiFTGenerator.pause_weight_verification`), so on Wormhole the affected geometry runs its
+prepared weight unchecked and the chunk comes out wrong; `0.21` is the figure §3.2 of PERF.md
+records for exactly that case. Blackhole is unaffected at this utterance length. Not fixed:
+the geometries a stream will use need their verification before the decode trace goes
+live (the warm-up chunk is the place), or Wormhole streams need the op's own preparation
+for the vocoder convs.
 
 ### A longer streamed utterance wedges the board
 
@@ -248,8 +262,9 @@ and streaming peaks (`0.001` each), while n300 gives batch `0.001` and streaming
 near-silence and `0.660` a plausible speech peak, so the batch path may be the
 degenerate one on a capped greedy run. Ruled out: the live trace, and the Wormhole
 `ttnn.conv1d` defect below (`COSYVOICE_CONV_PREPARE=0` gives the same figure).
-`test_device_streamed_matches_non_streamed` passes on n300; it uses the golden's own
-prompt and full token list rather than this case.
+`test_device_streamed_matches_non_streamed` passed on n300 while the stream still
+verified prepared conv weights; at `e0de3009` it fails there (below). It uses the golden's
+own prompt and full token list rather than this case.
 
 ### `cross_lingual yue` stops early
 

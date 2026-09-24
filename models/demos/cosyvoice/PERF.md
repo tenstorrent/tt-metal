@@ -203,8 +203,8 @@ prefix and stepped for every token.
 
 The n300 column is empty because this test hangs Wormhole (`docs/VALIDATION.md`). The
 shipped path, `CosyVoiceTTNN.synthesize_streaming`, runs on n300, where
-`test_device_streaming_generates_the_same_tokens_as_batch` passes, as does the content
-check above.
+`test_device_streaming_generates_the_same_tokens_as_batch` passes. The content check
+above does not at `e0de3009` (`docs/VALIDATION.md`, *Streaming content on Wormhole*).
 
 Interleaving makes the total worse: one device, one command queue, no overlap of
 compute, and a chunk's flow and vocoder work pauses token generation while it runs. What
@@ -561,7 +561,7 @@ and faster, because the plain scan runs serially on one core.
 
 `docs/VALIDATION.md` has the upstream status.
 
-### 3.2 Per-geometry verification of prepared conv weights on Wormhole
+### 3.2 Per-geometry verification of prepared conv weights (both architectures)
 
 Disabling `ttnn.conv1d` weight preparation to avoid the Wormhole defect
 (`docs/VALIDATION.md`) costs the flow stage `0.683 → 1.723 s` on n300, since the same
@@ -570,6 +570,10 @@ geometry once instead is free at the utterance level. With it, the vocoder runs 
 `0.077 s` against `0.084 s` and the streamed-vs-non-streamed mel PCC on n300 is `0.9024`
 against `0.218`, matching Blackhole's `0.9019`. Reproducer:
 `scripts/repro_conv1d_wormhole.py`, no model involved.
+Blackhole needs the same check for a different geometry (`Conv1d(256 -> 256)` at length 8264,
+`docs/VALIDATION.md`), which is why `prepare_weights_default` is off on both architectures.
+A stream pauses this check (`TtHiFTGenerator.pause_weight_verification`); on n300 that
+reintroduces the `0.218` case, see `docs/VALIDATION.md`, *Streaming content on Wormhole*.
 
 ## 4. Measured and not shipped
 

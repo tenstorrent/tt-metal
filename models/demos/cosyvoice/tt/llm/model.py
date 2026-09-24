@@ -142,9 +142,6 @@ class TtTransformerLM:
             parts.append(spk_emb)
         parts.append(text_enc)
         parts.append(task)
-        # The prompt's embedding is this method's to free, and only it: `spk_emb` and
-        # `text_enc` are the caller's. Freed by name, not by position in `parts`, which
-        # shifts with whether a speaker vector is present.
         prompt_emb = None
         if prompt_speech_tokens is not None and prompt_speech_tokens.shape[1] > 0:
             prompt_emb = ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT)
@@ -152,6 +149,9 @@ class TtTransformerLM:
         out = ttnn.concat(parts, dim=1)
         ttnn.deallocate(sos)
         ttnn.deallocate(task)
+        # The prompt embedding is the only other tensor this method allocates. Tracking it
+        # directly, rather than inferring it from the length of `parts`, frees it whether
+        # or not a speaker row was inserted (the demo passes no `spk_emb`).
         if prompt_emb is not None:
             ttnn.deallocate(prompt_emb)
         return out
@@ -237,17 +237,17 @@ class TtTransformerLM:
         `positional()` and `causal_mask()` memoise by size, which is right within
         one utterance and wrong across a sweep: every utterance has its own prefix
         length and its own bucket, so the tables grow without limit and the
-        allocator runs out somewhere in the middle. Each decoder layer's cached
-        positional projection (`TtRelPosAttention._pt_cache`) goes with them, since it
-        is keyed on one of those tables. The weights are untouched.
-
-        Only between utterances: a decode trace holds device pointers into the
-        projections, and `generate` releases its traced step before it returns.
+        allocator runs out somewhere in the middle. The weights are untouched.
         """
         for cache in (self._causal, self.decoder._pos_cache):
             for t in cache.values():
                 ttnn.deallocate(t)
             cache.clear()
+        # Each attention layer also caches its widened positional projection, keyed on
+        # (window, batch), which grows the same way across a sweep. `generate` and
+        # `generate_batch` release their decode trace before returning, so by the time a
+        # caller is between utterances no trace references these tensors and dropping
+        # them is safe (see `TtRelPosAttention.release_pos_proj_cache`).
         self.decoder.release_pos_proj_cache()
 
     # ----------------------------------------------------------------------

@@ -58,15 +58,6 @@ needs_weights = pytest.mark.skipif(
 needs_golden = pytest.mark.skipif(
     not os.path.exists(os.path.join(GOLDEN_DIR, "llm.ar_forward_chunk.npz")), reason="generate goldens first"
 )
-# Off unless asked for, on both architectures: the test wedges n300, and on Blackhole CI it
-# can take the runner host down partway through the perf suite. Neither cause is established
-# (`docs/VALIDATION.md`), and a lost machine costs every later test in the run.
-# `COSYVOICE_STREAMING_PERF=1` runs it on Blackhole; Wormhole stays skipped either way.
-opt_in = pytest.mark.skipif(
-    os.environ.get("COSYVOICE_STREAMING_PERF") != "1",
-    reason="opt-in (COSYVOICE_STREAMING_PERF=1): it has taken CI hosts down on Blackhole and wedges n300; "
-    "see docs/VALIDATION.md",
-)
 
 
 # The utterance is vocoded twice on each schedule -- once to warm, once to measure --
@@ -79,7 +70,6 @@ opt_in = pytest.mark.skipif(
 # Without it, every configuration of the perf suite recompiles everything, and this
 # test is where that shows up first.
 @pytest.mark.timeout(3600)
-@opt_in
 @needs_weights
 @needs_golden
 @needs_l1_small
@@ -87,10 +77,14 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # Wormhole stays skipped even when opted in: this test wedges n300, cause not established.
-    # `docs/VALIDATION.md` has what is ruled out and what to try next.
-    if "WORMHOLE" in str(device.arch()).upper():
-        pytest.skip("hangs Wormhole n300, cause not established; see docs/VALIDATION.md and PERF.md, Known limitations")
+    # Opt-in on every architecture. On Wormhole it wedges n300, cause not established
+    # (`docs/VALIDATION.md` has what is ruled out). On Blackhole it ran to completion on the
+    # author's p150a/p150b, but two consecutive attempts on Blackhole CI VMs lost the runner
+    # about twelve minutes into the perf suite with this test in it, and the suite completed
+    # once it was excluded (tt-metal PR #52540 review). Until that is understood it must not
+    # run by default anywhere; set COSYVOICE_RUN_STREAMING_PERF=1 to run it.
+    if os.environ.get("COSYVOICE_RUN_STREAMING_PERF") != "1":
+        pytest.skip("opt-in: wedges Wormhole n300 and took down Blackhole CI VMs; set COSYVOICE_RUN_STREAMING_PERF=1")
 
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator

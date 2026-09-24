@@ -115,8 +115,8 @@ pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 # performance -- every numeric threshold is asserted, not printed; see
 # tests/perf/gates.py for how each threshold is enforced, met or not,
 # and PERF.md for what the numbers mean. The first-audio latency test is
-# opt-in (COSYVOICE_STREAMING_PERF=1, Blackhole only): it wedges n300 and
-# can take a CI host down, see docs/VALIDATION.md.
+# opt-in (COSYVOICE_RUN_STREAMING_PERF=1): it wedges n300 and can take a
+# CI host down, see docs/VALIDATION.md.
 pytest models/demos/cosyvoice/tests/perf/ -v -s
 
 # two of those device tests want prompt .npz files from prepare_inputs.py and
