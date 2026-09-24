@@ -304,7 +304,7 @@ TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Device 99 is not in the 1-chip mock cluster, so opening it fails.
-        EXPECT_THROW(env.create_unit_mesh_device(99), std::runtime_error);
+        EXPECT_THROW(env.create_unit_mesh(99), std::runtime_error);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());

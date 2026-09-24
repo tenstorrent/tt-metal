@@ -453,7 +453,8 @@ TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
 
         auto mesh_shape = env.get_system_mesh().shape();
         auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
-        auto mesh_device = env.create_mesh_device(mesh_device_config, trace_region_size, l1_small_region_size);
+        auto mesh_device = env.create_mesh_device(
+            mesh_device_config, {.l1_small_size = l1_small_region_size, .trace_region_size = trace_region_size});
         context_id = mesh_device->impl().get_context_id();
     }
 
@@ -569,8 +570,8 @@ TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
     MetalEnv mock_env(
         {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()});
 
-    const std::vector<int> device_ids{0, 1};
-    auto meshes = mock_env.create_unit_meshes(device_ids);
+    const std::array<ChipId, 2> device_ids{0, 1};
+    auto meshes = mock_env.create_unit_meshes(device_ids, {.l1_small_size = 1 << 15});
     ASSERT_EQ(meshes.size(), device_ids.size());
     for (ChipId device_id : device_ids) {
         ASSERT_TRUE(meshes.contains(device_id));
@@ -584,6 +585,17 @@ TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
     meshes.clear();
     const std::string teardown_log = testing::internal::GetCapturedStdout();
     EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
+}
+
+// Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
+TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen) {
+    MetalEnv mock_env(
+        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()});
+    // Querying the system mesh first makes the env own one context shared by every create_* call.
+    mock_env.get_system_mesh();
+
+    auto mesh_0 = mock_env.create_unit_mesh(0);
+    EXPECT_THROW(mock_env.create_unit_mesh(1, {.num_command_queues = 2}), std::runtime_error);
 }
 
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.
