@@ -359,26 +359,22 @@ if(ENABLE_DISTRIBUTED)
                 DESTINATION ${CMAKE_INSTALL_BINDIR}
                 COMPONENT metalium-runtime
         )
-    endif()
-endif()
 
-# PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
-# TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir. This must stay
-# OUTSIDE the ENABLE_DISTRIBUTED guard above: find_and_load() runs in core runtime (e.g. single-card CPU-only builds with
-# no MPI), so the descriptors have to ship even when the distributed/rank-binding tooling is not built.
-if(TT_INSTALL)
-    file(
-        GLOB _fabric_pgd_files
-        CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_fabric/physical_groupings/*.textproto"
-    )
-    if(_fabric_pgd_files)
-        install(
-            FILES
-                ${_fabric_pgd_files}
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings
-            COMPONENT metalium-runtime
+        # PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
+        # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
+        file(
+            GLOB _generate_rank_bindings_pgd_files
+            CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_fabric/physical_groupings/*.textproto"
         )
+        if(_generate_rank_bindings_pgd_files)
+            install(
+                FILES
+                    ${_generate_rank_bindings_pgd_files}
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings
+                COMPONENT metalium-runtime
+            )
+        endif()
     endif()
 endif()
 
