@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -15,6 +16,17 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_sigmoid() {
     _calculate_sigmoid_<ITERATIONS>();
 }
+
+// Op class for sigmoid(x). Same name and leading template parameters as on Wormhole/Blackhole; the Quasar
+// kernel does not depend on APPROXIMATION_MODE or is_fp32_dest_acc_en.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Sigmoid : SfpuUnaryOp<Sigmoid<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_sigmoid<ITERATIONS>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

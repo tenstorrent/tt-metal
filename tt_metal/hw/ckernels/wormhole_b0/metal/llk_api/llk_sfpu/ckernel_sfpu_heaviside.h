@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -46,6 +47,13 @@ inline void calculate_heaviside(std::uint32_t value) {
         dst_reg++;
     }
 }
+
+// Op class for heaviside(x, value).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Heaviside : SfpuUnaryOp<Heaviside<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { heaviside_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -156,4 +157,15 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
         rand_rows<false>();
     }
 }
+
+// Op class for rand: overwrite each element with a uniform random float in [from, from + scale).
+// init seeds the PRNG.
+template <bool APPROXIMATION_MODE>
+struct Rand : SfpuUnaryOp<Rand<APPROXIMATION_MODE>> {
+    static constexpr auto& calculate = rand<APPROXIMATION_MODE>;
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t seed) {
+        rand_init<APPROXIMATION_MODE>(seed);
+    }
+};
+
 }  // namespace ckernel::sfpu

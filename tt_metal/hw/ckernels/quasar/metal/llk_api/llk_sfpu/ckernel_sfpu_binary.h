@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -138,6 +139,27 @@ inline void sfpu_binary_init() {
         _init_reciprocal_<APPROXIMATION_MODE>();
     }
 }
+
+// Op class for the elementwise float binary ops selected by BINOP (ADD, SUB, MUL, DIV). Same name and
+// leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    bool is_fp32_dest_acc_en = false,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct BinaryFloat
+    : SfpuBinaryOp<
+          BinaryFloat<APPROXIMATION_MODE, BINOP, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS, SLOT>,
+          SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_sfpu_binary<APPROXIMATION_MODE, BINOP, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS, SLOT>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    static inline __attribute__((always_inline)) void init_op() { sfpu_binary_init<APPROXIMATION_MODE, BINOP>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

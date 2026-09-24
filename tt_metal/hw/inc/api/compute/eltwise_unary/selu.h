@@ -4,16 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #ifndef ARCH_QUASAR
 #include "ckernel_sfpu_selu.h"
 #endif
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+// Quasar has no selu kernel.
 #ifndef ARCH_QUASAR
 // clang-format off
 /**
@@ -32,37 +33,21 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_selu,
-        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        scale,
-        alpha));
+ALWI void selu_tile(std::uint32_t idst, std::uint32_t scale, std::uint32_t alpha) {
+    MATH((sfpu::Selu<APPROX, is_fp32_dest_acc_en>::run(idst, scale, alpha)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_selu,
-        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        scale,
-        alpha));
+ALWI void selu_tile_pack(std::uint32_t idst, std::uint32_t scale, std::uint32_t alpha) {
+    PACK((sfpu::Selu<APPROX, is_fp32_dest_acc_en>::run(idst, scale, alpha)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init() { MATH((sfpu::Selu<APPROX, DST_ACCUM_MODE>::init())); }
 
-ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init_pack() { PACK((sfpu::Selu<APPROX, DST_ACCUM_MODE>::init())); }
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

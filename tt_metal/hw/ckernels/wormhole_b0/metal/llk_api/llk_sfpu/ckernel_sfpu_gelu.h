@@ -19,6 +19,7 @@
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -340,6 +341,15 @@ inline void calculate_gelu() {
     }
 }
 
+// Op class for gelu (erf form, or the fast approximation when APPROXIMATION_MODE is set).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Gelu : SfpuUnaryOp<Gelu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_gelu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        gelu_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
+
 // =============================================================================
 // GELU tanh approximation in FP32:
 //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
@@ -380,6 +390,13 @@ inline void gelu_tanh_init() {
     // initialise constants for _sfpu_tanh_fp32_accurate_
     tanh_init<false, true>();
 }
+
+// Op class for gelu with the tanh approximation, computed in fp32.
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct GeluTanh : SfpuUnaryOp<GeluTanh<is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_gelu_tanh<is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { gelu_tanh_init(); }
+};
 
 // =============================================================================
 // GELU Derivative - Polynomial Approximation
@@ -508,5 +525,15 @@ inline void gelu_derivative_polynomial_init() {
         sfpu_reciprocal_init<false>();
     }
 }
+
+// Op class for the gelu derivative (piecewise polynomial).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct GeluDerivative : SfpuUnaryOp<GeluDerivative<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate =
+        calculate_gelu_derivative_polynomial<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() {
+        gelu_derivative_polynomial_init<APPROXIMATION_MODE>();
+    }
+};
 
 }  // namespace ckernel::sfpu

@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -89,7 +91,7 @@ inline void sum_int_init() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void add_int(const uint dst_offset) {
+inline void add_int(const std::uint32_t dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0];
@@ -104,6 +106,24 @@ inline void add_int(const uint dst_offset) {
         dst_reg++;
     }
 }
+
+// Op class for an int32 column sum within a tile.
+template <bool APPROXIMATION_MODE>
+struct SumIntCol : SfpuUnaryOp<SumIntCol<APPROXIMATION_MODE>> {
+    static constexpr auto& calculate = calculate_sum_int_col<APPROXIMATION_MODE>;
+};
+
+// Op class for an int32 row sum within a tile.
+template <bool APPROXIMATION_MODE>
+struct SumIntRow : SfpuUnaryOp<SumIntRow<APPROXIMATION_MODE>> {
+    static constexpr auto& calculate = calculate_sum_int_row<APPROXIMATION_MODE>;
+};
+
+// Op class for an elementwise int32 add of a tile and the tile dst_offset tiles after it in Dest.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct AddIntDstOffset : SfpuUnaryOp<AddIntDstOffset<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = add_int<APPROXIMATION_MODE, ITERATIONS>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

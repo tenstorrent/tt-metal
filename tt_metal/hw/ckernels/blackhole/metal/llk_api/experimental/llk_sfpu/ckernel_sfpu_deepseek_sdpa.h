@@ -11,6 +11,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -81,5 +82,11 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::dst_reg += 2;
     }
 }
+
+// Op class for the fused max-sub-exp-add kernel of the SDPA tail reduction.
+template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
+struct FusedMaxSubExpAdd : SfpuUnaryOp<FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, final_norm>> {
+    static constexpr auto& calculate = calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>;
+};
 
 }  // namespace ckernel::sfpu

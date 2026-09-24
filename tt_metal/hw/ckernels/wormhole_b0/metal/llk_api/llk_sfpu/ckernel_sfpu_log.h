@@ -32,16 +32,18 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
-sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
+sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
 
@@ -139,7 +141,7 @@ template <
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
-inline void calculate_log(uint log_base_scale_factor) {
+inline void calculate_log(std::uint32_t log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
@@ -172,6 +174,23 @@ inline void log_init() {
         sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
+
+// Op class for ln(x), optionally scaled by a base factor (log_with_base).
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX,
+    bool HAS_BASE_SCALING,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    bool IS_BASE_TWO = false>
+struct Log : SfpuUnaryOp<
+                 Log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>> {
+    static constexpr auto& calculate =
+        calculate_log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, ITERATIONS, IS_BASE_TWO>;
+    static inline __attribute__((always_inline)) void init_op() {
+        log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

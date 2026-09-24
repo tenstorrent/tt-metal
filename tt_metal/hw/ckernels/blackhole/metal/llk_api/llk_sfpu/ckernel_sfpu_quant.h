@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -155,7 +156,7 @@ template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32>
-void quant_init(const uint zero_point) {
+void quant_init(const std::uint32_t zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
@@ -238,7 +239,7 @@ template <
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32,
     bool INT8_INPUT = false>
-void requant_init(const uint zero_point) {
+void requant_init(const std::uint32_t zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
@@ -339,7 +340,7 @@ void requant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-void dequant_init(const uint zero_point) {
+void dequant_init(const std::uint32_t zero_point) {
     // One-time setup for calculate_dequant_int32; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
     // recorded body computes (A + LREG2) * B = (A - zero_point) * B).
@@ -377,7 +378,8 @@ void dequant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_quant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
@@ -413,7 +415,8 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_requant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
     // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
     // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
@@ -450,7 +453,7 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_quant_int32_int8_pack(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Int8 output: MAD + offset-128 pack body is recorded once into QUANT_REPLAY_SLOT and replayed.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
@@ -467,7 +470,7 @@ inline void calculate_quant_int32_int8_pack(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false>
 inline void calculate_requant_int32_int8_pack(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Int8 output: CAST + MAD + offset-128 pack body is recorded once into REQUANT_REPLAY_SLOT and replayed.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
@@ -490,7 +493,8 @@ inline void calculate_requant_int32_int8_pack(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_dequant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
     // Operand B[LREG1] is scaling factor (fp32).
@@ -525,5 +529,58 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);  // store fp32 + dst_reg += 2
     }
 }
+
+// Op class for per-tensor affine quantization: out = in0 * in1 (scale) + zero_point, rounded to an
+// integer. OUTPUT_FORMAT picks the rounding range (Int32 and UInt8 share calculate_quant_int32;
+// Int8 packs through calculate_quant_int32_int8_pack). init takes the zero point.
+template <bool APPROXIMATION_MODE, DataFormat OUTPUT_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
+struct Quant : SfpuBinaryOp<Quant<APPROXIMATION_MODE, OUTPUT_FORMAT, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+            calculate_quant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_quant_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        quant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, OUTPUT_FORMAT>(zero_point);
+    }
+};
+
+// Op class for per-tensor affine re-quantization of an int32 (or, with INT8_INPUT, an int8) tile.
+// OUTPUT_FORMAT picks the rounding range as for Quant. init takes the zero point.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32,
+    bool INT8_INPUT = false,
+    int ITERATIONS = 8>
+struct Requant : SfpuBinaryOp<Requant<APPROXIMATION_MODE, OUTPUT_FORMAT, INT8_INPUT, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+            calculate_requant_int32_int8_pack<APPROXIMATION_MODE, ITERATIONS, INT8_INPUT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_requant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        requant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, OUTPUT_FORMAT, INT8_INPUT>(zero_point);
+    }
+};
+
+// Op class for per-tensor affine de-quantization of an int32 (or, with INT8_INPUT, an int8) tile to
+// fp32. init takes the negated zero point.
+template <bool APPROXIMATION_MODE, bool INT8_INPUT = false, int ITERATIONS = 8>
+struct Dequant : SfpuBinaryOp<Dequant<APPROXIMATION_MODE, INT8_INPUT, ITERATIONS>> {
+    static constexpr auto& calculate =
+        calculate_dequant_int32<APPROXIMATION_MODE, ITERATIONS, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>;
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t zero_point) {
+        dequant_init<APPROXIMATION_MODE, false /* SIGN_MAGNITUDE_FORMAT */, INT8_INPUT>(zero_point);
+    }
+};
 
 }  // namespace ckernel::sfpu

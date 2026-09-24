@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -12,6 +13,7 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -23,10 +25,10 @@ namespace ckernel::sfpu {
 // ======================================================================
 
 #ifdef INP_FLOAT32
-constexpr uint32_t DIGAMMA_NUM_DEGREE = 10;
-constexpr uint32_t DIGAMMA_DEN_DEGREE = 9;
-constexpr uint32_t DIGAMMA_NUM_SEGMENTS = 2;
-constexpr uint32_t DIGAMMA_LUT_SIZE = 45;
+constexpr std::uint32_t DIGAMMA_NUM_DEGREE = 10;
+constexpr std::uint32_t DIGAMMA_DEN_DEGREE = 9;
+constexpr std::uint32_t DIGAMMA_NUM_SEGMENTS = 2;
+constexpr std::uint32_t DIGAMMA_LUT_SIZE = 45;
 constexpr std::array<float, 45> DIGAMMA_LUT = {
     {1.0000000000e-02f,  5.1005000000e+01f, 1.0200000000e+02f, -4.2596286535e-01f, -1.2459139824e+00f,
      -7.0374596119e-01f, 3.5418295860e-01f, 3.9686101675e-01f, 1.0760356486e-01f,  1.1159370653e-02f,
@@ -40,10 +42,10 @@ constexpr std::array<float, 45> DIGAMMA_LUT = {
 
 #else
 
-constexpr uint32_t DIGAMMA_NUM_DEGREE = 6;
-constexpr uint32_t DIGAMMA_DEN_DEGREE = 5;
-constexpr uint32_t DIGAMMA_NUM_SEGMENTS = 1;
-constexpr uint32_t DIGAMMA_LUT_SIZE = 15;
+constexpr std::uint32_t DIGAMMA_NUM_DEGREE = 6;
+constexpr std::uint32_t DIGAMMA_DEN_DEGREE = 5;
+constexpr std::uint32_t DIGAMMA_NUM_SEGMENTS = 1;
+constexpr std::uint32_t DIGAMMA_LUT_SIZE = 15;
 // Layout: [range_lo, range_hi], then num coeffs a0..a6 (ascending degree), then den coeffs b0..b5.
 constexpr std::array<float, 15> DIGAMMA_LUT = {
     {1.0000000000e-02f,
@@ -108,5 +110,12 @@ void digamma_init() {
     // all three stay reserved for it, so digamma must not repurpose Prgm1/Prgm2.
     sfpu_reciprocal_init();
 }
+
+// Op class for digamma(x).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Digamma : SfpuUnaryOp<Digamma<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_digamma<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { digamma_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

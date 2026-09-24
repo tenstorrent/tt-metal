@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_rsqrt.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -17,7 +17,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = false>
 ALWI void rsqrt_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
+    MATH((sfpu::Rsqrt<APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false /* FAST_APPROX */, legacy_compat>::init()));
 }
 
 // clang-format off
@@ -35,14 +35,8 @@ ALWI void rsqrt_tile_init() {
  */
 // clang-format on
 template <bool legacy_compat = false, bool FAST_APPROX = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void rsqrt_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_rsqrt,
-        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX, legacy_compat),
-        idst,
-        VectorMode::RC));
+ALWI void rsqrt_tile(std::uint32_t idst) {
+    MATH((sfpu::Rsqrt<APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX, legacy_compat>::run(idst)));
 }
 
 }  // namespace ckernel

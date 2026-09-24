@@ -11,6 +11,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -36,7 +37,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         if constexpr (max_iter == 2) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
-            v_if (t < 0) {
+            v_if(t < 0) {
                 t = x * y1 - sfpi::vConstFloatPrgm0;
                 y = y1 * -t - 0.0f;
             }
@@ -44,9 +45,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         } else {
             // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
             // preceding SFPMAD.
-            v_if (t < 0) {
-                y = y * -t - 0.0f;
-            }
+            v_if(t < 0) { y = y * -t - 0.0f; }
             v_endif;
         }
     }
@@ -102,6 +101,23 @@ void recip_init() {
     // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
+
+// Op class for the reciprocal.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool legacy_compat = true,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Reciprocal
+    : SfpuUnaryOp<Reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, legacy_compat, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_reciprocal<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, legacy_compat>();
+    }
+    static inline __attribute__((always_inline)) void init_op() {
+        recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, legacy_compat>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

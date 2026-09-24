@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_clamp.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -27,18 +27,11 @@ namespace ckernel {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
 */
 // clang-format on
-ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_clamp,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param0,
-        param1));
+ALWI void clamp_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    MATH((sfpu::Clamp<APPROX>::run(idst, param0, param1)));
 }
 
+// Quasar has no int32 clamp kernel.
 #ifndef ARCH_QUASAR
 // clang-format off
 /**
@@ -55,22 +48,14 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_clamp_int32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param0,
-        param1));
+ALWI void clamp_tile_int32(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    MATH((sfpu::ClampInt32<APPROX>::run(idst, param0, param1)));
 }
 #endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH(SFPU_UNARY_INIT(clamp)); }
+ALWI void clamp_tile_init() { MATH((sfpu::Clamp<APPROX>::init())); }
 
 }  // namespace ckernel

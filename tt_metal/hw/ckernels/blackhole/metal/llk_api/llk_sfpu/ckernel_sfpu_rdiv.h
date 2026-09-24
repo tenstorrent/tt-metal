@@ -4,17 +4,20 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
-inline void calculate_rdiv(const uint value) {
+inline void calculate_rdiv(const std::uint32_t value) {
     sfpi::vFloat val = Converter::as_float(value);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -47,6 +50,18 @@ void rdiv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for value / x.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    RoundingMode rounding_mode = RoundingMode::None,
+    int ITERATIONS = 8>
+struct Rdiv : SfpuUnaryOp<Rdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, rounding_mode, ITERATIONS>> {
+    static constexpr auto& calculate =
+        calculate_rdiv<APPROXIMATION_MODE, is_fp32_dest_acc_en, rounding_mode, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { rdiv_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

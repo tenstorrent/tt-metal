@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -186,6 +187,16 @@ inline void calculate_cumsum(const bool first) {
         }
     }
 }
+
+// Op class for the column-wise cumulative sum of a whole tile. The kernel walks Dest itself.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Cumsum : SfpuUnaryOp<Cumsum<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static constexpr bool walks_faces = false;
+
+    static constexpr auto& calculate = calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() { cumsum_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

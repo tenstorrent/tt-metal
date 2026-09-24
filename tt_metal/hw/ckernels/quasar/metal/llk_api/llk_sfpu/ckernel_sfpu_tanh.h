@@ -6,6 +6,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -31,6 +32,17 @@ inline void calculate_tanh() {
                                                                                    // 2 rows)
     }
 }
+
+// Op class for tanh(x). Same name and leading template parameters as on Wormhole/Blackhole; the Quasar
+// kernel does not depend on APPROXIMATION_MODE or is_fp32_dest_acc_en.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Tanh : SfpuUnaryOp<Tanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_tanh<ITERATIONS>;
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -83,5 +84,12 @@ inline void mish_init() {
     // exp does not need an init
     recip_init<APPROXIMATION_MODE, false, false>();
 }
+
+// Op class for mish: x * tanh(softplus(x)).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Mish : SfpuUnaryOp<Mish<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_mish<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { mish_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

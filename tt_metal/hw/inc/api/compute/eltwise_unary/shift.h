@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_unary_shift.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,9 +30,8 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+ALWI void left_shift_tile(std::uint32_t idst, std::uint32_t param0) {
+    MATH((sfpu::LeftShift<APPROX, data_format>::run(idst, param0)));
 }
 
 // clang-format off
@@ -55,19 +54,18 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+ALWI void right_shift_tile(std::uint32_t idst, std::uint32_t param0) {
+    MATH((sfpu::RightShift<APPROX, data_format>::run(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift)); }
+ALWI void left_shift_tile_init() { MATH((sfpu::LeftShift<APPROX>::init())); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift)); }
+ALWI void right_shift_tile_init() { MATH((sfpu::RightShift<APPROX>::init())); }
 
 }  // namespace ckernel

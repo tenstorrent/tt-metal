@@ -174,15 +174,14 @@ struct SfpuTernaryOp : SfpuOpBase<Op>
         _llk_math_eltwise_sfpu_check_dst_index_<SLOT>(dst_index_in1);
         _llk_math_eltwise_sfpu_check_dst_index_<SLOT>(dst_index_in2);
         _llk_math_eltwise_sfpu_check_dst_index_<SLOT>(dst_index_out);
-        const auto calculate = [](auto&&... calculate_args) __attribute__((always_inline)) { Op::calculate(calculate_args...); };
         if constexpr (Op::walks_faces)
         {
-            _llk_math_eltwise_ternary_sfpu_run_<TENSOR_SHAPE, SLOT>(calculate, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, args...);
+            _llk_math_eltwise_ternary_sfpu_run_<TENSOR_SHAPE, SLOT>(Op::calculate, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, args...);
         }
         else
         {
             static_assert(_llk_math_eltwise_sfpu_is_full_tile_<SLOT>(TENSOR_SHAPE), "An op that walks Dest itself processes the full tile");
-            _llk_math_eltwise_ternary_sfpu_run_once_<SLOT>(calculate, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, args...);
+            _llk_math_eltwise_ternary_sfpu_run_once_<SLOT>(Op::calculate, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, args...);
         }
     }
 

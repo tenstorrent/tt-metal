@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -76,5 +77,12 @@ inline void cube_root_init() {
     sfpi::vConstFloatPrgm1 = -0x1.403e6cp0f;
     sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;
 }
+
+// Op class for the cube root.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct Cbrt : SfpuUnaryOp<Cbrt<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_cube_root<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { cube_root_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

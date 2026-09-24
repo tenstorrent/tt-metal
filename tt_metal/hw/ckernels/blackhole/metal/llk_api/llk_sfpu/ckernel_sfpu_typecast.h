@@ -14,6 +14,8 @@
 #include "ckernel_ops.h"
 #include "ckernel_sfpu_quant.h"  // for INT8_SIGN_MASK
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -1160,6 +1162,132 @@ inline void init_typecast_int8_to_fp32() {
     TTI_SFPCONFIG(0x700 | InstrModLoadStore::FP32, 8, 1);
 #endif
 }
+
+inline constexpr bool _typecast_is_float_(DataFormat fmt) {
+    return fmt == DataFormat::Float32 || fmt == DataFormat::Float16_b || fmt == DataFormat::Bfp8_b ||
+           fmt == DataFormat::Bfp4_b;
+}
+
+// Float16_b and the block-float formats the packer produces from it.
+inline constexpr bool _typecast_is_fp16b_like_(DataFormat fmt) {
+    return fmt == DataFormat::Float16_b || fmt == DataFormat::Bfp8_b || fmt == DataFormat::Bfp4_b;
+}
+
+inline constexpr bool _typecast_is_byte_(DataFormat fmt) { return fmt == DataFormat::UInt8 || fmt == DataFormat::Int8; }
+
+// The calculate_typecast_* kernel and the init that typecast_tile runs for one (IN_FORMAT, OUT_FORMAT) pair.
+struct TypecastFns {
+    void (*calculate)();  // nullptr: the unpacker/packer do the conversion, no SFPU kernel runs
+    void (*init)();
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat IN_FORMAT,
+    DataFormat OUT_FORMAT,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS>
+constexpr TypecastFns _typecast_fns_() {
+    constexpr DataFormat in = IN_FORMAT;
+    constexpr DataFormat out = OUT_FORMAT;
+    if constexpr (_typecast_is_float_(in) && out == DataFormat::UInt16) {
+        return {
+            calculate_typecast_fp32_to_uint16<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>,
+            init_typecast_fp32_to_uint16<APPROXIMATION_MODE>};
+    } else if constexpr (_typecast_is_float_(in) && out == DataFormat::Int32) {
+        return {calculate_typecast_fp32_to_int32<APPROXIMATION_MODE, ITERATIONS>, typecast_init};
+    } else if constexpr (_typecast_is_float_(in) && out == DataFormat::UInt32) {
+        return {calculate_typecast_fp32_to_uint32<APPROXIMATION_MODE, ITERATIONS>, typecast_init};
+    } else if constexpr (_typecast_is_float_(in) && _typecast_is_byte_(out)) {
+        return {
+            calculate_typecast_fp32_to_uint8<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_fp32_to_uint8<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::Float32 && out == DataFormat::Float16_b) {
+        return {
+            calculate_typecast_fp32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_fp32_to_fp16b<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::UInt16 && out == DataFormat::Float32) {
+        return {
+            calculate_typecast_uint16_to_fp32<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>,
+            init_typecast_uint16_to_fp32<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::UInt16 && _typecast_is_fp16b_like_(out)) {
+        return {
+            calculate_typecast_uint16_to_fp16b<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_uint16_to_fp16b<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::UInt16 && (out == DataFormat::UInt32 || out == DataFormat::Int32)) {
+        return {
+            calculate_typecast_uint16_to_uint32<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>,
+            init_typecast_uint16_to_uint32<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::Int32 && out == DataFormat::Float32) {
+        return {
+            calculate_typecast_int32_to_fp32<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_int32_to_fp32<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::Int32 && _typecast_is_fp16b_like_(out)) {
+        return {
+            calculate_typecast_int32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_int32_to_fp16b<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::Int32 && out == DataFormat::UInt16) {
+        return {
+            calculate_typecast_int32_to_uint16<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_int32_to_uint16<APPROXIMATION_MODE>};
+    } else if constexpr ((in == DataFormat::UInt32 || in == DataFormat::UInt8) && out == DataFormat::Float32) {
+        return {
+            calculate_typecast_uint32_to_fp32<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_uint32_to_fp32<APPROXIMATION_MODE>};
+    } else if constexpr ((in == DataFormat::UInt32 || in == DataFormat::UInt8) && _typecast_is_fp16b_like_(out)) {
+        return {
+            calculate_typecast_uint32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_uint32_to_fp16b<APPROXIMATION_MODE>};
+    } else if constexpr ((in == DataFormat::UInt32 || in == DataFormat::UInt8) && out == DataFormat::UInt16) {
+        return {
+            calculate_typecast_uint32_to_uint16<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_uint32_to_uint16<APPROXIMATION_MODE>};
+    } else if constexpr (
+        (in == DataFormat::Int32 || in == DataFormat::UInt32 || in == DataFormat::UInt16) && _typecast_is_byte_(out)) {
+        return {
+            calculate_typecast_uint_to_uint8<APPROXIMATION_MODE, ITERATIONS, (in == DataFormat::UInt16)>,
+            init_typecast_uint_to_uint8<APPROXIMATION_MODE>};
+    } else if constexpr (
+        in == DataFormat::Int8 &&
+        (out == DataFormat::Int32 || out == DataFormat::UInt32 || out == DataFormat::UInt16)) {
+        return {
+            calculate_typecast_int8_to_int32<APPROXIMATION_MODE, ITERATIONS, (out == DataFormat::UInt16)>,
+            init_typecast_int8_input<APPROXIMATION_MODE>};
+    } else if constexpr (in == DataFormat::Int8 && _typecast_is_float_(out)) {
+        return {
+            calculate_typecast_int8_to_fp32<APPROXIMATION_MODE, ITERATIONS>,
+            init_typecast_int8_to_fp32<APPROXIMATION_MODE>};
+    } else {
+        // Float16_b <-> Float32, block float <-> float, UInt8 -> {Int32, UInt32} and UInt8 <-> Int8.
+        return {nullptr, typecast_init};
+    }
+}
+
+// Op class for typecast_tile<IN, OUT>: runs the calculate_typecast_* kernel and the init that the
+// (IN_FORMAT, OUT_FORMAT) pair selects (see _typecast_fns_). has_kernel is false for the pairs the
+// unpacker/packer convert on their own: the compute API then runs no SFPU op, but still runs the init.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat IN_FORMAT,
+    DataFormat OUT_FORMAT,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8>
+struct Typecast : SfpuUnaryOp<Typecast<APPROXIMATION_MODE, IN_FORMAT, OUT_FORMAT, is_fp32_dest_acc_en, ITERATIONS>> {
+    static_assert(
+        is_fp32_dest_acc_en || (IN_FORMAT != DataFormat::Int8 && OUT_FORMAT != DataFormat::Int8),
+        "Int8 typecast requires Dest in 32 bit mode");
+
+    static constexpr TypecastFns fns =
+        _typecast_fns_<APPROXIMATION_MODE, IN_FORMAT, OUT_FORMAT, is_fp32_dest_acc_en, ITERATIONS>();
+    static constexpr bool has_kernel = fns.calculate != nullptr;
+    static constexpr bool needs_init = true;
+
+    static inline __attribute__((always_inline)) void calculate() {
+        static_assert(has_kernel, "The unpacker/packer do this typecast; there is no SFPU kernel to run");
+        fns.calculate();
+    }
+    static inline __attribute__((always_inline)) void init_op() { fns.init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

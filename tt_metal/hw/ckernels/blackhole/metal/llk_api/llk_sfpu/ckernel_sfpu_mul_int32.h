@@ -9,6 +9,8 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "sfpu/ckernel_sfpu_mul_int.h"
 
 namespace ckernel::sfpu {
 
@@ -224,5 +226,30 @@ inline void mul_int32_init() {
     TTI_SFPCONFIG(0xff0, 8, 1);
 #endif
 }
+
+// Op class for an elementwise integer multiply of two tiles: mul_int32 for Int32/UInt32, _mul_int_ for UInt16.
+template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS = 8>
+struct MulInt : SfpuBinaryOp<MulInt<APPROXIMATION_MODE, data_format, ITERATIONS>> {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
+
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        if constexpr (data_format == DataFormat::UInt16) {
+            _mul_int_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            mul_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static inline __attribute__((always_inline)) void init_op() {
+        if constexpr (data_format == DataFormat::UInt16) {
+            _init_mul_int_<APPROXIMATION_MODE>();
+        } else {
+            mul_int32_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

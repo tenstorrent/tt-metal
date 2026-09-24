@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -148,5 +149,12 @@ void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+// Op class for the modified Bessel function I1(x).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct I1 : SfpuUnaryOp<I1<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_i1<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { i1_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

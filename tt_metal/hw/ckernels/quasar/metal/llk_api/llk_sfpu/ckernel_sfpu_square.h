@@ -10,6 +10,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -77,6 +78,19 @@ inline void calculate_square(
         calculate_square_rows(load_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
     }
 }
+
+// Op class for x * x. Same name and leading template parameters as on Wormhole/Blackhole; the Quasar
+// kernel does not depend on APPROXIMATION_MODE or is_fp32_dest_acc_en.
+// init_square programs ADDR_MOD_6.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Square : SfpuUnaryOp<Square<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_square<ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { init_square(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

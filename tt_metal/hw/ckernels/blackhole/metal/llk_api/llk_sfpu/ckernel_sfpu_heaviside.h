@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -17,7 +19,7 @@ namespace sfpu {
 inline void heaviside_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_heaviside(uint value) {
+inline void calculate_heaviside(std::uint32_t value) {
     // SFPU microcode
     vFloat s = Converter::as_float(value);
 
@@ -42,6 +44,13 @@ inline void calculate_heaviside(uint value) {
         dst_reg++;
     }
 }
+
+// Op class for heaviside(x, value).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Heaviside : SfpuUnaryOp<Heaviside<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { heaviside_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_rpow.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow_init, (APPROX))); }
+ALWI void rpow_tile_init() { MATH((sfpu::Rpow<APPROX>::init())); }
 // clang-format off
 /**
  * Performs element-wise computation of the rpow on each element of a tile
@@ -33,15 +33,17 @@ ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void rpow_tile(uint32_t idst, uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_rpow,
-        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst,
-        vector_mode,
-        base_val));
+ALWI void rpow_tile(std::uint32_t idst, std::uint32_t base_val) {
+    MATH((sfpu::Rpow<APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en>::run(idst, base_val)));
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the overload above, which
+ * processes the full tile.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rpow_tile(std::uint32_t idst, std::uint32_t base_val, VectorMode vector_mode) {
+    MATH((sfpu::Rpow<APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en>::run_vector_mode(vector_mode, idst, base_val)));
 }
 
 }  // namespace ckernel

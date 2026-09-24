@@ -11,6 +11,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -169,6 +170,61 @@ inline void calculate_typecast() {
         _calculate_typecast_arith_sfp_rows_<SRC_FMT, DST_FMT>();
     }
 }
+
+// MX / block-float typecasts are a pure unpack/pack format conversion (a datacopy) on Quasar:
+// the unpacker converts MX -> float into Dest and the packer converts float -> MX on the way out,
+// so no SFPU op runs. This mirrors the BH "handled by unpacker/packer" no-op bfp arms.
+inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
+    return fmt == DataFormat::MxFp8R || fmt == DataFormat::MxFp8P || fmt == DataFormat::MxFp6R ||
+           fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
+           fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
+}
+
+// Float16_b <-> Float32 does not need an SFPU op. Dest already holds the value as Float32 (widen by
+// setting Dest to 32-bit; narrow by letting the packer emit Float16_b from that Float32 Dest).
+inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
+    return (src == DataFormat::Float16_b && dst == DataFormat::Float32) ||
+           (src == DataFormat::Float32 && dst == DataFormat::Float16_b);
+}
+
+// Op class for typecast_tile<IN, OUT>. Same name and leading template parameters as on
+// Wormhole/Blackhole (APPROXIMATION_MODE and is_fp32_dest_acc_en are unused here); one kernel,
+// templated on the effective formats, covers every pair.
+//
+// An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
+// format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
+// collapse to a pure format no-op, and so does MX <-> Float32, which reaches the Float16_b <-> Float32
+// no-op arm. The rest (MX <-> {Int32, ...}) run the Float16_b <-> X SFPU conversion on top of the
+// format (X -> MX runs X -> Float16_b, then the packer emits MX). has_kernel and needs_init are false
+// for the no-op pairs: the compute API then runs neither the op nor its init.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat IN_FORMAT,
+    DataFormat OUT_FORMAT,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Typecast
+    : SfpuUnaryOp<Typecast<APPROXIMATION_MODE, IN_FORMAT, OUT_FORMAT, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    // The kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs as UInt8.
+    // The byte would be decoded wrong with no error. Reject it here.
+    static_assert(
+        IN_FORMAT != DataFormat::Int8 && OUT_FORMAT != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
+
+    static constexpr DataFormat effective_in_format =
+        _typecast_is_mx_format_(IN_FORMAT) ? DataFormat::Float16_b : IN_FORMAT;
+    static constexpr DataFormat effective_out_format =
+        _typecast_is_mx_format_(OUT_FORMAT) ? DataFormat::Float16_b : OUT_FORMAT;
+    static constexpr bool has_kernel = effective_in_format != effective_out_format &&
+                                       !_typecast_is_sfpu_no_op_(effective_in_format, effective_out_format);
+    static constexpr bool needs_init = has_kernel;
+
+    static inline __attribute__((always_inline)) void calculate() {
+        static_assert(has_kernel, "The unpacker/packer do this typecast; there is no SFPU kernel to run");
+        calculate_typecast<effective_in_format, effective_out_format, ITERATIONS>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { init_typecast(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

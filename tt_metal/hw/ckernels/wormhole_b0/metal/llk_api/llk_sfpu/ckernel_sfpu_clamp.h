@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_sfpu_unary_max_min.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -16,7 +18,7 @@ inline void clamp_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // out = min(max(x, min_val), max_val)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp(uint min_val, uint max_val) {
+inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_float(min_val);
@@ -27,8 +29,15 @@ inline void calculate_clamp(uint min_val, uint max_val) {
     }
 }
 
+// Op class for clamp(x, min_val, max_val) on floats (fp32 bits).
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Clamp : SfpuUnaryOp<Clamp<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_clamp<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { clamp_init(); }
+};
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp_int32(uint min_val, uint max_val) {
+inline void calculate_clamp_int32(std::uint32_t min_val, std::uint32_t max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_int(min_val);
@@ -38,5 +47,12 @@ inline void calculate_clamp_int32(uint min_val, uint max_val) {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for clamp(x, min_val, max_val) on int32.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct ClampInt32 : SfpuUnaryOp<ClampInt32<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_clamp_int32<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { clamp_init(); }
+};
 
 }  // namespace ckernel::sfpu

@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 using namespace sfpi;
 
@@ -25,6 +26,14 @@ inline void calculate_bitwise_not() {
         dst_reg++;
     }
 }
+
+// Op class for an elementwise bitwise NOT.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct BitwiseNot : SfpuUnaryOp<BitwiseNot<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_bitwise_not<APPROXIMATION_MODE, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() { bitwise_not_init(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

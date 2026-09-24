@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -125,6 +126,22 @@ void rsqrt_init() {
     // Program the SQRT_23-bits seed / refinement constants the full-precision rsqrt reads.
     _init_rsqrt_<APPROXIMATION_MODE>();
 }
+
+// Op class for the reciprocal square root.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool fp32_dest_acc_en = false,
+    bool FAST_APPROX = false,
+    bool legacy_compat = false,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Rsqrt
+    : SfpuUnaryOp<Rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat>();
+    }
+    static inline __attribute__((always_inline)) void init_op() { rsqrt_init<APPROXIMATION_MODE, legacy_compat>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

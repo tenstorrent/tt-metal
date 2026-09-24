@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -129,7 +131,7 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  *        --> alpha_n * (expm1(minimum(x, eps)) - x) + beta * x
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
+inline void calculate_xielu(const std::uint32_t param0, const std::uint32_t param1) {
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -176,5 +178,12 @@ void xielu_init() {
     sfpi::vConstFloatPrgm1 = -1e-6f;                // eps value
     sfpi::vConstFloatPrgm2 = -0.0000009999995427f;  // expm1(eps)
 }
+
+// Op class for xielu with alpha_p and alpha_n (fp32 bits).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct Xielu : SfpuUnaryOp<Xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_xielu<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { xielu_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
@@ -12,6 +13,9 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel::sfpu {
 
@@ -56,12 +60,12 @@ inline void calculate_lgamma_stirling() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_lgamma_adjusted(
-    const uint dst_index_in0,  // lgamma_stirling result
-    const uint dst_index_in1,  // log|sin(pi * frac(x))| with integer adjustments
-    const uint dst_index_in2,  // input x
-    const uint dst_index_out) {
+    const std::uint32_t dst_index_in0,  // lgamma_stirling result
+    const std::uint32_t dst_index_in1,  // log|sin(pi * frac(x))| with integer adjustments
+    const std::uint32_t dst_index_in2,  // input x
+    const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     constexpr float ln_pi = 1.1447298858f;
 
     for (int d = 0; d < ITERATIONS; d++) {
@@ -92,10 +96,10 @@ inline void calculate_lgamma_adjusted(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
     constexpr float LOG_SQRT_PI = 0.57236494f;  // lgamma(0.5) = ln(sqrt(pi))
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
     // Minimal coefficients for 0-3 ULP
     constexpr float r0 = 0.0833333333f;   // 1/12
@@ -167,5 +171,25 @@ void lgamma_stirling_init() {
     // init for sfpu_reciprocal_iter<2> for Blackhole
     sfpi::vConstFloatPrgm0 = 2.0f;
 }
+
+// Op class for the Stirling approximation of lgamma(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+struct LgammaStirling : SfpuUnaryOp<LgammaStirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_lgamma_stirling<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for the fp32 Stirling approximation of lgamma(x), with a scratch tile in Dest.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct LgammaStirlingFp32 : SfpuBinaryOp<LgammaStirlingFp32<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_lgamma_stirling_fp32<APPROXIMATION_MODE, ITERATIONS>;
+    static inline __attribute__((always_inline)) void init_op() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+// Op class for the reflection and integer adjustments of lgamma(x).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+struct LgammaAdjusted : SfpuTernaryOp<LgammaAdjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_lgamma_adjusted<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>;
+};
 
 }  // namespace ckernel::sfpu

@@ -4,18 +4,20 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-inline void init_remainder(const uint value, const uint recip) {
+inline void init_remainder(const std::uint32_t value, const std::uint32_t recip) {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = Converter::as_float(value);
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
@@ -76,7 +78,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_small_b(
 //   scalar < 2^11 -> range-reduce + small-b helper (b0 + 1/b hoisted, skips high chunks)
 //   else (< 2^31) -> range-reduce + full helper (1/b hoisted)
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_remainder_uint32_scalar(uint scalar) {
+inline void calculate_remainder_uint32_scalar(std::uint32_t scalar) {
     sfpi::vInt b = static_cast<int>(scalar);
 
     if (scalar >= 0x80000000u) {
@@ -209,6 +211,24 @@ inline void calculate_remainder() {
         sfpi::dst_reg++;
     }
 }
+
+// Op class for an elementwise remainder by the scalar denominator that init() loads.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Remainder : SfpuUnaryOp<Remainder<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_remainder<APPROXIMATION_MODE, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op(const std::uint32_t value, const std::uint32_t recip) {
+        init_remainder<APPROXIMATION_MODE>(value, recip);
+    }
+};
+
+// Op class for an elementwise unsigned remainder by a uint32 scalar divisor.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct RemainderUint32Scalar : SfpuUnaryOp<RemainderUint32Scalar<APPROXIMATION_MODE, ITERATIONS>> {
+    static constexpr auto& calculate = calculate_remainder_uint32_scalar<APPROXIMATION_MODE, ITERATIONS>;
+
+    static inline __attribute__((always_inline)) void init_op() { remainder_uint32_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

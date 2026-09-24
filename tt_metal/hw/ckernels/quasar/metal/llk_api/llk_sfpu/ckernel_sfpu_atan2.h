@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu.h"
 #include "ckernel_trisc_common.h"
 #include "sfpi.h"
 
@@ -184,6 +185,20 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2_init() {
     _init_reciprocal_<APPROXIMATION_MODE || !is_fp32_dest_acc_en>();
 }
+
+// Op class for elementwise atan2(in0, in1) of two float tiles in Dest (in0 = y, in1 = x). Same name and
+// leading template parameters as on Wormhole/Blackhole.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Atan2 : SfpuBinaryOp<Atan2<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, SLOT>, SLOT> {
+    static constexpr auto& calculate = calculate_sfpu_atan2<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, SLOT>;
+    static inline __attribute__((always_inline)) void init_op() {
+        calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

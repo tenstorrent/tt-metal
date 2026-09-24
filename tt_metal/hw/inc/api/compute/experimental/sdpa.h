@@ -14,6 +14,7 @@
 #include "api/compute/experimental/sdpa_custom_mm.h"
 #include "api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h"
 #include "api/compute/experimental/deepseek_compute_kernel_hw_startup.h"
+#include "tensor_shape.h"
 
 #ifdef TRISC_MATH
 #include "experimental/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
@@ -22,7 +23,6 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_deepseek_sdpa.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "experimental/llk_unpack_A_sdpa_api.h"
@@ -32,7 +32,6 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -499,22 +498,38 @@ void compute_sdpa_recip(
 // SDPA Tail Reduction - Fused SFPI Kernel and Helper
 // =============================================================================
 
+/**
+ * The TensorShape that a legacy VectorMode template argument of the SDPA tail helpers below selects;
+ * VectorMode::None and VectorMode::RC_custom select a single face.
+ */
+constexpr TensorShape sdpa_tail_tensor_shape(const VectorMode vector_mode) {
+    return vector_mode == VectorMode::RC  ? DEFAULT_TENSOR_SHAPE
+           : vector_mode == VectorMode::R ? tensor_shape_from_tile_dims(16, 32)
+           : vector_mode == VectorMode::C ? tensor_shape_from_tile_dims(32, 16)
+                                          : tensor_shape_from_tile_dims(16, 16);
+}
+
 #ifdef TRISC_MATH
 
 /**
  * Wrapper for fused max-sub-exp-add SFPI kernel.
- * Invokes calculate_fused_max_sub_exp_add_tile via the SFPU macro wrapper.
+ * Runs calculate_fused_max_sub_exp_add_tile on the faces TENSOR_SHAPE selects (default: the left column of faces).
  */
-template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, bool final_norm = false>
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    TensorShape TENSOR_SHAPE = tensor_shape_from_tile_dims(32, 16),
+    bool final_norm = false>
 void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_fused_max_sub_exp_add_tile,
-        (SDPA_EXP_APPROX_MODE, final_norm),
-        idst,
-        vector_mode,
-        scale_bf16);
+    sfpu::FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, final_norm>::template run<TENSOR_SHAPE>(idst, scale_bf16);
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the TensorShape template
+ * parameter of the overload above; see sdpa_tail_tensor_shape for the correspondence.
+ */
+template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode, bool final_norm = false>
+void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
+    sfpu::FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, final_norm>::run_vector_mode(vector_mode, idst, scale_bf16);
 }
 #endif
 
@@ -537,13 +552,15 @@ void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
  * @param cb_prev_ms Previous MS tile (MS2) (max in col 0, sum in col 1)
  * @param cb_cur_ms Output MS tile (only used when normalize=false)
  * @param cb_l_for_init CB used for sdpa_mul_bcast_col_reuse_tiles_init
+ *
+ * TENSOR_SHAPE selects the faces of the MS tiles to process (default: the left column of faces).
  */
 template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
     std::uint32_t block_size,
     std::uint32_t scale_fp32,
-    VectorMode vector_mode = VectorMode::C,
+    TensorShape TENSOR_SHAPE = tensor_shape_from_tile_dims(32, 16),
     bool pop_ms = false,
     bool dense = false>
 ALWI void sdpa_tail_ms_reduce(
@@ -564,7 +581,7 @@ ALWI void sdpa_tail_ms_reduce(
         cb_pop_front(cb_prev_ms, 1);
         cb_pop_front(cb_worker_ms, 1);
     }
-    MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
+    MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, TENSOR_SHAPE, normalize>(0, scale_bf16)));
     // Initialize SRCB reuse for L tile broadcast multiply
     // TODO: Optimize init sequence with copy_tile
     sdpa_mul_bcast_col_reuse_tiles_init<block_size, dense>(cb_l_for_init);
@@ -583,6 +600,30 @@ ALWI void sdpa_tail_ms_reduce(
         cb_push_back(cb_cur_ms, 1);
         tile_regs_release();
     }
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the TensorShape template
+ * parameter of the overload above; see sdpa_tail_tensor_shape for the correspondence.
+ */
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    bool normalize,
+    std::uint32_t block_size,
+    std::uint32_t scale_fp32,
+    VectorMode vector_mode,
+    bool pop_ms = false,
+    bool dense = false>
+ALWI void sdpa_tail_ms_reduce(
+    std::uint32_t cb_worker_ms, std::uint32_t cb_prev_ms, std::uint32_t cb_cur_ms, std::uint32_t cb_l_for_init) {
+    sdpa_tail_ms_reduce<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        block_size,
+        scale_fp32,
+        sdpa_tail_tensor_shape(vector_mode),
+        pop_ms,
+        dense>(cb_worker_ms, cb_prev_ms, cb_cur_ms, cb_l_for_init);
 }
 
 /**
@@ -687,6 +728,8 @@ ALWI void sdpa_tail_finalize(std::uint32_t cb_worker_ms, std::uint32_t cb_prev_m
  * @param cb_l1 Worker L tiles
  * @param cb_l2 Previous L tiles
  * @param cb_l_out Output L tiles
+ *
+ * TENSOR_SHAPE selects the faces of the MS tiles to process (default: the left column of faces).
  */
 template <
     bool SDPA_EXP_APPROX_MODE,
@@ -694,7 +737,7 @@ template <
     std::uint32_t block_size,
     std::uint32_t num_blocks,
     std::uint32_t scale_fp32,
-    VectorMode vector_mode = VectorMode::C,
+    TensorShape TENSOR_SHAPE = tensor_shape_from_tile_dims(32, 16),
     bool dense = false,
     bool untilize = false,
     bool explicit_untilize_geometry = false>
@@ -706,7 +749,7 @@ ALWI void sdpa_tail(
     std::uint32_t cb_l2,
     std::uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true, dense>(
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, TENSOR_SHAPE, true, dense>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
@@ -760,6 +803,39 @@ ALWI void sdpa_tail(
 
     // Phase 3: Finalize (postamble + pop MS)
     sdpa_tail_finalize<false>(cb_worker_max_sum, cb_prev_max_sum);
+}
+
+/**
+ * Legacy overload selecting the faces to process with a VectorMode. Prefer the TensorShape template
+ * parameter of the overload above; see sdpa_tail_tensor_shape for the correspondence.
+ */
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    bool normalize,
+    std::uint32_t block_size,
+    std::uint32_t num_blocks,
+    std::uint32_t scale_fp32,
+    VectorMode vector_mode,
+    bool dense = false,
+    bool untilize = false,
+    bool explicit_untilize_geometry = false>
+ALWI void sdpa_tail(
+    std::uint32_t cb_worker_max_sum,
+    std::uint32_t cb_prev_max_sum,
+    std::uint32_t cb_cur_max_sum,
+    std::uint32_t cb_l1,
+    std::uint32_t cb_l2,
+    std::uint32_t cb_l_out) {
+    sdpa_tail<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        block_size,
+        num_blocks,
+        scale_fp32,
+        sdpa_tail_tensor_shape(vector_mode),
+        dense,
+        untilize,
+        explicit_untilize_geometry>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
 }
 
 }  // namespace ckernel

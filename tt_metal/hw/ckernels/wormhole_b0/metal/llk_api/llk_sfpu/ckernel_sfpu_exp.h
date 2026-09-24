@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -704,11 +705,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    std::uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
@@ -1047,6 +1044,22 @@ void exp_init() {
         }
     }
 }
+
+// Op class for the exponential. scale is the input scale programmed by the approximate-mode init.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool SCALE_EN = false,
+    int ITERATIONS = 8,
+    bool CLAMP_NEGATIVE = true,
+    std::uint32_t scale = 0x3F800000>
+struct Exp : SfpuUnaryOp<Exp<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE, scale>> {
+    static constexpr auto& calculate =
+        calculate_exponential<APPROXIMATION_MODE, is_fp32_dest_acc_en, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>;
+    static inline __attribute__((always_inline)) void init_op() {
+        exp_init<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE, is_fp32_dest_acc_en>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

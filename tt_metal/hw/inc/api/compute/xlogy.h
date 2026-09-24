@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binary.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -29,23 +29,13 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, BinaryOp::XLOGY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void xlogy_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::BinaryFloat<APPROX, BinaryOp::XLOGY, is_fp32_dest_acc_en>::run(idst0, idst1, odst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void xlogy_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
-}
+ALWI void xlogy_binary_tile_init() { MATH((sfpu::BinaryFloat<APPROX, BinaryOp::XLOGY>::init())); }
 
 }  // namespace ckernel

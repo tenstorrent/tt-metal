@@ -106,15 +106,14 @@ struct SfpuUnaryOp : SfpuOpBase<Op>
     static inline __attribute__((always_inline)) void run(const std::uint32_t dst_index, Args&&... args)
     {
         _llk_math_eltwise_sfpu_check_dst_index_<SLOT>(dst_index);
-        const auto calculate = [](auto&&... calculate_args) __attribute__((always_inline)) { Op::calculate(calculate_args...); };
         if constexpr (Op::walks_faces)
         {
-            _llk_math_eltwise_unary_sfpu_run_<TENSOR_SHAPE, SLOT>(calculate, dst_index, args...);
+            _llk_math_eltwise_unary_sfpu_run_<TENSOR_SHAPE, SLOT>(Op::calculate, dst_index, args...);
         }
         else
         {
             static_assert(_llk_math_eltwise_sfpu_is_full_tile_<SLOT>(TENSOR_SHAPE), "An op that walks Dest itself processes the full tile");
-            _llk_math_eltwise_unary_sfpu_run_once_<SLOT>(calculate, dst_index, args...);
+            _llk_math_eltwise_unary_sfpu_run_once_<SLOT>(Op::calculate, dst_index, args...);
         }
     }
 
