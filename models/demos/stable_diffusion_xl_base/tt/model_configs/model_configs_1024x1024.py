@@ -873,21 +873,6 @@ class ModelOptimisations1024x1024:
             "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             "negative_mask": False,
         }
-        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"] = {
-            "op_config": {
-                "core_grid": ttnn.CoreGrid(y=8, x=8),
-                "num_out_blocks": None,
-                "inplace": True,
-                "use_welford": True,
-                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=True,
-                    fp32_dest_acc_en=True,
-                ),
-            },
-            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-            "negative_mask": False,
-        }
         self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
@@ -1285,9 +1270,6 @@ class ModelOptimisations1024x1024:
         return mask, negative_mask, gamma, beta
 
     def _get_groupnorm_config(self, module_path):
-        if module_path == "unet.norm":
-            # Reduce final-normalization scale bias that accumulates across denoising steps.
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"]
         if "up_blocks.2" in module_path and "norm1" in module_path:
             return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
         if "resnets" in module_path:

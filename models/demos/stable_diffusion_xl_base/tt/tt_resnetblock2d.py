@@ -117,7 +117,6 @@ class TtResnetBlock2D(LightweightModule):
             )
             self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
             self.conv3_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.conv_shortcut")
-            self.conv3_compute_config = model_config.get_mm_compute_config(f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
@@ -271,7 +270,7 @@ class TtResnetBlock2D(LightweightModule):
                 self.tt_conv3_weights,
                 bias=self.tt_conv3_bias,
                 program_config=self.conv3_program_config,
-                compute_kernel_config=self.conv3_compute_config,
+                compute_kernel_config=self.default_compute_config,
                 memory_config=self.conv3_memory_config,
             )
             if not self.is_first_resnet_block:
