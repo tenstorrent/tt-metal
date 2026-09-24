@@ -25,6 +25,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/test_emule_compute_fidelity.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_emule_host_wait.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_host_alignment.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_mcast_source_exclusion.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_metadata_size.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_noc_without_barrier.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_padded_write.cpp
