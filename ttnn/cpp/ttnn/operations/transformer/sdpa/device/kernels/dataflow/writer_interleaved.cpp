@@ -102,7 +102,14 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
+#ifdef OUT_HEADS_CONCAT
+    // Output is [B, 1, Sq, NQH*vDH]: head nq's tiles sit at column tiles [nq*vDHt, (nq+1)*vDHt) of each row tile.
+    const auto out_tile_shape = TensorTileShape(B, 1, valid_Sqt, NQH * vDHt);
+    constexpr uint32_t out_row_stride_tiles = NQH * vDHt;
+#else
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride_tiles = vDHt;
+#endif
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -231,7 +238,11 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+#ifdef OUT_HEADS_CONCAT
+            uint32_t out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
+#else
             uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+#endif
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
@@ -246,7 +257,8 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     out_subblock_h,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride_tiles);
             } else {
                 write_block(
                     noc,
@@ -257,7 +269,8 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride_tiles);
             }
         }
     }  // close phase

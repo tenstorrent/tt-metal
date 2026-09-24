@@ -16,6 +16,11 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
+    if (attrs.output_heads_concat) {
+        TT_FATAL(
+            !attrs.output_mem_config.is_sharded(),
+            "SDPA output_heads_concat writes the [B, 1, Sq, NQH*vDH] layout and needs an interleaved output");
+    }
     const bool use_mla = attrs.use_mla;
 
     // Common validations for both modes
@@ -536,6 +541,12 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
     }
+    if (attrs.output_heads_concat) {
+        // [B, NQH, Sq, vDH] -> [B, 1, Sq, NQH * vDH]: the writer lays head h's tiles at column tiles
+        // [h * vDHt, (h + 1) * vDHt) of each row tile, which is exactly concat_heads' output.
+        shape[3] = shape[1] * shape[3];
+        shape[1] = 1;
+    }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
@@ -647,7 +658,8 @@ Tensor sdpa(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool output_heads_concat) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -665,6 +677,7 @@ Tensor sdpa(
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .output_heads_concat = output_heads_concat,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

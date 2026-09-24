@@ -339,8 +339,10 @@ void bind_sdpa(nb::module_& mod) {
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
 
 
+            output_heads_concat (bool): Defaults to `False`. Write the output directly in the `[b x 1 x s x (nqh*dh)]` layout that `concat_heads` would produce (same tiles, different tile ids), so no concat pass is needed before the output projection. Interleaved output only.
+
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with `output_heads_concat`).
 
         )doc";
 
@@ -362,7 +364,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
-        nb::arg("windowed_q_token_offset_tensor") = nb::none());
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("output_heads_concat") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
