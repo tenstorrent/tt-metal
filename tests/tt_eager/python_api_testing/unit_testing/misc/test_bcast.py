@@ -289,3 +289,41 @@ def test_bcast_h_block_sharded_batched_channel(device, batch, height_per_batch, 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+def test_bcast_hw_sharded_multi_row_col(device):
+    # Regression: sharded HW-bcast walked cores column-major instead of the shard's row-major
+    # placement; needs a multi-row/multi-col grid and bN*bC>1 (bnc1=0) for that to matter.
+    torch.manual_seed(0)
+    N, C, H, W = 2, 1, 256, 32
+    a_torch = torch.rand([N, C, H, W], dtype=torch.bfloat16)
+    b_torch = torch.rand([N, C, 1, 1], dtype=torch.bfloat16)
+    torch_ref_output = a_torch + b_torch
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    core_grid = ttnn.CoreGrid(x=4, y=2)
+    shard_shape = (N * C * H // (core_grid.x * core_grid.y), W)
+    in_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    a_tt = ttnn.to_memory_config(a_tt, in_sharded_mem_config)
+
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        a_tt,
+        b_tt,
+        ttnn.BcastOpMath.ADD,
+        ttnn.BcastOpDim.HW,
+        memory_config=ttnn.get_memory_config(a_tt),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg

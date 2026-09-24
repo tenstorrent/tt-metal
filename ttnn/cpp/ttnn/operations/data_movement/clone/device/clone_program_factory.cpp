@@ -43,8 +43,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     CoreRangeSet core_group_2;
     uint32_t num_units_per_core_group_1;
     uint32_t num_units_per_core_group_2;
-    uint32_t num_cores_x;
-    uint32_t num_cores_y;
+    std::vector<CoreCoord> cores;
 
     if (is_sharded) {
         auto shard_spec = output.buffer()->shard_spec();
@@ -72,13 +71,10 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
 
-        auto grid_size = all_cores.bounding_box();
-        num_cores_x = grid_size.end_coord.x + 1;
-        num_cores_y = grid_size.end_coord.y + 1;
+        // Walk the shard's own CoreRangeSet, not a bbox rectangle (wrong unless the grid is a rectangle at the origin).
+        cores = corerange_to_cores(all_cores, num_cores, shard_spec.orientation() == ShardOrientation::ROW_MAJOR);
     } else {
         auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
-        num_cores_x = compute_with_storage_grid_size.x;
-        num_cores_y = compute_with_storage_grid_size.y;
         auto
             [num_cores_result,
              all_cores_result,
@@ -92,6 +88,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         core_group_2 = core_group_2_result;
         num_units_per_core_group_1 = num_units_per_core_group_1_result;
         num_units_per_core_group_2 = num_units_per_core_group_2_result;
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
     }
 
     auto alignment = input.buffer()->alignment();
@@ -262,7 +259,6 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
