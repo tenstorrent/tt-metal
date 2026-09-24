@@ -28,10 +28,29 @@
 // Records a timestamp for a signal event.
 #define SYNC_SIGNAL(name, key) DeviceTimestampedData(name, (key))
 
+// Tags a NoC address with the NoC that carried it: bit 60 is the NoC index, bit 61 says the
+// field is present. A NoC address occupies bits 0-59 only (a 36-bit L1 offset plus four 6-bit
+// coordinate fields), so the top nibble is free.
+//
+// Needed because a multicast address alone is ambiguous. get_safe_multicast_noc_addr passes
+// the rectangle's corners as (end, start) for noc 1 and (start, end) for noc 0, so a noc-1
+// rectangle arrives with both axes reversed -- indistinguishable from a noc-0 rectangle that
+// wraps the torus on both axes. Worse, a noc-1 rectangle that wraps on ONE axis arrives with
+// only the other axis reversed and reads as a plain noc-0 wrap. A decoder cannot separate
+// these after the fact; the sender can simply say.
+//
+// Wrap EVERY NoC address passed to SYNC_SIGNAL in this. If some emitters tag and others do
+// not, an absent tag stops meaning "capture from an older build" and a consumer can no longer
+// fall back safely. Consumers must strip both bits BEFORE reading any field: unicast is
+// detected as "nothing set above bit 47", which a tag bit would break.
+#define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) \
+    SYNC_SIGNAL(name, ((uint64_t)(addr)) | (((uint64_t)((noc) & 1)) << 60) | (1ull << 61))
+
 #else
 
 // When profiling is off, these do nothing but still compile-check the arguments.
 #define SYNC_WAIT(name, key) (void(sizeof(key)))
 #define SYNC_SIGNAL(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 
 #endif
