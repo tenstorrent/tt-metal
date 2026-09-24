@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Gen2 variant of read_my_coordinates.cpp: same kernel, named compile-time args.
+// Gen2 variant of read_my_coordinates.cpp.
 // Writes my_x, my_y, my_logical_x, my_logical_y, my_sub_device_x and my_sub_device_y
 // to results_addr, in that order. Requires 24B.
 //

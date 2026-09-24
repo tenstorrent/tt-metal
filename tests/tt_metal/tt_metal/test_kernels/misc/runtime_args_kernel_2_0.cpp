@@ -41,8 +41,6 @@ void kernel_main() {
 #endif
     constexpr uint32_t kCommonRTASeparation = 1024;
     uint64_t hartid = 0;
-    // Per-DM slotting is opt-in via MAX_DMS: callers that run the kernel on several DMs at once need
-    // each DM to own a slot, while callers reading back from a fixed address want the plain offsets.
 #if defined(COMPILE_FOR_DM) && defined(MAX_DMS)
     // Quasar DM only: get the DM processor's hartid (DM2..DM7 on Quasar). Used
     // to index into a MAX_DMS-wide L1 region so each DM writes to its own slot.
@@ -57,7 +55,6 @@ void kernel_main() {
     }
 
 #ifdef COMMON_RUNTIME_ARGS
-    // Kept in its own loop: the common count need not match the unique count.
     for (uint32_t i = 0; i < NUM_COMMON_RUNTIME_ARGS; i++) {
         results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_vararg(i);
     }

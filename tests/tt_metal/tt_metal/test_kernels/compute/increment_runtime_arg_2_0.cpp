@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 variant of increment_runtime_arg.cpp: takes the counts and result bases as named
-// compile-time args and reads the runtime args as positional varargs. The legacy variant remains
-// in increment_runtime_arg.cpp for callers still on the Metal 1.0 host API.
+// Metal 2.0 compute variant of increment_runtime_arg.cpp.
 
 #include <cstdint>
 
@@ -19,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
 
-    // A single Tensix thread publishes the results; PACK is the sibling Gen2 compute kernels' choice.
+    // Only one Tensix thread may publish the results.
 #ifdef TRISC_PACK
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         auto* arg_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_args_base + (i * sizeof(uint32_t)));

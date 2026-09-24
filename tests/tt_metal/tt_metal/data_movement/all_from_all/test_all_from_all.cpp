@@ -620,7 +620,6 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllFromAllPacketSizes2_0) 
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     CoreCoord sub_grid_size = mst_grid_size;
 
-    // packet_sizes_test caps the transaction and page sweep on Quasar for the emulator runtime budget.
     if (this->device().arch() == ARCH::QUASAR) {
         if (mst_grid_size.x * mst_grid_size.y < 2) {
             GTEST_SKIP() << "Skipping: all-from-all needs >= 2 cores, but the grid is " << mst_grid_size.x << "x"

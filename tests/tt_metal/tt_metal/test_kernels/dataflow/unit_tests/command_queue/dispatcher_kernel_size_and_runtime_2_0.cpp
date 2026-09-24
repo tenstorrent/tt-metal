@@ -2,17 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 variant of dispatcher_kernel_size_and_runtime.cpp: same checks, named compile-time args.
-// Gen2 differences:
-//   - spins on the RISC-V cycle counter, since c_tensix_core's wall clock is Gen1-only, so
-//     KERNEL_RUNTIME_MICROSECONDS is a cycle count here rather than microseconds
-//   - the Gen1 circular buffers become dataflow buffers, so the page-size check becomes an
-//     entry-size check. Gen2 rejects a data-movement kernel bound as both ends of a DFB, so this
-//     kernel takes the producer end and a blank compute kernel alongside it takes the consumer end
-//   - Gen2 rejects a non-zero semaphore initial value, so the Gen1 "reads back SEM_VAL" assertion
-//     becomes "reads back zero, then leaves it non-zero". Every launch re-sends the semaphore
-//     payload, so a re-dispatched program seeing zero again proves dispatch placed the value
-//     rather than that the L1 happened to be clear
+// Metal 2.0 variant of dispatcher_kernel_size_and_runtime.cpp. KERNEL_RUNTIME_MICROSECONDS is a cycle
+// count here, and since Gen2 requires a zero semaphore initial value, the semaphore check reads back
+// zero and then leaves it non-zero.
 
 #include <cstdint>
 
@@ -40,9 +32,7 @@ static inline uint32_t read_cycle_count() {
     return cycles;
 }
 
-// DFB accessor names are compile-time tokens, so each possible index needs its own statement. The
-// host binds exactly NUM_TEST_DFBS of them and defines the count to match. The expected entry sizes
-// follow the unique args and the semaphore ids in the runtime args, matching the host's order.
+// DFB accessor names are compile-time tokens, so each index needs its own statement.
 #define VERIFY_DFB(idx)                                                                   \
     {                                                                                     \
         DataflowBuffer dfb(dfb::dfb_##idx);                                               \
@@ -58,8 +48,6 @@ static inline uint32_t read_cycle_count() {
         }                                                                                 \
     }
 
-// Semaphore accessor names are compile-time tokens too. The blank compute kernel alongside this one
-// never touches a semaphore, so poisoning a slot here cannot be observed by a sibling.
 #define VERIFY_SEM(idx)                                                              \
     {                                                                                \
         Semaphore s(sem::sem_##idx);                                                 \

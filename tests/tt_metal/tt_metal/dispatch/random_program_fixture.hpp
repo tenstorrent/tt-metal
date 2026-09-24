@@ -23,9 +23,7 @@
 
 namespace tt::tt_metal {
 
-// A DM-produced, Tensix-consumed DFB takes one of the 16 DM-visible tile counters on its tensix, so
-// that is the ceiling here rather than the 32 device slots Gen2 allows. It also matches the length of
-// the accessor ladders in random_program_2_0.cpp and dispatcher_kernel_size_and_runtime_2_0.cpp.
+// DM-visible tile counters per Tensix; must match the accessor ladders in the _2_0 kernels.
 constexpr uint32_t k_gen2_max_num_dfbs = 16;
 
 class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
@@ -92,8 +90,6 @@ protected:
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
-    // Gen2 programs are built from a ProgramSpec rather than having kernels added to an existing
-    // Program, so callers that support both take the whole program from here.
     Program create_program_with_kernel(
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
@@ -244,8 +240,7 @@ protected:
     }
 
 private:
-    // Gen2 equivalent of the create_kernel path below. Semaphores are declared so dispatch still has
-    // to place them, but are not value checked: Gen2 only allows a zero initial value.
+    // Semaphores are not value checked: Gen2 only allows a zero initial value.
     Program create_gen2_program(
         const CoreType kernel_core_type, const bool simple_kernel, KernelProperties kernel_properties) {
         using namespace tt::tt_metal::experimental;
@@ -254,8 +249,7 @@ private:
         if (kernel_properties.max_num_cbs == 0) {
             kernel_properties.max_num_cbs = max_dfbs_;
         }
-        // hal().get_arch_num_circular_buffers() reports 64 on Quasar, far more DFBs than a single
-        // node has tile counters for, so clamp both ends of the range.
+        // Quasar reports 64 CBs, more DFBs than a node has tile counters for.
         kernel_properties.max_num_cbs = std::min(kernel_properties.max_num_cbs, k_gen2_max_num_dfbs);
         kernel_properties.min_num_cbs = std::min(kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
         const CoreRangeSet cores = this->get_cores(kernel_core_type);
@@ -301,10 +295,7 @@ private:
         defines.emplace("NUM_TEST_DFBS", std::to_string(entry_sizes.size()));
         defines.emplace("NUM_TEST_SEMS", std::to_string(sem_ids.size()));
 
-        // Gen2 rejects a data-movement kernel bound as both ends of a DFB, so the kernel under test
-        // produces and a blank compute kernel consumes. Nothing is pushed through the buffers, as on
-        // Gen1; the point is that dispatch has to deliver each buffer's config for the kernel to read
-        // back. A compute endpoint requires the data format to be declared.
+        // Gen2 rejects a DM kernel bound as both ends of a DFB, so a blank compute kernel consumes.
         Group<DataflowBufferSpec> dataflow_buffers;
         Group<KernelSpec::DFBBinding> producer_bindings;
         Group<KernelSpec::DFBBinding> consumer_bindings;
@@ -357,8 +348,7 @@ private:
                  {"unique_rt_args_vals_offset", UNIQUE_RUNTIME_ARGS_VAL_OFFSET},
                  {"common_rt_args_vals_offset", COMMON_RUNTIME_ARGS_VAL_OFFSET},
                  {"num_sems", static_cast<uint32_t>(sem_ids.size())}},
-            // Implicit sync would take a transaction id per DFB out of a pool of 24, and nothing is
-            // ever pushed through these buffers for it to synchronize.
+            // Implicit sync takes a transaction id per DFB from a pool of 24.
             .hw_config = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
             .advanced_options =
                 KernelAdvancedOptions{

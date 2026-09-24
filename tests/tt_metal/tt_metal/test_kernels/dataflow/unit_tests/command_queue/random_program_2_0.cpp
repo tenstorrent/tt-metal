@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 variant of random_program.cpp: same checks, named compile-time args, one source for both
-// the data-movement and the compute flavor. Gen2 differences:
-//   - the Gen1 circular buffers become dataflow buffers, and their sizes are read through the DFB
-//     accessors rather than by walking the launch message's circular buffer config
-//   - Gen2 requires a zero semaphore initial value, so the Gen1 "reads back i + 1" check becomes
-//     "reads back zero, then leaves it non-zero". Every launch re-sends the semaphore payload, since
-//     programs share the dispatch config ring, so a re-dispatched program seeing zero again proves
-//     dispatch placed the value rather than that the L1 happened to be clear
+// Metal 2.0 variant of random_program.cpp. Gen2 requires a zero semaphore initial value, so the
+// semaphore check reads back zero and then leaves it non-zero for the next dispatch to reset.
 
 #include <cstdint>
 
@@ -31,17 +25,14 @@ constexpr uint32_t num_unique_rt_args = get_arg(args::num_unique_rt_args);
 constexpr uint32_t num_common_rt_args = get_arg(args::num_common_rt_args);
 constexpr uint32_t entry_size_step = get_arg(args::entry_size_step);
 
-// g_dfb_interface only exists on the unpack and pack TRISC images, and the math TRISC is not a DFB
-// participant, so the compute flavor does its checking from unpack alone. The spin loops below still
-// run on every thread.
+// g_dfb_interface only exists on the unpack and pack TRISC images.
 #if !defined(COMPILE_FOR_TRISC) || defined(TRISC_UNPACK)
 #define RUN_CHECKS 1
 #else
 #define RUN_CHECKS 0
 #endif
 
-// DFB accessor names are compile-time tokens, so each possible index needs its own statement. The
-// host binds exactly NUM_TEST_DFBS of them and defines the count to match.
+// DFB accessor names are compile-time tokens, so each index needs its own statement.
 #define VERIFY_DFB(idx)                                                                                       \
     {                                                                                                         \
         DataflowBuffer dfb(dfb::dfb_##idx);                                                                   \
@@ -52,8 +43,6 @@ constexpr uint32_t entry_size_step = get_arg(args::entry_size_step);
         }                                                                                                     \
     }
 
-// Semaphore accessor names are compile-time tokens too. Only the data-movement kernel that the host
-// gave a non-zero NUM_TEST_SEMS does this, so no sibling kernel can read a slot after it is poisoned.
 #define VERIFY_SEM(idx)                                                                             \
     {                                                                                               \
         Semaphore s(sem::sem_##idx);                                                                \
