@@ -15,6 +15,7 @@ forward traces, and the latent is unpatchified on device. Weights load from the 
 from __future__ import annotations
 
 import itertools
+import os
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,15 @@ from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import fast_device_to_host, float_to_uint8
 from ...utils.tracing import traced_function
 from .vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw, _norm, _partition_hw
+
+# SD35_VAE_NOGATHER=1: keep the decoded image spatially sharded on device and stitch the shards on
+# the host, instead of all-gathering the full image onto every chip and then DMA-reading all four
+# identical copies (4x the PCIe traffic; the readback is what contends when 8 columns decode at once).
+
+
+def _nogather() -> bool:
+    # read at call time so a host process can decide per worker after import (tt-media-server)
+    return os.environ.get("SD35_VAE_NOGATHER", "0") == "1"
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -166,8 +176,7 @@ class SD35VaeDecoder(Module):
         z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
         return _partition_hw(self._ctx, z)
 
-    @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
-    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+    def _forward_body(self, z: ttnn.Tensor) -> ttnn.Tensor:
         z = self.conv_in.forward(z)
         z = self.mid_block.forward(z)
         for block in self.up_blocks:
@@ -176,7 +185,23 @@ class SD35VaeDecoder(Module):
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
         z = self.conv_out.forward(z)
+        if _nogather():
+            return z
         return _all_gather_hw(self._ctx, z)
+
+    @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
+    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+        return self._forward_body(z)
+
+    # SD35_VAE_FOLD=1: one trace for un-scale/unpatchify + decoder + float->uint8, so the VAE
+    # phase is a single trace launch plus one DMA read instead of ~12 untraced dispatches whose
+    # host round-trip latency is exposed when several columns decode at the same moment.
+    _fold_args: dict | None = None
+
+    @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
+    def decode_fused(self, tt_latents: ttnn.Tensor, /) -> ttnn.Tensor:
+        z = self.preprocess_and_unpatchify(tt_latents, **self._fold_args)
+        return float_to_uint8(self._forward_body(z))
 
 
 def sd35_vae_parallel_config(mesh_device: ttnn.MeshDevice) -> SD35VaeParallelConfig:
@@ -244,5 +269,30 @@ class SD35SpatialVaeAdapter:
         )
         image = self.decoder.forward(z, traced=traced)
         return fast_device_to_host(
-            image, self.device, [None, None], ccl_manager=self.ccl_manager, pre_transfer_fn=float_to_uint8
+            image, self.device, self._concat_dims(), ccl_manager=self.ccl_manager, pre_transfer_fn=float_to_uint8
         )
+
+    def _concat_dims(self) -> list[int | None]:
+        """Host concat dims for fast_device_to_host: none when the image is replicated, else the
+        (B, H, W, C) dims the decoder shards over each mesh axis."""
+        if not _nogather():
+            return [None, None]
+        ctx = self.decoder._ctx
+        dims: list[int | None] = [None, None]
+        if ctx.h_factor > 1:
+            dims[ctx.h_mesh_axis] = 1
+        if ctx.w_factor > 1:
+            dims[ctx.w_mesh_axis] = 2
+        return dims
+
+    def decode_device_fused(self, tt_latents: ttnn.Tensor, *, height: int, width: int, traced: bool) -> torch.Tensor:
+        """Same result as decode_device, with preprocessing and uint8 conversion inside the VAE trace."""
+        self.decoder._fold_args = dict(
+            height=height,
+            width=width,
+            patch_size=self.patch_size,
+            scaling_factor=self.scaling_factor,
+            shift_factor=self.shift_factor,
+        )
+        image_u8 = self.decoder.decode_fused(tt_latents, traced=traced)
+        return fast_device_to_host(image_u8, self.device, self._concat_dims(), ccl_manager=self.ccl_manager)
