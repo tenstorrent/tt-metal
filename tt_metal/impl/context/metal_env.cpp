@@ -171,6 +171,13 @@ void MetalEnvImpl::initialize_base_objects() {
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
+    // Multi-ERISC runs on every Blackhole simulator topology, as on silicon; only Blackhole's HAL acts on the flag,
+    // so turn it off for other simulated architectures. TT_METAL_DISABLE_MULTI_AERISC=1 still turns it off.
+    if (this->rtoptions_->get_simulator_enabled() && platform_arch != tt::ARCH::BLACKHOLE &&
+        this->rtoptions_->get_enable_2_erisc_mode()) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode for non-Blackhole simulator");
+        this->rtoptions_->set_enable_2_erisc_mode(false);
+    }
     this->verify_fw_capabilities();
 
     if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch()) {
