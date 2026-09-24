@@ -4,9 +4,9 @@ Text-embedding inference for [perplexity-ai/pplx-embed-v1-4b](https://huggingfac
 on Tenstorrent Blackhole (P150 single device, and multi-chip via data
 parallelism).
 
-This is the 4B sibling of [`pplx_embed_0_6b`](../pplx_embed_0_6b/README.md): it
-reuses that model's serving/eval tooling (live serving, bucketing, masked
-pooling, DP harness) and the memory-placement optimizations validated on the
+This directory holds the optimized pplx-embed-v1-4B stack: live serving,
+sequence-length bucketing, masked pooling, a data-parallel harness, and the
+memory-placement and kernel optimizations for the
 [Qwen3-Embedding-4B](../qwen3_embedding_4b/README.md) backbone (same 2560-d,
 36-layer Qwen3-4B architecture). This README covers how to run every script,
 what each produces, and the optimizations applied.
@@ -33,22 +33,18 @@ backbone (diffusion continued pre-training).
 | Pooling       | Mean over real tokens       |
 | Output        | (optionally L2-normalized) 2560-d vector |
 
-It differs from Qwen3-Embedding-4B in three ways (identical to the 0.6B pplx
-model): **bidirectional attention** (no causal mask), **mean-token pooling**
-(not last-token), and it requires `trust_remote_code=True` for HuggingFace
-loading.
+It differs from Qwen3-Embedding-4B in three ways: **bidirectional attention**
+(no causal mask), **mean-token pooling** (not last-token), and it requires
+`trust_remote_code=True` for HuggingFace loading.
 
-### Key differences from the 0.6B pplx model
+### Placement at a glance
 
-| Aspect            | 0.6B   | 4B            |
-|-------------------|--------|---------------|
-| Hidden size       | 1024   | 2560          |
-| Layers            | 28     | 36            |
-| Q-heads           | 16     | 32            |
-| bs=1 ISL=512 act  | 1 MB   | 2.5 MB (L1)   |
-| bs=32 ISL=512 act | 32 MB  | 80 MB (DRAM)  |
-| DRAM matmul grid  | 80-core (8×10) | **full worker grid: 12×10 = 120 here** (13×10 on p150a) |
-| LN block sharding | active | active at bs=1 (10×8); fused add + RMSNorm at bs≥8 |
+| Aspect            | 4B            |
+|-------------------|---------------|
+| bs=1 ISL=512 activation  | 2.5 MB, L1-resident   |
+| bs=32 ISL=512 activation | 80 MB, DRAM-resident  |
+| DRAM matmul grid  | full worker grid: 12×10 = 120 here (13×10 on p150a) |
+| RMSNorm           | block-sharded at bs=1 (10×8); fused residual add + RMSNorm at bs≥8 |
 
 ---
 
@@ -105,9 +101,8 @@ stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Bas
 
 Every landing from the 2026-09-22 baseline to the numbers above, with its mechanism and measured effect, is in
 [PERF.md](PERF.md); the long-form notes per landing are in §5 below, and every rejected experiment with numbers
-is in `doc/NEGATIVE_RESULTS.md`. Most of the early wins were constants tuned for the 0.6B sibling that silently
-mis-applied to 4B (2.5× the hidden size, 2× the heads); re-check them before reusing this config on another
-model in the family.
+is in `doc/NEGATIVE_RESULTS.md`. Most of the early wins were inherited configuration constants that did not fit the
+4B shapes; re-check them before reusing this config on another model in the family.
 
 - **L1 path (bs=1, ISL≤512):** activations stay resident in L1, so the residual stream never
   round-trips DRAM; the matmuls are the legacy 2D-multicast kernel on 12×8 with DRAM-width-sharded
@@ -1114,8 +1109,7 @@ n_l1_bufs, n_dram_bufs`). This is exactly how the bs=4 batched-L1 win was found
 - All changes are localized to this directory; the bidirectional attention and
   weight-loading live in `tt/attention.py` and `demo/_common.py::PplxModelArgs`.
 - `PplxBidirectionalAttention` (`tt/attention.py`) wraps SDPA with
-  `is_causal=False`, applies the LoFi RoPE kernel config, and is shared verbatim
-  with the 0.6B model (only scale dimensions differ).
+  `is_causal=False` and applies the LoFi RoPE kernel config.
 - `PplxModelArgs` loads weights directly from (sharded) safetensors, avoiding the
   custom HF `modeling.py` that requires a newer `transformers`.
 - `dp32_multiprocess.py` / `live_demo.py --dp N` spawn one process per chip

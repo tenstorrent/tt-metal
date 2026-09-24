@@ -153,15 +153,3 @@ Q/K RMSNorm + RoPE op emitting bfp8 Q/K/V, SDPA on the streaming kernel writing 
 directly, a fused residual add + RMSNorm, a fused SwiGLU product, and DRAM-interleaved weights at bs32. The
 Qwen3-specific switch is `QWEN_SDPA_CAUSAL=1`, set automatically for a non-pplx `HF_MODEL`. The full list with
 the effect of each change is in [`../pplx_embed_4b/PERF.md`](../pplx_embed_4b/PERF.md).
-
-## Key differences from 0.6B
-
-| Aspect | 0.6B | 4B |
-|---|---|---|
-| Hidden size | 1024 | 2560 |
-| Layers | 28 | 36 |
-| Q-heads | 16 | 32 |
-| bs=1 L1 activation | 1 MB | 2.5 MB |
-| bs=32 activation | 32 MB | 80 MB (DRAM) |
-| LN block sharding | Active | Active at bs=1 (10x8 grid); fused add + RMSNorm at bs≥8 |
-| Matmul grid (bs=32) | 8x8 (64 cores) | full worker grid (12x10 here, 13x10 on p150a) |
