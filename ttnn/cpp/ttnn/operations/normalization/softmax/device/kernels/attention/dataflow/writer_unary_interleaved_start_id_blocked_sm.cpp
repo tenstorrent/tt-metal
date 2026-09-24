@@ -10,9 +10,12 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+#ifdef REDUCE_AUX_ON_WRITER
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 void kernel_main() {
+#ifdef REDUCE_AUX_ON_WRITER
     using MaxAuxiliary =
         ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
     using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
@@ -20,6 +23,7 @@ void kernel_main() {
         dfb::sum_scaler>;
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
+#endif
 
     using namespace tt::constants;
 

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -62,6 +62,15 @@ void kernel_main() {
     const auto src_a = TensorAccessor(tensor::src);
 
     const Noc noc;
+
+    // Prepare scalers in parallel with the writer's padding mask, which compute waits on first.
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb::sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     const std::uint32_t i_tile = 0;
