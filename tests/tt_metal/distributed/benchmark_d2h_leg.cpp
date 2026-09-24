@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -374,9 +375,50 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
             }
         }
 
+        // How far the run got, not what the drain below sweeps up.
+        const uint64_t frames_at_exit = frames;
+
+        // The kernel runs on after every ok=false path and exits only once its last put is
+        // retired. Drain -- discarding, the run already failed -- so it can reach that.
+        if (!ok) {
+            const D2HLeg::Sink discard = [&](const SendTask& t) {
+                ++pending[t.core];
+                ++frames;
+                return true;
+            };
+            uint64_t drained = frames;
+            auto drain_until = std::chrono::steady_clock::now() + kStall;
+            while (frames < total_frames_ && std::chrono::steady_clock::now() < drain_until) {
+                d2h_->poll(discard);
+                for (uint32_t c = 0; c < cores_; ++c) {
+                    if (pending[c] != 0) {
+                        d2h_->retire(c, pending[c]);
+                        pending[c] = 0;
+                    }
+                }
+                // Bounded on progress, not on total time: a slow drain is still a drain.
+                if (frames != drained) {
+                    drained = frames;
+                    drain_until = std::chrono::steady_clock::now() + kStall;
+                }
+            }
+        }
+
         // Only after the FIFO has drained: Finish() before that is unbounded.
-        if (ok) {
+        if (frames >= total_frames_) {
             Finish(mesh_->mesh_command_queue());
+        } else {
+            // Nothing here can stop the kernel or close the shared device, and returning
+            // runs ~D2HLeg and release() under pages it may still write. Leave them mapped.
+            std::fprintf(
+                stderr,
+                "fatal: %s; the sender kernel did not drain within %llds, so the device may still be "
+                "writing into the pinned region. Exiting without teardown -- reset the device before "
+                "the next run.\n",
+                run_error.c_str(),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(kStall).count()));
+            std::fflush(stderr);
+            std::_Exit(EXIT_FAILURE);
         }
 
         // The chip clock is global, so earliest begin and latest end bound one window.
@@ -402,7 +444,7 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
             }
         }
 
-        state.counters["frames"] = static_cast<double>(frames);
+        state.counters["frames"] = static_cast<double>(frames_at_exit);
         if (ok && end > begin) {
             const double secs = static_cast<double>(end - begin) / (cycles_per_us_ * 1e6);
             const double gb = static_cast<double>(total_frames_ - warmup_frames_) * page_bytes_ / 1e9;
