@@ -10,9 +10,6 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr layernorm_moreh(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta);
-
 autograd::TensorPtr composite_layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, std::optional<autograd::TensorPtr> beta_opt);
 
