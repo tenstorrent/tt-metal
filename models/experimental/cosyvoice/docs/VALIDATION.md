@@ -463,8 +463,14 @@ than raising, so `tests/pcc/test_source.py`'s SineGen tests skip when
 ## Reproducing the whole thing
 
 ```bash
-# host tier, no device, ~90 s
+cd $TT_METAL_HOME
+
+# host tier, no device, under a minute
 pytest models/experimental/cosyvoice/tests/ -k "not device"
+
+# the prompt .npz files scripts/prepare_inputs.py writes; without them five device tests
+# skip, among them the per-utterance RTF test that RTF < 0.5 is judged on
+export COSYVOICE_INPUTS=/path/to/inputs
 
 # device tier: correctness
 pytest models/experimental/cosyvoice/tests/pcc/ models/experimental/cosyvoice/tests/e2e/ -v
@@ -477,6 +483,6 @@ COSYVOICE_FF2_GRID=8x2 pytest models/experimental/cosyvoice/tests/perf/ -v -s
 COSYVOICE_KV_INPLACE=1 pytest models/experimental/cosyvoice/tests/perf/ -v -s
 ```
 
-Weights and goldens have to exist first; [`../README.md`](../README.md) has the
-export and capture steps. The perf suite skips itself with a stated reason rather than
-failing when they do not.
+Weights, goldens and the prompt inputs have to exist first; [`../README.md`](../README.md)
+has the export, capture and preparation steps. A test that needs one of them skips with a
+stated reason rather than failing when it is absent.
