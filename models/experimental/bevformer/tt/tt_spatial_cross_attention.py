@@ -231,6 +231,9 @@ class TTSpatialCrossAttention:
             batch_first=batch_first,
         )
 
+        # ``params.deformable_attention``, not ``params``: MSDA applies its own
+        # ``output_proj``, while the one in the SCA namespace belongs to the slots
+        # projection in forward. Sharing a namespace applies the SCA's matrix twice.
         self.deformable_attention = TTMSDeformableAttention(
             deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes
         )
