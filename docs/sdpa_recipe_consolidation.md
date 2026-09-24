@@ -25,7 +25,7 @@ kernels.
 | # | Task | Status |
 | --- | --- | --- |
 | 1 | Contract + input recommendations docs | done (5cffae00) |
-| 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint implemented (b3c7d066), validating on bh-32; ring/exp follow task 4 |
+| 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint done and validated (sweep of 25 geometries x 7 variants x 3 regimes green on bh-38; frozen digests unchanged; ring 897 / exp 131 unchanged); ring/exp geometry in progress (`cglagovich/sdpa-recipe-ring-geometry`) |
 | 3 | Op-selected blocking and grid; `program_config` becomes an optional override | code done on `cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204 (host tests pass); device runs and perf table queued |
 | 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | done (`cglagovich/sdpa-recipe-ring-factories` @ 4b65adf7, merged); legacy kernels byte-identical in 204/206 configs, ring/exp/continuation/mesh green, perf unchanged |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
@@ -58,7 +58,8 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
   pack-only `-Os` (kernel config buffer), like odd Q chunks already did.
 - Ring and exp ring keep their current limits until task 4 moves them onto
   recipe-owned factories; `recipe_q_tiles` / `recipe_k_tiles` remain their checks.
-- Test: `test_sdpa_recipe_geometry.py`.
+- Test: `test_sdpa_recipe_geometry.py`. At K512/D128, Q384 fits L1 only for 3 variants and
+  Q512/Q1024 for none; Q1024 is exercised at K128/D64 (3 variants fit).
 
 ## Task 2 findings
 
