@@ -501,8 +501,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_w = 4;
     }
 
+    // Named recipes end an odd Q chunk with a single-row group (the writer drains the remainder group).
     TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
+        named_compute || Sq_chunk_t % qk_out_subblock_h == 0,
         "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
         Sq_chunk_t,
         qk_out_subblock_h);
@@ -540,7 +541,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     if (use_streaming_compute) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
         TT_FATAL(
-            Sq_chunk_t % out_out_subblock_h == 0,
+            named_compute || Sq_chunk_t % out_out_subblock_h == 0,
             "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
             Sq_chunk_t,
             out_out_subblock_h);
