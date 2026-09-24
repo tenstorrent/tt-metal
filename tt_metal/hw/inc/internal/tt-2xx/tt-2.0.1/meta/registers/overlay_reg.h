@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
+
 #ifndef OVERLAY_REG_H
 #define OVERLAY_REG_H
 
@@ -16,6 +21,7 @@
 #include "tt_cluster_clint_reg.h"
 #include "tt_cluster_ctrl_reg.h"
 #include "tt_cluster_ctrl_t6_l1_csr_reg.h"
+#include "tt_cluster_plic_reg.h"
 #include "tt_overlay_llk_tile_counters_reg.h"
 #include "tt_rocc_accel_reg.h"
 
