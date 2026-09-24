@@ -8,10 +8,9 @@ only when no row holds a pad token, and the caller owns that statement. These
 tests fix three facts so that a later change cannot move the default or widen
 the skip without a failure:
 
-  1. Unpadded input: no_padding=True returns the default result, to kernel rounding.
-     The two paths can run different SDPA kernels (B1: the nomask path writes the
-     concat layout from the model-local SDPA), so they agree to PATHS_COS, not to
-     float rounding. Accuracy against HF is the PCC gate in test_model*.py.
+  1. Unpadded input: no_padding=True returns the default result.
+     At B1 and B8 (Galaxy) the nomask path runs the model-local SDPA, which uses
+     the stock streaming compute kernel, so both paths give the same result.
   2. Padded input: the default masks, so it returns the explicit keep-mask result.
   3. Padded input: no_padding=True returns a different result for the padded row,
      so the flag does remove the mask. The earlier measurement gave cos 0.4147.
@@ -30,11 +29,8 @@ SEQ_LEN = 512
 PADDED_ROW = 1
 PADDED_VALID = 64
 
-# The same kernel on both runs: rows match to float rounding (measured 1.00016).
+# Unpadded rows match to float rounding; the measured value is 1.00016.
 SAME_COS = 0.9999
-# Default against no_padding=True: different SDPA kernels at B1 differ by rounding
-# over 24 layers (measured cos 0.985). A masking bug measured 0.4147.
-PATHS_COS = 0.98
 # A padded row under no_padding=True measured cos 0.4147 against the masked row.
 DIFFERENT_COS = 0.9
 
@@ -84,7 +80,7 @@ def test_no_padding_contract(device, model_path, batch_size, reset_seeds):
     skip_full = _run(model, device, full, no_padding=True)
     for row in range(batch_size):
         cos = _row_cos(default_full, skip_full, row)
-        assert cos >= PATHS_COS, f"unpadded row {row}: no_padding=True gives cos {cos:.6f}"
+        assert cos >= SAME_COS, f"unpadded row {row}: no_padding=True gives cos {cos:.6f}"
 
     # 2. Padded input: the default masks, the same as an explicit keep-mask.
     default_padded = _run(model, device, padded)

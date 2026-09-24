@@ -486,15 +486,27 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
 def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
     """EncoderSDPAConfig for the model-local SDPA that writes [B, 1, S, H*D], or None.
 
-    B1/S512 on Blackhole: same chunk plan and 8x8 grid as the stock call, streaming
-    compute at LoFi. Standalone (tests/perf/encoder_sdpa_concat.py): 20.1 us against
-    30.6 us for stock SDPA + concat, cos 0.99949 against 0.99951 for stock.
+    The op runs the stock streaming compute kernel, so its output is bit-identical
+    to stock SDPA + concat (tests/perf/encoder_sdpa_concat.py, Galaxy chip 0).
+    - B1/S512 on Blackhole: the stock chunk plan and 8x8 grid. 22.4 us against
+      30.7 us for stock SDPA + concat.
+    - B8/S512 on a grid narrower than 13 columns (Galaxy): the stock q256/k512 plan
+      on the full 12x10 grid, 256 work units split 2 or 3 per core. 86.1 us against
+      121.8 us for stock SDPA + concat (108.6 us for stock SDPA alone). A 13-column
+      grid keeps the stock path; it has not been measured there.
     """
-    if seq_len != 512 or batch_size != 1 or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+    if seq_len != 512 or batch_size not in (1, 8) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    if batch_size == 8 and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
         return None
     from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
 
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+    if batch_size == 1:
+        grid_x, grid_y = 8, 8
+    else:
+        g = mesh_device.compute_with_storage_grid_size()
+        grid_x, grid_y = int(g.x), int(g.y)
     return EncoderSDPAConfig(
         batch=batch_size,
         num_q_heads=16,
@@ -504,12 +516,13 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
         head_dim=64,
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        grid_x=8,
-        grid_y=8,
+        grid_x=grid_x,
+        grid_y=grid_y,
         scale=scale,
         use_streaming=True,
         fp32_dest_acc_en=False,
         direct_concat_heads=True,
+        exp_approx_mode=_sdpa_exp_approx(seq_len, mesh_device),
     )
 
 
