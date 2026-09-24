@@ -85,7 +85,7 @@ inline uint64_t make_key(tt::tt_metal::distributed::MeshDevice* md, uint32_t big
 }
 
 inline std::shared_ptr<DeltaPlan> get_or_create(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md, uint32_t big_modulus, uint32_t full_N) {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md, uint32_t big_modulus, uint32_t full_N) {
     using namespace tt::tt_metal::distributed;
 
     const uint64_t key = make_key(md.get(), big_modulus, full_N);

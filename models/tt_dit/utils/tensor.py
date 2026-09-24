@@ -565,6 +565,7 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    use_persistent_buffer: bool = True,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -634,7 +635,7 @@ def fast_device_to_host(
                 dim=inter_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
-                use_persistent_buffer=True,
+                use_persistent_buffer=use_persistent_buffer,
             )
 
             n_hosts = int(ttnn.distributed_context_get_size())

@@ -65,9 +65,11 @@ inline void sfpu_rope_dest_setup()
  * tile, so the load is hoisted out of the head loop.  A single even-parity load
  * serves both x parities (see the layout note at the top).
  */
+template <bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint32_t sin_addr)
 {
-    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(InstrModLoadStore::FP16B);
+    // BF16 inputs can be unpacked into FP32 DEST: use the register representation.
+    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
     TT_SFPLOAD(p_sfpu::LREG0, FMT, rope::ZERO_ADDR_MOD, cos_addr);
     TT_SFPLOAD(p_sfpu::LREG1, FMT, rope::ZERO_ADDR_MOD, sin_addr);
 }
@@ -94,9 +96,10 @@ inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
  * (the caller's x_base/x_stride asserts guarantee it).  Only the address-bearing
  * instructions take the runtime TT_ form; the multiplies keep their inline encoding.
  */
+template <bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_face(const std::uint32_t x_addr)
 {
-    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(InstrModLoadStore::FP16B);
+    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
     constexpr std::uint8_t AM   = rope::ZERO_ADDR_MOD;
 
     TT_SFPLOAD(p_sfpu::LREG4, FMT, AM, x_addr);     // x_even
@@ -182,6 +185,9 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
  * have that row replicated across live rows if ``tile_h > 1``.  When true
  * (block decode) each 4-row group loads its matching fused rows.
  *
+ * ``is_fp32_dest_acc_en`` selects the DEST register representation for both
+ * x and fused phases, independently of their original input memory format.
+ *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
  * a custom_mm<dense_packing> result still sitting in DEST.
  */
@@ -192,9 +198,10 @@ template <
     std::uint32_t x_stride,
     std::uint32_t cs_base,
     std::uint32_t cs_stride,
-    bool has_scale       = false,
-    std::uint32_t tile_h = 1,
-    bool cos_sin_per_row = false>
+    bool has_scale           = false,
+    std::uint32_t tile_h     = 1,
+    bool cos_sin_per_row     = false,
+    bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
@@ -218,7 +225,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                 // One shared phase per column-face; reused for every row-group
                 // and (for tile_h==32) the matching bottom face.
                 const std::uint32_t cs_off = w * cs_stride + f * F;
-                sfpu_rope_load_cos_sin(cs_base + cs_off, cs_base + cs_off + 2);
+                sfpu_rope_load_cos_sin<is_fp32_dest_acc_en>(cs_base + cs_off, cs_base + cs_off + 2);
                 if constexpr (has_scale)
                 {
                     sfpu_rope_scale_cos_sin(scale_fp32);
@@ -233,7 +240,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                     if constexpr (cos_sin_per_row)
                     {
                         const std::uint32_t cs_off = w * cs_stride + face_base + rg_off;
-                        sfpu_rope_load_cos_sin(cs_base + cs_off, cs_base + cs_off + 2);
+                        sfpu_rope_load_cos_sin<is_fp32_dest_acc_en>(cs_base + cs_off, cs_base + cs_off + 2);
                         if constexpr (has_scale)
                         {
                             sfpu_rope_scale_cos_sin(scale_fp32);
@@ -242,7 +249,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                     std::uint32_t x_addr = x_base + w * x_stride + face_base + rg_off;
                     for (std::uint32_t h = 0; h < Ht; h++)
                     {
-                        sfpu_rope_face(x_addr);
+                        sfpu_rope_face<is_fp32_dest_acc_en>(x_addr);
                         x_addr += head_stride;
                     }
                 }
