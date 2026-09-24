@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_is_fp16_zero.h"
 
@@ -52,6 +53,31 @@ inline void calculate_mask_posinf() {
         dst_reg++;
     }
 }
+
+// Op classes for masking a tile with the tile that follows it in Dest. They need no init beyond the
+// op-agnostic SFPU init (mask_init only resets the counters).
+
+// Op class for masking a float tile with 0.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct Mask : SfpuUnaryOp<Mask<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() { calculate_mask<APPROXIMATION_MODE, ITERATIONS>(); }
+};
+
+// Op class for masking an int32 tile with 0.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct IntMask : SfpuUnaryOp<IntMask<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_int_mask<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for masking a float tile with +inf.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+struct MaskPosinf : SfpuUnaryOp<MaskPosinf<APPROXIMATION_MODE, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate() {
+        calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

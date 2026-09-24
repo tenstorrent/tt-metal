@@ -10,6 +10,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -40,7 +41,7 @@ namespace sfpu {
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_reshuffle_rows(uint idx_addr) {
+inline void calculate_reshuffle_rows(std::uint32_t idx_addr) {
     constexpr std::uint32_t output_tile_offset = 64;
 
     // clr DEST tile 1
@@ -113,6 +114,16 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         TT_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, output_tile_offset + output_row_addr + 18);  // Face 1/3, odd columns
     }
 }
+
+// Op class for reshuffling the rows of a tile to the indices stored at an L1 address. The kernel
+// walks the whole tile itself; its init only resets the counters, which the op-agnostic init does.
+template <bool APPROXIMATION_MODE>
+struct ReshuffleRows : SfpuUnaryOp<ReshuffleRows<APPROXIMATION_MODE>> {
+    static constexpr bool walks_faces = false;
+    static inline __attribute__((always_inline)) void calculate(const std::uint32_t idx_addr) {
+        calculate_reshuffle_rows<APPROXIMATION_MODE>(idx_addr);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

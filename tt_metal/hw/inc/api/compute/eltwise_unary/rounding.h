@@ -4,14 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_QUASAR
 #include "ckernel_sfpu_rounding_ops.h"
-#else
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
-#endif
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -19,7 +15,8 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+// The rounding ops need no init beyond the op-agnostic SFPU init.
+ALWI void rounding_op_tile_init() { MATH((sfpu::UnaryFn::init())); }
 
 // clang-format off
 /**
@@ -35,10 +32,7 @@ ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | idst            | The index of the tile in DST register buffer to perform ceil operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void ceil_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_ceil_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void ceil_tile(std::uint32_t idst) { MATH((sfpu::Ceil<APPROX>::run(idst))); }
 
 // clang-format off
 /**
@@ -54,10 +48,7 @@ ALWI void ceil_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void floor_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void floor_tile(std::uint32_t idst) { MATH((sfpu::Floor<APPROX>::run(idst))); }
 
 // clang-format off
 /**
@@ -73,10 +64,7 @@ ALWI void floor_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform trunc operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void trunc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_trunc_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void trunc_tile(std::uint32_t idst) { MATH((sfpu::Trunc<APPROX>::run(idst))); }
 
 // clang-format off
 /**
@@ -93,10 +81,7 @@ ALWI void trunc_tile(uint32_t idst) {
  * | decimals        | The number of decimal places to round to.                                  | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void round_tile(uint32_t idst, int32_t decimals) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, decimals));
-}
+ALWI void round_tile(std::uint32_t idst, std::int32_t decimals) { MATH((sfpu::Round<APPROX>::run(idst, decimals))); }
 
 // clang-format off
 /**
@@ -116,10 +101,7 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  * | idst            | The index of the tile in DST register buffer to perform the stochastic round on     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void stochastic_round_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_stochastic_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void stochastic_round_tile(std::uint32_t idst) { MATH((sfpu::StochasticRound<APPROX>::run(idst))); }
 
 // clang-format off
 /**
@@ -135,9 +117,6 @@ ALWI void stochastic_round_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void frac_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_frac_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-}
+ALWI void frac_tile(std::uint32_t idst) { MATH((sfpu::Frac<APPROX>::run(idst))); }
 
 }  // namespace ckernel
