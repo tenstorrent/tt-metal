@@ -354,11 +354,6 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    // Co-owners reserve the config buffer together; only the sender owner maps host memory.
-    if (!mesh_device->is_local(sender_core_.device_coord)) {
-        return;
-    }
-
     // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
     auto& ctx = mesh_device->impl().metal_context();
     bool can_use_pinned_memory =
@@ -420,7 +415,13 @@ D2HSocket::D2HSocket(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     process_scope_(scope),
     mesh_device_(mesh_device.get()) {
+    // Checked on every rank before the collective allocation so co-owners fail together.
+    TT_FATAL(fifo_size_ % pcie_alignment_ == 0, "FIFO size must be PCIe-aligned.");
     init_config_buffer(mesh_device);
+    // Co-owners reserve the config buffer together; only the sender owner maps host memory.
+    if (!mesh_device->is_local(sender_core_.device_coord)) {
+        return;
+    }
     init_common(mesh_device);
 }
 

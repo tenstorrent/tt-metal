@@ -29,7 +29,7 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     if (mesh_device.is_local(endpoint.device_coord)) {
         auto* device = mesh_device.get_device(endpoint.device_coord);
         auto& service = mesh_device.impl().metal_context().get_service_core_manager();
-        local_service_core = service.claimed_cores(device->id()).contains(endpoint.core_coord);
+        local_service_core = service.claimed_cores(device->id()).contains(endpoint.core_coord) ? 1 : 0;
     }
     uint32_t service_core = 0;
     context->all_reduce(
