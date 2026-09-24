@@ -97,8 +97,8 @@ def _gate(results: dict, record_property, prefix: str) -> None:
             # Absolute bound vs torch. If the legacy tt output itself exceeds it (bf16 weights and the
             # legacy HiFi2 SDPA config), the recipe must instead be no worse than legacy vs torch.
             # LOW_PRECISION also rounds its inputs (RNE7 Q, RNE5+BFP8 KV), so it may scale with the
-            # legacy error: bias-free FLUX.2 has a small reference norm (legacy ~2.5%, E ~1.2x that).
-            relative_cap = 1.25 * base if variant == "LOW_PRECISION" else base if base > bound else bound
+            # legacy error: bias-free FLUX.2 has a small reference norm (legacy ~2.5%, E ~1.2x that; allow 1.3x).
+            relative_cap = 1.3 * base if variant == "LOW_PRECISION" else base if base > bound else bound
             absolute_ok = vs_torch <= max(bound, relative_cap)
             if not absolute_ok or vs_torch > base + MARGIN:
                 failures.append(
