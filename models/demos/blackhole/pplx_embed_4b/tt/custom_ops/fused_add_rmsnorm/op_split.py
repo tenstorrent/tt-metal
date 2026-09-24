@@ -62,10 +62,17 @@ def fused_add_rmsnorm_split(
 
     grid = device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
-    n_cores = rows_t * R
-    if n_cores > gx * gy:
-        raise ValueError(f"rows_t*R = {n_cores} > {gx * gy} cores")
-    cores = [divmod(i, gy) for i in range(n_cores)]  # (cx, cy), y-major like _split_work_to_cores
+    n_units = rows_t * R
+    # Unit u = (row, k) runs on core u % C in wave u // C. C is a multiple of R, so a core keeps the same
+    # slice k = c % R in every wave and the R cores of a row group are the fixed, aligned group
+    # [c - k, c - k + R); the group walks rows row0, row0 + C/R, ... together. More units than cores
+    # (bs8: 128 rows x R) therefore just means more waves per core, no slot reuse in CB 8.
+    C = min(n_units, (gx * gy // R) * R)
+    if C < R:
+        raise ValueError(f"R={R} does not fit the {gx * gy}-core grid")
+    waves_max = -(-n_units // C)
+    row_stride = C // R
+    cores = [divmod(i, gy) for i in range(C)]  # (cx, cy), y-major like _split_work_to_cores
     used_cores = _core_ranges([(cx, cy, 1) for cx, cy in cores])
     virt = []
     for cx, cy in cores:
@@ -92,7 +99,7 @@ def fused_add_rmsnorm_split(
         cb(5, Wc, b8),  # sum, bfp8 working copy
         cb(6, Wc, ttnn.bfloat16),  # sum^2
         cb(7, 1, ttnn.bfloat16),  # this core's partial mean-square (compute -> writer)
-        cb(8, R, ttnn.bfloat16),  # all R partials of the row (peers write here)
+        cb(8, waves_max * R, ttnn.bfloat16),  # all R partials of every wave's row (peers write slot w*R + k)
         cb(9, 1, ttnn.bfloat16),  # rsqrt
         cb(16, Wc, sum_dtype),  # sum out slice
         cb(17, Wc, out_dtype),  # normalised out slice
@@ -109,8 +116,10 @@ def fused_add_rmsnorm_split(
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     reader_rt, compute_rt, writer_rt = [], [], []
-    for i, (cx, cy) in enumerate(cores):
-        row, k = divmod(i, R)
+    for c, (cx, cy) in enumerate(cores):
+        k = c % R
+        n_waves = (n_units - 1 - c) // C + 1
+        row0 = c // R
         core = (cx, cy)
         reader_rt.append(
             (
@@ -121,17 +130,21 @@ def fused_add_rmsnorm_split(
                     gamma_tiles.buffer_address(),
                     scaler_tile.buffer_address(),
                     eps_tile.buffer_address(),
-                    row,
+                    n_waves,
+                    row0,
+                    row_stride,
                     k,
                 ],
             )
         )
-        compute_rt.append((core, [0]))
+        compute_rt.append((core, [n_waves]))
         peers = []
         for j in range(R):
-            vx, vy = virt[row * R + j]
+            vx, vy = virt[c - k + j]
             peers += [vx, vy]
-        writer_rt.append((core, [sum_tensor.buffer_address(), out_tensor.buffer_address(), row, k] + peers))
+        writer_rt.append(
+            (core, [sum_tensor.buffer_address(), out_tensor.buffer_address(), n_waves, row0, row_stride, k] + peers)
+        )
 
     pd = ttnn.ProgramDescriptor(
         kernels=[

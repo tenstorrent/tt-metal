@@ -968,6 +968,44 @@ group's Q heads plus K *or* V (bs1: 256 units of 12 tiles instead of 128 of 24).
 bit-identical; standalone 48.4 → 44.5 µs at bs1 (−8%), 185.0 → 183.3 at bs8; e2e bs1 17.7 → 17.6
 (noise). Opt-in.
 
+### bs>1 round: row-split add+RMSNorm on every core, SDPA 12×8 at bs8, interleaved weights at bs32 (2026-09-24)
+
+**Multi-wave row-split fused add + RMSNorm (`fused_add_rmsnorm_split`, `tt/custom_ops/fused_add_rmsnorm/op_split.py`).**
+The row-granular fused kernel (landed for bs16+) assigns one tile-row per core, so 128 / 256 / 512
+tile-rows on 120 cores run in 2 / 3 / 5 waves with most cores idle in the last one — at bs8 it was
+only −3% vs the stock two ops and was never enabled there. The row-split kernel (built for bs1,
+where it lost to sync overhead) now takes any number of units: unit u = (row, slice k) runs on core
+u mod C in wave u div C with C a multiple of R, so every core keeps one slice index and the R cores
+of a row form a fixed group that walks rows together; each wave's R partial mean-squares land in
+their own CB 8 slot and the semaphore only counts up (`noc_semaphore_wait_min`). Standalone, DRAM
+bfp8, PCC vs stock ≥ 0.9996:
+
+| M | stock add + rms_norm | fused, 1 row/core | R=2 | R=4 | R=5 | R=10 |
+|---|---|---|---|---|---|---|
+| 4096 (bs8) | 184 µs | 178 | 165 | 144 | **141** | 136 |
+| 8192 (bs16) | 320 | 299 | 281 | 250 | **242** | — |
+| 16384 (bs32) | 597 | 530 | 491 | **459** | 463 | — |
+
+e2e: **bs8 123.1 → 119.9 (−2.6%, chip 7)** with `QWEN_FUSED_ADD_NORM_MIN_ROWS=4096` and
+`QWEN_FUSED_ADD_NORM_R=5`; **bs32 449.4 → 443.2 (−1.4%, chip 10)** with R=4. Per-call PCC vs the stock
+ops in the model at bs8 (`QWEN_FUSED_ADD_NORM_VERIFY=1`): sum ≥ 0.99988, norm ≥ 0.99980. R=20 is
+exchange-bound (+24%).
+
+**SDPA 12×8 q512/k512 at bs8 (−0.9%).** The batched model runs q512/k512 (the q256 override never
+reached these shapes). Standalone bs8 12×10 272 → 12×8 234 µs: 256 work units take 3 waves on 96
+cores as on 120, with less DRAM contention. e2e bs8 122.8 → 121.7 (chip 7); bs32 is neutral
+(435.1 → 436.4) and keeps 12×10. Opt out: `QWEN_SDPA_BS8_12X8=0`.
+
+**Interleaved bfp4 weights for QKV / WO / W1 / W3 at bs32 (−1.1%).** `minimal_matmul` streams
+interleaved weights 2–3% faster than the width-sharded layout from M=8192 up (QKV −3.4%, WO −2.0%,
+FF1 −1.6% at M=16384; FF2 prefers sharded, +1.4%); at M=4096 the sharded layout wins (+1.5…+2.3%),
+and the bs1 legacy kernel needs it. Knob `QWEN_WEIGHT_INTERLEAVED_K<k>_N<n>=1` in
+`create_dram_sharded_mem_config`; e2e bs32 441.9 → 436.9 (chip 6).
+
+**bs16.** Every one of these sits inside bs16's run-to-run band (217–231 ms between process
+launches); the alternating multi-launch A/Bs (`ab_multi.sh`, 2–3 pairs per arm, compare minima) are
+recorded in the negatives file §46 and decide the bs16 gates.
+
 ## 6. Profiling
 
 ```bash

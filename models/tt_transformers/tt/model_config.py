@@ -4121,6 +4121,11 @@ class ModelArgs:
     # =========================================================================
     def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
         """Create DRAM-sharded memory config for width-sharded tensors"""
+        # QWEN_WEIGHT_INTERLEAVED_K<k>_N<n>=1: keep this weight DRAM-interleaved instead. minimal_matmul
+        # streams interleaved weights 2-3% faster than width-sharded ones from M=8192 up (QKV, WO,
+        # FF1/FF3; FF2 prefers sharded), while the bs=1 legacy 2D kernel needs the sharded layout.
+        if os.getenv(f"QWEN_WEIGHT_INTERLEAVED_K{k}_N{n}", "0") == "1":
+            return ttnn.DRAM_MEMORY_CONFIG
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
         padded_size = math.ceil(n / (ttnn.TILE_SIZE * dram_cores)) * (ttnn.TILE_SIZE * dram_cores)

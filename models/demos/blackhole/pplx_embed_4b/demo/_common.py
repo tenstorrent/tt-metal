@@ -416,8 +416,39 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # before apply_recommended_env, whose setdefault would pin k256. Opt out:
     # QWEN_SDPA_BATCHED_WIDE=0.
     if batch_size > 1 and os.getenv("QWEN_SDPA_BATCHED_WIDE", "1") == "1":
-        os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
+        # bs8: 12x8 q512/k512 beats 12x10 (256 work units take 3 waves on 96 cores as on 120, with
+        # less DRAM contention): standalone 272 -> 234 us per call, e2e 122.8 -> 121.7 (chip 7).
+        # bs32 is neutral e2e (435.1 -> 436.4) and keeps 12x10; bs16 sits inside its run-to-run band.
+        if batch_size == 8 and os.getenv("QWEN_SDPA_BS8_12X8", "1") == "1":
+            os.environ.setdefault("QWEN_SDPA_GRID", "12,8")
+            os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "512")
+        else:
+            os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
+    # Fused residual add + RMSNorm with each row split over R cores (multi-wave row-split kernel). The
+    # row-granular kernel leaves most of the 120 cores idle in the last wave at 128-512 tile-rows;
+    # standalone stock add + rms_norm -> split: M=4096 184 -> 141 us (R=5), M=8192 320 -> 242 (R=5),
+    # M=16384 597 -> 459 (R=4). e2e bs8 123.1 -> 119.9 (chip 7, MIN_ROWS lowered to 4096 so bs8 takes the
+    # fused path at all), bs32 449.4 -> 443.2 (chip 10). Per-call PCC vs the stock ops >= 0.9998 at bs8
+    # (QWEN_FUSED_ADD_NORM_VERIFY=1). Opt out: QWEN_FUSED_ADD_NORM_R=0.
+    if batch_size == 8 and seq_len == 512:
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_MIN_ROWS", "4096")
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_R", "5")
+    if batch_size == 16 and seq_len == 512:
+        # standalone 320 -> 242 us per call; e2e sits inside bs16's 217/229 ms two-mode band (alternating
+        # 2-pair run: 228.3 / 231.6 -> 216.8 / 216.5), never measured worse.
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_R", "5")
+    if batch_size == 32 and seq_len == 512:
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_R", "4")
+        # minimal_matmul streams interleaved bfp4 weights 2-3% faster than width-sharded ones for
+        # QKV, WO and W1/W3 at M=16384 (FF2 prefers sharded): e2e 441.9 -> 436.9 (chip 6). At M=4096 the
+        # sharded layout is faster, so bs8 keeps it; the bs1 legacy kernel needs it.
+        for k in (
+            "QWEN_WEIGHT_INTERLEAVED_K2560_N6144",
+            "QWEN_WEIGHT_INTERLEAVED_K4096_N2560",
+            "QWEN_WEIGHT_INTERLEAVED_K2560_N9728",
+        ):
+            os.environ.setdefault(k, "1")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
