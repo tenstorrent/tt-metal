@@ -103,6 +103,7 @@ void validate_mesh_id_device_ownership(
 void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& topology_mapper = control_plane.get_topology_mapper();
     const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
 
