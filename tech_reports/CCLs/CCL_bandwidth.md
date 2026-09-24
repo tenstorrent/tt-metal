@@ -176,8 +176,6 @@ Each run lands in `data/runs/<timestamp>/`. The runs are merged, keeping the lat
 
 ## Results
 
-NOTE: Blackhole links currently run at half their rated speed, so the Blackhole figures and tables normalize against 25 GB/s per link per direction.
-
 ### Wormhole LoudBox
 
 ![](images/bw_wormhole_b0_bfloat16_6144_n8.png)
@@ -185,6 +183,8 @@ NOTE: Blackhole links currently run at half their rated speed, so the Blackhole 
 Additionally, figures for two and four devices: [`n2`](images/bw_wormhole_b0_bfloat16_6144_n2.png), [`n4`](images/bw_wormhole_b0_bfloat16_6144_n4.png). They have no ring panel, because the wraparound link exists only across all eight devices.
 
 ### Blackhole Galaxy
+
+NOTE: Blackhole Galaxy links currently run at half their rated speed, so the Blackhole Galaxy figures and tables normalize against 25 GB/s per link per direction.
 
 ![](images/bw_blackhole_bfloat16_8192_n8.png)
 
