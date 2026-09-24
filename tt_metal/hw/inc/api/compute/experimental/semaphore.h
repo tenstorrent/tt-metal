@@ -94,12 +94,12 @@ public:
      */
     void wait_min(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
-        WAYPOINT("TSWMW");
+        WAYPOINT("TSMW");
         {
             SYNC_WAIT("SYNC-SEM-WAIT", local_l1_addr_);
             while ((*sem_addr) < value);
         }
-        WAYPOINT("TSWMD");
+        WAYPOINT("TSMD");
     }
 
     /**

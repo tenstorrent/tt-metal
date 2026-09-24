@@ -163,23 +163,7 @@ inline void load_face_data(std::uint32_t upper_face_addr, std::uint32_t lower_fa
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_int_average() {
-    if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32) {
-        // For signed Int32 format, use absolute value approach for proper division by 32
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // Save original value for sign check
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);  // Get absolute value of LREG0
-        TTI_SFPSHFT(
-            -AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            0b01);  // Perform logical right shift by 5 bits (divide by 32)
-
-        // Restore sign if original value was negative
-        // Check if original value was negative (sign bit set)
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 4);  // Set condition code if original sign bit is 0 (positive)
-        TTI_SFPCOMPC(0, 0, 0, 0);              // Invert condition code (now true if original was negative)
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);  // Negate LREG0 if condition is true
-        TTI_SFPENCC(0, 0, 0, 0);                             // Clear condition codes
-    } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
+    if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
         // Two's-complement signed divide-by-32 (round toward zero). SFPABS clears the sign bit and is
         // only correct for sign-magnitude, so for 2's-complement we take the magnitude via a conditional
         // negate (0 - x), logical-shift, then restore the sign with a second conditional negate.
@@ -194,7 +178,11 @@ inline void perform_int_average() {
         TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);  // Restore sign (2's-complement negate) when negative
         TTI_SFPENCC(0, 0, 0, 0);
     } else {
-        // For unsigned formats (UInt32), just use logical shift directly since they can't be negative
+        // Unsigned formats (UInt32, and UInt16 in a 32-bit dest) reduce under the plain INT32 load/store
+        // mode. Signed Int32 AVG maps to INT32_2S_COMP (handled above), so this arm only ever sees
+        // non-negative data and a plain logical right shift by 5 (divide by 32) is correct. A
+        // sign-magnitude SFPABS/conditional-negate path here would treat bit 31 of a large unsigned
+        // column sum as a sign bit and corrupt the result.
         TTI_SFPSHFT(-AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK, p_sfpu::LREG0, p_sfpu::LREG0, 0b01);
     }
 }

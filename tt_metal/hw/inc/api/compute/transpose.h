@@ -61,14 +61,14 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
         // selected here via is_int_fpu_en. Ideally the LLK layer would infer this path from the
         // data format instead of selecting it here in the Compute API layer.
         // TODO: #46832.
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
               is_fp32_dest_acc_en,
               BroadcastType::NONE,
               true /*is_int_fpu_en*/>(icb)));
     } else {
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     }
 #else

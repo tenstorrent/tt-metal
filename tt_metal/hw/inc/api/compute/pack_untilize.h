@@ -248,32 +248,38 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
+    // The whole block_rt_dim x block_ct_dim block fits in DEST (see the max-block-size note above), so
+    // load every tile into its own DEST slot (row r, column c -> slot r * block_ct_dim + c) and let the
+    // packer untilize all rows in one call. llk_pack_untilize walks the block_rt_dim rows internally,
+    // advancing the packer output address per row and reading DEST slot block_rt * block_ct_dim + offset.
+    // (Mirrors pack_untilize_dest, which forwards block_rt_dim straight to the same LLK entry point.)
+    MATH((llk_math_wait_for_dest_available()));
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
-        MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
+            const uint32_t tile_index = r * block_ct_dim + c;
 #ifndef ARCH_QUASAR
             UNPACK((llk_unpack_A<
                     BroadcastType::NONE,
                     false /*acc_to_dest*/,
                     EltwiseBinaryReuseDestType::NONE,
-                    UnpackToDestEn>(icb, c)));
+                    UnpackToDestEn>(icb, tile_index)));
             MATH((
                 llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-                    c, icb)));
+                    tile_index, icb)));
 #else
             UNPACK((llk_unpack_A<
                     BroadcastType::NONE,
                     false /*acc_to_dest*/,
                     EltwiseBinaryReuseDestType::NONE,
-                    false /*unpack_to_dest*/>(icb, c)));
-            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
+                    false /*unpack_to_dest*/>(icb, tile_index)));
+            MATH((llk_math_eltwise_unary_datacopy(tile_index, icb)));
 #endif
         }
-        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-        PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
-        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+    PACK((llk_packer_wait_for_math_done()));
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index)));
+    PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
 // clang-format off
