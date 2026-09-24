@@ -269,7 +269,7 @@ def test_conv3d_prepared_weights_match_raw():
         x = _to_ttml(x_np, ttnn.Layout.ROW_MAJOR, BF16, True)
         w = _to_ttml(w_np, ttnn.Layout.ROW_MAJOR, BF16, True)
         kwargs = dict(padding=padding, groups=groups)
-        out = ttml.ops.conv.conv3d(x, w, None, prepared, **kwargs) if prepared else ttml.ops.conv.conv3d(x, w, **kwargs)
+        out = ttml.ops.conv.conv3d(x, w, prepared=prepared, **kwargs)
         out.set_grad_from_tensor(_to_ttml(dy_np, ttnn.Layout.ROW_MAJOR, BF16, False))
         out.backward(False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -296,12 +296,21 @@ def test_conv3d_prepared_weights_match_raw():
     np.testing.assert_array_equal(pre_dw, raw_dw)
 
 
+def test_conv3d_prepared_weight_keeps_bias_optional(expect_error):
+    w = _zeros((32, 32, 3, 3, 3))
+    x = _zeros((1, 4, 5, 6, 32))
+    prepared = ttml.ops.conv.prepare_conv3d_weight(w.get_value())
+    assert ttml.ops.conv.conv3d(x, w, prepared=prepared).shape() == [1, 2, 3, 4, 32]
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttml.ops.conv.conv3d(x, w, None, prepared)
+
+
 def test_conv3d_prepared_weight_mismatch_is_rejected(expect_error):
     w = _zeros((40, 32, 3, 3, 3))
     x = _zeros((1, 4, 5, 6, 64))
     prepared_for_one_group = ttml.ops.conv.prepare_conv3d_weight(w.get_value(), groups=1)
     with expect_error(ValueError, "built for shape"):
-        ttml.ops.conv.conv3d(x, w, None, prepared_for_one_group, groups=2)
+        ttml.ops.conv.conv3d(x, w, groups=2, prepared=prepared_for_one_group)
 
 
 def test_conv3d_prepared_weight_is_a_snapshot():
@@ -317,7 +326,7 @@ def test_conv3d_prepared_weight_is_a_snapshot():
 
     w.assign(_to_ttml(new_np, ttnn.Layout.ROW_MAJOR, BF16, False))
     with_new = ttml.ops.conv.conv3d(x, w, padding=(1, 1, 1)).to_numpy(FP32)
-    stale = ttml.ops.conv.conv3d(x, w, None, prepared, padding=(1, 1, 1)).to_numpy(FP32)
+    stale = ttml.ops.conv.conv3d(x, w, padding=(1, 1, 1), prepared=prepared).to_numpy(FP32)
 
     np.testing.assert_array_equal(stale, with_old)
     assert np.abs(stale - with_new).max() > 0.1
