@@ -47,9 +47,9 @@ void kernel_main() {
     DataflowBuffer dfb_reduce(dfb::reduce);
 #ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
-        ckl::input(dfb::in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
+        ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto res_input =
-        ckl::input(dfb::res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
+        ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
 #endif
     constexpr auto input_squared =
         ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
@@ -60,7 +60,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    constexpr auto squaring_shape = ckl::IterationShape::grid(Wt / blk, blk);
+    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
@@ -70,11 +70,14 @@ void kernel_main() {
                 ckl::AddBinary<>,
                 in0_input,
                 res_input,
-                ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
         } else {
-            ckl::
-                add<in0_input, res_input, ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                    squaring_shape);
+            ckl::add<
+                in0_input,
+                res_input,
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
         }
 #endif
 
@@ -82,10 +85,11 @@ void kernel_main() {
             ckl::unary<
                 ckl::Square<>,
                 input_squared,
-                ckl::output(dfb::x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         } else {
-            ckl::square<input_squared, ckl::output(dfb::x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                squaring_shape);
+            ckl::square<
+                input_squared,
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
