@@ -5,7 +5,7 @@
 
 NOT RUN IN CI, deliberately. It reads a real 8.86 GiB cache off /mnt/models and reports a
 wall-clock number; no threshold is asserted, because a meaningful one has to be calibrated per
-filesystem and per host and that work has not been done (tenstorrent/tt-metal#<issue>). Run it by
+filesystem and per host and that work has not been done (tenstorrent/tt-metal#57760). Run it by
 hand when you touch the host->device upload path:
 
     TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill \\
