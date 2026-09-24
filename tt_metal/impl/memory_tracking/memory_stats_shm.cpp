@@ -33,15 +33,12 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose) :
     asic_id_(asic_id),
     device_id_(device_id),
-    shm_fd_(-1),
-    region_(nullptr),
     // Per-PID tracking is enabled by default and disabled by TT_METAL_SHM_TRACKING_DISABLED=1.
     // The flag is captured once at construction (passed in by Device::initialize from its
     // MetalContext's rtoptions) -- it's a process-wide debug toggle, no need to look it up
     // again per allocation.
     per_pid_tracking_enabled_(!tracking_disabled),
-    verbose_enabled_(verbose),
-    is_creator_(false) {
+    verbose_enabled_(verbose) {
     // Format: /tt_device_<chip_unique_id>_memory
     // chip_unique_id from UMD is globally unique and never changes
     std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";

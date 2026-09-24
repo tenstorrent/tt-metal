@@ -254,6 +254,241 @@ TEST_F(UnitMeshFixture, B3_2_0_TailCreditRace_RepeatedImplicitSync_DMDM) {
     run_dm_dfb_dm_implicit_sync_2_0(this->device(), /*num_iterations=*/3, /*implicit_sync=*/true);
 }
 
+// Implicit-sync availability guards.
+//
+// Both guards drive one endpoint through the real implicit-sync path
+// (async_read/async_write with TXN_ID) while the opposite endpoint acts as a
+// credit controller using the explicit push_back / pop_front APIs. The
+// controller withholds the credit the second implicit transfer needs and
+// records, into L1, whether that transfer returned anyway. A pending transfer
+// is invisible to the tile-counter occupancy / free-space registers, so a
+// guard that consults only those registers lets the second transfer reuse a
+// slot that is not actually available.
+namespace {
+
+constexpr uint32_t kGuardEntrySize = 1024;
+constexpr uint32_t kGuardRingEntries = 16;
+constexpr uint32_t kGuardSentinel = 0xBAADF00Du;
+
+const m2::DFBSpecName GUARD_DFB{"dfb"};
+const m2::KernelSpecName GUARD_PRODUCER{"producer"};
+const m2::KernelSpecName GUARD_CONSUMER{"consumer"};
+const m2::TensorParamName GUARD_TENSOR{"guard_tensor"};
+const m2::SemaphoreSpecName GUARD_SEM_PRODUCER_READY{"producer_ready"};
+const m2::SemaphoreSpecName GUARD_SEM_CONSUMER_READY{"consumer_ready"};
+const m2::SemaphoreSpecName GUARD_SEM_SECOND_ATTEMPT{"second_attempt"};
+const m2::SemaphoreSpecName GUARD_SEM_SECOND_RETURNED{"second_returned"};
+const m2::SemaphoreSpecName GUARD_SEM_CREDIT_RELEASED{"credit_released"};
+const m2::SemaphoreSpecName GUARD_SEM_PEER_PRELOADED{"peer_preloaded"};
+
+std::vector<m2::SemaphoreBinding> guard_semaphore_bindings() {
+    return {
+        {.semaphore_spec_name = GUARD_SEM_PRODUCER_READY, .accessor_name = "producer_ready"},
+        {.semaphore_spec_name = GUARD_SEM_CONSUMER_READY, .accessor_name = "consumer_ready"},
+        {.semaphore_spec_name = GUARD_SEM_SECOND_ATTEMPT, .accessor_name = "second_attempt"},
+        {.semaphore_spec_name = GUARD_SEM_SECOND_RETURNED, .accessor_name = "second_returned"},
+        {.semaphore_spec_name = GUARD_SEM_CREDIT_RELEASED, .accessor_name = "credit_released"},
+    };
+}
+
+std::vector<m2::SemaphoreSpec> guard_semaphore_specs(const m2::NodeCoord& node) {
+    return {
+        {.unique_id = GUARD_SEM_PRODUCER_READY, .target_nodes = node},
+        {.unique_id = GUARD_SEM_CONSUMER_READY, .target_nodes = node},
+        {.unique_id = GUARD_SEM_SECOND_ATTEMPT, .target_nodes = node},
+        {.unique_id = GUARD_SEM_SECOND_RETURNED, .target_nodes = node},
+        {.unique_id = GUARD_SEM_CREDIT_RELEASED, .target_nodes = node},
+    };
+}
+
+void check_guard_result(distributed::MeshDevice& mesh_device, uint32_t result_l1_addr, const char* what) {
+    std::vector<uint32_t> result;
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 1u);
+    ASSERT_NE(result[0], kGuardSentinel) << "credit controller never reported a result";
+    EXPECT_EQ(result[0], 0u) << "the second implicit " << what << " returned before its credit was released";
+}
+
+}  // namespace
+
+// Implicit writes: the DM consumer drains one entry per tile counter, then
+// wraps back to the first counter whose entry is claimed but not yet acked.
+static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_device, uint32_t num_tile_counters) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync is Quasar-only";
+    }
+
+    const m2::NodeCoord node{0, 0};
+    const uint32_t num_pages = num_tile_counters + 1;
+    const auto tensor_spec = make_flat_dram_tensor_spec(kGuardEntrySize, num_pages, DataType::UINT32);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb{
+        .unique_id = GUARD_DFB,
+        .entry_size = kGuardEntrySize,
+        .num_entries = kGuardRingEntries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // One producer thread per tile counter; each posts to the counter it owns.
+    auto producer = make_dm_kernel(
+        GUARD_PRODUCER,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_write_guard_producer.cpp",
+        static_cast<uint8_t>(num_tile_counters));
+    producer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
+    producer.semaphore_bindings = guard_semaphore_bindings();
+    disable_implicit_sync_for(producer, GUARD_DFB);
+
+    auto consumer = make_dm_kernel(
+        GUARD_CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_write_guard_consumer.cpp");
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.tensor_bindings = {{.tensor_parameter_name = GUARD_TENSOR, .accessor_name = "dst_tensor"}};
+    consumer.compile_time_args = {{"num_tile_counters", num_tile_counters}};
+    consumer.semaphore_bindings = guard_semaphore_bindings();
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {GUARD_PRODUCER, GUARD_CONSUMER}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "implicit_write_availability_guard",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .semaphores = guard_semaphore_specs(node),
+        .tensor_parameters = {{.unique_id = GUARD_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
+    std::vector<uint32_t> sentinel{kGuardSentinel};
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sentinel);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = GUARD_PRODUCER,
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
+        {.kernel = GUARD_CONSUMER},
+    };
+    params.tensor_args = {{GUARD_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    check_guard_result(mesh_device, result_l1_addr, "write");
+}
+
+// Implicit reads: one producer round-robins num_tile_counters. POSTED/ACKED are
+// preloaded so each counter has exactly one free slot. The producer reserves
+// every one of those slots, then the next read revisits the first counter and
+// must wait for that counter's consumer to free it.
+static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_device, uint32_t num_tile_counters) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync is Quasar-only";
+    }
+
+    const m2::NodeCoord node{0, 0};
+    // STRIDED splits the ring across the consumers, so each tile counter holds
+    // ring / num_tile_counters entries. Preloading POSTED to that capacity with
+    // ACKED at 1 leaves exactly one free slot on every counter: the producer can
+    // reserve one read per counter, and the read that wraps back to the first
+    // counter must then wait for that counter's consumer to free a slot.
+    const uint32_t ring_entries = kGuardRingEntries;
+    const uint32_t preload_posted = ring_entries / num_tile_counters;
+    constexpr uint32_t preload_acked = 1;
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(kGuardEntrySize, num_tile_counters + 1, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb{
+        .unique_id = GUARD_DFB,
+        .entry_size = kGuardEntrySize,
+        .num_entries = ring_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto producer = make_dm_kernel(
+        GUARD_PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_read_guard_producer.cpp");
+    producer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    producer.tensor_bindings = {{.tensor_parameter_name = GUARD_TENSOR, .accessor_name = "src_tensor"}};
+    producer.compile_time_args = {{"preload_posted", preload_posted}, {"num_tile_counters", num_tile_counters}};
+    producer.semaphore_bindings = guard_semaphore_bindings();
+
+    auto consumer = make_dm_kernel(
+        GUARD_CONSUMER,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_implicit_read_guard_consumer.cpp",
+        static_cast<uint8_t>(num_tile_counters));
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = GUARD_DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.compile_time_args = {{"preload_acked", preload_acked}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
+    consumer.semaphore_bindings = guard_semaphore_bindings();
+    consumer.semaphore_bindings.push_back(
+        {.semaphore_spec_name = GUARD_SEM_PEER_PRELOADED, .accessor_name = "peer_preloaded"});
+    disable_implicit_sync_for(consumer, GUARD_DFB);
+
+    auto semaphores = guard_semaphore_specs(node);
+    semaphores.push_back({.unique_id = GUARD_SEM_PEER_PRELOADED, .target_nodes = node});
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {GUARD_PRODUCER, GUARD_CONSUMER}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "implicit_read_availability_guard",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = {{.unique_id = GUARD_TENSOR, .spec = in_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
+    std::vector<uint32_t> sentinel{kGuardSentinel};
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_l1_addr, sentinel);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = GUARD_PRODUCER},
+        {.kernel = GUARD_CONSUMER,
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
+    };
+    params.tensor_args = {{GUARD_TENSOR, std::cref(in_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    check_guard_result(mesh_device, result_l1_addr, "read");
+}
+
+TEST_F(UnitMeshFixture, ImplicitReadPendingPostReservesFreeSlot) {
+    run_implicit_read_availability_guard(this->device(), /*num_tile_counters=*/1);
+}
+
+TEST_F(UnitMeshFixture, ImplicitReadAvailability_1Producer2Consumer_2TC) {
+    run_implicit_read_availability_guard(this->device(), /*num_tile_counters=*/2);
+}
+
+TEST_F(UnitMeshFixture, ImplicitWritePendingAckIsNotNewData) {
+    run_implicit_write_availability_guard(this->device(), /*num_tile_counters=*/1);
+}
+
+TEST_F(UnitMeshFixture, ImplicitWriteAvailability_2Producer1Consumer_2TC) {
+    run_implicit_write_availability_guard(this->device(), /*num_tile_counters=*/2);
+}
+
 // D1: long implicit-sync run past counter wrap
 TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     if (this->device().arch() != ARCH::QUASAR) {

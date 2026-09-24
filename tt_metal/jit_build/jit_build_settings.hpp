@@ -22,6 +22,12 @@ enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
     DM_LOCAL_CACHED = 1,
     EXTERNAL = 2,
+    // Blackhole compute scope: the Tensix hardware (Sync Unit) semaphore, so concurrent UNPACK
+    // and PACK writers cannot lose an update. Produced by ResolveSemaphoreScope() for a Blackhole
+    // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
+    // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
+    // unlinked mirrors.
+    COMPUTE_ATOMIC = 3,
 };
 
 namespace tt::tt_metal {
@@ -40,6 +46,7 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
         case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
         case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
         case SemScope::EXTERNAL: return "EXTERNAL";
+        case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
     }
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
@@ -121,6 +128,10 @@ class JitBuildSettings {
 public:
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
+
+    // Zone tu-id registry key: identical across runs and across compile-time-arg variants of one source;
+    // get_full_kernel_name() embeds a per-variant hash.
+    virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
@@ -144,12 +155,15 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
+    // Callbacks are copied to isolate mutable target state, matching the overrides.
     virtual void process_dataflow_buffer_binding_handles(
         std::function<
+            // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
         const {}
     virtual void process_semaphore_binding_handles(
         std::function<
+            // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const {}
 
@@ -168,6 +182,7 @@ public:
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
+                                                    // NOLINTNEXTLINE(performance-unnecessary-value-param)
                                                     uint32_t num_runtime_field_crta_words)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
@@ -176,11 +191,20 @@ public:
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+
+    // PrefetcherPipe binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
+    //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
+    virtual void process_prefetcher_pipe_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
     virtual void process_tensor_binding_sequences(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
@@ -211,8 +235,10 @@ public:
     // Removal is tracked by issue #50953
     // Called to process named runtime arg namespaces for generated header (blaze_rt_args:: namespace).
     // Default no-op so Kernel subclasses that don't use named args compile unchanged.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
     virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}
     // Called to process named compile-time arg namespaces for generated header (blaze_ct_args:: namespace).
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
     virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const {}
     ////////////////////////////////////////////////////////////
     // Called to process additional include paths (e.g., kernel source directory for relative includes)

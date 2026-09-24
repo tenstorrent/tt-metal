@@ -16,6 +16,12 @@ selection.
   usable across the complete selected axis, or the minimum across both axes in
   full-mesh mode. An override must be greater than zero and no larger than
   every participating axis supports;
+- optional `subdevice_id` and `sub_core_grids` worker restriction. An explicit
+  grid must be fully contained in the selected TENSIX subdevice; an accidental
+  partial intersection is rejected;
+- optional caller-owned `ready_semaphore` and `data_valid_semaphore`. Supply
+  both or neither. The external pair enables the allocation-free,
+  no-internal-synchronization path required for concurrent subdevice dispatch;
 - a one-dimensional all-gather schedule: an integer `cluster_axis` runs
   independent collectives on the orthogonal axis, while `cluster_axis=None`
   makes every mesh device participate in one logical ring;
@@ -81,6 +87,42 @@ and a directly produced 32-way row-major layout, not an inherent claim of
 higher fabric bandwidth. Worker-count thresholds were qualified on the
 existing axis rings; measure the full-mesh path before assigning performance
 targets or retuning those thresholds.
+
+## External semaphore interface
+
+The overlap-capable call form is:
+
+```python
+ttnn.experimental.high_bw_all_gather(
+    input_tensor,
+    dim,
+    output_tensor,
+    cluster_axis=cluster_axis,
+    subdevice_id=gather_subdevice_id,
+    sub_core_grids=gather_core_grid,
+    num_links=2,
+    ready_semaphore=ready_semaphore,
+    data_valid_semaphore=data_valid_semaphore,
+)
+```
+
+The two semaphores are persistent runtime resources, not program structure.
+They must be distinct, belong to the input tensor's mesh device, use the same
+buffer type the legacy path would select (`L1_SMALL` when configured,
+otherwise `L1`), and cover every selected reader/writer core. Create them at
+zero over the complete gather strip, then perform one mesh-wide readiness
+barrier across every participating device before the first dispatch. The op
+does not allocate semaphores or call `Synchronize` when the pair is supplied.
+
+Successful kernels consume their ready and data-valid counts back to zero, so
+the same pair can be reused for adjacent invocations. Program-cache hits may
+also bind a different valid pair: semaphore addresses are excluded from the
+program hash and patched into runtime arguments on every call. If an invocation
+is aborted or fails after dispatch, the owner must join the affected subdevice,
+drain any in-flight work, and reset both semaphore values to zero before reuse.
+
+Omitting both handles preserves the existing behavior: the op allocates its
+own semaphores on a cache miss and performs the legacy readiness synchronization.
 
 ## Data flow
 

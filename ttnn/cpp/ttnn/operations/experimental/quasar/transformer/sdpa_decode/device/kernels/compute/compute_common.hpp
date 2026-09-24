@@ -29,23 +29,79 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+// ckernel_sfpu_sdpa.h has no Quasar implementation (raw WH/BH SFPI microcode for the fused
+// first-column softmax primitives). On Quasar, every helper below that used a fused primitive
+// is routed to generic SFPU tile ops instead (see the ARCH_QUASAR branches throughout this file).
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
+
+#ifdef ARCH_QUASAR
+// Tracks the packer's currently-selected output operand (the DFB whose descriptor/ring the packer HW is
+// pointed at). Reset once at compute-main entry via sdpa_pack_operand_tracker_reset().
+inline uint32_t g_last_pack_operand = 0xFFFFFFFFu;
+#endif
+
+// Switch the packer output operand to `out_dfb`.
+//
+// Quasar packer quirk: pack_reconfig_data_format(new) only updates the pack DATA FORMAT, not the output
+// ring/descriptor, when the pack output OPERAND changes (api/compute/reconfig_data_format.h NOTE
+// ARCH_QUASAR: "call pack_init(new_cb_id) before pack_tile when switching pack output operand"). Without a
+// pack_init the packer keeps writing to the previously-selected operand's ring -> the intended DFB is
+// never written (all-zero / silently-wrong output, no assert).
+//
+// But pack_init is a FULL packer re-init (state_configure<PACK> + llk_pack_init) that resets the packer's
+// per-tile dest write pointer / L1-accumulate section. Firing it at a SAME-operand / format-only reconfig
+// (e.g. an in-place accumulate that keeps packing the operand already selected) clobbers the in-progress
+// accumulation -> silently-wrong output. So pack_init must fire ONLY on a genuine operand CHANGE vs the
+// last ACTUAL pack. That is tracked at runtime here (not by per-site static classification) so runtime /
+// if constexpr branches and cross-helper operand carries are all handled: every operand switch routes
+// through this wrapper, so g_last_pack_operand is always the true last-packed operand. WH/BH need neither
+// (pack_reconfig alone re-targets there), so the gate is ARCH_QUASAR-only and the validated WH path is
+// byte-identical.
+ALWI void pack_reconfig_out(uint32_t out_dfb) {
+    pack_reconfig_data_format(out_dfb);
+#ifdef ARCH_QUASAR
+    if (out_dfb != g_last_pack_operand) {
+        pack_init(out_dfb);
+        g_last_pack_operand = out_dfb;
+    }
+#endif
+}
+
+// Reset the packer-operand tracker so the first pack of a fresh kernel launch always re-inits the packer
+// descriptor (a stale value carried across launches must never suppress that first pack_init).
+ALWI void sdpa_pack_operand_tracker_reset() {
+#ifdef ARCH_QUASAR
+    g_last_pack_operand = 0xFFFFFFFFu;
+#endif
+}
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
+#ifdef ARCH_QUASAR
+    // Quasar's llk_math_eltwise_unary_datacopy_init takes no PackMode param; its trailing template
+    // args are bools (unpack_to_dest, is_int_fpu_en, tilize).
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*unpack_to_dest*/,
+          false /*is_int_fpu_en*/>(cbid)));
+#else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
           PackMode::Default>(cbid)));
+#endif
 }
 
 /**
@@ -184,7 +240,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) 
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(out_dfb);
+        pack_reconfig_out(out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_dfb, (row_start_idx + i));
@@ -226,7 +282,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_in0.wait_front(num_tiles);
     dfb_out.reserve_back(rows);
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
@@ -256,7 +312,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_out.push_back(rows);
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
@@ -279,13 +335,17 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_dfb);
     copy_init(in_dfb);
     recip_tile_init();
-    pack_reconfig_data_format(in_dfb);
+    pack_reconfig_out(in_dfb);
 
     dfb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0);
-        MATH((recip_tile_first_column(0)));
+#ifdef ARCH_QUASAR
+        recip_tile(0);  // full-tile 1/x; only col 0 is consumed downstream
+#else
+        MATH((recip_tile_first_column(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, in_dfb);
@@ -308,7 +368,9 @@ template <
     bool write_result_inplace = true,
     bool do_reduce = true,
     VectorMode vector_mode = VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols, uint32_t in1_offset = 0) {
+    // in1_offset: ring-front offset of the in1 (max) block. 0 unless in1 is the "cur" half of the
+    // merged max DFB, in which case it is statistics_tiles so the reads skip the "prev" block.
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
     DataflowBuffer dfb_reduce(reduce_dfb);
@@ -322,14 +384,20 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     reconfig_data_format(in0_dfb, in1_dfb);
     sub_bcast_cols_init(in0_dfb, in1_dfb);
 
+#ifndef ARCH_QUASAR
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+#endif
+    // Quasar's exp only supports the default scale (1.0) and CLAMP_NEGATIVE=true (see the
+    // ARCH_QUASAR branch below, which applies scale_fp32 via a separate multiply before an
+    // unscaled exp). CLAMP_NEGATIVE matches the WH packer-ReLU-zeroes-negatives intent, so the
+    // ReLU config below stays shared for both archs (it's a no-op once inputs are already clamped).
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     dfb_in0.wait_front(rows * cols);
-    dfb_in1.wait_front(rows);
+    dfb_in1.wait_front(rows + in1_offset);
     if constexpr (do_reduce) {
         dfb_reduce.reserve_back(rows);
     }
@@ -345,12 +413,31 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+#ifdef ARCH_QUASAR
+            // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32 is
+            // applied via a separate multiply pass across all tiles in this dst block, then an
+            // unscaled exp pass. sub_tiles_bcast_cols is an FPU op (separate pipeline, no state to
+            // reissue); mul and exp are both SFPU op families, so each family's _init is issued once,
+            // immediately before its own loop over j, rather than interleaved per-tile.
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_unary_tile(j, scale_fp32);
+            }
+            exp_tile_init<true /* approx */>();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                exp_tile<true /* approx */, false /* scale_en */>(j);
+            }
+#else
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
+#endif
             tile_regs_commit();
 
             if constexpr (write_result_inplace) {
@@ -361,7 +448,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
-                pack_reconfig_data_format(in0_dfb);
+                pack_reconfig_out(in0_dfb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_dfb);
                 }
@@ -370,7 +457,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             }
 
             if constexpr (do_reduce) {
-                pack_reconfig_data_format(reduce_dfb);
+                pack_reconfig_out(reduce_dfb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -423,7 +510,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
     constexpr uint32_t num_tiles = rows * cols;
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
@@ -511,7 +598,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -589,7 +676,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Postcondition: in1_dfb has num_tiles consumed
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     add_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
@@ -612,6 +699,57 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     dfb_in0.push_back(num_tiles);
 }
 
+/**
+ * Merged online-softmax running-sum update, fused: sum = cur + prev * exp_max_diff, in place on the
+ * single merged sum DFB that holds both the prev block (ring front [0, num_tiles)) and the cur block
+ * (behind it at [cur_offset, cur_offset + num_tiles)), plus a separate exp_max_diff (emd) DFB.
+ *
+ * Why fused (not mul_block_inplace(prev) followed by add_block_inplace(cur, prev)): the two sum blocks
+ * sit contiguously in the ring exactly as reduce_c produced them (prev at the front, cur reserve_back'd
+ * right behind it). WH tile addressing is fifo_rd_ptr + page_size*tile_index with NO ring wrap, so an
+ * offset read (cur at cur_offset) is only valid while prev and cur are physically contiguous. An in-place
+ * mul_block_inplace on the front (prev) block pop_front/reserve_back/push_back-rotates the full
+ * 2*num_tiles-deep ring, which wraps the layout and makes the subsequent cur offset read fetch a wrong L1
+ * address (PCC ~0.70 on WH batch32). This fused pass reads both blocks straight from the contiguous
+ * reduce_c layout — mirroring the merged max path, whose sub_exp_block also reads prev@front + cur@offset
+ * contiguously and never rotates the merged buffer.
+ *
+ * emd is read (num_tiles at the front) but NOT popped — the out-accumulator scaling that follows pops it.
+ * num_tiles is statistics_tiles (== Sq_chunk_t); num_tiles + 1 must fit DST (one scratch reg for cur).
+ *
+ * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the front; prev+cur consumed.
+ */
+void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    DataflowBuffer d_sum(dfb_sum);
+    DataflowBuffer d_emd(dfb_emd);
+    d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
+    d_emd.wait_front(num_tiles);
+    reconfig_data_format(dfb_sum, dfb_emd);
+    pack_reconfig_out(dfb_sum);
+    const uint32_t cur_scratch = num_tiles;  // one scratch DST reg above the num_tiles result regs
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // dst[i] = prev[i] * emd[i]   (prev at front idx i, emd at front idx i)
+        mul_init(dfb_sum, dfb_emd);
+        mul_tiles(dfb_sum, dfb_emd, i, i, i);
+        // dst[cur_scratch] = cur[i]   (cur at ring offset cur_offset + i)
+        copy_init(dfb_sum);
+        copy_tile(dfb_sum, cur_offset + i, cur_scratch);
+        // dst[i] = prev[i]*emd[i] + cur[i]
+        add_binary_tile_init();
+        add_binary_tile(i, cur_scratch, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    d_sum.pop_front(cur_offset + num_tiles);  // drop the consumed prev AND cur blocks
+    d_sum.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        pack_tile(i, dfb_sum, i);
+    }
+    tile_regs_release();
+    d_sum.push_back(num_tiles);  // running sum is now the single contiguous front block
+}
+
 void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
@@ -625,7 +763,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -668,7 +806,7 @@ void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     }
 }
 
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
@@ -680,34 +818,51 @@ void exp_tile_first_column(uint32_t idst) {
         idst,
         VectorMode::C);
 }
-#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
+#endif  // (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 /**
  * out_dfb = exp((in0_dfb - in1_dfb) * scale_fp32)
  */
 template <uint32_t scale_fp32>
-void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
+void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles, uint32_t in1_offset = 0) {
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
     DataflowBuffer dfb_out(out_dfb);
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: out_dfb has num_tiles produced
     // Postcondition: in0_dfb and in1_dfb has num_tiles produced
+    // in1_offset: ring-front offset of the in1 block. 0 unless in1 is the "cur" half of the merged
+    // max DFB, in which case it is statistics_tiles so the reads skip the "prev" block at the front.
 
     sub_init(in0_dfb, in1_dfb);
+#ifndef ARCH_QUASAR
     exp_tile_init<EXP_APPROX_MODE>();
+#endif
     dfb_in0.wait_front(num_tiles);
-    dfb_in1.wait_front(num_tiles);
+    dfb_in1.wait_front(num_tiles + in1_offset);
     dfb_out.reserve_back(num_tiles);
 
+#ifndef ARCH_QUASAR
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
-        sub_tiles(in0_dfb, in1_dfb, i, i, 0);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+        sub_tiles(in0_dfb, in1_dfb, i, in1_offset + i, 0);
+#ifdef ARCH_QUASAR
+        // No fused exp_tile_first_column on Quasar, and Quasar's exp only supports scale=1.0 (see
+        // exp_init's static_assert), so scale_fp32 (already fp32-encoded) is applied via a separate
+        // multiply before an unscaled exp. Full-tile exp is numerically safe; only column 0 is
+        // consumed downstream.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, scale_fp32);
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(0);
+#else
+        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -716,14 +871,15 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     }
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    constexpr bool reuse_cur_max_tile = is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf;
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_fused_max_sub_exp_add_tile,
-        (is_fp32_dest_acc_en),
+        (is_fp32_dest_acc_en, reuse_cur_max_tile),
         idst,
         vector_mode,
         scale_bf16);
@@ -761,27 +917,90 @@ void correction_block(
 
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
-    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_2 = 2;  // cur_max output; also worker_sum input in FP32 half-sync
     constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
-    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+    constexpr uint32_t dst_reg_4 = 4;  // worker_sum in the five-tile layout
+    // #56171: FP32 half-sync only has slots 0..3. Reuse the cur_max output
+    // slot for worker_sum, which the SFPU loads before writing cur_max.
+    constexpr uint32_t worker_sum_dst = (DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf) ? dst_reg_2 : dst_reg_4;
+    static_assert(
+        worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
+        "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
 
+#ifndef ARCH_QUASAR
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
+#ifndef ARCH_QUASAR
         copy_init(dfb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
+#endif
+        // Each input switch must bind its own Quasar unpack buffer descriptor.
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_max);
+#endif
         copy_tile(dfb_prev_max, i, dst_reg_0);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_max);
+#endif
         copy_tile(dfb_worker_max, i, dst_reg_1);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_sum);
+#endif
         copy_tile(dfb_prev_sum, i, dst_reg_3);
-        copy_tile(dfb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_sum);
+#endif
+        copy_tile(dfb_worker_sum, i, worker_sum_dst);
+#ifdef ARCH_QUASAR
+        // No fused max/sub/exp/add primitive on Quasar. Decompose into generic dst-to-dst SFPU
+        // ops: cur_max = max(prev_max, worker_max); exp_prev/exp_worker = exp((prev/worker_max -
+        // cur_max) * scale); cur_sum = exp_prev*prev_sum + exp_worker*worker_sum. Full-tile ops
+        // are numerically safe here; only column 0 is consumed downstream. Each op family's _init
+        // reprograms shared SFPU state (e.g. LREG polynomial constants), so it must be re-issued
+        // immediately before that family's calculate call, not hoisted above the other families.
+        binary_max_tile_init();
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_2);  // cur_max = max(prev_max, worker_max)
+        sub_binary_tile_init();
+        sub_binary_tile(dst_reg_0, dst_reg_2, dst_reg_0);  // dst_reg_0 = prev_max - cur_max
+        sub_binary_tile(dst_reg_1, dst_reg_2, dst_reg_1);  // dst_reg_1 = worker_max - cur_max
+        // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32
+        // (already fp32-encoded) is applied via a separate multiply before an unscaled exp.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_reg_0, scale_fp32);  // dst_reg_0 = (prev_max - cur_max) * scale
+        mul_unary_tile(dst_reg_1, scale_fp32);  // dst_reg_1 = (worker_max - cur_max) * scale
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_0);  // dst_reg_0 = exp_prev
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_1);  // dst_reg_1 = exp_worker
+        mul_binary_tile_init();
+        mul_binary_tile(dst_reg_1, worker_sum_dst, worker_sum_dst);  // exp_worker * worker_sum
+        mul_binary_tile(dst_reg_0, dst_reg_3, dst_reg_3);            // exp_prev * prev_sum
+        add_binary_tile_init();
+        add_binary_tile(dst_reg_3, worker_sum_dst, dst_reg_3);  // cur_sum
+#else
+        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
+        // pack_tile selects the tile index; pack_reconfig_out selects the output buffer.
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff);
+#endif
         pack_tile(dst_reg_0, dfb_exp_max_diff);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff_2);
+#endif
         pack_tile(dst_reg_1, dfb_exp_max_diff_2);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_max);
+#endif
         pack_tile(dst_reg_2, dfb_cur_max);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_sum);
+#endif
         pack_tile(dst_reg_3, dfb_cur_sum);
         tile_regs_release();
         dfb_cur_max_obj.push_back(1);
@@ -806,6 +1025,9 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     // Postcondition: out_dfb has num_tiles produced
 
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
+    pack_reconfig_out(out_dfb);
+#endif
 
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
@@ -850,18 +1072,25 @@ void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
 
 void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
-    log_tile_init();
+    // log_tile SFPU is not wired up on Quasar; log_block is only used on the (untested) attention-sink
+    // path, so guard the log ops out there. On Quasar this degrades log_block to a plain copy — revisit
+    // when attention-sink is brought up on Quasar.
+#ifndef ARCH_QUASAR
+    MATH((log_tile_init()));
+#endif
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0 /*dst*/);
-        log_tile(0);
+#ifndef ARCH_QUASAR
+        MATH((log_tile(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -885,6 +1114,11 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
     sub_init(in0_dfb, in1_dfb);
+#ifdef ARCH_QUASAR
+    // Quasar ships a generic accurate sigmoid SFPU op, so there's no need for the manual
+    // exp(-x)/add-1/reciprocal decomposition the WH/BH fused fast path uses below.
+    sigmoid_tile_init();
+#else
     exp_tile_init<false>();
     // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
@@ -895,10 +1129,14 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_dfb, in1_dfb, i, i, 0);
+#ifdef ARCH_QUASAR
+        sigmoid_tile(0);  // full-tile accurate sigmoid(in0-in1); only col 0 is consumed downstream
+#else
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -911,7 +1149,8 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
             VectorMode::C,
             0x3F800000 /*scalar*/));
         // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -920,7 +1159,7 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_out.push_back(num_tiles);
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     SFPU_UNARY_CALL(
@@ -961,8 +1200,12 @@ void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32
         //     const_1_fp32 /*beta_reciprocal*/,
         //     const_20_fp32 /*threshold*/,
         //     (int)VectorMode::C)));
-
-        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));
+#ifdef ARCH_QUASAR
+        // Generic full-tile softplus; only col 0 is consumed downstream.
+        softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
+#else
+        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));  // WH/BH fused fast path
+#endif
         // Negate the output of softplus
         negative_tile(0);
         tile_regs_commit();
@@ -1133,7 +1376,7 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     dfb_in1.wait_front(N);
     dfb_out.wait_front(M);
 
@@ -1194,7 +1437,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t start = num_cols - num_padded;
 
     reconfig_data_format_srca(neginf_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(neginf_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1226,7 +1469,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_dfb tile-row of this query band; nonzero when heads span >1 DEST band
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1264,7 +1507,7 @@ void apply_causal_mask_lightweight(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1754,7 +1997,7 @@ void sdpa_inner_loop(
              * matmul_blocks internally waits on both inputs
              */
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
                 dfb_k_in,
@@ -1922,7 +2165,7 @@ void sdpa_inner_loop(
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
             reconfig_data_format(dfb_v_in, dfb_qk_im);
-            pack_reconfig_data_format(alias_mm2_cur_out);
+            pack_reconfig_out(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
@@ -2069,7 +2312,7 @@ void sdpa_inner_loop(
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // dfb_out = dfb_prev_out - alias_sub
                 reconfig_data_format(dfb_prev_out, alias_sub);
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 sub_block(dfb_prev_out, alias_sub, dfb_out, out_chunk_tiles);
                 dfb_prev_out_obj.pop_front(out_chunk_tiles);
                 DataflowBuffer(alias_cur_out).pop_front(out_chunk_tiles);
@@ -2078,7 +2321,7 @@ void sdpa_inner_loop(
                 // alias_sig = sigmoid(dfb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // dfb_lse_out = dfb_lse_in - alias_cur_lse
-                pack_reconfig_data_format(alias_sig);
+                pack_reconfig_out(alias_sig);
                 reconfig_data_format(dfb_lse_in, alias_cur_lse);
                 logsigmoid_sub(dfb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(dfb_lse_in, alias_sig, dfb_lse_out, Sq_chunk_t);
@@ -2086,10 +2329,10 @@ void sdpa_inner_loop(
                 DataflowBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
                 dfb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 copy_block(alias_mm2_prev_out, dfb_out, out_chunk_tiles);
 
-                pack_reconfig_data_format(dfb_lse_out);
+                pack_reconfig_out(dfb_lse_out);
                 copy_block(alias_prev_max, dfb_lse_out, Sq_chunk_t);
             }
         } else {
@@ -2097,7 +2340,7 @@ void sdpa_inner_loop(
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            pack_reconfig_data_format(dfb_out);
+            pack_reconfig_out(dfb_out);
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, dfb_out);
 
             // free up dfb_prev_max after K chunks

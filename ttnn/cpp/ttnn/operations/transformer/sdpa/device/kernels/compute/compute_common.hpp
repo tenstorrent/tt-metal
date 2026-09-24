@@ -312,10 +312,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     reconfig_data_format(in0_cb, in1_cb);
     sub_bcast_cols_init(in0_cb, in1_cb);
 
-    // The exponential function uses InputClamping::None for better performance. This version
-    // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
-    // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    // Approximate exp skips negative-input clamping for speed. Inputs below about -88 can
+    // produce negative outputs, which packer ReLU clears. Keep this path for partial faces.
+    // The accurate branch below handles full RC tiles.
+    if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+        exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    }
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     cb_in0.wait_front(rows * cols);
@@ -337,9 +339,22 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                // A 32x32 tile has four 16x16 faces, each requiring eight SFPU iterations.
+                // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+                if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+                    exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(
+                        j, vector_mode_exp);
+                } else {
+                    // Apply the full FP32 attention scale once before accurate exponentiation.
+                    // The init scale 0x3F800000 is the IEEE-754 encoding of 1.0f.
+                    // Negative clamping protects masked/large-negative scores in accurate BF16 exp.
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(j, scale_fp32);
+                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);
+                }
             }
             tile_regs_commit();
 
@@ -703,11 +718,12 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 #ifdef TRISC_MATH
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    constexpr bool reuse_cur_max_tile = is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf;
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_fused_max_sub_exp_add_tile,
-        (is_fp32_dest_acc_en),
+        (is_fp32_dest_acc_en, reuse_cur_max_tile),
         idst,
         vector_mode,
         scale_bf16);
@@ -745,9 +761,15 @@ void correction_block(
 
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
-    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_2 = 2;  // cur_max output; also worker_sum input in FP32 half-sync
     constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
-    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+    constexpr uint32_t dst_reg_4 = 4;  // worker_sum in the five-tile layout
+    // #56171: FP32 half-sync only has slots 0..3. Reuse the cur_max output
+    // slot for worker_sum, which the SFPU loads before writing cur_max.
+    constexpr uint32_t worker_sum_dst = (DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf) ? dst_reg_2 : dst_reg_4;
+    static_assert(
+        worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
+        "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
 
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -759,7 +781,7 @@ void correction_block(
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
-        copy_tile(cb_worker_sum, i, dst_reg_4);
+        copy_tile(cb_worker_sum, i, worker_sum_dst);
         MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
         tile_regs_commit();
         tile_regs_wait();

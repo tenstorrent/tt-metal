@@ -6,6 +6,10 @@
 // It is currently here while its reliability is proven
 
 #pragma once
+
+#if defined(NOC_ATT_ENABLED)
+#error "sharding_addrgen composes raw XY NoC addresses and is not ATT-aware"
+#endif
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #include "api/dataflow/dataflow_api.h"

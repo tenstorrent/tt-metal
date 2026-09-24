@@ -30,7 +30,6 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
@@ -251,7 +250,9 @@ public:
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return DeviceOperation::compute_program_hash(attrs, tensor_args);
+            // Fold type_hash so distinct ops cannot alias on a custom-hash collision
+            return ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::compute_program_hash(attrs, tensor_args));
         } else {
             return ttsl::hash::hash_objects_with_default_seed(
                 ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
@@ -892,19 +893,32 @@ public:
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
+            // Tracks which enumeration slots have already been claimed by an earlier
+            // TensorParameter in this loop. Without this, two parameters aliasing the same
+            // tensor (e.g. batch_norm's running_mean == running_var) would both resolve to
+            // the *first* matching slot via find_if, collapsing their indices together. On a
+            // later cache hit with distinct-but-same-spec tensors, the collapsed index map is
+            // replayed verbatim, silently rebinding the second parameter to the first tensor.
+            // Scanning left-to-right and skipping claimed slots recovers the intended
+            // positional binding (first occurrence -> first slot, second occurrence -> next
+            // matching unclaimed slot) instead of aliasing both onto the same index.
+            std::vector<bool> claimed(mesh_tensors.size(), false);
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(tensor_arg);
-                auto it = std::find_if(mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& wrapped) {
-                    return &wrapped.get() == target;
-                });
+                std::size_t idx = 0;
+                for (; idx < mesh_tensors.size(); ++idx) {
+                    if (!claimed[idx] && &mesh_tensors[idx].get() == target) {
+                        break;
+                    }
+                }
                 TT_FATAL(
-                    it != mesh_tensors.end(),
+                    idx != mesh_tensors.size(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                bindings.push_back(
-                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
+                claimed[idx] = true;
+                bindings.push_back({tensor_parameter_name, idx});
             }
             return bindings;
         }
@@ -1137,19 +1151,10 @@ public:
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash;
-
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else {
-            hash =
-                ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
-        }
-
-        // Combine with the mesh coordinates the workload is targeting.
-        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-            hash = ttsl::hash::hash_objects(hash, coord);
-        }
+        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
+        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+        std::for_each(
+            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
         return hash;
     }
 
@@ -1173,10 +1178,9 @@ public:
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
             key += ttsl::hash::canonical_key(attrs, tensor_args);
-            for (const auto& coord :
-                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-                key += ttsl::hash::canonical_key(coord);
-            }
+            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+            std::for_each(
+                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
             return key;
         }
     }

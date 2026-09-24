@@ -908,9 +908,9 @@ template <ttnn::unique_string Name, typename Func>
 void bind_unary_backward_gelu(
     nb::module_& mod,
     Func func,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    std::string parameter_a_value,
+    const std::string_view parameter_name,
+    const std::string_view parameter_doc,
+    const std::string_view parameter_default,
     const std::string_view description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -923,9 +923,9 @@ void bind_unary_backward_gelu(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (string): {3}. Defaults to `{4}`.
+            {2} (ttnn.GeluVariant, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -939,15 +939,15 @@ void bind_unary_backward_gelu(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE, ROW_MAJOR
+                 - TILE
 
             {7}
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
+        parameter_name,
+        parameter_doc,
+        parameter_default,
         description,
         supported_dtype,
         note);
@@ -959,7 +959,7 @@ void bind_unary_backward_gelu(
         nb::arg("grad_tensor"),
         nb::arg("input_tensor"),
         nb::kw_only(),
-        nb::arg(parameter_name_a.c_str()) = parameter_a_value,
+        nb::arg("variant") = ttnn::operations::unary::GeluVariant::ACCURATE,
         nb::arg("memory_config") = nb::none(),
         nb::arg("input_grad") = nb::none());
 }
@@ -1119,12 +1119,11 @@ void py_module(nb::module_& mod) {
     bind_unary_backward_gelu<"gelu_bw">(
         mod,
         &ttnn::gelu_bw,
-        "approximate",
-        "Approximation type",
-        "none",
-        R"doc(Performs backward operations for gelu on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
-        R"doc(BFLOAT16)doc",
+        "variant",
+        "Select GELU implementation",
+        "`ttnn.GeluVariant.Accurate`",
+        R"doc(Performs backward operations for GELU on :attr:`input_tensor`, with given :attr:`grad_tensor` and :attr:`variant`.)doc",
+        R"doc(BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     bind_unary_backward_unary_optional_float<"pow_bw">(

@@ -91,6 +91,21 @@ run_realtime_profiler_test() {
     pytest tests/ttnn/tracy/test_realtime_profiler.py
 }
 
+run_streaming_profiler_test() {
+    remove_default_log_locations
+    # Blackhole only: the streaming profiler relay is a resident kernel on the DRISC (DRAM) cores; the pytests self-skip elsewhere.
+    # Host-only unit tests first, then the on-device workload and Tracy capture.
+    ./build/test/tt_metal/tools/profiler/test_streaming_profiler_decode
+    ./build/test/tt_metal/tools/profiler/test_streaming_profiler_fetch
+    pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
+}
+
+run_sync_events_test() {
+    remove_default_log_locations
+    # Test sync event instrumentation for CB and semaphore APIs (streaming profiler only).
+    pytest tests/ttnn/tracy/test_sync_events_profiler.py
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -99,6 +114,8 @@ run_profiling_test() {
     run_perf_op_report_test
     run_realtime_profiler_test
     run_accumulate_profiler_test
+    run_streaming_profiler_test
+    run_sync_events_test
 }
 
 main() {

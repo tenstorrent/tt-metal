@@ -22,6 +22,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
     PerfRunType,
     StableSort,
@@ -42,6 +43,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FUSED_SORT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -439,6 +441,7 @@ def run_case(
                 ITERATIONS(iterations),
                 FAST_MODE(fast_mode),
                 STABLE_SORT(StableSort.No),
+                FUSED_SORT(FusedSort.No),
                 CLAMP_NEGATIVE(True),
             ],
             runtimes=[
@@ -469,6 +472,7 @@ def run_case(
                 ITERATIONS(iterations),
                 FAST_MODE(fast_mode),
                 STABLE_SORT(StableSort.No),
+                FUSED_SORT(FusedSort.No),
                 CLAMP_NEGATIVE(True),
             ],
             runtimes=[

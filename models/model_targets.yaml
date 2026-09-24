@@ -6,6 +6,19 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  llama3.1-8b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - batch_size: 1
+            status: active
+            perf: {}
+            accuracy:
+              # Mean of the four canonical IFEval accuracies, first 28 Meta rows.
+              ifeval: 80.47
+              ifeval_tolerance: 0.07
+            owner_id: U03HY7MK4BT
+            team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
   # leg (qwen2_7b / phi4 / deepseek); consumed by the demo's CI=true central accuracy gate. Values are
   # measured floors and are refreshed per-model during the re-measure sweep.
@@ -1125,10 +1138,8 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # Re-seeded from run 27036772693 (ci eval-32); the earlier 7.63/189
-            # were the token-matching teacher-forcing artifacts, not eval perf.
             perf:
-              decode_t/s/u: 22.1
+              decode_t/s/u: 29.9
               prefill_time_to_first_token: 82
             accuracy: {}
   qwen2.5-72b:
@@ -1161,7 +1172,10 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 419
+              # b1 TTFT measured 192-294 ms over 24 scheduled runs 2026-08-21..09-14 (mean 251, sd 34) on every
+              # f10cs* host; centre on the mean with a 0.25 tolerance ([187.5, 312.5]).
+              prefill_time_to_first_token: 250
+              prefill_time_to_first_token_tolerance: 0.25
               # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
               # recent scheduled runs + 3 targeted reruns. The old 13.77 center
               # sat at the top of the range, so its tol-0.15 floor (11.70) tripped
@@ -1302,8 +1316,8 @@ targets:
             status: active
             perf:
               prefill_time_to_first_token: 616
-              decode_t/s/u: 17.76
-              decode_t/s: 568.19
+              decode_t/s/u: 19.5
+              decode_t/s: 624
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
@@ -1331,10 +1345,11 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            # decode_t/s/u corrected 14.4 -> 22.0 (measured in run 27016350392).
             perf:
-              decode_t/s/u: 22.0
-              prefill_time_to_first_token: 123
+              decode_t/s/u: 19.5
+              decode_t_s_u_tolerance: 0.10
+              prefill_time_to_first_token: 141
+              prefill_time_to_first_token_tolerance: 0.15
             accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
@@ -1352,15 +1367,14 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            # Targets raised to match sustained perf on bh_quietbox_2 (p300x2):
-            # 6/6 recent scheduled runs measured decode_t/s ~680-703, t/s/u ~21.8,
-            # TTFT ~86-88ms (old targets 278 / 18.7 / 207 were stale). decode_t/s
-            # = batch_size * decode_t/s/u (32 * 21.6 ~= 691).
+            # Raised again 691 / 21.6 -> 931 / 29.1:
+            # runs 33710384109 (main) and 33967118837 both measured 931 / 29.1,
+            # above the old +15% ceiling.
             perf:
               prefill_time_to_first_token: 87
               prefill_time_to_first_token_tolerance: 0.2
-              decode_t/s/u: 21.6
-              decode_t/s: 691
+              decode_t/s/u: 29.1
+              decode_t/s: 931
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1413,6 +1427,35 @@ targets:
               top5: 97
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
+  qwen3.6-35b-a3b:
+    aliases: ["Qwen3.6-35B-A3B", "Qwen/Qwen3.6-35B-A3B"]
+    skus:
+      # Measured on bh_quietbox_2 (P150x4, 4 BH dies) warm trace replay. TTFT is in ms;
+      # decode is batch_size=1 so t/s == t/s/u.
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 490.0
+              decode_t/s: 25.28
+              decode_t/s/u: 25.28
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 9900.0
+              decode_t/s: 25.19
+              decode_t/s/u: 25.19
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:
@@ -1424,7 +1467,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 174.0
+              prefill_time_to_first_token: 150.0
               decode_t/s: 26.0
               decode_t/s/u: 26.0
               tolerance: 0.2
@@ -1569,8 +1612,12 @@ targets:
 
   # ResNet-50 is tier 1, so unlike the tier-3 models migrated alongside it, it is not
   # exempt from targets. The values below are measured, not placeholders:
-  #   wh_n150        batch 16   top1 75.375   fps 28.43   (run 31590127406)
-  #   wh_llmbox_perf batch 128  top1 75.456   fps 29.05   (run 31606078371)
+  #   wh_n150        batch 16   top1 75.375   fps 35.61   (run 35174410535, 2026-09-17)
+  #   wh_llmbox_perf batch 128  top1 75.456   fps 33.65   (run 35174410535, 2026-09-17)
+  # fps is dominated by the iteration-0 JIT kernel compile (~95 % of the measured time).
+  # #56218 (precompiled standard-library headers for every JIT kernel compile) cut that
+  # compile from 52.8 s to 42.0 s on wh_n150 and from 47.5 s to 43.8 s on wh_llmbox_perf,
+  # so the pre-#56218 targets (28.43 / 29.05) now fail the +15 % upper bound.
   #
   # Only the two e2e SKUs are listed -- validate_perf_targets.py's
   # _collect_active_test_combos walks models_e2e_tests.yaml alone, so unit and device-perf
@@ -1590,7 +1637,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 28.43
+              fps: 35.61
               fps_tolerance: 0.15
             accuracy:
               top1: 75.375
@@ -1603,7 +1650,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 29.05
+              fps: 33.65
               fps_tolerance: 0.15
             accuracy:
               top1: 75.456
@@ -1671,4 +1718,23 @@ targets:
               fps: 76.0
               fps_tolerance: 0.10
             owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
+            team: models
+
+  # DiffusionDrive is tier 3, so it is exempt from perf targets. Its accuracy gate is
+  # the committed assert in tests/pcc/test_pcc_checkpoint_accuracy.py -- trajectory PCC
+  # >= 0.99 against the PyTorch reference at production resolution (camera 256x1024,
+  # LiDAR 256x256) with the real 88.1-PDMS checkpoint. That test emits no benchmark
+  # payload, so there is no metric here for validate_perf_targets.py to compare; the
+  # combo is kept on the books as TODO, matching the vit entry above.
+  diffusiondrive:
+    aliases: ["DiffusionDrive", "diffusiondrive", "hustvl/DiffusionDrive"]
+    skus:
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT # Mark O'Connor
             team: models

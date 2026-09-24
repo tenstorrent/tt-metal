@@ -11,6 +11,9 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -91,18 +94,30 @@ void kernel_main() {
         }
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
-        rotated_in_interm_dfb_obj.wait_front(Wt);
-
         mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_dfb, sin_dfb, j, j, j);
-            pack_tile(j, sin_interm_dfb, j);
-        }
-        REL();
-        sin_interm_dfb_obj.push_back(Wt);
-        rotated_in_interm_dfb_obj.pop_front(Wt);
+        // sin_interim = rotated * sin
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    rotated_in_interm_dfb,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::InputTileMapping::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    sin_dfb,
+                    ckl::BroadcastDim::Row,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Block,
+                    ckl::DataFormatReconfig::Disabled)>{},
+            ckl::PackTile<ckl::output(
+                sin_interm_dfb,
+                ckl::ReservePolicy::None,
+                ckl::PushPolicy::AtEnd,
+                ckl::DataFormatReconfig::Disabled)>{});
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

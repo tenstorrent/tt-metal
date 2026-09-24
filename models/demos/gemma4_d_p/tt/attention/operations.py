@@ -18,7 +18,6 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
 
 from .weights import AttentionWeights
 
@@ -61,37 +60,26 @@ def split_qkv_heads_prefill(
     )
 
 
-def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None):
+def apply_per_head_norm(tensor, eps, weight=None, memory_config=None):
     """Normalize each token and head independently along head_dim."""
     orig_shape = tensor.shape
-    head_dim = orig_shape[-1]
-    if len(orig_shape) == 4 and orig_shape[0] > 1:
-        batch, num_heads, seq_len, _ = orig_shape
-        flat = ttnn.reshape(tensor, (1, 1, batch * num_heads * seq_len, head_dim))
-    else:
-        num_heads = orig_shape[1]
-        seq_or_batch = orig_shape[2]
-        flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
-    if with_scale and weight is not None:
-        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps, memory_config=memory_config)
-    else:
-        normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
+    _, num_heads, seq_len, head_dim = orig_shape
+    flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_len, head_dim))
+
+    # Use HiFi4 and fp32 acc for greater accuracy
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tensor.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    normed = ttnn.rms_norm(
+        flat,
+        weight=weight,
+        epsilon=eps,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     return ttnn.reshape(normed, orig_shape)
-
-
-def concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Concatenate prefill attention heads into the local hidden dimension."""
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
-
-
-def apply_output_projection(tensor, weights: AttentionWeights):
-    """Apply output projection (no bias for Gemma4)."""
-    out = ttnn.linear(tensor, weights.o_proj)
-    tensor.deallocate(True)
-    return out
-
-
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
-    return ccl_allreduce(tensor, mesh_config, ccl_manager)

@@ -380,7 +380,11 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
         f"wait_ready_ms={wait_ready_timeout_ms}"
     )
     client.send_kv_chunk_table(table_path)
-    client.wait_ready(wait_ready_timeout_ms)
+    try:
+        client.wait_ready(wait_ready_timeout_ms)
+    except RuntimeError as e:
+        logger.warning(f"[migration] WORKER_READY not observed ({e}); serving anyway")
+        return client
     logger.info(f"[migration] WORKER_READY: table={table_path}")
 
     return client

@@ -101,7 +101,10 @@ inline void calculate_sfpu_binary(
                 }
                 v_endif;
             }
-            v_elseif(in0 == in1) { result = 1.0f; }
+            // sfpi's vFloat equality subtracts the operands as integers and tests the
+            // difference as sign-magnitude, so it matches x == -x as well as x == x. Take the
+            // magnitude from the shortcut and the sign from the quotient, correct for both.
+            v_elseif(in0 == in1) { result = sfpi::copysgn(sfpi::vFloat(1.0f), result); }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {
