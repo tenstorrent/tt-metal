@@ -63,7 +63,14 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 ## Task 2 findings
 
 - One-tile BF16 Q chunks hung: the first PV group assumed two tile rows (fixed in 352a6f49).
-- Reported, not yet reproduced here: dense D64 E_bfp8 Q64/K352 hang (blocking agent).
+- LOW_PRECISION hung whenever a QK or PV subblock was one tile wide (odd K chunks such as
+  K32/K96/K352, all KV formats; the blocking agent's D64 E_bfp8 Q64/K352 report). LoFi no-MOP
+  matmuls record the reuse-side source clear in the replay image, and `mm_no_mop_reinit_short`
+  does not re-record it, so a 2x1 QK replay reused by a 2x4 PV matmul cleared the wrong source.
+  Fixed in 3fda4059 (`recipe_mm_reinit`); qualified geometries keep their instruction stream.
+  The legacy streaming kernel (`compute_streaming.hpp`) uses the same reinit, so legacy SDPA with
+  a LoFi compute config and a one-tile-wide QK subblock is likely affected too (inferred from
+  code, not reproduced).
 
 ## Task 6 notes (masks)
 
