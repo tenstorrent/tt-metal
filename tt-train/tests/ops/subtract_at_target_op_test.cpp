@@ -188,6 +188,35 @@ TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
     EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
 }
 
+TEST_F(SubtractAtTargetTest, TargetUpdateRoundsBfloat16TiesToEven) {
+    using namespace ttml;
+
+    // These two rows exercise both tie parities. 1 - 2^-9 is halfway between
+    // 0x3f7f and even 0x3f80, while 0.99609375 - 2^-9 is halfway between even
+    // 0x3f7e and 0x3f7f. Round-to-nearest-even must select the even endpoint in
+    // each case; the old truncating conversion selected 0x3f7f in the first row.
+    xt::xarray<float> input_t = xt::ones<float>({1U, 1U, 2U, 32U});
+    input_t(0, 0, 1, 0) = 0.99609375F;
+    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({1U, 2U});
+
+    auto input_dev = core::from_xtensor(input_t, &autograd::ctx().get_device());
+    auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+
+    auto result = metal::subtract_at_target(
+        input_dev,
+        target_dev,
+        /*local_V=*/32U,
+        /*cluster_axis=*/std::nullopt,
+        /*first_v=*/0U,
+        /*subtract_value=*/1.0F / 512.0F);
+
+    const auto result_xt = core::to_xtensor(result);
+    EXPECT_FLOAT_EQ(result_xt(0, 0, 0, 0), 1.0F);
+    EXPECT_FLOAT_EQ(result_xt(0, 0, 1, 0), 0.9921875F);
+    EXPECT_FLOAT_EQ(result_xt(0, 0, 0, 1), 1.0F);
+}
+
 TEST_F(SubtractAtTargetTest, CustomSubtractValuePartialVocab) {
     using namespace ttml;
 
