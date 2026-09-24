@@ -2564,7 +2564,7 @@ bool build_sat_placement_constraints(
         // capping the number of occupied hosts at ceil(meshes / capacity) forces every used host to be
         // packed full. Unlike per-host fill-all, this is a GLOBAL constraint the solver cannot dodge by
         // spreading across more locally-"full" hosts. If the cap is infeasible at the current candidate
-        // seats, solve_sat_placement retries without it (fallback) before growing pools.
+        // seats, next() grows pools and only drops the cap after growth is exhausted.
         std::size_t asics_per_mesh = 0;
         for (const auto& [seat, asics] : seat_to_asics) {
             (void)seat;
@@ -2583,65 +2583,16 @@ bool build_sat_placement_constraints(
         const std::size_t capacity = (asics_per_mesh > 0) ? (max_host_asics / asics_per_mesh) : 0;
         if (capacity > 0) {
             const std::size_t k = (pools.size() + capacity - 1) / capacity;
-            constraints.set_max_same_rank_groups_used(k);
+            // Only cap when it can actually reduce the host count. If the meshes need every available host
+            // anyway (k >= host groups -- e.g. a superpod that fully packs all its hosts), the cap constrains
+            // nothing but bolts an expensive at-most-k CNF onto an already-large solve, so the grow loop stalls.
+            // Skip it: the unconstrained solve already yields the only (all-hosts-full) packing.
+            if (k < host_seat_groups.size()) {
+                constraints.set_max_same_rank_groups_used(k);
+            }
         }
     }
     return true;
-}
-
-// Stage 2: solve STRICT then RELAXED for a mesh-to-seat assignment.
-std::vector<MappingResult<GlobalMeshId, const Candidate*>> solve_sat_placement(
-    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
-    const AdjacencyGraph<const Candidate*>& seat_graph,
-    const MappingConstraints<GlobalMeshId, const Candidate*>& constraints,
-    bool relaxed_inter_mesh_policy,
-    std::size_t& attempts,
-    PlacementSolveStats* stats,
-    const std::vector<std::map<GlobalMeshId, const Candidate*>>& excluded_mappings = {},
-    bool unique_shapes = false) {
-    std::vector<MappingResult<GlobalMeshId, const Candidate*>> results;
-    auto solve_with = [&](const MappingConstraints<GlobalMeshId, const Candidate*>& cons) -> bool {
-        for (const bool relaxed : {false, true}) {
-            if (relaxed && !relaxed_inter_mesh_policy) {
-                continue;
-            }
-            ++attempts;
-            const auto encode_start = std::chrono::steady_clock::now();
-            TopologyMappingEnumerationSession<GlobalMeshId, const Candidate*> session(
-                mesh_level_graph,
-                seat_graph,
-                cons,
-                relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT,
-                /*quiet_mode=*/true,
-                TopologyMappingSolverEngine::Sat,
-                unique_shapes);
-            for (const auto& mapping : excluded_mappings) {
-                session.exclude_mapping(mapping);
-            }
-            const auto encode_end = std::chrono::steady_clock::now();
-            MappingResult<GlobalMeshId, const Candidate*> result = session.next();
-            const auto solve_end = std::chrono::steady_clock::now();
-            if (stats != nullptr) {
-                stats->master_encode_elapsed +=
-                    std::chrono::duration_cast<std::chrono::microseconds>(encode_end - encode_start);
-                stats->master_solve_elapsed +=
-                    std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
-                stats->master_sat_attempts = attempts;
-            }
-            if (!result.success) {
-                continue;
-            }
-            results.push_back(std::move(result));
-            return true;
-        }
-        return false;
-    };
-    // Solve with the constraints as given (the HARD host-count cap when the caller set one). If the cap is
-    // infeasible at the current candidate seats this returns empty on purpose, so the caller's grow loop adds
-    // seats and retries -- growing candidates is what makes a tight (minimum-host) packing representable. The
-    // cap is only dropped as a last resort, after growth is exhausted (see SatPlacementEnumerationSession::next).
-    (void)solve_with(constraints);
-    return results;
 }
 
 // Stage 3: decode chosen seats into ASIC placements.
@@ -2846,7 +2797,79 @@ void SatPlacementEnumerationSession::finish_init(
         sat_intra_mesh_mode_by_mesh_,
         allowed_asics_by_mesh));
     grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
+    master_solve_ = std::make_unique<MasterSolve>(this);
     ready_ = true;
+}
+
+bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap) {
+    reset();
+    AdjacencyGraph<const Candidate*> seat_graph =
+        build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
+    if (!(build_sat_placement_constraints(
+              *owner_->pools_, *owner_->physical_system_descriptor_, owner_->constraints_) &&
+          owner_->apply_extra_constraints(owner_->constraints_))) {
+        return false;
+    }
+    if (drop_cap) {
+        owner_->constraints_.set_max_same_rank_groups_used(0);
+    }
+    const auto encode_start = std::chrono::steady_clock::now();
+    session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
+        owner_->mesh_level_graph_,
+        seat_graph,
+        owner_->constraints_,
+        relaxed_mode ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        owner_->unique_shapes_);
+    for (const auto& mapping : owner_->excluded_seat_maps()) {
+        session->exclude_mapping(mapping);
+    }
+    if (owner_->stats_ != nullptr) {
+        owner_->stats_->master_sat_vars = seat_graph.get_nodes().size();
+        owner_->stats_->master_sat_clauses = seat_graph.get_nodes().size();
+        owner_->stats_->master_encode_elapsed +=
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start);
+    }
+    relaxed = relaxed_mode;
+    drop_host_cap = drop_cap;
+    return true;
+}
+
+MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
+    MappingResult<MeshId, const Candidate*> failure;
+    failure.success = false;
+    const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_;
+    // Unchanged mode and host cap: this is another model from the session already encoded.
+    if (!matches(relaxed_mode, drop_cap) && !restart(relaxed_mode, drop_cap)) {
+        return failure;
+    }
+    ++owner_->attempts_;
+    const auto solve_start = std::chrono::steady_clock::now();
+    MappingResult<MeshId, const Candidate*> result = session->next();
+    if (owner_->stats_ != nullptr) {
+        owner_->stats_->master_solve_elapsed +=
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - solve_start);
+        owner_->stats_->master_sat_attempts = owner_->attempts_;
+    }
+    return result;
+}
+
+void SatPlacementEnumerationSession::MasterSolve::block_assigned(const AssignedMeshes& assigned) {
+    if (session == nullptr || !session->started()) {
+        return;
+    }
+    std::map<MeshId, const Candidate*> seats;
+    for (const PlacedMesh& placed : assigned) {
+        const std::set<const Candidate*> matching = owner_->seats_matching(placed.mesh_id, placed.placement.asics);
+        if (matching.empty()) {
+            continue;
+        }
+        seats.emplace(placed.mesh_id, *matching.begin());
+    }
+    if (!seats.empty()) {
+        session->exclude_mapping(seats);
+    }
 }
 
 SatPlacementEnumerationSession::~SatPlacementEnumerationSession() = default;
@@ -2855,6 +2878,10 @@ void SatPlacementEnumerationSession::invalidate_pending_solve() {
     pending_.clear();
     pending_index_ = 0;
     solved_ = false;
+    // Constraints changed: the live encoding no longer matches. The next placement builds a new session.
+    if (master_solve_ != nullptr) {
+        master_solve_->reset();
+    }
 }
 
 std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerationSession::seats_matching(
@@ -2983,9 +3010,12 @@ bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assig
     }
     // Exclude the *combination* (this exact set of mesh footprints), not each mesh placement independently.
     // Forbidding each footprint on its own would also rule out other valid mappings that happen to reuse one
-    // of these footprints. remember_yielded() records the combination so the next solve excludes just it,
-    // matching excluded_seat_maps() semantics.
+    // of these footprints. remember_yielded() records the combination so a later rebuilt solve excludes just
+    // it. A live session is blocked in place so the next next() skips it without re-encoding.
     remember_yielded(assigned);
+    if (master_solve_ != nullptr) {
+        master_solve_->block_assigned(assigned);
+    }
     return true;
 }
 
@@ -2993,99 +3023,46 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (!ready_) {
         return {};
     }
-    auto record_success = [&](const AssignedMeshes& assigned) {
+    if (pending_index_ < pending_.size()) {
+        remember_yielded(pending_[pending_index_]);
+        AssignedMeshes assigned = pending_[pending_index_++];
         if (stats_ != nullptr) {
             stats_->meshes_placed = assigned.size();
             stats_->success = stats_->meshes_total != 0 && stats_->meshes_placed == stats_->meshes_total;
         }
-    };
-    if (pending_index_ < pending_.size()) {
-        remember_yielded(pending_[pending_index_]);
-        AssignedMeshes assigned = pending_[pending_index_++];
-        record_success(assigned);
         return assigned;
     }
     if (solved_) {
         return {};
     }
 
-    std::vector<MappingResult<GlobalMeshId, const Candidate*>> results;
-    auto try_solve = [&]() {
-        AdjacencyGraph<const Candidate*> seat_graph = build_sat_placement_seat_graph(*pools_, mesh_level_graph_);
-        if (!(build_sat_placement_constraints(*pools_, *physical_system_descriptor_, constraints_) &&
-              apply_extra_constraints(constraints_))) {
-            return false;
-        }
-        if (stats_ != nullptr) {
-            stats_->master_sat_vars = seat_graph.get_nodes().size();
-            stats_->master_sat_clauses = seat_graph.get_nodes().size();
-        }
-        results = solve_sat_placement(
-            mesh_level_graph_,
-            seat_graph,
-            constraints_,
-            relaxed_inter_mesh_policy_,
-            attempts_,
-            stats_,
-            excluded_seat_maps(),
-            unique_shapes_);
-        return !results.empty();
-    };
-
-    // Re-solve at the current columns (excluding already-yielded seatings) before growing more.
-    // 3. Grow loop
-    while (cycle_ < kMaxGrowthCycles) {
-        if (try_solve()) {
-            break;
-        }
-
+    // Same mode and host cap: next() is another model from the live session.
+    MappingResult<MeshId, const Candidate*> result = master_solve_->next(/*drop_cap=*/false);
+    while (!result.success && cycle_ < kMaxGrowthCycles) {
         ++cycle_;
         const bool at_cap = cycle_ >= kMaxGrowthCycles;
-        // c. No solution: grow pools that still have variants. Exhausted pools are skipped.
-        const std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-        if (grown != 0 && !at_cap) {
-            continue;
-        }
-        // d. Nothing left to grow, or hit the cap: inject fallbacks lazily, then grow.
-        if (!fallbacks_in_ && inject_sat_placement_fallbacks(*pools_, mgd_fallback_by_mesh_)) {
+        std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
+        if ((grown == 0 || at_cap) && !fallbacks_in_ &&
+            inject_sat_placement_fallbacks(*pools_, mgd_fallback_by_mesh_)) {
             fallbacks_in_ = true;
-            const std::size_t fallback_grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-            if (fallback_grown != 0) {
-                continue;
-            }
+            grown += grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
         }
+        if (grown == 0) {
             break;
-    }
-
-    // The loop can grow the pools (or inject fallbacks) and then exit on the cap without ever solving at
-    // those newly-grown columns. Make one final attempt so the last growth is actually tried before giving up.
-    if (results.empty()) {
-        try_solve();
-    }
-
-    // Grow is exhausted and the HARD host-count cap is still infeasible: drop the cap and solve once more so a
-    // system that genuinely cannot pack into the minimum host count still gets a placement instead of failing.
-    // This fallback runs only after growth, so a tight packing is always preferred when it is reachable.
-    if (results.empty()) {
-        AdjacencyGraph<const Candidate*> seat_graph = build_sat_placement_seat_graph(*pools_, mesh_level_graph_);
-        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, constraints_) &&
-            apply_extra_constraints(constraints_)) {
-            constraints_.set_max_same_rank_groups_used(0);
-            results = solve_sat_placement(
-                mesh_level_graph_,
-                seat_graph,
-                constraints_,
-                relaxed_inter_mesh_policy_,
-                attempts_,
-                stats_,
-                excluded_seat_maps(),
-                unique_shapes_);
+        }
+        // Growth reallocates candidate pointers, so the live encoding cannot be reused.
+        master_solve_->reset();
+        result = master_solve_->next(/*drop_cap=*/false);
+        if (at_cap) {
+            break;
         }
     }
-
-    // 4. Decode SAT placements. Leave solved_ false so a later next() re-solves with
-    // yielded seatings excluded instead of treating this batch as terminal.
-    if (!results.empty()) {
+    // Growth is exhausted and the capped solve still failed. Dropping the cap changes the encoding.
+    if (!result.success) {
+        result = master_solve_->next(/*drop_cap=*/true);
+    }
+    if (!result.success) {
+        solved_ = true;
         bool complete = true;
         for (const auto& [_, pool] : *pools_) {
             if (!pool.variants_exhausted()) {
@@ -3093,48 +3070,43 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
                 break;
             }
         }
+        const std::size_t candidates = count_sat_placement_candidates(*pools_);
         if (stats_ != nullptr) {
-            stats_->master_solve_success = true;
             stats_->master_growth_rounds = cycle_;
-            stats_->master_candidates_enumerated = count_sat_placement_candidates(*pools_);
+            stats_->master_candidates_enumerated = candidates;
             stats_->candidate_lists_complete = complete;
+            stats_->master_sat_attempts = attempts_;
         }
-        pending_.clear();
-        pending_index_ = 0;
-        pending_.reserve(results.size());
-        for (const auto& result : results) {
-            pending_.push_back(decode_sat_placement(result));
-        }
-        remember_yielded(pending_[pending_index_]);
-        AssignedMeshes assigned = pending_[pending_index_++];
-        record_success(assigned);
-        return assigned;
+        log_warning(
+            tt::LogFabric,
+            "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} candidate(s); "
+            "candidate lists {} -- the UNSAT verdict is {}",
+            attempts_,
+            cycle_,
+            candidates,
+            complete ? "COMPLETE" : "TRUNCATED",
+            complete ? "trustworthy" : "NOT trustworthy");
+        return {};
     }
 
-    solved_ = true;
-    bool complete = true;
-    for (const auto& [_, pool] : *pools_) {
-        if (!pool.variants_exhausted()) {
-            complete = false;
-            break;
-        }
-    }
+    AssignedMeshes assigned = decode_sat_placement(result);
+    remember_yielded(assigned);
     if (stats_ != nullptr) {
+        bool lists_complete = true;
+        for (const auto& [_, pool] : *pools_) {
+            if (!pool.variants_exhausted()) {
+                lists_complete = false;
+                break;
+            }
+        }
+        stats_->master_solve_success = true;
         stats_->master_growth_rounds = cycle_;
         stats_->master_candidates_enumerated = count_sat_placement_candidates(*pools_);
-        stats_->candidate_lists_complete = complete;
-        stats_->master_sat_attempts = attempts_;
+        stats_->candidate_lists_complete = lists_complete;
+        stats_->meshes_placed = assigned.size();
+        stats_->success = stats_->meshes_total != 0 && assigned.size() == stats_->meshes_total;
     }
-    log_warning(
-        tt::LogFabric,
-        "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} candidate(s); "
-        "candidate lists {} -- the UNSAT verdict is {}",
-        attempts_,
-        cycle_,
-        count_sat_placement_candidates(*pools_),
-        complete ? "COMPLETE" : "TRUNCATED",
-        complete ? "trustworthy" : "NOT trustworthy");
-    return {};
+    return assigned;
 }
 
 std::vector<AssignedMeshes> SatPlacementEnumerationSession::all() {

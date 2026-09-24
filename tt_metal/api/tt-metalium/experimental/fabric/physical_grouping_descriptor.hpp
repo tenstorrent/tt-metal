@@ -424,6 +424,8 @@ private:
 
 // Incremental SAT joint placement used by MultiMeshSolutionEnumerator.
 // Physical identity of a seat is the ASIC footprint on PlacedMesh.
+// The master SAT session stays live across next() calls and is advanced with next().
+// It is rebuilt only when candidate pools grow, or when validation mode, the host-cap, or constraints change.
 // Column growth stays inside next(); extra constraints applied on the subsequent next().
 class SatPlacementEnumerationSession {
 public:
@@ -487,6 +489,35 @@ private:
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> extra_forbidden_;
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> extra_required_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> yielded_footprints_;
+
+    // Live SAT session. next() is another model from it when the mode and host cap still match.
+    // The placement session resets it when the pools grow; next() rebuilds only then, or when the cap changes.
+    struct MasterSolve {
+        explicit MasterSolve(SatPlacementEnumerationSession* owner) : owner_(owner) {}
+
+        void reset() { session.reset(); }
+
+        // True when this session was encoded for this validation mode and host-cap setting.
+        bool matches(bool relaxed_mode, bool drop_cap) const {
+            return session != nullptr && relaxed == relaxed_mode && drop_host_cap == drop_cap;
+        }
+
+        // Rebuild the session for this mode and host cap. False when the seat constraints cannot be built.
+        bool restart(bool relaxed_mode, bool drop_cap);
+
+        // Another model from the live session. Restarts only when there is no session or the mode or host cap differs.
+        MappingResult<MeshId, const Candidate*> next(bool drop_cap);
+
+        void block_assigned(const AssignedMeshes& assigned);
+
+        bool relaxed = false;
+        bool drop_host_cap = false;
+
+    private:
+        SatPlacementEnumerationSession* owner_ = nullptr;
+        std::unique_ptr<TopologyMappingEnumerationSession<MeshId, const Candidate*>> session;
+    };
+    std::unique_ptr<MasterSolve> master_solve_;
 
     void finish_init(const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
     void invalidate_pending_solve();
