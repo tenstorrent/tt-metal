@@ -149,6 +149,13 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
         err = "H2HSocket: ring_pages must be at least 1";
         return nullptr;
     }
+    // The same offsets are a local load in trailer_guard() and a remote displacement in the
+    // peer's window, so a short region is an out-of-bounds read here and an invalid RMA there.
+    if (const uint64_t need = pinned_bytes_for(cfg.cores); cfg.region_bytes < need) {
+        err = fmt::format(
+            "H2HSocket: region is {} B but {} cores need at least {} B", cfg.region_bytes, cfg.cores, need);
+        return nullptr;
+    }
     if (cfg.rx_data_offset + static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
         err = "H2HSocket: rx_data_offset + ring_pages x page_bytes (" + std::to_string(cfg.rx_data_offset) + " + " +
               std::to_string(cfg.ring_pages) + " x " + std::to_string(cfg.page_bytes) + ") exceeds the " +
