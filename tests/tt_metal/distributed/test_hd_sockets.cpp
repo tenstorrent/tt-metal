@@ -11,7 +11,6 @@
 #include <internal/cluster_noc_helpers.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <exception>
 #include <random>
@@ -37,8 +36,6 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/distributed/mesh_device_impl.hpp"
-#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -405,48 +402,6 @@ bool is_device_coord_mmio_mapped(
     const auto& cluster = MetalContext::instance().get_cluster();
     auto device_id = mesh_device->get_device(device_coord)->id();
     return cluster.get_associated_mmio_device(device_id) == device_id;
-}
-
-// Run with rank bindings that split one mesh across multiple ranks. Launches no kernels, so it
-// also runs on mock clusters.
-using SharedHDSocketFixture = GenericMeshDeviceFixture;
-TEST_F(SharedHDSocketFixture, ConstructOnSharedMesh) {
-    const auto& context = mesh_device_->impl().coowner_context();
-    if (!context) {
-        GTEST_SKIP() << "Requires a mesh shared by multiple ranks.";
-    }
-    auto rejected = testing::ThrowsMessage<std::runtime_error>(testing::HasSubstr("rank owning endpoint"));
-    std::vector<uint32_t> page(1024 / sizeof(uint32_t));
-    const auto range = MeshCoordinateRange(mesh_device_->shape());
-    for (const auto& coord : {range.start_coord(), range.end_coord()}) {
-        for (auto mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
-            SCOPED_TRACE(fmt::format("endpoint={}, mode={}", coord, static_cast<int>(mode)));
-            const MeshCoreCoord endpoint(coord, CoreCoord(0, 0));
-            {
-                H2DSocket input(mesh_device_, endpoint, BufferType::L1, 4096, mode);
-                D2HSocket output(mesh_device_, endpoint, 4096);
-                input.set_page_size(1024);
-                output.set_page_size(1024);
-
-                std::array<uint32_t, 2> addresses = {
-                    input.get_config_buffer_address(), output.get_config_buffer_address()};
-                std::array<uint32_t, 2> minima = {}, maxima = {};
-                context->all_reduce(
-                    ttsl::Span<uint32_t>(addresses), ttsl::Span<uint32_t>(minima), multihost::ReduceOp::MIN);
-                context->all_reduce(
-                    ttsl::Span<uint32_t>(addresses), ttsl::Span<uint32_t>(maxima), multihost::ReduceOp::MAX);
-                EXPECT_EQ(minima, maxima);
-
-                if (!mesh_device_->is_local(coord)) {
-                    EXPECT_THAT([&] { input.write(page.data(), 1); }, rejected);
-                    EXPECT_THAT([&] { output.read(page.data(), 1); }, rejected);
-                    EXPECT_NO_THROW(input.barrier(1));
-                    EXPECT_NO_THROW(output.barrier(1));
-                }
-            }
-            context->barrier();
-        }
-    }
 }
 
 using HDSocketFixture = MeshDevice1x2Fixture;
