@@ -11,6 +11,8 @@
 #include <string_view>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -245,6 +247,63 @@ TEST_F(SoftmaxBackwardOpTest, LiveL1PressureReplansCachedProgram) {
     EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(pressured_result_again), expected, 0.0F, 0.0F));
     EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(clear_result), expected, 0.0F, 0.0F));
     EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(clear_result_again), expected, 0.0F, 0.0F));
+}
+
+TEST_F(SoftmaxBackwardOpTest, PersistentL1PressureUsesCommittedProgramBase) {
+    constexpr uint32_t height = 32;
+    constexpr uint32_t width = 160;
+    constexpr uint64_t target_headroom = 48ULL * 1024ULL;
+    constexpr uint64_t config_page_allowance = 4ULL * 1024ULL;
+    constexpr uint64_t full_row_one_slot_bytes = 36864ULL;
+    constexpr uint64_t full_row_two_slot_bytes = 67584ULL;
+
+    const tt::tt_metal::CoreRangeSet one_core(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 0)));
+    s_device->enable_program_cache();
+    s_device->clear_program_cache();
+
+    const uint64_t initial_base = tt::tt_metal::GetProgramLocalL1Base(*s_device, one_core);
+    const uint64_t current_ceiling = s_device->lowest_occupied_compute_l1_address().value_or(
+        static_cast<tt::tt_metal::DeviceAddr>(s_device->l1_size_per_core()));
+    if (current_ceiling <= initial_base + target_headroom + config_page_allowance) {
+        GTEST_SKIP() << "device starts with only " << current_ceiling - initial_base
+                     << " bytes of program-local L1 headroom";
+    }
+    const uint32_t alignment = s_device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t unaligned_ring_size = current_ceiling - initial_base - target_headroom - config_page_allowance;
+    const uint32_t ring_size = static_cast<uint32_t>((unaligned_ring_size / alignment) * alignment);
+    auto persistent_space = tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
+        *s_device,
+        {
+            .sender_cores = one_core,
+            .receiver_domain = one_core,
+            .ring_size = ring_size,
+            .max_receivers_per_pipe = 1,
+        });
+
+    const uint64_t committed_base = tt::tt_metal::GetProgramLocalL1Base(*s_device, one_core);
+    ASSERT_GT(committed_base, initial_base);
+    const uint64_t committed_headroom = current_ceiling - committed_base;
+    if (committed_headroom < full_row_one_slot_bytes || committed_headroom >= full_row_two_slot_bytes) {
+        GTEST_SKIP() << "could not establish discriminating persistent-L1 headroom; got " << committed_headroom
+                     << " bytes";
+    }
+
+    xt::xarray<float> y = xt::ones<float>({1, 1, height, width}) * (1.0F / static_cast<float>(width));
+    xt::xarray<float> grad = xt::empty<float>({1, 1, height, width});
+    for (size_t i = 0; i < grad.size(); ++i) {
+        grad.data()[i] = (i % 2U == 0U) ? 1.0F : -1.0F;
+    }
+    const xt::xarray<float> expected = y * grad;
+    auto y_tt = to_device_tensor(y, s_device, ttnn::DataType::BFLOAT16);
+    auto grad_tt = to_device_tensor(grad, s_device, ttnn::DataType::BFLOAT16);
+
+    ttnn::Tensor result;
+    EXPECT_NO_THROW(result = ttml::metal::softmax_backward(y_tt, grad_tt, 3, one_core));
+    tt::tt_metal::distributed::Synchronize(*s_device, std::nullopt);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(result), expected, 2e-2F, 2e-2F));
+
+    s_device->clear_program_cache();
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {

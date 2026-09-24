@@ -91,6 +91,32 @@ static void assign_rows_to_cores(
     }
 }
 
+static uint32_t get_num_rows(const ttnn::Tensor& tensor) {
+    const auto& padded_shape = tensor.padded_shape();
+    const uint32_t padded_height = padded_shape[-2];
+    const uint32_t padded_width = padded_shape[-1];
+    const uint32_t tile_height = tensor.tensor_spec().tile().get_height();
+    const uint32_t height_tiles = padded_height / tile_height;
+    const uint64_t num_outer_dims = tensor.physical_volume() / padded_height / padded_width;
+    return num_outer_dims * height_tiles;
+}
+
+struct WorkDistribution {
+    std::vector<tt::tt_metal::CoreRange> core_ranges;
+    std::vector<CoreRowAssignment> row_assignments;
+};
+
+static WorkDistribution get_work_distribution(
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const tt::tt_metal::IDevice* device,
+    uint32_t num_rows) {
+    WorkDistribution distribution;
+    const std::vector<tt::tt_metal::CoreCoord> cores_in_order = get_worker_cores_in_order(sub_core_grids, device);
+    assign_rows_to_cores(cores_in_order, num_rows, distribution.core_ranges, distribution.row_assignments);
+    TT_FATAL(!distribution.core_ranges.empty(), "SoftmaxBackward: no cores have work");
+    return distribution;
+}
+
 }  // namespace
 
 namespace ttml::metal::ops::softmax_backward::device {
@@ -100,13 +126,13 @@ static constexpr uint64_t memory_estimator(uint32_t width_tiles, uint32_t tile_s
     return (3ULL * buffering_multiplier * width_tiles + 3ULL) * tile_size;
 }
 
-static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
-    const uint64_t allocator_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+static KernelMode get_kernel_mode(
+    uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device, uint64_t program_local_l1_base) {
     uint64_t live_ceiling = device->l1_size_per_core();
     if (const auto lowest_occupied = device->lowest_occupied_compute_l1_address(); lowest_occupied.has_value()) {
         live_ceiling = std::min(live_ceiling, static_cast<uint64_t>(*lowest_occupied));
     }
-    const uint64_t available_l1 = live_ceiling > allocator_base ? live_ceiling - allocator_base : 0ULL;
+    const uint64_t available_l1 = live_ceiling > program_local_l1_base ? live_ceiling - program_local_l1_base : 0ULL;
 
     const auto fits = [&](uint32_t tiles_per_block, uint32_t buffering_multiplier) {
         return memory_estimator(tiles_per_block, tile_size, buffering_multiplier) <= available_l1;
@@ -133,12 +159,19 @@ static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, cons
 }
 
 KernelMode plan_kernel_mode(
-    const SoftmaxBackwardParams& /*operation_attributes*/, const SoftmaxBackwardInputs& tensor_args) {
+    const SoftmaxBackwardParams& operation_attributes, const SoftmaxBackwardInputs& tensor_args) {
     const auto& softmax_output = tensor_args.softmax_output;
     const auto tile = softmax_output.tensor_spec().tile();
     const uint32_t width_tiles = softmax_output.padded_shape()[-1] / tile.get_width();
     const uint32_t intermed_tile_size = tile_size(datatype_to_dataformat_converter(softmax_output.dtype()));
-    return get_kernel_mode(width_tiles, intermed_tile_size, softmax_output.device());
+    const auto distribution = get_work_distribution(
+        operation_attributes.sub_core_grids, softmax_output.device(), get_num_rows(softmax_output));
+    const tt::tt_metal::CoreRangeSet worker_cores(distribution.core_ranges);
+    // The cache key uses a snapshot of the persistent arena. The factory seals the same cores
+    // before placing CBs; if the floor moves meanwhile, it can only build a more conservative
+    // program under this key because a cached Program keeps its committed floor sealed.
+    const uint64_t program_local_l1_base = GetProgramLocalL1Base(*softmax_output.device(), worker_cores);
+    return get_kernel_mode(width_tiles, intermed_tile_size, softmax_output.device(), program_local_l1_base);
 }
 
 static void get_tensor_properties(
@@ -164,17 +197,13 @@ static void get_tensor_properties(
     // every compute step is per-lane (elementwise mul, matmul-with-ones reduction, COL
     // broadcast), so padding lanes never contaminate valid lanes.
     const auto& padded_shape = softmax_output.padded_shape();
-    const uint32_t padded_height = padded_shape[-2];
     const uint32_t padded_width = padded_shape[-1];
     const auto tile = softmax_output.tensor_spec().tile();
-    const uint32_t tile_height = tile.get_height();
     const uint32_t tile_width = tile.get_width();
-    const uint32_t height_tiles = padded_height / tile_height;
     width_tiles = padded_width / tile_width;
     const uint32_t logical_width = softmax_output.logical_shape()[-1];
     mask_w = logical_width % tile_width;
-    const uint64_t num_outer_dims = softmax_output.physical_volume() / padded_height / padded_width;
-    num_rows = num_outer_dims * height_tiles;
+    num_rows = get_num_rows(softmax_output);
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     // y*grad and reduction tiles use the same format as activations (BFLOAT16 or FLOAT32 today).
@@ -221,8 +250,12 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         intermed_tile_size,
         tensor_return_value);
 
+    WorkDistribution distribution = get_work_distribution(operation_attributes.sub_core_grids, device, num_rows);
+    const tt::tt_metal::CoreRangeSet worker_cores(distribution.core_ranges);
+    // Commit the persistent-L1 floor before selecting and placing the program's circular buffers.
+    const uint64_t program_local_l1_base = ReserveProgramLocalL1(program, *device, worker_cores);
     const auto [buffering_multiplier, required_memory_bytes, tiles_per_block] =
-        plan_kernel_mode(operation_attributes, tensor_args);
+        get_kernel_mode(width_tiles, intermed_tile_size, device, program_local_l1_base);
 
     log_debug(
         tt::LogOp,
@@ -232,15 +265,6 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         width_tiles,
         buffering_multiplier,
         required_memory_bytes / 1024);
-
-    // Collect worker cores in deterministic order and assign rows to each.
-    std::vector<tt::tt_metal::CoreRange> worker_core_ranges;
-    std::vector<CoreRowAssignment> core_row_assignments;
-    const std::vector<tt::tt_metal::CoreCoord> cores_in_order =
-        get_worker_cores_in_order(operation_attributes.sub_core_grids, device);
-    assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
-    TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
-    const tt::tt_metal::CoreRangeSet worker_cores(worker_core_ranges);
 
     const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
     const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
@@ -295,7 +319,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     SetCommonRuntimeArgs(
         program, reader_kernel_id, {softmax_output.buffer()->address(), upstream_grad.buffer()->address()});
     SetCommonRuntimeArgs(program, writer_kernel_id, {tensor_return_value.buffer()->address()});
-    for (const CoreRowAssignment& a : core_row_assignments) {
+    for (const CoreRowAssignment& a : distribution.row_assignments) {
         SetRuntimeArgs(program, reader_kernel_id, a.core, {a.start_row, a.num_rows});
         SetRuntimeArgs(program, writer_kernel_id, a.core, {a.start_row, a.num_rows});
         SetRuntimeArgs(program, compute_kernel_id, a.core, {a.num_rows});
