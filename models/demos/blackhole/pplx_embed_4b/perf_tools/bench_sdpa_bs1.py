@@ -9,6 +9,8 @@ import ttnn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common_traced import make_traced
 
+CAUSAL = os.getenv("IS_CAUSAL", "0") == "1"
+
 B8 = ttnn.bfloat8_b
 D = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=64 * 1024 * 1024)
 traced = make_traced(D)
@@ -54,7 +56,7 @@ try:
                         res.append((float("inf"), gx, gy, qc, kc, f32))
     for f in (True, False):
         b = [r for r in res if (r[1], r[2], r[3], r[4], r[5]) == (8, 8, 512, 256, f)][0][0]
-        print(f"[bs1 SDPA] grid 8x8 q512/k256 fp32_acc={f}: {b:7.1f} us", flush=True)
+        print(f"[bs1 SDPA causal={CAUSAL}] grid 8x8 q512/k256 fp32_acc={f}: {b:7.1f} us", flush=True)
     base = [r for r in res if (r[1], r[2], r[3], r[4], r[5]) == (8, 8, 512, 256, True)][0][0]
     print(
         f"[bs1 SDPA] {sum(1 for r in res if r[0]==float('inf'))} of {len(res)} failed; top 12 vs 8x8 q512/k256 fp32_acc=True:"

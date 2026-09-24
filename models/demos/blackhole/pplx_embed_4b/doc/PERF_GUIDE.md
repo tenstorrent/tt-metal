@@ -138,3 +138,36 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 - `NEGATIVE_RESULTS.md` — every rejected experiment with numbers (§0–§49), including measurement corrections.
 - `github_issues/` — the kernel/op asks filed on tenstorrent/tt-metal (#57626–#57630, #57722) with repro scripts.
 - `../README.md` §5 — the long-form notes per landing.
+
+## 9. Qwen3-Embedding-4B through the same stack
+
+`Qwen/Qwen3-Embedding-4B` is the backbone pplx-embed-4B was trained from (2560 hidden, 9728 FFN, 36 layers,
+32 Q / 8 KV heads, d 128), so every landing above applies unchanged. The two recipe differences follow
+`HF_MODEL`: attention is causal (`apply_workload_env` sets `QWEN_SDPA_CAUSAL=1` for any non-pplx checkpoint,
+so the SDPA wrapper leaves the base forward's `is_causal=True` alone and passes no pad mask), and the
+embedding is the last real token with an EOS appended (the traced pipeline already slices the last-token
+tile; the accuracy script has `--pool last --eos`).
+
+```bash
+export HF_MODEL=Qwen/Qwen3-Embedding-4B                    # weights from the HF cache; tensor cache built on first run
+TT_VISIBLE_DEVICES=4 $PY $M/perf_tools/e2e_run_fp.py 1 10    # cold best of 10
+bash $M/perf_tools/sustained_run.sh 8 7 30 q3e8 "HF_MODEL=Qwen/Qwen3-Embedding-4B"    # cold + sustained, tt-smi sampled
+TT_VISIBLE_DEVICES=9 $PY $M/demo/eval_accuracy_batched.py --batch 8 --pool last --eos  # STS-B, Qwen recipe
+IS_CAUSAL=1 TT_VISIBLE_DEVICES=3 $PY $M/perf_tools/bench_sdpa_bs1.py                   # SDPA sweeps under causal attention
+IS_CAUSAL=1 TT_VISIBLE_DEVICES=3 $PY $M/perf_tools/bench_sdpa_batched.py
+```
+
+Measured 2026-09-24 (same chips and method as the pplx table in `POSITIVE_RESULTS.md`; the H200 reference
+is the pplx-embed-4B H200 measurement, identical compute):
+
+| batch | cold best | sustained (it 15–29) | × H200 cold / sustained | pplx-embed-4B cold / sustained | STS-B (last token + EOS) |
+|---|---|---|---|---|---|
+| 1 | 18.1 ms | 18.3 | 3.33× / 3.37× | 17.6 / 18.3 | 0.8190 |
+| 8 | 115.7 | 121.9 | 3.50× / 3.68× | 115.3 / 121.0 | 0.8095 |
+| 16 | 217.6 | 228.3 | 3.24× / 3.40× | 221.0 / 228.2 | 0.8076 |
+| 32 | 426.9 | 445.5 | 3.07× / 3.20× | 425.5 / 451.1 | 0.8073 |
+
+The per-batch SDPA gates are also the optimum under causal attention (bs1 8×8 q256/k256 with fp32
+accumulation off, 54.5 µs; batched 12×8 q512/k512 at 237.6 / 454.5 / 804.4 µs for bs8 / 16 / 32 — the same
+picks, and for the batched sweep the same times, as bidirectional), so there is no Qwen-specific gating.
+The previous Qwen demo (`../qwen3_embedding_4b/`, README numbers) read 32.3 ms at bs1 and 725 ms at bs32.

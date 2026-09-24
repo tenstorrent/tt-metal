@@ -392,6 +392,11 @@ WORKLOAD_CONFIGS = {
 }
 
 
+def _model_is_bidirectional() -> bool:
+    """pplx-embed is a bidirectional Qwen3-4B; Qwen3-Embedding-4B (same backbone) is causal."""
+    return "pplx" in os.getenv("HF_MODEL", MODEL_NAME).lower()
+
+
 def apply_workload_env(batch_size: int, seq_len: int) -> None:
     """Apply optimized env vars for a specific (batch_size, seq_len) workload.
 
@@ -399,6 +404,9 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     for unseen combinations: batched-L1 if the activation fits the ~8 MiB cap
     AND seq<=512, DRAM + 130-core matmul grid otherwise.
     """
+    # Attention direction follows the checkpoint: causal for Qwen3-Embedding-4B, bidirectional for pplx-embed.
+    if not _model_is_bidirectional():
+        os.environ.setdefault("QWEN_SDPA_CAUSAL", "1")
     cfg = WORKLOAD_CONFIGS.get((batch_size, seq_len))
     if cfg is None:
         activation_bytes = batch_size * seq_len * HIDDEN_DIM * 2
@@ -898,7 +906,7 @@ def run_perf(
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info(f"  pplx-embed-v1-4B Performance  ({tt_device_name})")
+    logger.info(f"  {os.getenv('HF_MODEL', MODEL_NAME).split('/')[-1]} Performance  ({tt_device_name})")
     logger.info("=" * 60)
     logger.info(f"  Batch size:           {batch_size}")
     logger.info(f"  Input seq length:     {seq_len}")

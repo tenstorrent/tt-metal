@@ -189,11 +189,16 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     produce, so that pass (142 MB per layer at bs32) is skipped. The concat wrapper recognises the tensor.
     """
 
+    # QWEN_SDPA_CAUSAL=1 keeps the base forward's causal attention (Qwen3-Embedding-4B: same backbone as
+    # pplx-embed, causal attention + last-token pooling); default is pplx-embed's bidirectional attention.
+    causal = os.getenv("QWEN_SDPA_CAUSAL", "0") == "1"
+
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
-        kwargs["is_causal"] = False
-        if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
-            kwargs["attn_mask"] = _PAD_ATTN_MASK
+        if not causal:
+            kwargs["is_causal"] = False
+            if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
+                kwargs["attn_mask"] = _PAD_ATTN_MASK
         q = args[0] if args else kwargs.get("input_tensor_q")
         if concat_out and q is not None and int(q.shape[0]) > 1:
             kwargs["output_heads_concat"] = True

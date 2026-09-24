@@ -10,6 +10,8 @@ pooling, DP harness) and the memory-placement optimizations validated on the
 [Qwen3-Embedding-4B](../qwen3_embedding_4b/README.md) backbone (same 2560-d,
 36-layer Qwen3-4B architecture). This README covers how to run every script,
 what each produces, and the optimizations applied.
+The same stack runs the causal `Qwen/Qwen3-Embedding-4B` checkpoint unchanged
+(`HF_MODEL=Qwen/Qwen3-Embedding-4B`; numbers and instructions in [doc/PERF_GUIDE.md](doc/PERF_GUIDE.md) §9).
 
 ---
 
