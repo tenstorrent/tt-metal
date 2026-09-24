@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -159,6 +160,75 @@ inline void _calculate_stochastic_round_() {
         sfpi::dst_reg++;
     }
 }
+
+// Op classes for the rounding kernels above. Same names and leading template parameters as on
+// Wormhole/Blackhole; they need no init beyond the op-agnostic SFPU init.
+
+// Op class for elementwise floor.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Floor : SfpuUnaryOp<Floor<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        _calculate_floor_<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for elementwise ceil.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Ceil : SfpuUnaryOp<Ceil<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        _calculate_ceil_<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for elementwise truncation toward zero.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Trunc : SfpuUnaryOp<Trunc<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        _calculate_trunc_<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for the elementwise fractional part, x - trunc(x).
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Frac : SfpuUnaryOp<Frac<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        _calculate_frac_<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
+
+// Op class for elementwise round-half-to-even to a given number of decimal places.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Round : SfpuUnaryOp<Round<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(const int decimals) {
+        _calculate_round_<APPROXIMATION_MODE, ITERATIONS>(decimals);
+    }
+};
+
+// Op class for elementwise stochastic rounding of FP32 to BF16.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct StochasticRound : SfpuUnaryOp<StochasticRound<APPROXIMATION_MODE, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate() {
+        _calculate_stochastic_round_<APPROXIMATION_MODE, ITERATIONS>();
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

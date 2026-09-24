@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_quant.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -26,9 +26,8 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+ALWI void quant_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Quant<APPROX>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -45,9 +44,8 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32_int8_pack, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+ALWI void quant_int8_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Quant<APPROX, DataFormat::Int8>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -64,9 +62,8 @@ ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+ALWI void requant_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Requant<APPROX>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -83,16 +80,8 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32_int8_pack,
-        (APPROX),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void requant_int8_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int8>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -109,16 +98,8 @@ ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void requant_int8_in_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32,
-        (APPROX, 8, false, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void requant_int8_in_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int32, true /* INT8_INPUT */>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -136,16 +117,8 @@ ALWI void requant_int8_in_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32_int8_pack,
-        (APPROX, 8, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void requant_int8_in_int8_out_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int8, true /* INT8_INPUT */>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -162,9 +135,8 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+ALWI void dequant_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Dequant<APPROX>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -181,16 +153,8 @@ ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_dequant_int32,
-        (APPROX, 8, false, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+ALWI void dequant_int8_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((sfpu::Dequant<APPROX, true /* INT8_INPUT */>::run(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -205,9 +169,7 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void quant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX), zero_point)));
-}
+ALWI void quant_tile_init(const std::uint32_t zero_point) { MATH((sfpu::Quant<APPROX>::init(zero_point))); }
 
 // clang-format off
 /**
@@ -221,8 +183,8 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+ALWI void quant_uint8_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Quant<APPROX, DataFormat::UInt8>::init(zero_point)));
 }
 
 // clang-format off
@@ -236,8 +198,8 @@ ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void quant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+ALWI void quant_int8_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Quant<APPROX, DataFormat::Int8>::init(zero_point)));
 }
 
 // clang-format off
@@ -252,9 +214,7 @@ ALWI void quant_int8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point)));
-}
+ALWI void requant_tile_init(const std::uint32_t zero_point) { MATH((sfpu::Requant<APPROX>::init(zero_point))); }
 
 // clang-format off
 /**
@@ -268,8 +228,8 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+ALWI void requant_uint8_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Requant<APPROX, DataFormat::UInt8>::init(zero_point)));
 }
 
 // clang-format off
@@ -283,8 +243,8 @@ ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+ALWI void requant_int8_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int8>::init(zero_point)));
 }
 
 // clang-format off
@@ -299,9 +259,8 @@ ALWI void requant_int8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point)));
+ALWI void requant_int8_in_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int32, true /* INT8_INPUT */>::init(zero_point)));
 }
 
 // clang-format off
@@ -317,9 +276,8 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point)));
+ALWI void requant_int8_in_uint8_out_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Requant<APPROX, DataFormat::UInt8, true /* INT8_INPUT */>::init(zero_point)));
 }
 
 // clang-format off
@@ -335,9 +293,8 @@ ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point)));
+ALWI void requant_int8_in_int8_out_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Requant<APPROX, DataFormat::Int8, true /* INT8_INPUT */>::init(zero_point)));
 }
 
 // clang-format off
@@ -352,9 +309,7 @@ ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void dequant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX), zero_point)));
-}
+ALWI void dequant_tile_init(const std::uint32_t zero_point) { MATH((sfpu::Dequant<APPROX>::init(zero_point))); }
 
 // clang-format off
 /**
@@ -368,8 +323,8 @@ ALWI void dequant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
-ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX, false, true), zero_point)));
+ALWI void dequant_int8_tile_init(const std::uint32_t zero_point) {
+    MATH((sfpu::Dequant<APPROX, true /* INT8_INPUT */>::init(zero_point)));
 }
 
 }  // namespace ckernel
