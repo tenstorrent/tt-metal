@@ -738,6 +738,23 @@ std::string Inspector::get_kernel_elf_path(int watcher_kernel_id, uint32_t proce
     return elf_path;
 }
 
+void Inspector::register_kernel_elf_paths(
+    int watcher_kernel_id, std::vector<std::string> processor_elf_paths) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data || !data->kernel_path_collection_enabled) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->kernel_path_mutex);
+        data->kernel_id_to_processor_elf_paths[watcher_kernel_id] = std::move(processor_elf_paths);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to register ELF paths for watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+    }
+}
+
 namespace experimental::inspector {
 
 bool IsEnabled() { return Inspector::is_enabled(); }

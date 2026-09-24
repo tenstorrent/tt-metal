@@ -131,6 +131,7 @@ SocView build_soc_view(IDevice* device, Program& program) {
         auto ct = hw.get_programmable_core_type(pct);
         PctInfo p;
         p.core_type = static_cast<uint32_t>(ct);
+        p.dprint_buffer_addr = static_cast<uint32_t>(hw.get_dev_addr(ct, HalL1MemAddrType::DPRINT_BUFFERS));
         // Only the TENSIX routing-table addr is consumed (setup_core_state's fabric-identity write);
         // get_dev_addr(ROUTING_TABLE) may be undefined for other core types. Program-context addr.
         if (ct == HalProgrammableCoreType::TENSIX) {
@@ -167,6 +168,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
+    pd.config.dprint_enabled =
+        MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint);
 
     // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
     // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
