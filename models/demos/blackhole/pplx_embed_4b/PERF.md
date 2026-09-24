@@ -24,28 +24,27 @@ after the board's power manager has settled the clock (≈1.1–1.3 GHz under lo
 
 ## What changed, in order
 
-Effects are the same-chip A/B measured at landing (best of 10 at the cold clock; the sustained metric was
-adopted late in the effort). e2e ms after each step: bs1 / bs8 / bs16 / bs32.
+Each row was measured as a same-chip A/B when it landed (best of 10 at the cold clock; the sustained metric
+was adopted later). The last column is e2e latency after the step: bs1 / bs8 / bs16 / bs32, in ms.
 
-| # | change | mechanism | after |
+| # | Change | Why it is faster | After |
 |---|---|---|---|
-| 1 | `minimal_matmul` output subblock 1×8 (was 1×1) | the batched matmuls ran one tile per DST pass | bs8 −12%, bs16 −13%, bs32 −18% |
-| 2 | `in0_block_w` cap 8 → 38; head-split QKV and concat as model-local `generic_op`s | FF2 blocks were pinned at 2; head split scatters the fused QKV activation straight into heads | bs1 −4.4 ms and −2.7 ms |
-| 3 | timed path = extended trace | pooling + I/O inside the replay; the 3.4 ms host bubble at bs1 is gone | 25.2 / 155.6 / 288.7 / 543.5 |
-| 4 | fused head-split + Q/K RMSNorm + RoPE, emitting bfp8 Q and K/V | one pass over QKV replaces create_heads, q_norm, k_norm, two RoPE ops and a typecast | 23.7 / 135.3 / 250.4 / 474.3 |
-| 5 | QKV projection writes bfp8; merged core ranges for the generic ops | 26 MB less per layer at bs8; ≈0.4 µs per core range per launch | 23.4 / 126.7 / 240.6 / 455.8 |
-| 6 | batched SDPA on all 120 cores with a 512-token K chunk | one K chunk, no re-read | 23.3 / 126.2 / 239.6 / 450.6 |
-| 7 | fused residual add + RMSNorm (bs16+), then row-split over 4–5 cores per row (bs8/16/32) | one op emits the residual sum and the normalised tensor: 4 DRAM passes → 2, 87% of DRAM bandwidth at bs32 | 234.8 / 443.5, later 118.5 / 216.7 / 428.1 |
-| 8 | fused-SwiGLU matmul blocks at bs16, plain matmul blocks at bs8 | in-model block sweeps | 123.4 / 228.3 |
-| 9 | SwiGLU product as one `generic_op` at bs32 (`silu_mul`) | SiLU then dest-reuse multiply | 438.1 |
-| 10 | bs1: legacy 2D matmuls on 12×8 after fixing the factory's DRAM-bank walk, coalesced weight reads, SDPA q256 | the 2D multicast kernel at M=512 beats `minimal_matmul` by 53–65%; the bug had blocked grids wider than 8 | **17.7** / 123.4 / 228.3 / 438.1 |
-| 11 | bs>1: SDPA 12×8 at bs8, DRAM-interleaved QKV/WO/W1/W3 weights at bs32 | fewer, fuller SDPA work units; interleaved weights read faster at M=16384 | 17.7 / 118.5 / 216.7 / 428.1 |
-| 12 | SDPA writes the `[B, 1, S, H·d]` layout directly (new op flag `output_heads_concat`) | tile-id remap in the writer; the concat pass (142 MB per layer at bs32) is gone | 17.6 / 115.3 / 221.0 / 425.5 |
-| 13 | bs1: concat-free SDPA output too; residual adds written in the norm's block-shard layout | the per-layer concat op and all 72 interleaved-to-sharded ops disappear | 17.3 (sustained 18.3 → 17.7) |
+| 1 | Stock prefill configs corrected: `minimal_matmul` output subblock 1×8 (was 1×1), `in0_block_w` cap 8 → 38, grid clamped to the 120-worker part | the batched matmuls ran one tile per DST pass; FF2 was pinned at 2-tile blocks | bs8 −12%, bs16 −13%, bs32 −18%, bs1 −4.4 ms |
+| 2 | Head split and concat as model-local kernels | the fused QKV activation is scattered straight into heads | bs1 −2.7 ms, bs32 −8.8 ms |
+| 3 | Extended trace as the timed path | forward, pooling and I/O in one replay; a 3.4 ms host bubble at bs1 is gone | 25.2 / 155.6 / 288.7 / 543.5 |
+| 4 | Head split + Q/K RMSNorm + RoPE fused into one kernel, Q/K/V written in bfp8; QKV projection writes bfp8 | one pass replaces five ops and a typecast; SDPA reads half the bytes | 23.7 / 127.5 / 240.9 / 456.7 |
+| 5 | Merged core ranges for the model-local kernels | ≈0.4 µs per core range per launch | 23.4 / 126.7 / 240.6 / 455.8 |
+| 6 | Batched SDPA on all 120 cores with a 512-token K chunk | K and V read once | 23.3 / 126.2 / 239.6 / 450.6 |
+| 7 | Residual add + RMSNorm fused (bs16+) | one kernel writes the residual sum and the normalised tensor: 4 DRAM passes → 2 | 23.3 / 126.2 / 234.8 / 443.5 |
+| 8 | Matmul block sweeps at bs8 / bs16; SwiGLU product as one kernel at bs32 | in-model sweeps; SiLU and multiply in one pass over the FF1/FF3 outputs | 23.3 / 123.4 / 228.3 / 438.1 |
+| 9 | bs1: legacy 2D-multicast matmuls on 12×8, coalesced weight reads, SDPA q-chunk 256 | at M=512 the 2D kernel beats `minimal_matmul` by 53–65%; a factory bug had blocked grids wider than 8 | 17.7 / 123.4 / 228.3 / 438.1 |
+| 10 | bs>1: add + RMSNorm split over 4–5 cores per row, SDPA 12×8 at bs8, DRAM-interleaved weights at bs32 | all 120 cores busy in the norm; fuller SDPA work units; faster weight reads at M=16384 | 17.7 / 118.5 / 216.7 / 428.1 |
+| 11 | SDPA writes the concatenated-heads layout directly (new op flag) | the concat pass (142 MB per layer at bs32) is gone | 17.6 / 115.3 / 221.0 / 425.5 |
+| 12 | bs1: concat-free SDPA output; residual adds written in the norm's shard layout | the per-layer concat and 72 layout conversions are gone | 17.3 / 115.3 / 221.0 / 425.5 |
 
-Configuration lives in `demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable
-from the shell); the kernels in `tt/custom_ops/`; the shared-code changes in `models/tt_transformers/tt/`
-(prefill norm, matmul grids and blocks, weight layouts) and in the SDPA op and the 2D matmul factory.
+Sustained after step 12: **17.6 / 120.9 / 227.6 / 446.4 ms**. Configuration lives in
+`demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable from the shell), the kernels in
+`tt/custom_ops/`, the shared-code changes in `models/tt_transformers/tt/`, the SDPA op and the 2D matmul factory.
 
 ## Where the time goes now
 
@@ -53,18 +52,8 @@ Device-profiled bs32 (365 ms of kernels at the nominal clock; sustained e2e 446 
 product 13%, fused add+RMSNorm 8%, SDPA 8%, fused heads op 6%. bs1 (16.6 ms of kernels, 509 ops): matmuls
 60%, SwiGLU product 14%, SDPA 11%, fused heads op 10%.
 
-## What is left
-
-Every wiring- or config-level item is at or near its ceiling; the remainder sits in three kernels, filed on
-tenstorrent/tt-metal with repro scripts:
-
-- `minimal_matmul` at K=2560, N=9728 runs at 74% of the LoFi peak (85% is the practical ceiling): ≈ −18 ms at
-  bs32, and the bs8 fused-SwiGLU matmul runs at 43%: ≈ −26 ms at bs8 — #57626.
-- SwiGLU epilogue inside FF1/FF3 instead of the SFPU-bound product op: ≈ −8 ms at bs32 — #57627.
-- SDPA at 43% of its byte floor at bs32 and on 64 of 120 cores at bs1: −8…−16 ms at bs32 — #57628.
-
 Details: `doc/POSITIVE_RESULTS.md` (every landing with its effect), `doc/NEGATIVE_RESULTS.md` (every rejected
-experiment with numbers, §0–§50), `doc/PERF_GUIDE.md` (how to run, measure and profile).
+experiment with numbers), `doc/PERF_GUIDE.md` (how to run, measure and profile).
 
 ## Reproduce
 
