@@ -180,11 +180,7 @@ jobs:
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
       # On /ci for the same reason as PREFILL_SUMMARIES: triage runs on a worker node.
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-      # Weight load is 10x slower with the pinned host-memory H2D path: a routed-expert layer
-      # (8.86 GiB of bfloat4_b tensorbins) takes 6741 ms pinned vs 633 ms copied, measured on an
-      # 8x4 Blackhole galaxy. Raising the cache above the working set does not help, so this is
-      # not LRU pressure -- ttnn.load_tensor mmaps each file afresh, so the pin cache cannot hit.
-      # 0 refuses every pin and restores the copy path. Revert when tenstorrent/tt-metal#52893 is fixed.
+      # Pinned host-memory H2D makes weight load 10x slower; 0 restores the copy path. See #52893.
       TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
     strategy:
       fail-fast: false
