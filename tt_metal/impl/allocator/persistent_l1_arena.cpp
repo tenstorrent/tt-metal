@@ -138,9 +138,11 @@ void PersistentL1Arena::deallocate(uint64_t allocation_id) {
     allocations_.erase(allocation_it);
 }
 
-DeviceAddr PersistentL1Arena::high_water_mark(const CoreRangeSet& cores) const {
+DeviceAddr PersistentL1Arena::high_water_mark(const CoreRangeSet& cores) const { return high_water_mark(cores, base_); }
+
+DeviceAddr PersistentL1Arena::high_water_mark(const CoreRangeSet& cores, DeviceAddr empty_value) const {
     std::lock_guard lock(mutex_);
-    DeviceAddr high_water_mark = base_;
+    DeviceAddr high_water_mark = empty_value;
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         auto regions_it = regions_by_core_.find(core);
         if (regions_it != regions_by_core_.end() && !regions_it->second.empty()) {

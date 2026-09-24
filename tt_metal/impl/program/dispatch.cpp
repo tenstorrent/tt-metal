@@ -592,7 +592,8 @@ uint32_t finalize_kernel_bins(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
-    uint32_t& kernel_text_size) {
+    uint32_t& kernel_text_size,
+    std::unordered_map<CoreCoord, uint32_t>* program_end_by_core) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     // Mock/emulated devices don't have real binaries, skip finalization
     if (metal_ctx.get_cluster().is_mock_or_emulated()) {
@@ -640,6 +641,14 @@ uint32_t finalize_kernel_bins(
                         kernel->get_kernel_processor_class(),
                         kernel->get_kernel_processor_type(i),
                         binaries[i]->get_text_size());
+                }
+            }
+        }
+        if (program_end_by_core != nullptr) {
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                for (const CoreCoord& core : core_range) {
+                    const bool inserted = program_end_by_core->emplace(core, offset).second;
+                    TT_FATAL(inserted, "Core {} belongs to multiple kernel groups", core);
                 }
             }
         }

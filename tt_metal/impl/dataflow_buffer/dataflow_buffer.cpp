@@ -20,6 +20,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "tt-metalium/mesh_device.hpp"
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
@@ -2593,6 +2594,19 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
     std::optional<DeviceAddr> lowest_address =
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
+    const auto& allocator = device->allocator_impl();
+    const bool hybrid_mode =
+        uses_per_core_l1_layout() && allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+    std::vector<AllocatorImpl*> physical_allocators;
+    if (hybrid_mode) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* physical_device : mesh->get_devices()) {
+                physical_allocators.push_back(physical_device->allocator_impl().get());
+            }
+        } else {
+            physical_allocators.push_back(allocator.get());
+        }
+    }
 
     for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
         if (dfb_allocator.l1_regions.empty()) {
@@ -2607,13 +2621,29 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
                 dfb_region_end,
                 max_l1_size);
         }
-        if (lowest_address.has_value() and lowest_address.value() < dfb_region_end) {
+        std::optional<DeviceAddr> allocator_frontier = lowest_address;
+        if (hybrid_mode) {
+            allocator_frontier = std::nullopt;
+            for (const CoreCoord& core : dfb_allocator.core_range) {
+                for (AllocatorImpl* physical_allocator : physical_allocators) {
+                    const auto bank_id =
+                        physical_allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+                    const auto address = physical_allocator->get_lowest_occupied_l1_address(bank_id);
+                    if (address.has_value()) {
+                        allocator_frontier = allocator_frontier.has_value()
+                                                 ? std::make_optional(std::min(*allocator_frontier, *address))
+                                                 : address;
+                    }
+                }
+            }
+        }
+        if (allocator_frontier.has_value() and allocator_frontier.value() < dfb_region_end) {
             TT_THROW(
                 "Statically allocated dataflow buffers in program {} clash with L1 buffers on core range {}. L1 buffer "
                 "allocated at {} and static dataflow buffer region ends at {}",
                 this->id,
                 dfb_allocator.core_range.str(),
-                lowest_address.value(),
+                allocator_frontier.value(),
                 dfb_region_end);
         }
     }

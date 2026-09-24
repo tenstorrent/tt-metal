@@ -431,6 +431,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::remote_format_descriptors,
             "Remote format descriptors for GlobalCircularBuffer CBs")
         .def_rw(
+            "uniform_address_group",
+            &tt::tt_metal::CBDescriptor::uniform_address_group,
+            "Nonzero group whose static CB descriptors share one uniform L1 base address")
+        .def_rw(
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
@@ -1105,6 +1109,12 @@ void py_module_types(nb::module_& mod) {
         .def_rw("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
         .def_rw("initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
 
+    nb::enum_<tt::tt_metal::ProgramL1Layout>(mod, "ProgramL1Layout", R"pbdoc(
+        Contract governing how a program reserves worker L1 for its image.
+    )pbdoc")
+        .value("UNIFORM", tt::tt_metal::ProgramL1Layout::UNIFORM)
+        .value("PER_CORE", tt::tt_metal::ProgramL1Layout::PER_CORE);
+
     nb::class_<tt::tt_metal::ProgramDescriptor>(mod, "ProgramDescriptor", R"pbdoc(
         Descriptor for a complete program.
 
@@ -1133,6 +1143,10 @@ void py_module_types(nb::module_& mod) {
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "program_l1_layout",
+            &tt::tt_metal::ProgramDescriptor::program_l1_layout,
+            "Worker L1 program-image layout contract")
         .def_rw(
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,

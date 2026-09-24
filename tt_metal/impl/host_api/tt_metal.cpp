@@ -1036,6 +1036,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 #endif
 
     try {
+        program.impl().validate_program_image_region(validation_device);
         program.impl().allocate_circular_buffers(validation_device);
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
@@ -1201,8 +1202,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
                     }
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, prefetcher_pipe_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);

@@ -110,6 +110,7 @@ KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
 RuntimeArgs = ttnn._ttnn.program_descriptor.RuntimeArgs
 RuntimeArgsColProxy = ttnn._ttnn.program_descriptor.RuntimeArgsColProxy
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
+ProgramL1Layout = ttnn._ttnn.program_descriptor.ProgramL1Layout
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
 MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
 merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors

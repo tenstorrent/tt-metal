@@ -2,16 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for per-core allocation using BankManager's AllocatorDependencies.
-//
-// The per-core allocation model uses N+1 allocators inside one BankManager:
-//   Allocator 0       = lockstep  (same address on all banks/cores)
-//   Allocator 1..N    = per-bank  (independent address per bank/core)
-//
-// Dependency graph:
-//   Allocator 0 depends on {1, 2, ..., N}  — lockstep must avoid all per-bank regions
-//   Allocator k depends on {0}              — per-bank must avoid lockstep regions
-//   Per-bank allocators are independent of each other (separate physical L1s)
+// BankManager uses one lockstep allocator and one allocator per bank.
+// Lockstep and per-bank allocators avoid one another; independent banks may
+// reuse addresses because they represent distinct physical L1s.
 
 #include <gtest/gtest.h>
 #include <cstdint>
